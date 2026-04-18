@@ -3,6 +3,7 @@
  * Card-based layout with status tracking and add-event dialog.
  */
 import React, { useState, useMemo, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent } from "@/components/ui/card";
@@ -817,7 +818,7 @@ function sameYMD(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
-export default function PulseEventsTab({ pulseEvents = [], search = "" }) {
+export default function PulseEventsTab({ search = "" }) {
   const [eventStatus, setEventStatus] = useState("all");
   const [showAddEvent, setShowAddEvent] = useState(false);
   const [eventPage, setEventPage] = useState(0);
@@ -828,15 +829,39 @@ export default function PulseEventsTab({ pulseEvents = [], search = "" }) {
   // #58: expanded recurring groups (keyed by recurringKey)
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
+  // ── Own data fetch (unbounded, server-sorted) ─────────────────────────────
+  // Previously consumed a shared pulseEvents array fetched at the page level
+  // (capped at 200). Now each mount issues a single query targeted at
+  // pulse_events. Events are dense (a few thousand total) but we still run
+  // server-side ordering so the UI can render the earliest upcoming first.
+  const queryClient = useQueryClient();
+  const { data: pulseEvents = [] } = useQuery({
+    queryKey: ["pulse-events-list"],
+    queryFn: async () => {
+      const { data, error } = await api._supabase
+        .from("pulse_events")
+        .select("*")
+        .order("event_date", { ascending: true, nullsFirst: false })
+        .limit(10000);
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
   // ── Update status ───────────────────────────────────────────────────────────
   const handleUpdateStatus = useCallback(async (id, status) => {
     try {
       await api.entities.PulseEvent.update(id, { status });
-      await refetchEntityList("PulseEvent");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["pulse-events-list"] }),
+        refetchEntityList("PulseEvent"),
+      ]);
     } catch (err) {
       toast.error("Failed to update: " + (err?.message || "Unknown error"));
     }
-  }, []);
+  }, [queryClient]);
 
   // ── Filtered + sorted events ────────────────────────────────────────────────
   const filtered = useMemo(() => {

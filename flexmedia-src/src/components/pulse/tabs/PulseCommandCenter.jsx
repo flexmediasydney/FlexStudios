@@ -13,10 +13,8 @@ import {
   Tooltip, ResponsiveContainer, Cell, LabelList,
 } from "recharts";
 import { TrendingUp, Users, UserPlus, MapPin, Activity, ExternalLink, Sparkles, AtSign, Phone, Zap, Flame, Home, FileImage } from "lucide-react";
-import {
-  isActiveListing,
-  isRelationshipState,
-} from "@/components/pulse/utils/listingHelpers";
+// Previously imported isActiveListing / isRelationshipState here for client-
+// side reduces; all such reduces now live in pulse_get_dashboard_stats (137).
 
 // ── Tooltip styling ───────────────────────────────────────────────────────────
 
@@ -56,30 +54,41 @@ const TREND_WINDOWS = [
   { value: 52, label: "52w" },
 ];
 
-function WeeklyTrendCard({ pulseListings }) {
+function WeeklyTrendCard({ weeklyListings }) {
   const [weeks, setWeeks] = useState(12);
 
   // For ≤12 weeks show per-week labels (W1..W12); for ≥26 switch to
   // month labels so the axis doesn't collapse into a dense strip.
   const useMonthLabels = weeks >= 26;
 
+  // Server-side pre-aggregated weekly listing counts (pulse_get_dashboard_stats).
+  // Produces up to 52 rows of { week_start, count }.
   const data = useMemo(() => {
+    const byWeek = new Map();
+    for (const row of weeklyListings || []) {
+      if (!row?.week_start) continue;
+      byWeek.set(row.week_start, row.count || 0);
+    }
     const rows = [];
     for (let i = weeks - 1; i >= 0; i--) {
       const start = new Date(Date.now() - (i + 1) * 7 * 86400000);
-      const end = new Date(Date.now() - i * 7 * 86400000);
-      const count = pulseListings.filter(
-        (l) => l.listed_date && new Date(l.listed_date) >= start && new Date(l.listed_date) < end
-      ).length;
+      const key = start.toISOString().slice(0, 10);
+      // Nearest week-start match — the RPC buckets by date_trunc('week')
+      // (Monday-rooted), whereas our loop uses exact 7-day offsets. Widen
+      // the lookup to ±3 days so we don't miss cells due to offset mismatch.
+      let count = 0;
+      for (const [k, v] of byWeek) {
+        const diff = Math.abs(new Date(k).getTime() - start.getTime());
+        if (diff <= 3 * 86400000) { count = v; break; }
+      }
+      void key;
       const label = useMonthLabels
-        // Month label at the START of each bucket — duplicated months render as
-        // a long band on the axis but recharts will de-dupe visually.
         ? start.toLocaleDateString("en-AU", { month: "short" })
         : `W${weeks - i}`;
       rows.push({ week: label, count });
     }
     return rows;
-  }, [pulseListings, weeks, useMonthLabels]);
+  }, [weeklyListings, weeks, useMonthLabels]);
 
   const hasData = data.some((d) => d.count > 0);
 
@@ -201,15 +210,13 @@ function prospectScore(a) {
   );
 }
 
-function TopAgentsNotInCrmCard({ pulseAgents, onAddToCrm, onOpenEntity }) {
-  const agents = useMemo(() => {
-    // Attach the score once, then sort — lets us display it per-row cheaply.
-    return (pulseAgents || [])
-      .filter((a) => a.is_in_crm === false)
-      .map((a) => ({ ...a, _prospect_score: prospectScore(a) }))
-      .sort((a, b) => b._prospect_score - a._prospect_score)
-      .slice(0, 10);
-  }, [pulseAgents]);
+function TopAgentsNotInCrmCard({ topUnmappedAgents, onAddToCrm, onOpenEntity }) {
+  // Server-side top-10 feed (pulse_get_dashboard_stats.top_unmapped_agents).
+  // Each row already carries prospect_score from the RPC so we don't recompute.
+  const agents = useMemo(
+    () => (topUnmappedAgents || []).map((a) => ({ ...a, _prospect_score: a.prospect_score ?? prospectScore(a) })),
+    [topUnmappedAgents],
+  );
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
@@ -305,41 +312,26 @@ const ENRICHMENT_CONFIG = {
   first_seen:              { icon: Zap,      color: "text-cyan-500",    label: "First seen" },
 };
 
-function RecentEnrichmentCard({ pulseAgents, pulseTimeline, onOpenEntity }) {
+function RecentEnrichmentCard({ recentEnrichment, onOpenEntity }) {
+  // Server-side pre-filtered to ENRICHMENT_EVENT_TYPES, newest first, limit 10.
   const items = useMemo(() => {
-    // Build lookup for name resolution on agent-typed rows.
-    const agentByReaId = new Map();
-    const agentById = new Map();
-    for (const a of pulseAgents || []) {
-      if (a.rea_agent_id) agentByReaId.set(String(a.rea_agent_id), a);
-      if (a.id) agentById.set(a.id, a);
-    }
-
-    return (pulseTimeline || [])
-      .filter((e) => ENRICHMENT_EVENT_TYPES.has(e.event_type))
-      .slice(0, 10)
-      .map((e) => {
-        const lookupAgent =
-          (e.rea_id && agentByReaId.get(String(e.rea_id))) ||
-          (e.pulse_entity_id && agentById.get(e.pulse_entity_id)) ||
-          null;
-        const displayName =
-          e.title ||
-          lookupAgent?.full_name ||
-          (e.entity_type ? `${e.entity_type} ${(e.pulse_entity_id || "").slice(0, 8)}` : "Entity");
-        const entityType = e.entity_type || (lookupAgent ? "agent" : null);
-        const openId = e.pulse_entity_id || lookupAgent?.id || null;
-        return {
-          id: e.id,
-          eventType: e.event_type,
-          displayName,
-          description: e.description || null,
-          createdAt: e.created_at,
-          entityType,
-          openId,
-        };
-      });
-  }, [pulseTimeline, pulseAgents]);
+    return (recentEnrichment || []).map((e) => {
+      const displayName =
+        e.title ||
+        (e.entity_type ? `${e.entity_type} ${(e.pulse_entity_id || "").slice(0, 8)}` : "Entity");
+      const entityType = e.entity_type || null;
+      const openId = e.pulse_entity_id || null;
+      return {
+        id: e.id,
+        eventType: e.event_type,
+        displayName,
+        description: e.description || null,
+        createdAt: e.created_at,
+        entityType,
+        openId,
+      };
+    });
+  }, [recentEnrichment]);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
@@ -413,51 +405,39 @@ const SIGNAL_PROXY_CONFIG = {
   listing_floorplan_added:  { icon: FileImage, color: "text-blue-500",    label: "Floorplan added" },
 };
 
-function HotSignalsCard({ pulseSignals, pulseTimeline, onOpenEntity }) {
+function HotSignalsCard({ hotSignals7d, hotSignalsProxy7d, onOpenEntity }) {
   const items = useMemo(() => {
-    const cutoff = Date.now() - 7 * 86400000;
-
-    // Primary: pulse_signals (when populated)
-    const signals = (pulseSignals || [])
-      .filter((s) => {
-        if (!s.created_at) return false;
-        const t = new Date(s.created_at).getTime();
-        return !isNaN(t) && t >= cutoff;
-      })
-      .slice(0, 10)
-      .map((s) => ({
-        id: s.id,
-        source: "signal",
-        title: s.title || s.signal_type || "Signal",
-        description: s.description || null,
-        createdAt: s.created_at,
-        entityType: s.entity_type || null,
-        openId: s.pulse_entity_id || s.entity_id || null,
-        iconType: s.signal_type || "signal",
-      }));
-
+    // Primary: server-side pulse_signals filtered to last 7 days (10 rows).
+    const signals = (hotSignals7d || []).map((s) => ({
+      id: s.id,
+      source: "signal",
+      title: s.title || s.event_type || "Signal",
+      description: s.description || null,
+      createdAt: s.created_at,
+      // pulse_signals uses linked_agent_ids[]/linked_agency_ids[] instead of a
+      // single entity reference — prefer agent, then agency when populated.
+      entityType: (Array.isArray(s.linked_agent_ids) && s.linked_agent_ids[0]) ? "agent"
+        : (Array.isArray(s.linked_agency_ids) && s.linked_agency_ids[0]) ? "agency"
+        : null,
+      openId: (Array.isArray(s.linked_agent_ids) && s.linked_agent_ids[0])
+        || (Array.isArray(s.linked_agency_ids) && s.linked_agency_ids[0])
+        || null,
+      iconType: s.event_type || "signal",
+    }));
     if (signals.length > 0) return signals;
 
-    // Fallback: proxy events in timeline
-    return (pulseTimeline || [])
-      .filter((e) => {
-        if (!HOT_SIGNAL_PROXY_EVENTS.has(e.event_type)) return false;
-        if (!e.created_at) return false;
-        const t = new Date(e.created_at).getTime();
-        return !isNaN(t) && t >= cutoff;
-      })
-      .slice(0, 10)
-      .map((e) => ({
-        id: e.id,
-        source: "timeline",
-        title: e.title || e.event_type,
-        description: e.description || null,
-        createdAt: e.created_at,
-        entityType: e.entity_type || null,
-        openId: e.pulse_entity_id || null,
-        iconType: e.event_type,
-      }));
-  }, [pulseSignals, pulseTimeline]);
+    // Fallback: timeline proxy events (server-filtered to last 7 days, 10 rows).
+    return (hotSignalsProxy7d || []).map((e) => ({
+      id: e.id,
+      source: "timeline",
+      title: e.title || e.event_type,
+      description: e.description || null,
+      createdAt: e.created_at,
+      entityType: e.entity_type || null,
+      openId: e.pulse_entity_id || null,
+      iconType: e.event_type,
+    }));
+  }, [hotSignals7d, hotSignalsProxy7d]);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
@@ -523,27 +503,21 @@ function HotSignalsCard({ pulseSignals, pulseTimeline, onOpenEntity }) {
 
 const FUNNEL_COLORS = ["#94a3b8", "#3b82f6", "#10b981", "#8b5cf6"];
 
-function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
+function ConversionFunnelCard({ funnel, stats }) {
   // CC05: log scale by default so all four bars are visibly proportional even
   // when Territory (thousands) dwarfs Booked (single digits). User can switch
   // back to Linear when they want absolute comparison.
   const [scale, setScale] = useState("log");
 
   const data = useMemo(() => {
-    // relationship_state casing has drifted in the CRM — "Active"/"active"/etc.
-    // Use shared `isRelationshipState` for case-insensitive matching.
-    const activeClients = (crmAgents || []).filter(
-      (a) => isRelationshipState(a, "Active")
-    ).length;
-    const d30 = new Date(Date.now() - 30 * 86400000);
-    const bookedThisMonth = (projects || []).filter(
-      (p) => p.created_at && new Date(p.created_at) > d30
-    ).length;
+    // All inputs come from pulse_get_dashboard_stats.funnel — no client-side
+    // reduces over crmAgents / projects arrays.
+    const f = funnel || stats?._funnel || {};
     const rows = [
-      { stage: "Territory", count: stats?.totalAgents ?? (pulseAgents || []).length },
-      { stage: "In CRM", count: (crmAgents || []).length },
-      { stage: "Active", count: activeClients },
-      { stage: "Booked (30d)", count: bookedThisMonth },
+      { stage: "Territory",    count: f.territory     ?? stats?.totalAgents ?? 0 },
+      { stage: "In CRM",       count: f.in_crm_total  ?? 0 },
+      { stage: "Active",       count: f.in_crm_active ?? 0 },
+      { stage: "Booked (30d)", count: f.booked_30d    ?? stats?.recentProjects ?? 0 },
     ];
     // Compute stage-over-stage conversion % (relative to the PREVIOUS stage,
     // not to Territory — "Active/In-CRM" is the more useful funnel metric).
@@ -555,7 +529,7 @@ function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
         : `${r.count.toLocaleString()} (${pct >= 10 ? pct.toFixed(0) : pct.toFixed(1)}%)`;
       return { ...r, pct, pctLabel };
     });
-  }, [pulseAgents, crmAgents, projects, stats]);
+  }, [funnel, stats]);
 
   const maxVal = Math.max(...data.map((d) => d.count), 1);
   // Log scale can't show 0; use a floor of 1 so empty stages still render a tick.
@@ -656,21 +630,13 @@ function ConversionFunnelCard({ pulseAgents, crmAgents, projects, stats }) {
 
 // ── Card 5: Suburb Distribution ───────────────────────────────────────────────
 
-function SuburbDistributionCard({ pulseListings }) {
-  const data = useMemo(() => {
-    const counts = {};
-    // Use `isActiveListing` — covers for_sale + for_rent + under_contract
-    // (previously only for_sale, so under_contract listings silently dropped).
-    (pulseListings || [])
-      .filter((l) => isActiveListing(l) && l.suburb)
-      .forEach((l) => {
-        counts[l.suburb] = (counts[l.suburb] || 0) + 1;
-      });
-    return Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 15)
-      .map(([suburb, count]) => ({ suburb, count }));
-  }, [pulseListings]);
+function SuburbDistributionCard({ suburbDistribution }) {
+  // Server-pre-aggregated in pulse_get_dashboard_stats.suburb_distribution —
+  // top 15 suburbs by active listing count (for_sale/for_rent/under_contract).
+  const data = useMemo(
+    () => (suburbDistribution || []).map((r) => ({ suburb: r.suburb, count: r.count || 0 })),
+    [suburbDistribution],
+  );
 
   const maxVal = Math.max(...data.map((d) => d.count), 1);
 
@@ -789,52 +755,21 @@ function RecentTimelineCard({ pulseTimeline, onViewFullTimeline }) {
 // slideout. Data source: pulseListings (already server-loaded up to 5k rows
 // per useEntityList cap — fine for 7-day window even in the busiest month).
 
-function SoldLast7DaysCard({ pulseListings, pulseAgencies, onOpenEntity }) {
+function SoldLast7DaysCard({ soldLast7Days, onOpenEntity }) {
+  // Server-pre-aggregated in pulse_get_dashboard_stats.sold_last_7_days:
+  // { agency_key, agency_rea_id, agency_name, pulse_agency_id, is_in_crm, count, total_value }
   const { rows, totalAgencies } = useMemo(() => {
-    const cutoff = Date.now() - 7 * 86_400_000;
-    const byAgency = new Map();
-    for (const l of pulseListings || []) {
-      if (l.listing_type !== "sold") continue;
-      if (!l.sold_date) continue;
-      const d = new Date(l.sold_date).getTime();
-      if (isNaN(d) || d < cutoff) continue;
-      const key = l.agency_rea_id || (l.agency_name || "").trim().toLowerCase();
-      if (!key) continue;
-      const existing = byAgency.get(key);
-      if (existing) {
-        existing.count += 1;
-        existing.total_value += Number(l.sold_price) || 0;
-      } else {
-        byAgency.set(key, {
-          key,
-          agency_rea_id: l.agency_rea_id || null,
-          agency_name: l.agency_name || "Unknown agency",
-          count: 1,
-          total_value: Number(l.sold_price) || 0,
-        });
-      }
-    }
-    // Match each aggregate back to a pulse_agencies row for is_in_crm + id
-    const agencyByReaId = new Map();
-    const agencyByName = new Map();
-    for (const a of pulseAgencies || []) {
-      if (a.rea_agency_id) agencyByReaId.set(String(a.rea_agency_id), a);
-      if (a.name) agencyByName.set(a.name.trim().toLowerCase(), a);
-    }
-    const enriched = Array.from(byAgency.values()).map((r) => {
-      const match =
-        (r.agency_rea_id && agencyByReaId.get(String(r.agency_rea_id))) ||
-        agencyByName.get(r.agency_name.trim().toLowerCase()) ||
-        null;
-      return {
-        ...r,
-        pulse_agency_id: match?.id || null,
-        is_in_crm: match?.is_in_crm ?? null,
-      };
-    });
-    enriched.sort((a, b) => b.count - a.count || b.total_value - a.total_value);
-    return { rows: enriched.slice(0, 20), totalAgencies: enriched.length };
-  }, [pulseListings, pulseAgencies]);
+    const list = (soldLast7Days || []).map((r) => ({
+      key: r.agency_key,
+      agency_rea_id: r.agency_rea_id || null,
+      agency_name: r.agency_name || "Unknown agency",
+      count: r.count || 0,
+      total_value: Number(r.total_value) || 0,
+      pulse_agency_id: r.pulse_agency_id || null,
+      is_in_crm: r.is_in_crm ?? null,
+    }));
+    return { rows: list, totalAgencies: list.length };
+  }, [soldLast7Days]);
 
   return (
     <Card className="rounded-xl border-0 shadow-sm">
@@ -926,42 +861,11 @@ function SoldLast7DaysCard({ pulseListings, pulseAgencies, onOpenEntity }) {
 // Gives an at-a-glance $-value of territory coverage we don't have in CRM.
 // We join listings → pulse_agencies via agency_rea_id (primary) then fall
 // back to agency_name for pre-id-backfill rows.
-function MoneyOnTheTableBanner({ pulseListings, pulseAgencies }) {
-  const { total, listingCount } = useMemo(() => {
-    // Build agency-by-id map for O(1) lookups across all listings.
-    const notInCrmByReaId = new Set();
-    const notInCrmByName = new Set();
-    const inCrmByReaId = new Set();
-    const inCrmByName = new Set();
-    for (const a of pulseAgencies || []) {
-      if (a.is_in_crm === false) {
-        if (a.rea_agency_id) notInCrmByReaId.add(String(a.rea_agency_id));
-        if (a.name) notInCrmByName.add(a.name.trim().toLowerCase());
-      } else if (a.is_in_crm === true) {
-        if (a.rea_agency_id) inCrmByReaId.add(String(a.rea_agency_id));
-        if (a.name) inCrmByName.add(a.name.trim().toLowerCase());
-      }
-    }
-    let sum = 0;
-    let count = 0;
-    for (const l of pulseListings || []) {
-      // Only count listings whose agency we've classified as NOT in CRM.
-      const reaIdKey = l.agency_rea_id ? String(l.agency_rea_id) : null;
-      const nameKey = (l.agency_name || "").trim().toLowerCase() || null;
-      const isNotInCrm =
-        (reaIdKey && notInCrmByReaId.has(reaIdKey)) ||
-        (!reaIdKey && nameKey && notInCrmByName.has(nameKey));
-      if (!isNotInCrm) continue;
-      // Skip if the same listing's agency is ALSO found in the in-CRM set —
-      // we have duplicate-name agencies in the wild. Prefer in-CRM classification.
-      if (reaIdKey && inCrmByReaId.has(reaIdKey)) continue;
-      const price = Number(l.asking_price) || Number(l.sold_price) || 0;
-      if (price <= 0) continue;
-      sum += price;
-      count += 1;
-    }
-    return { total: sum, listingCount: count };
-  }, [pulseListings, pulseAgencies]);
+function MoneyOnTheTableBanner({ moneyOnTheTable }) {
+  // Server-pre-aggregated in pulse_get_dashboard_stats.money_on_the_table —
+  // { total, listing_count } for all listings whose agency is_in_crm = false.
+  const total = Number(moneyOnTheTable?.total) || 0;
+  const listingCount = Number(moneyOnTheTable?.listing_count) || 0;
 
   if (total <= 0) return null;
 
@@ -992,58 +896,44 @@ function MoneyOnTheTableBanner({ pulseListings, pulseAgencies }) {
 }
 
 export default function PulseCommandCenter({
-  pulseAgents = [],
-  pulseAgencies = [],
-  pulseListings = [],
-  pulseEvents = [],
-  pulseSignals = [],
-  crmAgents = [],
-  projects = [],
-  pulseMappings = [],
+  // Legacy props still accepted — all derived data now flows through
+  // `dashboardStats` (pulse_get_dashboard_stats RPC). The old array props are
+  // left in the signature so callers can keep passing them without breaking.
+  dashboardStats = null,
   pulseTimeline = [],
   stats = {},
-  search = "",
   onAddToCrm,
   onOpenEntity,
   onViewFullTimeline,
 }) {
+  const ds = dashboardStats || {};
   return (
     <div className="space-y-3">
       {/* Feature 4: money-on-the-table banner — top-right of tab content */}
-      <MoneyOnTheTableBanner
-        pulseListings={pulseListings}
-        pulseAgencies={pulseAgencies}
-      />
+      <MoneyOnTheTableBanner moneyOnTheTable={ds.money_on_the_table} />
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <WeeklyTrendCard pulseListings={pulseListings} />
+        <WeeklyTrendCard weeklyListings={ds.weekly_listings} />
         <TopAgentsNotInCrmCard
-          pulseAgents={pulseAgents}
+          topUnmappedAgents={ds.top_unmapped_agents}
           onAddToCrm={onAddToCrm}
           onOpenEntity={onOpenEntity}
         />
         {/* Feature 2: sold-last-7-days — ranks agencies, shows CRM-match badge */}
         <SoldLast7DaysCard
-          pulseListings={pulseListings}
-          pulseAgencies={pulseAgencies}
+          soldLast7Days={ds.sold_last_7_days}
           onOpenEntity={onOpenEntity}
         />
         <RecentEnrichmentCard
-          pulseAgents={pulseAgents}
-          pulseTimeline={pulseTimeline}
+          recentEnrichment={ds.recent_enrichment}
           onOpenEntity={onOpenEntity}
         />
         <HotSignalsCard
-          pulseSignals={pulseSignals}
-          pulseTimeline={pulseTimeline}
+          hotSignals7d={ds.hot_signals_7d}
+          hotSignalsProxy7d={ds.hot_signals_proxy_7d}
           onOpenEntity={onOpenEntity}
         />
-        <ConversionFunnelCard
-          pulseAgents={pulseAgents}
-          crmAgents={crmAgents}
-          projects={projects}
-          stats={stats}
-        />
-        <SuburbDistributionCard pulseListings={pulseListings} />
+        <ConversionFunnelCard funnel={ds.funnel} stats={stats} />
+        <SuburbDistributionCard suburbDistribution={ds.suburb_distribution} />
         <RecentTimelineCard
           pulseTimeline={pulseTimeline}
           onViewFullTimeline={onViewFullTimeline}

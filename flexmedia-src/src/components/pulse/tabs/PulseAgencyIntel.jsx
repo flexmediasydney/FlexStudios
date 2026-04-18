@@ -904,9 +904,16 @@ export function AgencySlideout({
     return mapping?.crm_entity_id || null;
   }
 
-  /* roster — AG05: apply user-selected sort (default: Active listings) */
+  /* roster — AG05: apply user-selected sort (default: Active listings).
+     Prefers the server-side dossier roster (includes CRM mapping join) and
+     falls back to the pulseAgents prop when the dossier hasn't resolved yet.
+     Post big-refactor pulseAgents is empty at page level, so the dossier is
+     the only populated path in practice. */
   const roster = useMemo(() => {
     if (!agency) return [];
+    if (Array.isArray(agencyDossier?.agency_roster) && agencyDossier.agency_roster.length > 0) {
+      return sortRoster(agencyDossier.agency_roster, rosterSort);
+    }
     let base = [];
     if (agency.rea_agency_id) {
       base = pulseAgents.filter((a) => a.agency_rea_id === agency.rea_agency_id);
@@ -916,7 +923,7 @@ export function AgencySlideout({
       if (key) base = pulseAgents.filter((a) => normAgencyKey(a.agency_name) === key);
     }
     return sortRoster(base, rosterSort);
-  }, [agency, pulseAgents, rosterSort]);
+  }, [agency, pulseAgents, rosterSort, agencyDossier]);
 
   /* AG06: aggregate sales_breakdown from roster — pulse_agencies has no
      sales_breakdown column, so we roll up per-agent sales_breakdown jsonb
@@ -936,9 +943,15 @@ export function AgencySlideout({
     return s;
   }, [roster]);
 
-  /* listings */
+  /* listings — prefer server-side dossier listings (same table, pre-filtered
+     to this agency and its roster). Fallback kept for the window where the
+     slideout mounts before the RPC resolves. Post big-refactor pulseListings
+     is empty at page level so the dossier is effectively the only source. */
   const agencyListings = useMemo(() => {
     if (!agency) return [];
+    if (Array.isArray(agencyDossier?.listings) && agencyDossier.listings.length > 0) {
+      return agencyDossier.listings;
+    }
     if (agency.rea_agency_id) {
       const byId = pulseListings.filter(
         (l) => l.agency_rea_id === agency.rea_agency_id
@@ -955,7 +968,7 @@ export function AgencySlideout({
     const key = normAgencyKey(agency.name);
     if (key) return pulseListings.filter((l) => normAgencyKey(l.agency_name) === key);
     return [];
-  }, [agency, pulseListings, roster]);
+  }, [agency, pulseListings, roster, agencyDossier]);
 
   const forSale = agencyListings.filter((l) => l.listing_type === "for_sale").slice(0, 10);
   const forRent = agencyListings.filter((l) => l.listing_type === "for_rent").slice(0, 10);
@@ -2130,11 +2143,9 @@ export default function PulseAgencyIntel({
               )}
             >
               {label}
-              {value === "all" && ` (${pulseAgencies.length})`}
-              {value === "not_in_crm" &&
-                ` (${pulseAgencies.filter((a) => !a.is_in_crm).length})`}
-              {value === "in_crm" &&
-                ` (${pulseAgencies.filter((a) => a.is_in_crm).length})`}
+              {value === "all"        && ` (${(stats?.totalAgencies ?? 0).toLocaleString()})`}
+              {value === "not_in_crm" && ` (${(stats?.agenciesNotInCrm ?? 0).toLocaleString()})`}
+              {value === "in_crm"     && ` (${(stats?.agenciesInCrm ?? 0).toLocaleString()})`}
             </button>
           ))}
         </div>

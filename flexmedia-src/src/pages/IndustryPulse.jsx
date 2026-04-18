@@ -5,7 +5,7 @@
  */
 import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
@@ -22,6 +22,11 @@ import {
 import { cn } from "@/lib/utils";
 
 // ── Tab components ────────────────────────────────────────────────────────────
+
+// Stable empty array reference — used by props that previously carried heavy
+// lazy-loaded collections. Module-scoped so useMemo deps stay stable and tabs
+// don't re-render when the IndustryPulse shell does.
+const EMPTY_ARRAY = Object.freeze([]);
 
 import PulseCommandCenter from "@/components/pulse/tabs/PulseCommandCenter";
 import PulseAgentIntel, { AgentSlideout } from "@/components/pulse/tabs/PulseAgentIntel";
@@ -219,13 +224,27 @@ const VALID_TAB_VALUES = new Set(TABS.map(t => t.value));
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function IndustryPulse() {
-  // ── Data hooks (this is the ONLY place useEntityList is called for Pulse) ──
-  const { data: pulseAgents = [], loading: agentsLoading } = useEntityList(
-    "PulseAgent", "-total_listings_active", 5000
-  );
-  const { data: pulseAgencies = [], loading: agenciesLoading } = useEntityList("PulseAgency", "-active_listings", 500);
-  const { data: pulseListings = [], loading: listingsLoading } = useEntityList("PulseListing", "-created_at", 5000);
-  const { data: pulseEvents = [] } = useEntityList("PulseEvent", "event_date", 200);
+  // ── Data hooks ────────────────────────────────────────────────────────────
+  // Post big-refactor: the top-level page no longer pulls down the full
+  // pulse_agents / pulse_agencies / pulse_listings / pulse_events arrays (10k+
+  // rows each). A single aggregate RPC (pulse_get_dashboard_stats, migration
+  // 137) returns every count + top-N list the shell / Command Center /
+  // stat-strip need. Heavy tabs (Agents, Agencies, Listings, Events, Market)
+  // manage their own server-paginated data queries so the browser never has
+  // to hydrate the full dataset.
+  const { data: dashboardStats, isLoading: statsLoading, refetch: refetchStats } = useQuery({
+    queryKey: ["pulse_dashboard_stats"],
+    queryFn: async () => {
+      const { data, error } = await api._supabase.rpc("pulse_get_dashboard_stats");
+      if (error) throw error;
+      return data;
+    },
+    // Stats aggregate query takes ~200ms and changes slowly — cache aggressively
+    // so tab-switching + back-nav doesn't re-hammer the DB.
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
   const { data: pulseSignals = [] } = useEntityList("PulseSignal", "-created_at");
   const { data: crmAgents = [], loading: crmAgentsLoading } = useEntityList("Agent", "name");
   const { data: crmAgencies = [] } = useEntityList("Agency", "name");
@@ -237,8 +256,23 @@ export default function IndustryPulse() {
   const { data: targetSuburbs = [] } = useEntityList("PulseTargetSuburb", "-priority", 500);
   const { data: user } = useCurrentUser();
 
-  // True when any primary data set is still loading
-  const isLoading = agentsLoading || agenciesLoading || listingsLoading || crmAgentsLoading;
+  // Heavy entity arrays are NO LONGER loaded at the page level. Tabs fetch
+  // what they need. Empty arrays are passed through sharedProps so downstream
+  // tabs that still reference the props (for ancillary features) fall through
+  // to their own data fetches gracefully.
+  const pulseAgents = EMPTY_ARRAY;
+  const pulseAgencies = EMPTY_ARRAY;
+  const pulseListings = EMPTY_ARRAY;
+  const pulseEvents = EMPTY_ARRAY;
+
+  // Consider page ready once the stats RPC + CRM lookup resolve. Everything
+  // else loads below the fold or inside a tab and can progressive-render.
+  const isLoading = statsLoading || crmAgentsLoading;
+
+  // Shared query client — used by the refresh handler to invalidate every
+  // tab's server-paginated query key in one sweep, and by prefetchEntity
+  // further down the file for row-hover prefetches.
+  const queryClient = useQueryClient();
 
   // ── UI state ────────────────────────────────────────────────────────────────
   // Tab state is mirrored into the URL's `?tab=` query param so deep-links
@@ -456,11 +490,19 @@ export default function IndustryPulse() {
   const handleRefreshAll = useCallback(async () => {
     setRefreshing(true);
     try {
+      // Refresh the stats RPC + any supplemental entity caches. Tabs that
+      // server-paginate their own data (Agents/Agencies/Listings/Events)
+      // invalidate themselves via their own refetchInterval / useQuery keys;
+      // bumping the stats cache + react-query pulse_dashboard_stats key also
+      // refreshes everything the shell renders (stat strip, tab chip counts,
+      // Command Center cards).
       await Promise.all([
-        refetchEntityList("PulseAgent"),
-        refetchEntityList("PulseAgency"),
-        refetchEntityList("PulseListing"),
-        refetchEntityList("PulseEvent"),
+        refetchStats(),
+        queryClient.invalidateQueries({ queryKey: ["pulse-listings-page"] }),
+        queryClient.invalidateQueries({ queryKey: ["pulse-agents-page"] }),
+        queryClient.invalidateQueries({ queryKey: ["pulse-agencies-page"] }),
+        queryClient.invalidateQueries({ queryKey: ["pulse-events-list"] }),
+        queryClient.invalidateQueries({ queryKey: ["pulse-market-data"] }),
         refetchEntityList("PulseSignal"),
         refetchEntityList("Agent"),
         refetchEntityList("Agency"),
@@ -475,7 +517,7 @@ export default function IndustryPulse() {
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [refetchStats]);
 
   // Tick every 30s so the relative-time label ("Refreshed 2m ago") updates
   // without needing a user action. Cheap: single interval, no network.
@@ -491,7 +533,6 @@ export default function IndustryPulse() {
   // don't trigger a storm of prefetches. When the user finally hovers for
   // long enough (intent), we ask react-query to populate the dossier cache —
   // so by the time they click, the slideout opens instantly.
-  const queryClient = useQueryClient();
   const prefetchTimers = useRef(new Map());
   const prefetchEntity = useCallback((entityType, id) => {
     if (!entityType || !id) return;
@@ -538,127 +579,67 @@ export default function IndustryPulse() {
     };
   }, []);
 
-  // ── QoL #1: 7-day-ago snapshot for trend arrows ─────────────────────────
-  // Fetches aggregate counts as they stood 7 days ago via `created_at` cutoff
-  // filters. We compare to today's accurate counts to render `▲ +12%` badges
-  // on each stat card. Non-blocking: if the query fails (RLS, network),
-  // `trendSnapshot` stays null and the cards just omit the badge.
-  const [trendSnapshot, setTrendSnapshot] = useState(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
-        const sb = api._supabase;
-        const [agents, agencies, forSale, forRent, sold] = await Promise.all([
-          sb.from("pulse_agents").select("id", { count: "exact", head: true }).lt("created_at", sevenDaysAgo),
-          sb.from("pulse_agencies").select("id", { count: "exact", head: true }).lt("created_at", sevenDaysAgo),
-          sb.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_sale").lt("created_at", sevenDaysAgo),
-          sb.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_rent").lt("created_at", sevenDaysAgo),
-          sb.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "sold").lt("created_at", sevenDaysAgo),
-        ]);
-        if (cancelled) return;
-        setTrendSnapshot({
-          agents: agents.count ?? 0,
-          agencies: agencies.count ?? 0,
-          activeListings: forSale.count ?? 0,
-          rentals: forRent.count ?? 0,
-          sold: sold.count ?? 0,
-        });
-      } catch {
-        // Silent — trend badges just won't render.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [lastFetched]);
+  // ── Trend baseline (for ▲/▼ delta badges) ───────────────────────────────
+  // Surfaced directly by the dashboard stats RPC (trend_7d_ago) rather than
+  // five extra HEAD requests from the browser.
+  const trendSnapshot = useMemo(() => {
+    const t = dashboardStats?.trend_7d_ago;
+    if (!t) return null;
+    return {
+      agents:         t.agents         ?? 0,
+      agencies:       t.agencies       ?? 0,
+      activeListings: t.for_sale       ?? 0,
+      rentals:        t.for_rent       ?? 0,
+      sold:           t.sold           ?? 0,
+    };
+  }, [dashboardStats]);
 
-  // ── Server-side accurate counts ───────────────────────────────────────────
-  // The client-side useMemo below reduces pulseListings.length, which is
-  // capped at 5000 rows by useEntityList. Once real listing count exceeds
-  // that cap, totals silently under-count. Fetch dedicated count queries
-  // in parallel so headline stats are accurate even past the cap.
-  const [accurateCounts, setAccurateCounts] = useState(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const [forSale, forRent, sold, underContract, total] = await Promise.all([
-          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_sale"),
-          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "for_rent"),
-          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "sold"),
-          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }).eq("listing_type", "under_contract"),
-          api._supabase.from("pulse_listings").select("id", { count: "exact", head: true }),
-        ]);
-        if (cancelled) return;
-        setAccurateCounts({
-          activeListings: forSale.count ?? 0,
-          rentals: forRent.count ?? 0,
-          sold: sold.count ?? 0,
-          underContract: underContract.count ?? 0,
-          totalListings: total.count ?? 0,
-        });
-      } catch {
-        // Leave accurateCounts null so fallback to client-side reduce kicks in.
-      }
-    })();
-    return () => { cancelled = true; };
-    // Refresh counts whenever the client-side listings array length changes —
-    // a proxy for "data was refreshed".
-  }, [pulseListings.length]);
-
-  // ── Computed stats ───────────────────────────────────────────────────────────
+  // ── Computed stats ───────────────────────────────────────────────────────
+  // All totals come straight from the stats RPC. We still expose the same
+  // keys the tabs reference (totalAgents, notInCrm, activeListings, etc.) so
+  // downstream consumers don't need to change shape.
   const stats = useMemo(() => {
-    const now = new Date();
-    const d30 = new Date(now.getTime() - 30 * 86400000);
-
-    const recentListings = pulseListings.filter(
-      (l) => l.listed_date && new Date(l.listed_date) > d30
-    ).length;
-    const recentProjects = projects.filter(
-      (p) => p.created_at && new Date(p.created_at) > d30
-    ).length;
-
-    const clientSide = {
-      totalAgents: pulseAgents.length,
-      notInCrm: pulseAgents.filter((a) => !a.is_in_crm).length,
-      totalAgencies: pulseAgencies.length,
-      agenciesNotInCrm: pulseAgencies.filter((a) => !a.is_in_crm).length,
-      totalListings: pulseListings.length,
-      activeListings: pulseListings.filter((l) => l.listing_type === "for_sale").length,
-      rentals: pulseListings.filter((l) => l.listing_type === "for_rent").length,
-      sold: pulseListings.filter((l) => l.listing_type === "sold").length,
-      avgDom: (() => {
-        const w = pulseListings.filter((l) => l.days_on_market > 0);
-        return w.length > 0
-          ? Math.round(w.reduce((s, l) => s + l.days_on_market, 0) / w.length)
-          : 0;
-      })(),
-      upcomingEvents: pulseEvents.filter(
-        (e) => e.event_date && new Date(e.event_date) > now && e.status !== "skipped"
-      ).length,
-      newSignals: pulseSignals.filter((s) => s.status === "new").length,
-      agentMovements: pulseAgents.filter(
-        (a) => a.agency_changed_at && new Date(a.agency_changed_at) > d30
-      ).length,
+    const t = dashboardStats?.totals;
+    const f = dashboardStats?.funnel;
+    if (!t) {
+      // First render before the RPC resolves — zeros instead of undefined
+      // so the stat strip + tab badges don't flicker NaN / undefined.
+      return {
+        totalAgents: 0, notInCrm: 0, agentsInCrm: 0,
+        totalAgencies: 0, agenciesNotInCrm: 0, agenciesInCrm: 0,
+        totalListings: 0, activeListings: 0, rentals: 0, sold: 0, underContract: 0, withdrawn: 0,
+        avgDom: 0, upcomingEvents: 0, newSignals: 0, agentMovements: 0,
+        recentProjects: 0, recentListings: 0, marketShare: 0, suggestedMappings: 0,
+      };
+    }
+    const recentListings = t.recent_listings_30d ?? 0;
+    const recentProjects = t.recent_projects_30d ?? 0;
+    return {
+      totalAgents: t.agents ?? 0,
+      notInCrm: t.agents_not_in_crm ?? 0,
+      agentsInCrm: t.agents_in_crm ?? 0,
+      totalAgencies: t.agencies ?? 0,
+      agenciesNotInCrm: t.agencies_not_in_crm ?? 0,
+      agenciesInCrm: t.agencies_in_crm ?? 0,
+      totalListings: t.listings ?? 0,
+      activeListings: t.for_sale ?? 0,
+      rentals: t.for_rent ?? 0,
+      sold: t.sold ?? 0,
+      underContract: t.under_contract ?? 0,
+      withdrawn: t.withdrawn ?? 0,
+      avgDom: dashboardStats.avg_dom ?? 0,
+      upcomingEvents: t.upcoming_events ?? 0,
+      newSignals: t.new_signals ?? 0,
+      agentMovements: t.agent_movements_30d ?? 0,
       recentProjects,
       recentListings,
-      marketShare:
-        recentListings > 0 ? Math.round((recentProjects / recentListings) * 100) : 0,
-      suggestedMappings: pulseMappings.filter(m => m.confidence === "suggested").length,
+      marketShare: recentListings > 0 ? Math.round((recentProjects / recentListings) * 100) : 0,
+      suggestedMappings: t.suggested_mappings ?? 0,
+      // Pass through the funnel inputs so PulseCommandCenter can render its
+      // Territory → Booked chart off-RPC.
+      _funnel: f || null,
     };
-
-    // Override listing counts with server-side accurate totals once loaded.
-    // Silently no-op when `accurateCounts` is null (first render / query error).
-    if (accurateCounts) {
-      clientSide.totalListings = accurateCounts.totalListings;
-      clientSide.activeListings = accurateCounts.activeListings;
-      clientSide.rentals = accurateCounts.rentals;
-      clientSide.sold = accurateCounts.sold;
-      clientSide.underContract = accurateCounts.underContract;
-    }
-
-    return clientSide;
-  }, [pulseAgents, pulseAgencies, pulseListings, pulseEvents, pulseSignals, projects, pulseMappings, accurateCounts]);
+  }, [dashboardStats]);
 
   // Deep-link handler — Command Center → Timeline tab
   const handleViewFullTimeline = useCallback(() => {
@@ -688,6 +669,10 @@ export default function IndustryPulse() {
 
   // ── Shared props spread into every tab ──────────────────────────────────────
   const sharedProps = {
+    // Heavy entity arrays are now empty — tabs fetch what they need. The
+    // props are kept in the shape for backwards-compat with the many tab
+    // components that still destructure them; the arrays just start empty
+    // and the tabs' own useQuery hooks populate the visible data.
     pulseAgents,
     pulseAgencies,
     pulseListings,
@@ -703,6 +688,9 @@ export default function IndustryPulse() {
     targetSuburbs,
     search,
     stats,
+    // Dashboard stats RPC payload — Command Center + anywhere else that used
+    // to reduce over the full entity arrays now reads from here.
+    dashboardStats,
     user,
     onAddToCrm: handleAddToCrmFromCommand,
     addToCrmFromCommand,

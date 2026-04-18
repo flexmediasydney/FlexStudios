@@ -4,6 +4,8 @@
  *           Suburb heatmap table.
  */
 import React, { useState, useMemo, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -968,19 +970,42 @@ function usePropertyTypeOptions(pulseListings) {
 }
 
 export default function PulseMarketData({
+  // Lazy-own-fetch refactor: no longer consumes the 10k-row shared pulseListings
+  // array. Instead queries pulse_listings on first mount, bounded to the most
+  // recent 12 months + a 20k safety cap. The heavy aggregations (summary,
+  // heatmap, weekly trend) all run off this bounded slice.
   pulseAgents = [],
-  pulseAgencies = [],
-  pulseListings = [],
-  pulseEvents = [],
-  pulseSignals = [],
   crmAgents = [],
   projects = [],
-  pulseMappings = [],
-  pulseTimeline = [],
   stats = {},
-  search = "",
   onOpenEntity,
 }) {
+  const { data: pulseListings = [], isLoading: listingsLoading } = useQuery({
+    queryKey: ["pulse-market-data", "listings-12m"],
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - 365 * 86400000).toISOString();
+      // Column projection: only the fields the aggregations actually read.
+      const cols = [
+        "id", "listing_type", "suburb", "property_type",
+        "asking_price", "sold_price", "price_text",
+        "days_on_market", "listed_date", "sold_date", "created_at",
+        "agent_rea_id", "agent_name",
+        "agency_rea_id", "agency_name",
+        "bedrooms", "bathrooms", "parking", "land_size",
+      ].join(",");
+      const { data, error } = await api._supabase
+        .from("pulse_listings")
+        .select(cols)
+        .gte("created_at", cutoff)
+        .order("created_at", { ascending: false })
+        .limit(20000);
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  void listingsLoading;
   const [timeRange, setTimeRange] = useState("30");
   const [propertyType, setPropertyType] = useState("all");
   // #49: chart-driven filter layered on top of the suburb heatmap. Either

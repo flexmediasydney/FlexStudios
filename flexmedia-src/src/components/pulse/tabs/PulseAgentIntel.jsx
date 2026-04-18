@@ -717,21 +717,24 @@ export function AgentSlideout({
   }, [agent, pulseMappings]);
 
   const agentListings = useMemo(() => {
+    // Prefer server-side dossier listings (filtered to this agent) over the
+    // pulseListings prop. Post big-refactor pulseListings is empty at the
+    // page level, so the dossier is the practical source.
+    const source = (Array.isArray(agentDossier?.listings) && agentDossier.listings.length > 0)
+      ? agentDossier.listings
+      : pulseListings;
     const id = agent.rea_agent_id;
     if (!id) return { active: [], sold: [] };
-    const all = pulseListings.filter(
+    const all = (source || []).filter(
       (l) =>
         l.agent_rea_id === id ||
         (Array.isArray(l.agent_rea_ids) && l.agent_rea_ids.includes(id))
     );
     return {
-      // Use shared `isActiveListing` so under_contract listings are counted as
-      // active workload (they previously fell off because the filter hard-coded
-      // for_sale + for_rent).
       active: all.filter((l) => isActiveListing(l)),
       sold: all.filter((l) => l.listing_type === "sold"),
     };
-  }, [agent.rea_agent_id, pulseListings]);
+  }, [agent.rea_agent_id, pulseListings, agentDossier]);
 
   // Cross-reference: find pulse agency record
   const linkedAgency = useMemo(() => {
@@ -1518,7 +1521,11 @@ export default function PulseAgentIntel({
   // ── Auto-open Add-to-CRM dialog when triggered from CommandCenter ───────
   useEffect(() => {
     if (addToCrmFromCommand) {
-      const agent = pulseAgents.find((a) => a.id === addToCrmFromCommand.id);
+      // Previously re-looked the agent up in the shared pulseAgents array;
+      // post-refactor that array is empty at the page level. The Command
+      // Center hands us the full agent row (from top_unmapped_agents RPC) so
+      // we can pass it straight through.
+      const agent = pulseAgents.find((a) => a.id === addToCrmFromCommand.id) || addToCrmFromCommand;
       if (agent) {
         setAddToCrmCandidate(agent);
       }
@@ -1875,17 +1882,9 @@ export default function PulseAgentIntel({
       {/* ── Filter bar ── */}
       <div className="flex flex-wrap items-center gap-2">
         {[
-          { key: "all", label: "All Agents", count: pulseAgents.length },
-          {
-            key: "not_in_crm",
-            label: "Not in CRM",
-            count: stats.notInCrm ?? pulseAgents.filter((a) => !a.is_in_crm).length,
-          },
-          {
-            key: "in_crm",
-            label: "In CRM",
-            count: pulseAgents.filter((a) => a.is_in_crm).length,
-          },
+          { key: "all",        label: "All Agents",  count: stats.totalAgents ?? 0 },
+          { key: "not_in_crm", label: "Not in CRM",  count: stats.notInCrm ?? 0 },
+          { key: "in_crm",     label: "In CRM",      count: stats.agentsInCrm ?? 0 },
         ].map(({ key, label, count }) => (
           <button
             key={key}
