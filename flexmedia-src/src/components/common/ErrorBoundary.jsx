@@ -180,11 +180,16 @@ class ErrorBoundary extends Component {
       );
     }
 
-    // Wrap children in a keyed fragment so "Try Again" forces a remount
+    // Wrap children in a keyed <div> so "Try Again" forces a remount
     // (prevents the same broken component from immediately re-throwing).
-    // h-full + flex preserves parent flex layout constraints (needed by
-    // inbox-style full-height children with their own internal scroll).
-    return <div key={this.state.resetKey} className="h-full flex flex-col min-h-0">{this.props.children}</div>;
+    // display:contents removes this wrapper from layout entirely — children
+    // inherit their grandparent's flex/grid/block behaviour untouched. This
+    // fixes a regression where `h-full flex flex-col min-h-0` (added to pass
+    // height through for the Inbox) was imposing flex-col on every page with
+    // an ErrorBoundary, causing pages like ProjectDetails to stretch widgets
+    // to ~4x their natural height. `contents` is in all evergreen browsers
+    // and still lets React's keyed-remount work.
+    return <div key={this.state.resetKey} style={{ display: 'contents' }}>{this.props.children}</div>;
   }
 }
 
