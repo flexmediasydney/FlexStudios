@@ -12,7 +12,13 @@ import {
   fireRoleNotif,
 } from '../utils.ts';
 
-export async function handleRescheduled(entities: any, orderId: string, p: any) {
+export interface HandlerContext {
+  queueRowId?: string | null;
+  webhookLogId?: string | null;
+  eventType?: string | null;
+}
+
+export async function handleRescheduled(entities: any, orderId: string, p: any, _ctx: HandlerContext = {}) {
   const eventId = p.id;
   const startTime = p.when?.start_time ? p.when.start_time * 1000 : null;
   const project = await findProjectByOrderId(entities, orderId);

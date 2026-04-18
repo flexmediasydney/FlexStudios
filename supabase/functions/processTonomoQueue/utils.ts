@@ -1,6 +1,16 @@
 // Shared utility functions for processTonomoQueue
 
 import { PROCESSOR_VERSION } from './types.ts';
+import {
+  diffProjectPackages,
+  isAddOnly,
+  isNoOp,
+  applyDiff,
+  extractAddedFromNew,
+  type ProjectItemsDiff,
+  type ProjectProduct,
+  type ProjectPackage,
+} from './diffTonomoProducts.ts';
 
 // Safe JSON parse with fallback — prevents crashes on corrupt stored JSON
 export function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
@@ -310,6 +320,157 @@ export function deduplicateProjectItems(autoProducts: any[], autoPackages: any[]
   return {
     products: Array.from(seenProducts.values()),
     packages: Array.from(seenPackages.values()),
+  };
+}
+
+/**
+ * Lock-aware reconciliation of a Tonomo product/package rebuild against a
+ * project that may have manually_overridden_fields / per-line locks.
+ *
+ * Inputs:
+ *  - project: the existing project row
+ *  - proposedProducts / proposedPackages: the deduped "after" state from
+ *    resolveProductsFromTiers + resolveProductsFromWorkDays
+ *  - allProducts / allPackages: product/package catalog (for name resolution
+ *    and dedup inside merges)
+ *  - context: { queueRowId, webhookLogId, eventType } — threaded through for
+ *    audit purposes when stashing a pending delta
+ *
+ * Outputs (as a subset of an "updates" object ready to merge into Project.update):
+ *  - decision: 'no_lock_apply' | 'noop' | 'auto_merge' | 'stash_for_review'
+ *  - updates: the field patch for this decision (e.g. products/packages for
+ *    a merge, or tonomo_pending_delta for a stash)
+ *  - reviewReason: human-readable reason string (for decision='stash_for_review')
+ *  - activityDescription: string for writeProjectActivity (for logging)
+ *  - diff: the computed diff (always populated when lock path is taken)
+ */
+export interface ReconcileContext {
+  queueRowId?: string | null;
+  webhookLogId?: string | null;
+  eventType?: string | null;
+}
+
+export interface ReconcileResult {
+  decision: 'no_lock_apply' | 'noop' | 'auto_merge' | 'stash_for_review';
+  updates: Record<string, any>;
+  reviewReason?: string;
+  activityDescription?: string;
+  diff?: ProjectItemsDiff;
+  summary?: string;
+}
+
+export function reconcileProductsPackagesAgainstLock(
+  project: any,
+  proposedProducts: ProjectProduct[],
+  proposedPackages: ProjectPackage[],
+  allProducts: any[],
+  allPackages: any[],
+  context: ReconcileContext = {},
+): ReconcileResult {
+  const overriddenFields = safeJsonParse(project?.manually_overridden_fields, [] as string[]);
+  const legacyLock = overriddenFields.includes('products') || overriddenFields.includes('packages');
+  const lockedProductIds = new Set<string>(
+    safeJsonParse<string[]>(project?.manually_locked_product_ids, []) || []
+  );
+  const lockedPackageIds = new Set<string>(
+    safeJsonParse<string[]>(project?.manually_locked_package_ids, []) || []
+  );
+
+  const hasAnyLock = legacyLock || lockedProductIds.size > 0 || lockedPackageIds.size > 0;
+
+  // No lock at all → just overwrite with proposed state (legacy behavior preserved).
+  if (!hasAnyLock) {
+    if ((proposedProducts?.length || 0) === 0 && (proposedPackages?.length || 0) === 0) {
+      return { decision: 'noop', updates: {} };
+    }
+    return {
+      decision: 'no_lock_apply',
+      updates: {
+        products: proposedProducts,
+        packages: proposedPackages,
+        products_auto_applied: true,
+        products_needs_recalc: true,
+      },
+    };
+  }
+
+  // Lock path — compute diff for visibility.
+  const diff = diffProjectPackages(
+    project?.products, project?.packages,
+    proposedProducts, proposedPackages,
+    allProducts, allPackages,
+  );
+
+  // Prune additions that target a per-line locked id — the user intentionally
+  // blocked that specific line, so respect it even on add-only merges.
+  const prunedAddedProducts = diff.added_products.filter(d => !lockedProductIds.has(d.product_id));
+  const prunedAddedPackages = diff.added_packages.filter(d => !lockedPackageIds.has(d.package_id));
+  const diffForApply: ProjectItemsDiff = {
+    ...diff,
+    added_products: prunedAddedProducts,
+    added_packages: prunedAddedPackages,
+  };
+
+  if (isNoOp(diffForApply) && isNoOp(diff)) {
+    return { decision: 'noop', updates: {}, diff };
+  }
+
+  // Only additions (that aren't themselves locked out) → safe auto-merge.
+  if (isAddOnly(diffForApply)) {
+    const { addedProducts, addedPackages } = extractAddedFromNew(
+      proposedProducts, proposedPackages, diffForApply,
+    );
+    const merged = applyDiff(
+      project?.products || [], project?.packages || [],
+      addedProducts, addedPackages,
+    );
+    const addedSummary = [
+      prunedAddedProducts.length > 0 ? `${prunedAddedProducts.length} product(s): ${prunedAddedProducts.map(d => d.product_name).join(', ')}` : null,
+      prunedAddedPackages.length > 0 ? `${prunedAddedPackages.length} package(s): ${prunedAddedPackages.map(d => d.package_name).join(', ')}` : null,
+    ].filter(Boolean).join(' and ');
+    return {
+      decision: 'auto_merge',
+      diff: diffForApply,
+      updates: {
+        products: merged.products,
+        packages: merged.packages,
+        products_needs_recalc: true,
+        tonomo_pending_delta: null, // clear any prior stash — we just applied
+      },
+      activityDescription: `Tonomo added ${addedSummary} (add-only, auto-merged despite override lock).`,
+      summary: `auto-merged: added ${prunedAddedProducts.length} product(s), ${prunedAddedPackages.length} package(s)`,
+    };
+  }
+
+  // Destructive (removal or qty change) → stash for manual review.
+  const stash = {
+    detected_at: new Date().toISOString(),
+    source_queue_id: context.queueRowId || null,
+    source_webhook_log_id: context.webhookLogId || null,
+    source_event_type: context.eventType || null,
+    before: {
+      products: project?.products || [],
+      packages: project?.packages || [],
+    },
+    after: {
+      products: proposedProducts,
+      packages: proposedPackages,
+    },
+    diff,
+    safe_to_auto_apply: false,
+    auto_applied_at: null,
+  };
+  const reviewReason = `Tonomo wants to change products/packages but manually-overridden lock is on. ${diff.added_products.length} added, ${diff.removed_products.length} removed, ${diff.qty_changed.length} qty change(s). Review required.`;
+  const activityDescription = `Tonomo pending delta stashed: +${diff.added_products.length}/−${diff.removed_products.length} products, ${diff.qty_changed.length} qty changes, +${diff.added_packages.length}/−${diff.removed_packages.length} packages.`;
+  return {
+    decision: 'stash_for_review',
+    diff,
+    updates: {
+      tonomo_pending_delta: JSON.stringify(stash),
+    },
+    reviewReason,
+    activityDescription,
+    summary: 'stashed pending delta (destructive change while lock on)',
   };
 }
 

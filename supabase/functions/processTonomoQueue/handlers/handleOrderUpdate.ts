@@ -6,11 +6,19 @@ import {
   resolveProductsFromWorkDays,
   loadMappingTable,
   findProjectByOrderId,
+  reconcileProductsPackagesAgainstLock,
+  fireRoleNotif,
   safeJsonParse,
   writeAudit,
   writeProjectActivity,
 } from '../utils.ts';
 import { handleScheduled } from './handleScheduled.ts';
+
+export interface HandlerContext {
+  queueRowId?: string | null;
+  webhookLogId?: string | null;
+  eventType?: string | null;
+}
 
 /**
  * Fallback: try to find a project by appointment ID.
@@ -36,7 +44,7 @@ async function findProjectByAppointmentId(appointmentId: string): Promise<any> {
   }
 }
 
-export async function handleOrderUpdate(entities: any, orderId: string, p: any, paymentOnly = false) {
+export async function handleOrderUpdate(entities: any, orderId: string, p: any, paymentOnly = false, ctx: HandlerContext = {}) {
   // Try primary lookup by order ID, then fallback to appointment ID
   let project = await findProjectByOrderId(entities, orderId);
   let matchedBy = 'order_id';
@@ -85,7 +93,7 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
       });
       return { summary: `Skipped order update for ${orderId} — insufficient data to create project`, skipped: true };
     }
-    return handleScheduled(entities, orderId, p, 'booking_created_or_changed');
+    return handleScheduled(entities, orderId, p, 'booking_created_or_changed', ctx);
   }
 
   const incomingStatus = p.orderStatus || p.order?.orderStatus;
@@ -165,7 +173,8 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
 
   const rawTiersBCC = p.order?.service_custom_tiers || p.service_custom_tiers || [];
   const workDaysArrBCC = p.order?.workDays || p.workDays || [];
-  if ((rawTiersBCC.length > 0 || workDaysArrBCC.length > 0) && !overriddenFields.includes('products')) {
+  let reconcileActivityDescriptionBCC: string | null = null;
+  if (rawTiersBCC.length > 0 || workDaysArrBCC.length > 0) {
     const allMappingsBCC = await loadMappingTable(entities);
     const { autoProducts: newProd, autoPackages: newPkg, mappingGaps: newGapsBCC } =
       await resolveProductsFromTiers(entities, rawTiersBCC, allMappingsBCC);
@@ -177,15 +186,24 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
     newGapsBCC.push(...feeGaps);
 
     if (newProd.length > 0 || newPkg.length > 0) {
-      const dedupedBCC = deduplicateProjectItems(newProd, newPkg,
-        await entities.Product.list(null, 500).catch(() => []),
-        await entities.Package.list(null, 200).catch(() => [])
-      );
-      updates.products = dedupedBCC.products;
-      updates.packages = dedupedBCC.packages;
-      updates.products_auto_applied = true;
-      updates.products_needs_recalc = true;
+      const allProductsBCC = await entities.Product.list(null, 500).catch(() => []);
+      const allPackagesBCC = await entities.Package.list(null, 200).catch(() => []);
+      const dedupedBCC = deduplicateProjectItems(newProd, newPkg, allProductsBCC, allPackagesBCC);
       updates.products_mapping_gaps = JSON.stringify(newGapsBCC.map((g: any) => g.serviceName));
+
+      const reconciled = reconcileProductsPackagesAgainstLock(
+        project, dedupedBCC.products, dedupedBCC.packages,
+        allProductsBCC, allPackagesBCC,
+        { queueRowId: ctx.queueRowId, webhookLogId: ctx.webhookLogId, eventType: ctx.eventType || 'booking_created_or_changed' },
+      );
+
+      Object.assign(updates, reconciled.updates);
+      if (reconciled.activityDescription) reconcileActivityDescriptionBCC = reconciled.activityDescription;
+
+      if (reconciled.decision === 'stash_for_review') {
+        if (!updates.pending_review_type) updates.pending_review_type = 'tonomo_drift';
+        if (reconciled.reviewReason) reviewReasons.push(reconciled.reviewReason);
+      }
     }
   }
 
@@ -277,6 +295,37 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
       order_status: incomingStatusBCC || null,
     },
   });
+
+  if (reconcileActivityDescriptionBCC) {
+    await writeProjectActivity(entities, {
+      project_id: project.id,
+      project_title: project.title || '',
+      action: updates.tonomo_pending_delta ? 'tonomo_delta_stashed' : 'tonomo_delta_auto_merged',
+      description: reconcileActivityDescriptionBCC,
+      tonomo_order_id: orderId,
+      tonomo_event_type: 'booking_created_or_changed',
+      metadata: {
+        queue_row_id: ctx.queueRowId || null,
+        webhook_log_id: ctx.webhookLogId || null,
+      },
+    });
+  }
+
+  if (updates.tonomo_pending_delta) {
+    const bccProjectName = project.title || project.property_address || 'Project';
+    fireRoleNotif(entities, ['project_owner', 'master_admin'], {
+      type: 'tonomo_delta_pending_review',
+      category: 'tonomo',
+      severity: 'warning',
+      title: `Tonomo delta needs review — ${bccProjectName}`,
+      message: `Tonomo updated products/packages but the project has a manual-edit lock. Review and apply/dismiss.`,
+      projectId: project.id,
+      projectName: bccProjectName,
+      ctaLabel: 'Review Delta',
+      source: 'tonomo',
+      idempotencyKey: `tonomo_delta:${orderId}:${new Date().toISOString().split('T')[0]}`,
+    }, project).catch(() => {});
+  }
 
   if (updates.products || updates.packages) {
     invokeFunction('applyProjectRoleDefaults', {

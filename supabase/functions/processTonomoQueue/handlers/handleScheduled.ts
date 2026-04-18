@@ -15,16 +15,24 @@ import {
   resolveMappingsMulti,
   loadMappingTable,
   findProjectByOrderId,
+  reconcileProductsPackagesAgainstLock,
   buildReviewReason,
   filterOverriddenFields,
   safeJsonParse,
   writeAudit,
   writeProjectActivity,
   fireAdminNotif,
+  fireRoleNotif,
   safeList,
 } from '../utils.ts';
 
-export async function handleScheduled(entities: any, orderId: string, p: any, originAction = 'scheduled') {
+export interface HandlerContext {
+  queueRowId?: string | null;
+  webhookLogId?: string | null;
+  eventType?: string | null;
+}
+
+export async function handleScheduled(entities: any, orderId: string, p: any, originAction = 'scheduled', ctx: HandlerContext = {}) {
   const eventId = p.id;
   const orderName = p.order?.orderName || p.orderName || 'Unknown order';
   const address = p.address?.formatted_address || p.property_address?.formatted_address || p.location || p.order?.property_address?.formatted_address || '';
@@ -254,12 +262,21 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     !isAdditionalAppointment &&
     (autoApproveOnImminent || !sharedData.urgent_review);
 
+  // Cache for the reconciler path (used when updating an existing project
+  // that may have a lock on products/packages).
+  let allProdsSchedCache: any[] | null = null;
+  let allPkgsSchedCache: any[] | null = null;
+  let dedupedSched: { products: any[]; packages: any[] } | null = null;
+
   if (hasAutoProducts) {
     const [allProdsSched, allPkgsSched] = await Promise.all([
       entities.Product.list(null, 500).catch(() => []),
       entities.Package.list(null, 200).catch(() => []),
     ]);
+    allProdsSchedCache = allProdsSched;
+    allPkgsSchedCache = allPkgsSched;
     const deduped = deduplicateProjectItems(autoProducts, autoPackages, allProdsSched, allPkgsSched);
+    dedupedSched = deduped;
     sharedData.products = deduped.products;
     sharedData.packages = deduped.packages;
   }
@@ -304,9 +321,57 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     if (hoursUntilShoot <= 24 && hoursUntilShoot > 0) sharedData.urgent_review = true;
   }
 
+  // Local helper: when updating an existing project with a lock on
+  // products/packages, filterOverriddenFields strips those keys and we'd
+  // silently drop Tonomo's product update. The reconciler decides whether
+  // the delta can be auto-merged (add-only) or should be stashed for review.
+  function applyLockAwareProductUpdate(
+    targetProject: any,
+    safeData: Record<string, any>,
+    extraReviewReasons: string[],
+  ) {
+    if (!hasAutoProducts || !dedupedSched) return { safeData, stashActivity: null as string | null };
+    const overriddenFields = safeJsonParse(targetProject.manually_overridden_fields, [] as string[]);
+    const legacyLock = overriddenFields.includes('products') || overriddenFields.includes('packages');
+    const perLineLocks = safeJsonParse<string[]>(targetProject.manually_locked_product_ids, []);
+    const perLinePkgLocks = safeJsonParse<string[]>(targetProject.manually_locked_package_ids, []);
+    const hasAnyLock = legacyLock || (perLineLocks?.length || 0) > 0 || (perLinePkgLocks?.length || 0) > 0;
+    if (!hasAnyLock) return { safeData, stashActivity: null as string | null };
+
+    const reconciled = reconcileProductsPackagesAgainstLock(
+      targetProject, dedupedSched.products, dedupedSched.packages,
+      allProdsSchedCache || [], allPkgsSchedCache || [],
+      { queueRowId: ctx.queueRowId, webhookLogId: ctx.webhookLogId, eventType: ctx.eventType || originAction },
+    );
+
+    if (reconciled.decision === 'noop') {
+      return { safeData, stashActivity: null as string | null };
+    }
+
+    if (reconciled.decision === 'auto_merge') {
+      // Inject merged products/packages back into safeData (filterOverriddenFields
+      // had stripped them when legacy lock was on).
+      const merged: Record<string, any> = { ...safeData, ...reconciled.updates };
+      return { safeData: merged, stashActivity: reconciled.activityDescription || null };
+    }
+
+    if (reconciled.decision === 'stash_for_review') {
+      if (reconciled.reviewReason) extraReviewReasons.push(reconciled.reviewReason);
+      const merged: Record<string, any> = {
+        ...safeData,
+        ...reconciled.updates,
+      };
+      if (!merged.pending_review_type) merged.pending_review_type = 'tonomo_drift';
+      return { safeData: merged, stashActivity: reconciled.activityDescription || null };
+    }
+
+    return { safeData, stashActivity: null as string | null };
+  }
+
   // ── CREATE OR UPDATE PROJECT ────────────────────────────────────────────────
   let project;
   let operation;
+  let scheduledStashActivity: string | null = null;
 
   if (!existing) {
     const autoStatus = sharedData.shoot_date ? 'scheduled' : 'to_be_scheduled';
@@ -341,11 +406,20 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       if (!reFetched) throw new Error(`Unique constraint hit for ${orderId} but re-fetch returned null`);
 
       const overriddenFields = safeJsonParse(reFetched.manually_overridden_fields, [] as string[]);
-      const safeData = filterOverriddenFields(sharedData, overriddenFields);
+      let safeData = filterOverriddenFields(sharedData, overriddenFields);
+      const extraReasons: string[] = [];
+      const lockAware = applyLockAwareProductUpdate(reFetched, safeData, extraReasons);
+      safeData = lockAware.safeData;
+      if (lockAware.stashActivity) scheduledStashActivity = lockAware.stashActivity;
       if (reFetched.status !== 'pending_review') {
         delete safeData.status;
         delete safeData.pending_review_reason;
         delete safeData.pending_review_type;
+      }
+      if (extraReasons.length > 0 && reFetched.status !== 'pending_review') {
+        safeData.status = 'pending_review';
+        safeData.pre_revision_stage = reFetched.status;
+        safeData.pending_review_reason = extraReasons.join(' | ');
       }
       await entities.Project.update(reFetched.id, safeData);
       project = { ...reFetched, ...safeData };
@@ -359,13 +433,17 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       : `New appointment added to a delivered booking. Previous status: delivered. Please review — this may indicate a re-shoot or correction booking.`;
 
     const overriddenFields = safeJsonParse(existing.manually_overridden_fields, [] as string[]);
-    const safeData = filterOverriddenFields(sharedData, overriddenFields);
+    let safeData = filterOverriddenFields(sharedData, overriddenFields);
+    const extraReasons: string[] = [];
+    const lockAware = applyLockAwareProductUpdate(existing, safeData, extraReasons);
+    safeData = lockAware.safeData;
+    if (lockAware.stashActivity) scheduledStashActivity = lockAware.stashActivity;
 
     await entities.Project.update(existing.id, {
       ...safeData,
       status: 'pending_review',
       pending_review_type: reviewType,
-      pending_review_reason: reversalReason,
+      pending_review_reason: [reversalReason, ...extraReasons].filter(Boolean).join(' | '),
       pre_revision_stage: existing.status,
       tonomo_lifecycle_stage: 'restored',
       is_archived: false,
@@ -376,15 +454,27 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
 
   } else if (isAdditionalAppointment) {
     const overriddenFields = safeJsonParse(existing.manually_overridden_fields, [] as string[]);
-    const safeData = filterOverriddenFields(sharedData, overriddenFields);
+    let safeData = filterOverriddenFields(sharedData, overriddenFields);
+    const extraReasons: string[] = [];
+    const lockAware = applyLockAwareProductUpdate(existing, safeData, extraReasons);
+    safeData = lockAware.safeData;
+    if (lockAware.stashActivity) scheduledStashActivity = lockAware.stashActivity;
 
     if (ACTIVE_STAGES.includes(existing.status)) {
       safeData.status = 'pending_review';
       safeData.pending_review_type = 'additional_appointment';
-      safeData.pending_review_reason = `Additional appointment added to booking: ${new Date(startTime!).toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney', weekday: 'short', day: 'numeric', month: 'short' })}${photographers[0] ? ` — ${photographers[0].name}` : ''}. Review and re-approve.`;
+      safeData.pending_review_reason = [
+        `Additional appointment added to booking: ${new Date(startTime!).toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney', weekday: 'short', day: 'numeric', month: 'short' })}${photographers[0] ? ` — ${photographers[0].name}` : ''}. Review and re-approve.`,
+        ...extraReasons,
+      ].filter(Boolean).join(' | ');
       safeData.pre_revision_stage = existing.status;
     } else {
       delete safeData.status;
+      if (extraReasons.length > 0) {
+        safeData.status = 'pending_review';
+        safeData.pre_revision_stage = existing.status;
+        safeData.pending_review_reason = extraReasons.join(' | ');
+      }
     }
 
     await entities.Project.update(existing.id, safeData);
@@ -393,17 +483,29 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
 
   } else {
     const overriddenFields = safeJsonParse(existing.manually_overridden_fields, [] as string[]);
-    const safeData = filterOverriddenFields(sharedData, overriddenFields);
+    let safeData = filterOverriddenFields(sharedData, overriddenFields);
+    const extraReasons: string[] = [];
+    const lockAware = applyLockAwareProductUpdate(existing, safeData, extraReasons);
+    safeData = lockAware.safeData;
+    if (lockAware.stashActivity) scheduledStashActivity = lockAware.stashActivity;
 
     if (existing.status !== 'pending_review') {
       delete safeData.status;
       delete safeData.pending_review_reason;
       delete safeData.pending_review_type;
+      if (extraReasons.length > 0) {
+        safeData.status = 'pending_review';
+        safeData.pre_revision_stage = existing.status;
+        safeData.pending_review_reason = extraReasons.join(' | ');
+      }
     } else {
-      safeData.pending_review_reason = buildReviewReason(
-        mappingConfidence, mappingGaps, serviceAssignmentUncertain, unresolvedPhotographers, productGapNames,
-        sharedData._flow_unmapped || false, sharedData._type_unmapped || false
-      );
+      safeData.pending_review_reason = [
+        buildReviewReason(
+          mappingConfidence, mappingGaps, serviceAssignmentUncertain, unresolvedPhotographers, productGapNames,
+          sharedData._flow_unmapped || false, sharedData._type_unmapped || false
+        ),
+        ...extraReasons,
+      ].filter(Boolean).join(' | ');
     }
 
     await entities.Project.update(existing.id, safeData);
@@ -484,6 +586,35 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       `Products applied: ${autoProducts.length} products, ${autoPackages.length} packages`,
     ].join(' | '),
   });
+
+  if (scheduledStashActivity) {
+    await writeProjectActivity(entities, {
+      project_id: project.id,
+      project_title: project.title || project.property_address || '',
+      action: project.tonomo_pending_delta ? 'tonomo_delta_stashed' : 'tonomo_delta_auto_merged',
+      description: scheduledStashActivity,
+      tonomo_order_id: orderId,
+      tonomo_event_type: originAction,
+      metadata: {
+        queue_row_id: ctx.queueRowId || null,
+        webhook_log_id: ctx.webhookLogId || null,
+      },
+    });
+    if (project.tonomo_pending_delta) {
+      fireRoleNotif(entities, ['project_owner', 'master_admin'], {
+        type: 'tonomo_delta_pending_review',
+        category: 'tonomo',
+        severity: 'warning',
+        title: `Tonomo delta needs review — ${project.title || project.property_address || 'Project'}`,
+        message: `Tonomo updated products/packages but the project has a manual-edit lock. Review and apply/dismiss.`,
+        projectId: project.id,
+        projectName: project.title || project.property_address || 'Project',
+        ctaLabel: 'Review Delta',
+        source: 'tonomo',
+        idempotencyKey: `tonomo_delta:${orderId}:${new Date().toISOString().split('T')[0]}`,
+      }, project).catch(() => {});
+    }
+  }
 
   await writeProjectActivity(entities, {
     project_id: project.id,

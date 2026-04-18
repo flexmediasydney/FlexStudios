@@ -13,13 +13,20 @@ import {
   resolveMappingsMulti,
   loadMappingTable,
   findProjectByOrderId,
+  reconcileProductsPackagesAgainstLock,
   safeJsonParse,
   writeAudit,
   writeProjectActivity,
   fireRoleNotif,
 } from '../utils.ts';
 
-export async function handleChanged(entities: any, orderId: string, p: any) {
+export interface HandlerContext {
+  queueRowId?: string | null;
+  webhookLogId?: string | null;
+  eventType?: string | null;
+}
+
+export async function handleChanged(entities: any, orderId: string, p: any, ctx: HandlerContext = {}) {
   const photographers = p.photographers || [];
   const agent = p.order?.listingAgents?.[0] || p.listingAgents?.[0] || null;
   const project = await findProjectByOrderId(entities, orderId);
@@ -290,7 +297,8 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
 
   const rawTiersChanged = p.order?.service_custom_tiers || p.service_custom_tiers || [];
   const workDaysArrChanged = p.order?.workDays || p.workDays || [];
-  if ((rawTiersChanged.length > 0 || workDaysArrChanged.length > 0) && !overriddenFields.includes('products')) {
+  let reconcileActivityDescription: string | null = null;
+  if (rawTiersChanged.length > 0 || workDaysArrChanged.length > 0) {
     // Reuse allMappings loaded above instead of calling loadMappingTable again
     const { autoProducts: newProducts, autoPackages: newPackages, mappingGaps: newGaps } =
       await resolveProductsFromTiers(entities, rawTiersChanged, allMappings);
@@ -301,40 +309,41 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     if (feeProducts.length > 0) newProducts.push(...feeProducts);
     newGaps.push(...feeGaps);
 
-    // Compare old vs new to detect removals
-    const oldProductIds = new Set((project.products || []).map((p: any) => p.product_id));
-    const newProductIds = new Set(newProducts.map((p: any) => p.product_id));
-    const oldPackageIds = new Set((project.packages || []).map((p: any) => p.package_id));
-    const newPackageIds = new Set(newPackages.map((p: any) => p.package_id));
+    const allProductsForDedup = await entities.Product.list(null, 500).catch(() => []);
+    const allPackagesForDedup = await entities.Package.list(null, 200).catch(() => []);
+    const deduped = deduplicateProjectItems(newProducts, newPackages, allProductsForDedup, allPackagesForDedup);
 
-    const removedProducts = [...oldProductIds].filter(id => !newProductIds.has(id));
-    const removedPackages = [...oldPackageIds].filter(id => !newPackageIds.has(id));
+    // Capture the mapping gaps from Tonomo regardless of lock state.
+    updates.products_mapping_gaps = JSON.stringify(newGaps.map((g: any) => g.serviceName));
 
-    if (removedProducts.length > 0 || removedPackages.length > 0) {
-      reviewReasons.push(`${removedProducts.length} product(s) and ${removedPackages.length} package(s) removed from Tonomo order`);
-      // The existing cleanupOrphanedProjectTasks call (later in the handler) will soft-delete tasks for removed products
-    }
+    const reconciled = reconcileProductsPackagesAgainstLock(
+      project, deduped.products, deduped.packages,
+      allProductsForDedup, allPackagesForDedup,
+      { queueRowId: ctx.queueRowId, webhookLogId: ctx.webhookLogId, eventType: ctx.eventType || 'changed' },
+    );
 
-    // Also handle the case where ALL products are removed (empty tiers):
-    if (newProducts.length === 0 && newPackages.length === 0 && (project.products?.length > 0 || project.packages?.length > 0)) {
-      reviewReasons.push('All products/packages removed from Tonomo order — manual review required');
-      updates.pending_review_type = 'products_removed';
-    }
+    Object.assign(updates, reconciled.updates);
+    if (reconciled.activityDescription) reconcileActivityDescription = reconciled.activityDescription;
 
-    if (newProducts.length > 0 || newPackages.length > 0 || removedProducts.length > 0 || removedPackages.length > 0) {
-      const dedupedChanged = deduplicateProjectItems(newProducts, newPackages,
-        await entities.Product.list(null, 500).catch(() => []),
-        await entities.Package.list(null, 200).catch(() => [])
-      );
-      updates.products = dedupedChanged.products;
-      updates.packages = dedupedChanged.packages;
-      updates.products_auto_applied = true;
-      updates.products_needs_recalc = true;
-      updates.products_mapping_gaps = JSON.stringify(newGaps.map((g: any) => g.serviceName));
+    if (reconciled.decision === 'stash_for_review') {
+      if (!updates.pending_review_type) updates.pending_review_type = 'tonomo_drift';
+      if (reconciled.reviewReason) reviewReasons.push(reconciled.reviewReason);
+    } else if (reconciled.decision === 'no_lock_apply') {
+      // Legacy-style feedback when products changed without a lock
+      const oldProductIds = new Set((project.products || []).map((pp: any) => pp.product_id));
+      const newProductIds = new Set(deduped.products.map((pp: any) => pp.product_id));
+      const removedProducts = [...oldProductIds].filter(id => !newProductIds.has(id));
+
+      if (deduped.products.length === 0 && deduped.packages.length === 0 && (project.products?.length > 0 || project.packages?.length > 0)) {
+        reviewReasons.push('All products/packages removed from Tonomo order — manual review required');
+        updates.pending_review_type = 'products_removed';
+      } else if (removedProducts.length > 0) {
+        reviewReasons.push(`${removedProducts.length} product(s) removed from Tonomo order`);
+      }
 
       if (ACTIVE_STAGES.includes(project.status)) {
         const prevProducts = project.products || [];
-        const qtyChanged = newProducts.some((np: any) => {
+        const qtyChanged = deduped.products.some((np: any) => {
           const prev = prevProducts.find((pp: any) => pp.product_id === np.product_id);
           return prev && prev.quantity !== np.quantity;
         });
@@ -395,6 +404,23 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
     },
   });
 
+  // Additional activity entry for the lock-aware merge / stash decision, so
+  // the History tab shows exactly what happened to the products/packages.
+  if (reconcileActivityDescription) {
+    await writeProjectActivity(entities, {
+      project_id: project.id,
+      project_title: project.title || '',
+      action: updates.tonomo_pending_delta ? 'tonomo_delta_stashed' : 'tonomo_delta_auto_merged',
+      description: reconcileActivityDescription,
+      tonomo_order_id: orderId,
+      tonomo_event_type: 'changed',
+      metadata: {
+        queue_row_id: ctx.queueRowId || null,
+        webhook_log_id: ctx.webhookLogId || null,
+      },
+    });
+  }
+
   if (updates.products || updates.packages) {
     const changedProjectName = project.title || project.property_address || 'Project';
     fireRoleNotif(entities, ['project_owner', 'master_admin'], {
@@ -408,6 +434,23 @@ export async function handleChanged(entities: any, orderId: string, p: any) {
       ctaLabel: 'View Project',
       source: 'tonomo',
       idempotencyKey: `services_changed:${orderId}:${new Date().toISOString().split('T')[0]}`,
+    }, updatedProject).catch(() => {});
+  }
+
+  // Notify admins when a destructive delta was stashed for review
+  if (updates.tonomo_pending_delta) {
+    const changedProjectName = project.title || project.property_address || 'Project';
+    fireRoleNotif(entities, ['project_owner', 'master_admin'], {
+      type: 'tonomo_delta_pending_review',
+      category: 'tonomo',
+      severity: 'warning',
+      title: `Tonomo delta needs review — ${changedProjectName}`,
+      message: `Tonomo changed products/packages but the project has a manual-edit lock. Review and apply/dismiss.`,
+      projectId: project.id,
+      projectName: changedProjectName,
+      ctaLabel: 'Review Delta',
+      source: 'tonomo',
+      idempotencyKey: `tonomo_delta:${orderId}:${new Date().toISOString().split('T')[0]}`,
     }, updatedProject).catch(() => {});
   }
 

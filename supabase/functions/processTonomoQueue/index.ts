@@ -38,14 +38,22 @@ async function processItem(entities: any, item: any, payload: any) {
     (action === 'changed' && effectiveOrderStatus === 'cancelled') ||
     (action === 'booking_created_or_changed' && effectiveOrderStatus === 'cancelled');
 
-  if (action === 'scheduled') return handleScheduled(entities, orderId, payload, 'scheduled');
-  if (action === 'rescheduled') return handleRescheduled(entities, orderId, payload);
+  // Context threaded to handlers so they can stash a pending delta with
+  // full traceability back to the queue item + webhook log.
+  const ctx = {
+    queueRowId: item.id || null,
+    webhookLogId: item.webhook_log_id || null,
+    eventType: action,
+  };
+
+  if (action === 'scheduled') return handleScheduled(entities, orderId, payload, 'scheduled', ctx);
+  if (action === 'rescheduled') return handleRescheduled(entities, orderId, payload, ctx);
   if (action === 'canceled') return handleCancelled(entities, orderId, payload);
   if (action === 'changed' && isOrderCancelled) return handleCancelled(entities, orderId, payload);
-  if (action === 'changed') return handleChanged(entities, orderId, payload);
+  if (action === 'changed') return handleChanged(entities, orderId, payload, ctx);
   if (action === 'booking_created_or_changed' && isOrderCancelled) return handleCancelled(entities, orderId, payload);
-  if (action === 'booking_created_or_changed') return handleOrderUpdate(entities, orderId, payload);
-  if (action === 'payment_updated') return handleOrderUpdate(entities, orderId, payload, true); // paymentOnly flag
+  if (action === 'booking_created_or_changed') return handleOrderUpdate(entities, orderId, payload, false, ctx);
+  if (action === 'payment_updated') return handleOrderUpdate(entities, orderId, payload, true, ctx); // paymentOnly flag
   if (action === 'booking_completed') return handleDelivered(entities, orderId, payload);
   if (action === 'new_customer') return handleNewCustomer(entities, payload);
 
