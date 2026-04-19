@@ -83,6 +83,8 @@ import { cn } from "@/lib/utils";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import AttachmentLightbox from "@/components/common/AttachmentLightbox";
 import PropertyHistoryCard from "@/components/pulse/PropertyHistoryCard";
+import QuoteInspector from "@/components/marketshare/QuoteInspector";
+import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
 import {
   displayPrice as sharedDisplayPrice,
   stalenessInfo,
@@ -308,6 +310,7 @@ export function ListingSlideout({
   const galleryRef = useRef(null);
   const floorplansRef = useRef(null);
   const historyRef = useRef(null);
+  const quoteRef = useRef(null);
   useEffect(() => {
     // Map tab names → section refs. Overview = no scroll (top of dialog).
     const target = {
@@ -316,6 +319,8 @@ export function ListingSlideout({
       floorplans: floorplansRef.current,
       history: historyRef.current,
       timeline: historyRef.current,
+      quote: quoteRef.current,
+      inspector: quoteRef.current,
     }[tab];
     if (target) {
       // Defer one frame so the dialog finishes mounting first.
@@ -397,9 +402,14 @@ export function ListingSlideout({
                     <ChevronLeft className="h-4 w-4" />
                   </Button>
                 )}
-                <DialogTitle className="text-base font-semibold leading-tight">
-                  {address || "Unknown address"}
-                </DialogTitle>
+                <div className="flex-1 min-w-0">
+                  <DialogTitle className="text-base font-semibold leading-tight">
+                    {address || "Unknown address"}
+                  </DialogTitle>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <EnrichmentBadge listing={listing} size="sm" />
+                  </div>
+                </div>
               </div>
               <Button
                 variant="ghost"
@@ -833,6 +843,25 @@ export function ListingSlideout({
               onOpenListing={(id) => onOpenEntity?.({ type: "listing", id })}
             />
           </div>
+
+          {/* Quote Inspector — Market Share engine reasoning for THIS listing.
+              Compact mode: Evidence + Classification + Receipt cards only.
+              Gated on listing.id since the RPC requires a uuid. Section also
+              re-uses the `quote` initialTab deep-link value so
+              `?slideout_tab=quote` scrolls here. */}
+          {listing?.id && (
+            <div ref={quoteRef} className="border-t border-border/60 pt-3">
+              <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide flex items-center gap-1">
+                <Sparkles className="h-3 w-3" />
+                {listing.has_linked_project ? "Quote Inspector" : "Missed Opportunity Quote"}
+              </p>
+              <QuoteInspector
+                compact
+                listingId={listing.id}
+                onOpenEntity={onOpenEntity}
+              />
+            </div>
+          )}
 
           {/* Price/Status History */}
           {(listing.previous_asking_price || listing.previous_listing_type) && (

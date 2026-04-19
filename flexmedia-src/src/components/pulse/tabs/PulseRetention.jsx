@@ -29,6 +29,8 @@ import {
   Mail, UserCheck, User as UserIcon, Briefcase, Package as PkgIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
+import DataFreshnessCard from "@/components/marketshare/DataFreshnessCard";
 // QuoteProvenance now landed — swapped from local shim to the real reusable
 // component that reads from pulse_get_listing_quote_detail.
 import { QuoteProvenance } from "@/components/marketshare/QuoteProvenance";
@@ -156,6 +158,9 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
           </Button>
         </div>
       </div>
+
+      {/* ── Data freshness strip — visibility on enrichment coverage ── */}
+      <DataFreshnessCard compact className="px-1" />
 
       {/* ── KPI strip ────────────────────────────────────────────── */}
       <KpiStrip mode={mode} totals={totals} count={filtered.length} />
@@ -781,7 +786,8 @@ function MissedListingsTable({ listings, onOpenEntity }) {
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b text-muted-foreground">
-                <th className="text-left py-1.5 font-medium px-1">Address</th>
+                <th className="text-center py-1.5 font-medium px-1" title="Enrichment status">Data</th>
+                <th className="text-left py-1.5 font-medium">Address</th>
                 <th className="text-left py-1.5 font-medium">First seen</th>
                 <th className="text-left py-1.5 font-medium">Package</th>
                 <th className="text-left py-1.5 font-medium">Tier</th>
@@ -795,7 +801,10 @@ function MissedListingsTable({ listings, onOpenEntity }) {
                 <tr key={l.listing_id} className="border-b last:border-b-0 hover:bg-muted/40 cursor-pointer"
                     onClick={() => onOpenEntity && onOpenEntity({ type: "listing", id: l.listing_id })}
                 >
-                  <td className="py-1.5 px-1 truncate max-w-[220px] hover:underline" title={l.address}>
+                  <td className="py-1.5 px-1 text-center" onClick={(e) => e.stopPropagation()}>
+                    <EnrichmentBadge listing={{ detail_enriched_at: l.detail_enriched_at }} compact />
+                  </td>
+                  <td className="py-1.5 truncate max-w-[220px] hover:underline" title={l.address}>
                     <div className="truncate">{l.address || l.property_key}</div>
                     <div className="text-[10px] text-muted-foreground truncate">{l.suburb || ""}</div>
                   </td>

@@ -30,6 +30,8 @@ import {
   AlertTriangle, CheckCircle2, Clock, Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
+import DataFreshnessCard from "@/components/marketshare/DataFreshnessCard";
 
 // ── Time window helpers ─────────────────────────────────────────────────────
 
@@ -180,6 +182,11 @@ export default function PulseMarketShare({ onOpenEntity, onNavigateTab }) {
           </div>
         </div>
       </div>
+
+      {/* Data freshness — always visible at top of dashboard so users know
+          what % of the numbers below are from enriched listings vs scrape-
+          only rows. Compact variant inline under the control bar. */}
+      <DataFreshnessCard compact className="px-1" />
 
       {view === "dashboard" ? (
         <DashboardView
@@ -342,6 +349,7 @@ function DashboardView({
               <thead>
                 <tr className="border-b text-muted-foreground">
                   <th className="text-left py-1.5 font-medium px-2">#</th>
+                  <th className="text-center py-1.5 font-medium" title="Enrichment status — fresh / pending / stale">Data</th>
                   <th className="text-left py-1.5 font-medium">Address</th>
                   <th className="text-left py-1.5 font-medium">Suburb</th>
                   <th className="text-left py-1.5 font-medium">Package</th>
@@ -361,6 +369,9 @@ function DashboardView({
                     title="Click to open listing slideout"
                   >
                     <td className="py-1.5 px-2 text-muted-foreground tabular-nums">{i + 1}</td>
+                    <td className="py-1.5 text-center" onClick={(e) => e.stopPropagation()}>
+                      <EnrichmentBadge listing={{ detail_enriched_at: row.detail_enriched_at }} compact />
+                    </td>
                     <td className="py-1.5 truncate max-w-[220px] font-medium hover:underline" title={row.address}>{row.address || "—"}</td>
                     <td className="py-1.5 text-muted-foreground">
                       {row.suburb ? (
