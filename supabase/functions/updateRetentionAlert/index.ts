@@ -88,10 +88,11 @@ serveWithAudit('updateRetentionAlert', async (req) => {
 
       // Notify admins when an alert is flagged as red_flag
       if (status === 'red_flag' && oldStatus !== 'red_flag') {
-        const { data: admins = [] } = await admin
+        const __admins_raw = await admin
           .from('users')
           .select('id')
           .in('role', ['master_admin', 'admin']);
+const admins = __admins_raw.data ?? [];
 
         for (const adm of admins) {
           await admin

@@ -23,10 +23,11 @@ serveWithAudit('recheckMappingGaps', async (req) => {
     const admin = getAdminClient();
 
     // 1. Load all confirmed mappings — services, agents, photographers
-    const { data: allMappings = [] } = await admin
+    const __allMappings_raw = await admin
       .from('tonomo_mapping_tables')
       .select('tonomo_id, tonomo_label, flexmedia_label, flexmedia_entity_id, is_confirmed, mapping_type')
       .eq('is_confirmed', true);
+const allMappings = __allMappings_raw.data ?? [];
 
     // Service mappings: match by tonomo_id or label
     const serviceMappings = allMappings.filter((m: any) => m.mapping_type === 'service');
@@ -46,13 +47,15 @@ serveWithAudit('recheckMappingGaps', async (req) => {
       if (m.flexmedia_label) confirmedStaffNames.add(m.flexmedia_label.toLowerCase());
     }
     // Also check agents table directly — gaps use email, agents have email field
-    const { data: agents = [] } = await admin.from('agents').select('id, email, name');
+    const __agents_raw = await admin.from('agents').select('id, email, name');
+const agents = __agents_raw.data ?? [];
     for (const a of agents) {
       if (a.email) confirmedStaffEmails.add(a.email.toLowerCase());
       if (a.name) confirmedStaffNames.add(a.name.toLowerCase());
     }
     // And users table for photographers
-    const { data: users = [] } = await admin.from('users').select('id, email, full_name');
+    const __users_raw = await admin.from('users').select('id, email, full_name');
+const users = __users_raw.data ?? [];
     for (const u of users) {
       if (u.email) confirmedStaffEmails.add(u.email.toLowerCase());
       if (u.full_name) confirmedStaffNames.add(u.full_name.toLowerCase());
@@ -116,11 +119,12 @@ serveWithAudit('recheckMappingGaps', async (req) => {
     // ─────────────────────────────────────────────────────────────────────
     // PASS 1: Projects with tracked gaps in mapping_gaps/products_mapping_gaps
     // ─────────────────────────────────────────────────────────────────────
-    const { data: projects = [] } = await admin
+    const __projects_raw = await admin
       .from('projects')
       .select('id, mapping_gaps, products_mapping_gaps, status, tonomo_order_id, agent_id, photographer_id')
       .or('mapping_gaps.neq.[]::jsonb,products_mapping_gaps.neq.[]::jsonb')
       .not('mapping_gaps', 'is', null);
+const projects = __projects_raw.data ?? [];
 
     let cleared = 0;
     let stillGapped = 0;
@@ -201,12 +205,13 @@ serveWithAudit('recheckMappingGaps', async (req) => {
     // appointment, urgent review) and prevents infinite replay loops when
     // mapping_confidence is legitimately "partial" due to non-mapping factors.
     // ─────────────────────────────────────────────────────────────────────
-    const { data: stealthProjects = [] } = await admin
+    const __stealthProjects_raw = await admin
       .from('projects')
       .select('id, status, tonomo_order_id, agent_id, photographer_id, mapping_confidence, pending_review_type, pending_review_reason')
       .eq('status', 'pending_review')
       .eq('source', 'tonomo')
       .not('tonomo_order_id', 'is', null);
+const stealthProjects = __stealthProjects_raw.data ?? [];
 
     let stealthReplayed = 0;
     for (const project of stealthProjects) {

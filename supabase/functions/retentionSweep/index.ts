@@ -26,7 +26,8 @@ serveWithAudit('retentionSweep', async (req) => {
       agentQuery = agentQuery.eq('id', singleAgentId);
     }
 
-    const { data: agents = [] } = await agentQuery;
+    const __agents_raw = await agentQuery;
+const agents = __agents_raw.data ?? [];
 
     let totalNewAlerts = 0;
     let totalResolved = 0;
@@ -55,11 +56,12 @@ serveWithAudit('retentionSweep', async (req) => {
         }
 
         // 3. Load FlexMedia projects for this agent
-        const { data: projects = [] } = await admin
+        const __projects_raw = await admin
           .from('projects')
           .select('id, property_address, title')
           .eq('agent_id', agent.id)
           .neq('source', 'goal');
+const projects = __projects_raw.data ?? [];
 
         // 4. Find gaps (Domain listings with no matching project)
         const gapListingIds = new Set<string>();
@@ -114,11 +116,12 @@ serveWithAudit('retentionSweep', async (req) => {
         }
 
         // 5. Auto-resolve: alerts for this agent whose listing is no longer a gap
-        const { data: activeAlerts = [] } = await admin
+        const __activeAlerts_raw = await admin
           .from('retention_alerts')
           .select('id, domain_listing_id, investigation_status')
           .eq('agent_id', agent.id)
           .eq('is_active', true);
+const activeAlerts = __activeAlerts_raw.data ?? [];
 
         for (const alert of activeAlerts) {
           if (!gapListingIds.has(alert.domain_listing_id)) {
@@ -154,10 +157,11 @@ serveWithAudit('retentionSweep', async (req) => {
 
     // 6. Send notifications for new critical alerts
     if (totalCritical > 0) {
-      const { data: admins = [] } = await admin
+      const __admins_raw = await admin
         .from('users')
         .select('id, full_name')
         .in('role', ['master_admin', 'admin']);
+const admins = __admins_raw.data ?? [];
 
       for (const adm of admins) {
         await admin

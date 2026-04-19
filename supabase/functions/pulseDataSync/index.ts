@@ -1107,10 +1107,11 @@ serveWithAudit('pulseDataSync', async (req) => {
     }
 
     // Fallback: agents with confirmed CRM mappings stay is_in_crm even if agency changed
-    const { data: confirmedAgentMappings = [] } = await admin.from('pulse_crm_mappings')
+    const __confirmedAgentMappings_raw = await admin.from('pulse_crm_mappings')
       .select('rea_id')
       .eq('entity_type', 'agent')
       .eq('confidence', 'confirmed');
+const confirmedAgentMappings = __confirmedAgentMappings_raw.data ?? [];
     const confirmedReaIds = new Set(confirmedAgentMappings.map((m: any) => m.rea_id).filter(Boolean));
     for (const agent of processedAgents) {
       if (!agent.is_in_crm && agent.rea_agent_id && confirmedReaIds.has(agent.rea_agent_id)) {
@@ -1157,9 +1158,10 @@ serveWithAudit('pulseDataSync', async (req) => {
       const CHUNK = 500;
       for (let i = 0; i < candidatePreUpsertReaIds.length; i += CHUNK) {
         const slice = candidatePreUpsertReaIds.slice(i, i + CHUNK);
-        const { data: rows = [] } = await admin.from('pulse_agents')
+        const __rows_raw = await admin.from('pulse_agents')
           .select('id, rea_agent_id, agency_name, agency_rea_id, full_name, alternate_mobiles, alternate_emails')
           .in('rea_agent_id', slice);
+const rows = __rows_raw.data ?? [];
         for (const r of rows as any[]) preUpsertPulseAgents.push(r);
       }
     }
@@ -1296,9 +1298,10 @@ serveWithAudit('pulseDataSync', async (req) => {
       const CHUNK = 500;
       for (let i = 0; i < candidateAgencyNames.length; i += CHUNK) {
         const slice = candidateAgencyNames.slice(i, i + CHUNK);
-        const { data: rows = [] } = await admin.from('pulse_agencies')
+        const __rows_raw = await admin.from('pulse_agencies')
           .select('id, name')
           .in('name', slice);
+const rows = __rows_raw.data ?? [];
         for (const r of rows as any[]) {
           existingAgencyMap.set((r.name || '').trim().toLowerCase(), r.id);
         }
@@ -1356,9 +1359,10 @@ serveWithAudit('pulseDataSync', async (req) => {
       const CHUNK = 500;
       for (let i = 0; i < candidateListingIds.length; i += CHUNK) {
         const chunk = candidateListingIds.slice(i, i + CHUNK);
-        const { data: chunkExisting = [] } = await admin.from('pulse_listings')
+        const __chunkExisting_raw = await admin.from('pulse_listings')
           .select('source_listing_id, asking_price, listing_type')
           .in('source_listing_id', chunk);
+const chunkExisting = __chunkExisting_raw.data ?? [];
         chunkExisting.forEach((l: any) => {
           if (l.source_listing_id) {
             existingListingIds.add(l.source_listing_id);
@@ -1602,9 +1606,10 @@ serveWithAudit('pulseDataSync', async (req) => {
         const CHUNK = 500;
         for (let i = 0; i < changedSourceIds.length; i += CHUNK) {
           const slice = changedSourceIds.slice(i, i + CHUNK);
-          const { data: rows = [] } = await admin.from('pulse_listings')
+          const __rows_raw = await admin.from('pulse_listings')
             .select('id, source_listing_id')
             .in('source_listing_id', slice);
+const rows = __rows_raw.data ?? [];
           for (const r of rows as any[]) {
             if (r.source_listing_id && r.id) sourceIdToPulseId.set(r.source_listing_id, r.id);
           }
@@ -1744,9 +1749,10 @@ serveWithAudit('pulseDataSync', async (req) => {
           const CHUNK = 500;
           for (let i = 0; i < candidateAgentIds.length; i += CHUNK) {
             const chunk = candidateAgentIds.slice(i, i + CHUNK);
-            const { data: chunkExisting = [] } = await admin.from('pulse_agents')
+            const __chunkExisting_raw = await admin.from('pulse_agents')
               .select('rea_agent_id')
               .in('rea_agent_id', chunk);
+const chunkExisting = __chunkExisting_raw.data ?? [];
             for (const r of chunkExisting) if (r.rea_agent_id) preCheckIds.add(r.rea_agent_id);
           }
         }
@@ -1808,9 +1814,10 @@ serveWithAudit('pulseDataSync', async (req) => {
               if (newlyInsertedReaIds.length === 0) {
                 console.log('bridge-agent first_seen: no genuinely new agents, skipping');
               } else {
-                const { data: bridgeInserted = [] } = await admin.from('pulse_agents')
+                const __bridgeInserted_raw = await admin.from('pulse_agents')
                   .select('id, rea_agent_id, full_name, agency_name, agency_rea_id')
                   .in('rea_agent_id', newlyInsertedReaIds);
+const bridgeInserted = __bridgeInserted_raw.data ?? [];
                 const timelineRows = bridgeInserted.map((pa: any) => ({
                   entity_type: 'agent',
                   pulse_entity_id: pa.id,
@@ -1851,9 +1858,10 @@ serveWithAudit('pulseDataSync', async (req) => {
           const CHUNK = 500;
           for (let i = 0; i < candidateAgencyIds.length; i += CHUNK) {
             const chunk = candidateAgencyIds.slice(i, i + CHUNK);
-            const { data: chunkExistingAg = [] } = await admin.from('pulse_agencies')
+            const __chunkExistingAg_raw = await admin.from('pulse_agencies')
               .select('rea_agency_id')
               .in('rea_agency_id', chunk);
+const chunkExistingAg = __chunkExistingAg_raw.data ?? [];
             for (const r of chunkExistingAg) if (r.rea_agency_id) preCheckAgIds.add(r.rea_agency_id);
           }
         }
@@ -1890,9 +1898,10 @@ serveWithAudit('pulseDataSync', async (req) => {
               if (newlyInsertedAgencyReaIds.length === 0) {
                 console.log('bridge-agency first_seen: no genuinely new agencies, skipping');
               } else {
-                const { data: bridgeInserted = [] } = await admin.from('pulse_agencies')
+                const __bridgeInserted_raw = await admin.from('pulse_agencies')
                   .select('id, rea_agency_id, name')
                   .in('rea_agency_id', newlyInsertedAgencyReaIds);
+const bridgeInserted = __bridgeInserted_raw.data ?? [];
                 const timelineRows = bridgeInserted.map((ag: any) => ({
                   entity_type: 'agency',
                   pulse_entity_id: ag.id,
@@ -1959,9 +1968,10 @@ serveWithAudit('pulseDataSync', async (req) => {
           const CHUNK = 500;
           for (let i = 0; i < candidateEnrichReaIds.length; i += CHUNK) {
             const slice = candidateEnrichReaIds.slice(i, i + CHUNK);
-            const { data: rows = [] } = await admin.from('pulse_agents')
+            const __rows_raw = await admin.from('pulse_agents')
               .select(selectCols)
               .in('rea_agent_id', slice);
+const rows = __rows_raw.data ?? [];
             for (const r of rows as any[]) existingAgentsForEnrich.push(r);
           }
         }
@@ -1980,9 +1990,10 @@ serveWithAudit('pulseDataSync', async (req) => {
             // the 99% case; any agent whose stored full_name casing differs
             // from what appeared in listings will be merged via the rea_id
             // path on a subsequent run.
-            const { data: rows = [] } = await admin.from('pulse_agents')
+            const __rows_raw = await admin.from('pulse_agents')
               .select(selectCols)
               .in('full_name', slice);
+const rows = __rows_raw.data ?? [];
             for (const r of rows as any[]) {
               if (!loadedIds.has(r.id)) {
                 existingAgentsForEnrich.push(r);
@@ -2220,7 +2231,8 @@ serveWithAudit('pulseDataSync', async (req) => {
 
     // ── Step 10: Auto-Mapping (REA ID + Phone + Name) ───────────────────
 
-    const { data: existingMappings = [] } = await admin.from('pulse_crm_mappings').select('id, rea_id, entity_type, crm_entity_id, confidence, pulse_entity_id');
+    const __existingMappings_raw = await admin.from('pulse_crm_mappings').select('id, rea_id, entity_type, crm_entity_id, confidence, pulse_entity_id');
+const existingMappings = __existingMappings_raw.data ?? [];
     const mappedKeys = new Set(existingMappings.filter((m: any) => m.confidence === 'confirmed').map((m: any) =>
       `${m.entity_type}:${m.rea_id || ''}`
     ));
@@ -2250,9 +2262,10 @@ serveWithAudit('pulseDataSync', async (req) => {
       const CHUNK = 500;
       for (let i = 0; i < step10AgentReaIds.length; i += CHUNK) {
         const slice = step10AgentReaIds.slice(i, i + CHUNK);
-        const { data: rows = [] } = await admin.from('pulse_agents')
+        const __rows_raw = await admin.from('pulse_agents')
           .select('id, rea_agent_id')
           .in('rea_agent_id', slice);
+const rows = __rows_raw.data ?? [];
         for (const r of rows as any[]) {
           if (r.rea_agent_id && r.id) pulseAgentIdMap.set(r.rea_agent_id, r.id);
         }
@@ -2279,9 +2292,10 @@ serveWithAudit('pulseDataSync', async (req) => {
       const CHUNK = 500;
       for (let i = 0; i < step10AgencyNames.length; i += CHUNK) {
         const slice = step10AgencyNames.slice(i, i + CHUNK);
-        const { data: rows = [] } = await admin.from('pulse_agencies')
+        const __rows_raw = await admin.from('pulse_agencies')
           .select('id, name')
           .in('name', slice);
+const rows = __rows_raw.data ?? [];
         for (const r of rows as any[]) {
           const k = (r.name || '').trim().toLowerCase();
           if (k && r.id) pulseAgencyIdMap.set(k, r.id);
@@ -2531,9 +2545,10 @@ serveWithAudit('pulseDataSync', async (req) => {
           const CHUNK = 200;
           for (let i = 0; i < touchedAgentReaIds.length; i += CHUNK) {
             const slice = touchedAgentReaIds.slice(i, i + CHUNK);
-            const { data: agentRows = [] } = await admin.from('pulse_agents')
+            const __agentRows_raw = await admin.from('pulse_agents')
               .select('id, rea_agent_id')
               .in('rea_agent_id', slice);
+const agentRows = __agentRows_raw.data ?? [];
             for (const row of agentRows as any[]) {
               const wasExisting = existingByReaIdSnapshot.has(row.rea_agent_id);
               historyRows.push({
@@ -2557,9 +2572,10 @@ serveWithAudit('pulseDataSync', async (req) => {
           const CHUNK = 200;
           for (let i = 0; i < touchedListingIds.length; i += CHUNK) {
             const slice = touchedListingIds.slice(i, i + CHUNK);
-            const { data: listingRows = [] } = await admin.from('pulse_listings')
+            const __listingRows_raw = await admin.from('pulse_listings')
               .select('id, source_listing_id')
               .in('source_listing_id', slice);
+const listingRows = __listingRows_raw.data ?? [];
             for (const row of listingRows as any[]) {
               const wasExisting = existingListingIds.has(row.source_listing_id);
               historyRows.push({
@@ -2585,9 +2601,10 @@ serveWithAudit('pulseDataSync', async (req) => {
           const CHUNK = 200;
           for (let i = 0; i < touchedAgencyNames.length; i += CHUNK) {
             const slice = touchedAgencyNames.slice(i, i + CHUNK);
-            const { data: agencyRows = [] } = await admin.from('pulse_agencies')
+            const __agencyRows_raw = await admin.from('pulse_agencies')
               .select('id, name, rea_agency_id')
               .in('name', slice);
+const agencyRows = __agencyRows_raw.data ?? [];
             for (const row of agencyRows as any[]) {
               const normKey = (row.name || '').trim().toLowerCase();
               const wasExisting = existingAgencyMap.has(normKey);

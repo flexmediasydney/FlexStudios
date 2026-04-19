@@ -150,9 +150,10 @@ serveWithAudit('computeCadenceHealth', async (req) => {
     console.log(`[computeCadenceHealth] Starting run — source: ${source}, date: ${todayStr}`);
 
     // ── Step 0: Load cadence rules once ──────────────────────────────────────
-    const { data: rules = [] } = await admin
+    const __rules_raw = await admin
       .from('cadence_rules')
       .select('position, default_interval_days');
+const rules = __rules_raw.data ?? [];
     const ruleMap: Record<string, number> = Object.fromEntries(
       (rules || []).map((r: any) => [r.position, r.default_interval_days])
     );
@@ -196,18 +197,20 @@ serveWithAudit('computeCadenceHealth', async (req) => {
         // ── Step 3: Compute warmth_score ──────────────────────────────────
 
         // Load recent touchpoints (last 90 days)
-        const { data: recentTps = [] } = await admin
+        const __recentTps_raw = await admin
           .from('touchpoints')
           .select('logged_at, outcome, sentiment, touchpoint_type_name')
           .eq('agent_id', agent.id)
           .gte('logged_at', ninetyDaysAgo)
           .order('logged_at', { ascending: false });
+const recentTps = __recentTps_raw.data ?? [];
 
         // Load conversion milestones
-        const { data: milestones = [] } = await admin
+        const __milestones_raw = await admin
           .from('conversion_milestones')
           .select('id')
           .eq('agent_id', agent.id);
+const milestones = __milestones_raw.data ?? [];
 
         const recency = computeRecencyScore(daysSince);
         const frequency = computeFrequencyScore((recentTps || []).length, interval);

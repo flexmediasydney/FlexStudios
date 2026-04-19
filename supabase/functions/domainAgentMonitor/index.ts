@@ -36,12 +36,13 @@ serveWithAudit('domainAgentMonitor', async (req) => {
     }
 
     // 2. Load agent's FlexMedia projects
-    const { data: projects = [] } = await admin
+    const __projects_raw = await admin
       .from('projects')
       .select('id, property_address, title, status, shoot_date, calculated_price, price, payment_status, products, packages')
       .eq('agent_id', agentId)
       .neq('source', 'goal')
       .order('shoot_date', { ascending: false });
+const projects = __projects_raw.data ?? [];
 
     // 3. Fetch Domain listings (real API or simulation)
     let domainListings: any[] = [];
@@ -97,11 +98,12 @@ serveWithAudit('domainAgentMonitor', async (req) => {
     const unmatchedProjects = projects.filter((p: any) => !matchedProjectIds.has(p.id));
 
     // 6. Load retention alerts for this agent
-    const { data: alerts = [] } = await admin
+    const __alerts_raw = await admin
       .from('retention_alerts')
       .select('*')
       .eq('agent_id', agentId)
       .order('first_detected_at', { ascending: false });
+const alerts = __alerts_raw.data ?? [];
 
     // 7. Build response
     const totalListings = domainListings.length;
