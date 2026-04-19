@@ -41,6 +41,10 @@ type SignalInsert = {
   title: string;
   description?: string | null;
   status: 'new';
+  // Explicit 'auto' provenance. Previous versions relied on the column default
+  // ('manual') which made every cron-generated signal masquerade as a hand
+  // capture in the UI. See migration 156 + CHECK constraint widening.
+  source_type: 'auto';
   is_actionable: boolean;
   suggested_action?: string | null;
   linked_agent_ids?: string[];
@@ -50,6 +54,28 @@ type SignalInsert = {
   source_run_id: string;
   idempotency_key: string;
 };
+
+// ── Price-drop quality thresholds ─────────────────────────────────────────
+// We were emitting signals for "$1k → $1k" (rent) and "$1.4M → $1.4M" (sale)
+// where fmtShort collapsed the delta to the same token. New rule:
+//   - Sale (old_price >= 2000): require both >= $5K absolute AND >= 2% drop.
+//   - Rent (old_price  < 2000): require >= $25/wk drop.
+// These numbers mirror the DELETE in migration 156 so old noise gets purged
+// and new noise never lands.
+const PRICE_DROP_SALE_MIN_ABS = 5000;
+const PRICE_DROP_SALE_MIN_PCT = 0.02;
+const PRICE_DROP_RENT_MIN_ABS = 25;
+const PRICE_DROP_RENT_THRESHOLD = 2000; // below this, price is treated as weekly rent
+
+function isMaterialDrop(oldP: number, newP: number): boolean {
+  if (!Number.isFinite(oldP) || !Number.isFinite(newP)) return false;
+  if (oldP <= 0 || newP <= 0 || newP >= oldP) return false;
+  const diff = oldP - newP;
+  if (oldP < PRICE_DROP_RENT_THRESHOLD) {
+    return diff >= PRICE_DROP_RENT_MIN_ABS;
+  }
+  return diff >= PRICE_DROP_SALE_MIN_ABS && diff / oldP >= PRICE_DROP_SALE_MIN_PCT;
+}
 
 // ── Pagination helper ────────────────────────────────────────────────────
 
@@ -124,6 +150,7 @@ async function generateAgentMovement(
       title,
       description,
       status: 'new' as const,
+      source_type: 'auto' as const,
       is_actionable: true,
       suggested_action: 'Congratulate and reconnect with this agent at their new agency',
       linked_agent_ids: [],
@@ -213,6 +240,7 @@ async function generateAgencyGrowth(
       title: `Agency ${name} grew by ${n} agents`,
       description: `In the last ${DEFAULT_LOOKBACK_HOURS}h: ${list.slice(0, 5).map((a: any) => a.name).join(', ')}${list.length > 5 ? `, +${list.length - 5} more` : ''}.`,
       status: 'new',
+      source_type: 'auto' as const,
       is_actionable: true,
       suggested_action: 'Review the agency profile and re-engage if they were a dormant prospect',
       linked_agent_ids: list.map((a: any) => a.id),
@@ -254,14 +282,23 @@ async function generatePriceDrops(
   if (!data.length) return [];
 
   const signals: SignalInsert[] = [];
+  let skippedNoise = 0;
   for (const row of data) {
-    // new_value.sample is an array of { address, old, new }; filter to drops only.
+    // new_value.sample is an array of { address, old, new }; filter to drops only
+    // AND require the drop to be material (see isMaterialDrop).
     const sample: Array<{ address?: string; old?: number; new?: number }> =
       (row.new_value as any)?.sample || [];
-    const drops = sample.filter((s) => (s.new ?? 0) > 0 && (s.old ?? 0) > (s.new ?? 0));
-    if (!drops.length) continue;
+    const drops = sample.filter((s) => isMaterialDrop(Number(s.old), Number(s.new)));
+    if (!drops.length) {
+      // Track how many were filtered out so the run summary shows the noise floor.
+      if (sample.some((s) => (s.new ?? 0) > 0 && (s.old ?? 0) > (s.new ?? 0))) {
+        skippedNoise += 1;
+      }
+      continue;
+    }
 
     const top = drops[0];
+    const pctDrop = top.old && top.new ? Math.round((1 - Number(top.new) / Number(top.old)) * 100) : null;
     const title = drops.length === 1
       ? `Price drop: ${top.address || 'listing'} now ${fmtShort(top.new)} (was ${fmtShort(top.old)})`
       : `${drops.length} listing price drops detected`;
@@ -270,8 +307,15 @@ async function generatePriceDrops(
       level: 'organisation',
       category: 'market',
       title,
-      description: drops.slice(0, 3).map((d) => `${d.address || '?'}: ${fmtShort(d.old)} → ${fmtShort(d.new)}`).join('; '),
+      description: drops.slice(0, 3).map((d) => {
+        const dOld = Number(d.old);
+        const dNew = Number(d.new);
+        const dollars = Number.isFinite(dOld) && Number.isFinite(dNew) ? dOld - dNew : 0;
+        const pct = Number.isFinite(dOld) && dOld > 0 ? Math.round((dollars / dOld) * 100) : 0;
+        return `${d.address || '?'}: ${fmtShort(d.old)} → ${fmtShort(d.new)} (-${fmtShort(dollars)}${pct ? ` / -${pct}%` : ''})`;
+      }).join('; '),
       status: 'new',
+      source_type: 'auto' as const,
       is_actionable: true,
       suggested_action: 'Reach out — motivated vendor may now need re-marketing',
       linked_agent_ids: [],
@@ -281,11 +325,22 @@ async function generatePriceDrops(
         timeline_id: row.id,
         drop_count: drops.length,
         drops: drops.slice(0, 10),
+        // Precomputed top drop for frontend delta badge.
+        top_drop: {
+          address: top.address,
+          old: top.old,
+          new: top.new,
+          abs_delta: top.old && top.new ? Number(top.old) - Number(top.new) : null,
+          pct_delta: pctDrop,
+        },
       },
       source_generator: GENERATOR,
       source_run_id: runId,
       idempotency_key: `${GENERATOR}:price_drop:${row.id}`,
     });
+  }
+  if (skippedNoise > 0) {
+    console.log(`[price_drop] skipped ${skippedNoise} noise rows below quality threshold`);
   }
   return signals;
 }
@@ -336,6 +391,7 @@ async function generateCrmSuggestions(
       title: `Suggested CRM match: ${pulseName} → ${crmName}`,
       description: `Match type: ${row.match_type || 'unknown'}. Confirm or reject on the Mappings tab.`,
       status: 'new' as const,
+      source_type: 'auto' as const,
       is_actionable: true,
       suggested_action: 'Open the Mappings tab and confirm or reject',
       linked_agent_ids: isAgent && row.crm_entity_id ? [row.crm_entity_id] : [],
