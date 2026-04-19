@@ -102,6 +102,7 @@ const Projects = React.lazy(() => import('./pages/Projects'));
 const ProspectDetails = React.lazy(() => import('./pages/ProspectDetails'));
 const Prospecting = React.lazy(() => import('./pages/Prospecting'));
 const Reports = React.lazy(() => import('./pages/Reports'));
+const LegacyMarketShareReport = React.lazy(() => import('./pages/LegacyMarketShareReport'));
 const SocialMedia = React.lazy(() => import('./pages/SocialMedia'));
 const Tasks = React.lazy(() => import('./pages/Tasks'));
 const SettingsAutomationRules = React.lazy(() => import('./pages/SettingsAutomationRules'));
@@ -164,6 +165,7 @@ export const PAGES = {
     "ProspectDetails": ProspectDetails,
     "Prospecting": Prospecting,
     "Reports": Reports,
+    "Reports/LegacyMarketShare": LegacyMarketShareReport,
     "Settings": Settings,
     "SettingsAI": SettingsAI,
     "SettingsAutomationRules": SettingsAutomationRules,

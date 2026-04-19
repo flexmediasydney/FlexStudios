@@ -54,6 +54,7 @@ export const ROUTE_ACCESS = {
 
   // ── ANALYTICS (manager+) ─────────────────────────────────
   Reports: MANAGER_AND_ABOVE,
+  'Reports/LegacyMarketShare': MANAGER_AND_ABOVE,
 
   // ── PRODUCTS & PRICING (admin+) ──────────────────────────
   Products: ADMIN_AND_ABOVE,

@@ -27,7 +27,7 @@ import {
   ExternalLink, Search, RefreshCw, DollarSign, Target,
   ChevronRight, Flame, Droplet, Star, Building2, Download,
   Mail, UserCheck, User as UserIcon, Briefcase, Package as PkgIcon,
-  Filter,
+  Filter, Archive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
@@ -616,12 +616,16 @@ function AgentRow({ r, idx, onSelect }) {
       <td className="py-1.5 text-right tabular-nums">{fmtInt(projects)}</td>
       {/* Current */}
       <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(curListings)}</td>
-      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.current_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">
+        <CapturedCell total={r.current_captured} active={r.current_captured_active} legacy={r.current_captured_legacy} />
+      </td>
       <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={curRet} /></td>
       <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(r.current_missed_value)}</td>
       {/* Sold */}
       <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(r.sold_listings)}</td>
-      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.sold_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">
+        <CapturedCell total={r.sold_captured} active={r.sold_captured_active} legacy={r.sold_captured_legacy} />
+      </td>
       <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={soldRet} /></td>
       <td className="py-1.5 text-muted-foreground"><ChevronRight className="h-3.5 w-3.5" /></td>
     </tr>
@@ -691,12 +695,16 @@ function AgencyRow({ r, idx, onSelect }) {
       <td className="py-1.5 text-right tabular-nums">{fmtInt(projects)}</td>
       {/* Current */}
       <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(curListings)}</td>
-      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.current_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">
+        <CapturedCell total={r.current_captured} active={r.current_captured_active} legacy={r.current_captured_legacy} />
+      </td>
       <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={curRet} /></td>
       <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(r.current_missed_value)}</td>
       {/* Sold */}
       <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(r.sold_listings)}</td>
-      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.sold_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">
+        <CapturedCell total={r.sold_captured} active={r.sold_captured_active} legacy={r.sold_captured_legacy} />
+      </td>
       <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={soldRet} /></td>
       <td className="py-1.5 text-muted-foreground"><ChevronRight className="h-3.5 w-3.5" /></td>
     </tr>
@@ -716,6 +724,28 @@ function Avatar({ url, name, shape = "circle" }) {
     <div className={cn("w-6 h-6 flex items-center justify-center text-[10px] font-semibold text-slate-600 bg-slate-100", radius)}>
       {initials || "?"}
     </div>
+  );
+}
+
+/**
+ * CapturedCell — renders a captured count with a hover tooltip breaking it
+ * into active + legacy when the agent-3 RPC extension populates those fields.
+ * Falls back gracefully (no tooltip) when the columns are missing.
+ */
+function CapturedCell({ total, active, legacy }) {
+  const hasBreakdown = active != null || legacy != null;
+  const a = Number(active) || 0;
+  const l = Number(legacy) || 0;
+  const title = hasBreakdown
+    ? `${a} active + ${l} legacy = ${Number(total) || (a + l)} captured`
+    : undefined;
+  return (
+    <span title={title} className={cn("inline-flex items-center gap-0.5", hasBreakdown && l > 0 && "underline decoration-dotted decoration-slate-400 underline-offset-2 cursor-help")}>
+      {fmtInt(total)}
+      {hasBreakdown && l > 0 && (
+        <Archive className="h-2.5 w-2.5 text-slate-400" aria-hidden="true" />
+      )}
+    </span>
   );
 }
 
@@ -826,6 +856,9 @@ function DetailView({ mode, selected, fromIso, toIso, windowLabel, onBack, onOpe
   const args = mode === "agent"
     ? { p_agent_rea_id: selected.agent_rea_id, p_from: fromIso, p_to: toIso }
     : { p_agency_pulse_id: selected.agency_pulse_id, p_from: fromIso, p_to: toIso };
+
+  // Legacy-import visibility toggle for the captured_listings table.
+  const [capturedView, setCapturedView] = useState("all"); // "all" | "active" | "legacy"
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ["pulse_retention_detail", mode, selected.agent_rea_id || selected.agency_pulse_id, fromIso, toIso],
@@ -975,6 +1008,14 @@ function DetailView({ mode, selected, fromIso, toIso, windowLabel, onBack, onOpe
             <MissedListingsTable listings={listings.filter(l => !l.is_captured)} onOpenEntity={onOpenEntity} />
           </div>
 
+          {/* Captured listings — with legacy visibility toggle */}
+          <CapturedListingsTable
+            listings={listings.filter(l => l.is_captured)}
+            capturedView={capturedView}
+            setCapturedView={setCapturedView}
+            onOpenEntity={onOpenEntity}
+          />
+
           {/* Matches grid: property_key pills */}
           <Card className="p-3">
             <div className="flex items-center gap-2 mb-2">
@@ -1062,6 +1103,111 @@ function StatusBadge({ status }) {
   };
   const [cls, label] = map[status] || ["bg-slate-100 text-slate-700 border-slate-200", status || "—"];
   return <Badge className={cn("text-[10px] h-4 px-1", cls)}>{label}</Badge>;
+}
+
+/**
+ * CapturedListingsTable — captured-side counterpart to MissedListingsTable.
+ * Adds a "captured_by" chip (Active / Legacy / Both) and a view toggle to
+ * filter by source. Consumes listing.captured_by populated by agent 3's
+ * RPC extension; rows without the field are treated as "active" so the
+ * table never collapses to empty pre-migration.
+ */
+function CapturedListingsTable({ listings, capturedView, setCapturedView, onOpenEntity }) {
+  const shown = (listings || []).filter(l => {
+    const cb = l.captured_by || "active"; // defensive default
+    if (capturedView === "active") return cb === "active" || cb === "both";
+    if (capturedView === "legacy") return cb === "legacy" || cb === "both";
+    return true;
+  });
+  const counts = {
+    all: (listings || []).length,
+    active: (listings || []).filter(l => (l.captured_by || "active") === "active" || l.captured_by === "both").length,
+    legacy: (listings || []).filter(l => l.captured_by === "legacy" || l.captured_by === "both").length,
+  };
+  return (
+    <Card className="p-3">
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+        <h3 className="text-sm font-semibold">Captured listings</h3>
+        <div className="flex items-center gap-0.5 rounded-md border bg-card p-0.5 ml-2" title="Filter captured listings by source">
+          {[
+            { v: "all",    l: `All (${counts.all})` },
+            { v: "active", l: `Active (${counts.active})` },
+            { v: "legacy", l: `Legacy (${counts.legacy})` },
+          ].map(opt => (
+            <button
+              key={opt.v}
+              onClick={() => setCapturedView(opt.v)}
+              className={cn(
+                "text-[11px] px-1.5 py-0.5 rounded transition-colors",
+                capturedView === opt.v ? "bg-primary text-primary-foreground font-medium" : "text-muted-foreground hover:bg-muted"
+              )}
+            >{opt.l}</button>
+          ))}
+        </div>
+        <Badge variant="secondary" className="ml-auto text-xs">{shown.length}</Badge>
+      </div>
+      {shown.length === 0 ? (
+        <div className="text-xs text-muted-foreground py-4 text-center">
+          {counts.all === 0 ? "No captures in this window." : "Nothing in this source."}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b text-muted-foreground">
+                <th className="text-left py-1.5 font-medium px-1">Captured by</th>
+                <th className="text-left py-1.5 font-medium">Address</th>
+                <th className="text-left py-1.5 font-medium">First seen</th>
+                <th className="text-left py-1.5 font-medium">Package</th>
+                <th className="text-right py-1.5 font-medium">Quote</th>
+                <th className="text-right py-1.5 font-medium px-1">Link</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(l => {
+                const cb = l.captured_by || "active";
+                return (
+                  <tr key={l.listing_id} className="border-b last:border-b-0 hover:bg-muted/40 cursor-pointer"
+                      onClick={() => onOpenEntity && onOpenEntity({ type: "listing", id: l.listing_id })}>
+                    <td className="py-1.5 px-1"><CapturedByChip by={cb} /></td>
+                    <td className="py-1.5 truncate max-w-[220px] hover:underline" title={l.address}>
+                      <div className="truncate">{l.address || l.property_key}</div>
+                      <div className="text-[10px] text-muted-foreground truncate">{l.suburb || ""}</div>
+                    </td>
+                    <td className="py-1.5 tabular-nums">{fmtDate(l.first_seen_at)}</td>
+                    <td className="py-1.5">
+                      {l.classified_package_name
+                        ? <Badge variant="outline" className="text-[10px] h-4 px-1">{l.classified_package_name.replace(" Package", "")}</Badge>
+                        : "—"}
+                    </td>
+                    <td className="py-1.5 text-right tabular-nums font-medium text-emerald-700">{fmtMoney(l.quoted_price)}</td>
+                    <td className="py-1.5 px-1 text-right" onClick={(e) => e.stopPropagation()}>
+                      {l.source_url && (
+                        <a href={l.source_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex" title="Open on REA">
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function CapturedByChip({ by }) {
+  const map = {
+    active: ["bg-emerald-100 text-emerald-800 border-emerald-200", "Active"],
+    legacy: ["bg-slate-100   text-slate-700   border-slate-200",   "Legacy"],
+    both:   ["bg-blue-100    text-blue-800    border-blue-200",    "Both"],
+  };
+  const [cls, label] = map[by] || map.active;
+  return <Badge className={cn("text-[10px] h-4 px-1 whitespace-nowrap", cls)}>{label}</Badge>;
 }
 
 function MissedListingsTable({ listings, onOpenEntity }) {

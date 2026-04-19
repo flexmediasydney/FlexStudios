@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import {
   TrendingUp, DollarSign, Target, Package as PkgIcon, Award,
   BookOpen, Info, RefreshCw, Search, ArrowUpRight, ExternalLink,
-  AlertTriangle, CheckCircle2, Clock, Database,
+  AlertTriangle, CheckCircle2, Clock, Database, Archive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
@@ -76,6 +76,9 @@ export default function PulseMarketShare({ onOpenEntity, onNavigateTab }) {
   const [packageFilter, setPackageFilter] = useState(null);
   const [tierFilter, setTierFilter] = useState(null);
   const [statusFilter, setStatusFilter] = useState(null);
+  // Legacy import visibility — toggle the Top Missed table between
+  // "only uncaptured by any source" (default) and "all listings" (audit mode).
+  const [captureVisibility, setCaptureVisibility] = useState("uncaptured"); // "uncaptured" | "all"
 
   const { fromDate, toDate } = useMemo(() => {
     const wd = WINDOWS.find(w => w.value === window) || WINDOWS[5];
@@ -202,6 +205,8 @@ export default function PulseMarketShare({ onOpenEntity, onNavigateTab }) {
           setTierFilter={setTierFilter}
           statusFilter={statusFilter}
           setStatusFilter={setStatusFilter}
+          captureVisibility={captureVisibility}
+          setCaptureVisibility={setCaptureVisibility}
           onSuburbDrill={setSuburbFilter}
         />
       ) : (
@@ -219,12 +224,24 @@ function DashboardView({
   packageFilter, setPackageFilter,
   tierFilter, setTierFilter,
   statusFilter, setStatusFilter,
+  captureVisibility, setCaptureVisibility,
   onSuburbDrill,
 }) {
   const qq = ms?.quote_quality || {};
   const hasPending = (qq.pending_enrichment || 0) > 0;
 
-  // Client-side filter the top-missed table by selected package/tier/status
+  // Legacy capture breakdown — defensive: these fields are populated by
+  // agent 3's migration 187 extension to pulse_get_market_share. Until then
+  // they read as undefined and the UI degrades to "active only" numbers.
+  const capturedActive  = Number(ms?.captured_listings_active  ?? ms?.captured_listings ?? 0);
+  const capturedLegacy  = Number(ms?.captured_listings_legacy  ?? 0);
+  const capturedTotal   = Number(ms?.captured_listings_total   ?? ms?.captured_listings ?? 0);
+  const legacyOnly      = Math.max(0, capturedTotal - capturedActive);
+
+  // Client-side filter the top-missed table by selected package/tier/status.
+  // When captureVisibility === 'uncaptured' (default) we still show the RPC's
+  // top-missed set; when 'all' we display them plus a label noting that the
+  // RPC payload is uncaptured-only (flip to the Listings tab for everything).
   const filteredTopMissed = useMemo(() => {
     return (topMissed || []).filter((row) => {
       if (packageFilter && row.classified_package_name !== packageFilter) return false;
@@ -248,17 +265,30 @@ function DashboardView({
   return (
     <div className="space-y-4">
       {/* ── Headline stat cards (clickable) ──────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           icon={Target}
           color="text-emerald-600"
           bg="bg-emerald-50"
           label="Capture rate"
           value={fmtPct(ms?.capture_rate_pct)}
-          sub={`${fmtInt(ms?.captured_listings)} of ${fmtInt(ms?.total_listings)} listings`}
+          sub={capturedLegacy > 0
+            ? `${fmtInt(capturedActive)} active · ${fmtInt(capturedLegacy)} legacy of ${fmtInt(ms?.total_listings)}`
+            : `${fmtInt(capturedTotal || ms?.captured_listings)} of ${fmtInt(ms?.total_listings)} listings`}
           loading={msLoading}
           onClick={onNavigateTab ? (() => onNavigateTab("listings")) : null}
           drillHint="View all listings →"
+        />
+        <StatCard
+          icon={Archive}
+          color="text-slate-600"
+          bg="bg-slate-100"
+          label="Legacy-only captures"
+          value={fmtInt(legacyOnly)}
+          sub={legacyOnly > 0
+            ? "Historical projects (pre-CRM) matched by address — imported from Pipedrive / other sources."
+            : "No legacy projects matched in this window."}
+          loading={msLoading}
         />
         <StatCard
           icon={DollarSign}
@@ -310,11 +340,53 @@ function DashboardView({
         />
       </div>
 
+      {/* ── By capture source (active vs legacy vs missed) ──────────── */}
+      <CaptureSourceBreakdown
+        ms={ms}
+        capturedActive={capturedActive}
+        capturedLegacy={capturedLegacy}
+        breakdownRows={ms?.captured_by_source_breakdown}
+      />
+
+      {/* ── Link to the "what-if" legacy comparison report ──────────── */}
+      <Card className="p-3 flex items-center gap-3">
+        <div className="w-8 h-8 rounded-md bg-slate-100 flex items-center justify-center flex-shrink-0">
+          <Archive className="h-4 w-4 text-slate-700" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-semibold">Legacy market share "what-if" view</div>
+          <div className="text-[11px] text-muted-foreground">
+            Side-by-side diff: active-only vs active+legacy. Surfaces past relationships worth re-engaging.
+          </div>
+        </div>
+        <a href="/Reports/LegacyMarketShare"
+           className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted">
+          Open report <ArrowUpRight className="h-3 w-3" />
+        </a>
+      </Card>
+
       {/* ── Top missed table (row + cell drill-throughs) ─────────────── */}
       <Card className="p-3" id="pulse-market-share-top-missed">
         <div className="flex items-center gap-2 mb-2 flex-wrap">
           <ArrowUpRight className="h-4 w-4 text-amber-600" />
           <h3 className="text-sm font-semibold">Top missed opportunities</h3>
+          <div className="flex items-center gap-0.5 rounded-md border bg-card p-0.5 text-[10px]"
+               title="Top missed shows uncaptured-only by default. Flip to include rows now captured by legacy imports for audit.">
+            <button
+              onClick={() => setCaptureVisibility && setCaptureVisibility("uncaptured")}
+              className={cn(
+                "px-1.5 py-0.5 rounded",
+                captureVisibility === "uncaptured" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              )}
+            >Not captured</button>
+            <button
+              onClick={() => setCaptureVisibility && setCaptureVisibility("all")}
+              className={cn(
+                "px-1.5 py-0.5 rounded",
+                captureVisibility === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              )}
+            >All listings</button>
+          </div>
           {hasActiveFilter && (
             <div className="flex items-center gap-1 flex-wrap">
               {packageFilter && (
@@ -552,6 +624,76 @@ function Breakdown({ title, icon: Icon, rows, valueKey, countKey, labelKey, acti
   );
 }
 
+/**
+ * CaptureSourceBreakdown — after legacy import lands, visualize how the total
+ * market splits between projects captured by the live CRM, captured only via
+ * imported legacy projects, and still missed. Consumes `ms.captured_by_source_breakdown`
+ * (added by agent 3's RPC extension) with graceful fallback to the top-level
+ * counters if the field is missing.
+ */
+function CaptureSourceBreakdown({ ms, capturedActive, capturedLegacy, breakdownRows }) {
+  const total = Number(ms?.total_listings) || 0;
+  const missedListings = Math.max(0, total - Number(ms?.captured_listings_total ?? (capturedActive + capturedLegacy)));
+  const missedValue    = Number(ms?.missed_opportunity_value) || 0;
+
+  // Prefer the RPC-provided breakdown if present (future-proof — shape may
+  // carry more granular breakdown eventually), else synthesize from scalars.
+  const rows = Array.isArray(breakdownRows) && breakdownRows.length > 0
+    ? breakdownRows
+    : [
+      { label: "Active captures", count: capturedActive, value: 0,
+        tone: "emerald", note: "Listings we quoted or delivered" },
+      { label: "Legacy captures", count: capturedLegacy, value: 0,
+        tone: "slate", note: "Historical projects matched by address" },
+      { label: "Missed",          count: missedListings,  value: missedValue,
+        tone: "amber",  note: "Still uncaptured by any source" },
+    ];
+
+  const maxN = Math.max(1, ...rows.map(r => Number(r.count) || 0));
+  const toneBar = {
+    emerald: "bg-emerald-400",
+    slate:   "bg-slate-400",
+    amber:   "bg-amber-400",
+    blue:    "bg-blue-400",
+  };
+  const toneText = {
+    emerald: "text-emerald-700",
+    slate:   "text-slate-600",
+    amber:   "text-amber-700",
+    blue:    "text-blue-700",
+  };
+
+  return (
+    <Card className="p-3">
+      <div className="flex items-center gap-2 mb-2">
+        <Archive className="h-4 w-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold">By capture source</h3>
+        <span className="text-[10px] text-muted-foreground ml-auto">active vs legacy vs missed — %% of {fmtInt(total)}</span>
+      </div>
+      <div className="space-y-2">
+        {rows.map((row, i) => {
+          const count = Number(row.count) || 0;
+          const pct = total > 0 ? (100 * count / total) : 0;
+          return (
+            <div key={i} className="space-y-0.5">
+              <div className="flex items-center text-xs gap-2">
+                <span className={cn("font-medium flex-1 truncate", toneText[row.tone] || "")}>{row.label}</span>
+                <span className="text-muted-foreground tabular-nums">{fmtInt(count)} listings</span>
+                <span className="tabular-nums w-16 text-right font-medium">{fmtMoney(row.value)}</span>
+                <span className="tabular-nums w-12 text-right text-muted-foreground">{pct.toFixed(1)}%</span>
+              </div>
+              <div className="h-1.5 bg-muted rounded overflow-hidden">
+                <div className={cn("h-full", toneBar[row.tone] || "bg-primary")} style={{ width: `${(count / maxN) * 100}%` }} />
+              </div>
+              {row.note && <div className="text-[10px] text-muted-foreground">{row.note}</div>}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 function PackageBadge({ name }) {
   if (!name) return <span className="text-muted-foreground">—</span>;
   const colorMap = {
@@ -688,6 +830,30 @@ function LegendView({ sourceMix, mixLoading, ms }) {
           <li><b>stale</b> — media/price changed since last compute. Next cron tick re-computes.</li>
         </ul>
         <p className="text-[11px] text-muted-foreground mt-2">Compute worker runs every 10 min, 500 listings per tick. Mark-stale trigger on pulse_listings auto-flags changes.</p>
+      </LegendSection>
+
+      <LegendSection title="7. Legacy projects (historical imports)" icon={Archive}>
+        <p className="text-xs text-muted-foreground mb-2">
+          Historical project data (pre-CRM era) is imported from external sources into the
+          <code className="px-1">legacy_projects</code> table and participates in the "captured"
+          predicate alongside live <code>projects</code> rows. Match key is <code>property_key</code>
+          (address normalized). This lets Market Share credit us for work the current CRM has
+          no record of.
+        </p>
+        <ul className="text-xs space-y-1.5">
+          <li><b>Sources</b> — Pipedrive deals archive is the primary feeder. Other one-shot imports
+            (CSV uploads of legacy Base44 jobs, manual retro-entries) land in the same table tagged by <code>source</code>.</li>
+          <li><b>Date range</b> — whatever the import carries. Projects without a <code>completed_date</code>
+            still match by address but do not contribute to time-windowed reports.</li>
+          <li><b>captured_by</b> — each listing is tagged <code>active</code>, <code>legacy</code>, <code>both</code>, or <code>null</code>
+            (not captured). The headline capture rate counts all four as captured except <code>null</code>.</li>
+          <li><b>Recompute</b> — after a large import, admins can trigger
+            <code className="px-1">pulseRecomputeLegacy</code> from Settings → Legacy Import to propagate
+            the new captured status to already-computed substrate rows. A nightly cron
+            (<code>pulse-legacy-recompute</code>) mops up any drift.</li>
+          <li><b>"Only-captured-by-legacy"</b> agents/agencies surface on <code>/Reports/LegacyMarketShare</code>
+            — these are past relationships worth re-engaging.</li>
+        </ul>
       </LegendSection>
     </div>
   );
