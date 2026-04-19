@@ -176,6 +176,56 @@ async function runApifyActor(actorSlug: string, input: any, label: string, timeo
     }
   }
 
+  // OP04 (2026-04-19): billing re-fetch for short SUCCEEDED runs.
+  //
+  // Why: Apify's `runs?waitForFinish=N` returns immediately once the actor
+  // finishes. For short runs (1-3s — common for rea_listings_bb_sold &
+  // rea_agents, which hit empty/small suburbs), the response status is
+  // already SUCCEEDED on the initial submit call, so the poll-while-RUNNING
+  // loop above is skipped entirely. At that exact moment, Apify's usage
+  // accounting has NOT yet been committed, so `usageTotalUsd` is null.
+  // Result: 0 billed cost recorded.
+  //
+  // Evidence: 813/813 rea_listings_bb_sold runs, 235/247 rea_agents runs,
+  // AND 912/958 rea_listings_bb_buy + 546/568 rea_listings_bb_rent runs —
+  // anywhere the actor completes in <~10s — all recorded $0.00 despite
+  // actual Apify billing. Affected ALL four pulseDataSync source_ids
+  // (buy/rent/sold/agents). Only long-running buy/rent runs (>30s)
+  // reliably had usage data on the waitForFinish response.
+  //
+  // Fix: when we see SUCCEEDED with null usageTotalUsd, sleep briefly then
+  // re-fetch the run record once. By that point Apify has written the
+  // accounting row. Cap the retry at 3 attempts × 1.5s each so this
+  // doesn't burn the wall budget on broken runs.
+  if (status === 'SUCCEEDED' && runId && usageTotalUsd === null) {
+    const refetchDeadlineMs = Math.min(5_000, Math.max(0, wallRemainingMs() - 10_000));
+    const refetchStart = Date.now();
+    let attempt = 0;
+    while (usageTotalUsd === null && attempt < 3 && (Date.now() - refetchStart) < refetchDeadlineMs && !wallExceeded()) {
+      attempt += 1;
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const refetchResp = await fetchWithTimeout(`${APIFY_BASE}/actor-runs/${runId}`, {
+          headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
+        }, 10_000);
+        const refetchData = await refetchResp.json().catch(() => ({}));
+        if (typeof refetchData?.data?.usageTotalUsd === 'number') {
+          usageTotalUsd = refetchData.data.usageTotalUsd;
+        }
+        if (typeof refetchData?.data?.stats?.runTimeSecs === 'number') {
+          runTimeSecs = refetchData.data.stats.runTimeSecs;
+        }
+      } catch (refetchErr: any) {
+        console.warn(`Apify ${label} billing refetch attempt ${attempt} failed: ${refetchErr?.message || refetchErr}`);
+      }
+    }
+    if (usageTotalUsd === null) {
+      console.warn(`Apify ${label}: billing refetch after ${attempt} attempts still null — recording $0 (Apify accounting delay).`);
+    } else {
+      console.log(`Apify ${label}: billing refetch captured $${usageTotalUsd.toFixed(4)} after ${attempt} retry(s).`);
+    }
+  }
+
   if (status !== 'SUCCEEDED') {
     console.error(`Apify ${label}: status=${status}`);
     return { items: [], runId, datasetId, usageTotalUsd, runTimeSecs, status };
