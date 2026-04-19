@@ -109,6 +109,50 @@ export default function PriceMatrixEditor({ priceMatrix }) {
       await refetchEntityList("PriceMatrix");
       refetchEntityList("PriceMatrixAuditLog");
       queryClient.invalidateQueries({ queryKey: ["price-matrix-audit", priceMatrix.id] });
+
+      // Force-recompute the Market Share substrate for every listing under this
+      // matrix's agency/agent. The DB trigger from migration 193 has already
+      // flipped them to quote_status='stale'; this RPC synchronously drains the
+      // queue (up to 1000 rows) so the dashboard updates within seconds rather
+      // than waiting 10min for the cron. See migration 193.
+      const toastId = toast.loading("Recomputing affected Market Share listings...");
+      try {
+        const result = await api.rpc("pulse_compute_stale_quotes_for_matrix", {
+          p_matrix_id: priceMatrix.id,
+          p_limit: 1000,
+        });
+        const processed = Number(result?.processed ?? 0);
+        const targetCount = Number(result?.target_count ?? processed);
+        const errors = Number(result?.errors ?? 0);
+        const label = processed === 1 ? "listing" : "listings";
+        if (processed === 0 && targetCount === 0) {
+          toast.info("No affected listings found for this matrix.", { id: toastId });
+        } else if (errors > 0) {
+          toast.warning(
+            `Recomputed ${processed}/${targetCount} ${label} (${errors} errors).`,
+            { id: toastId }
+          );
+        } else {
+          toast.success(
+            `${processed} ${label} recomputed. Market Share + Retention cards will refresh.`,
+            { id: toastId, duration: 6000 }
+          );
+        }
+        // Invalidate dashboard/retention query caches so the next fetch reads
+        // the fresh substrate.
+        queryClient.invalidateQueries({ queryKey: ["market-share"] });
+        queryClient.invalidateQueries({ queryKey: ["pulse-market-share"] });
+        queryClient.invalidateQueries({ queryKey: ["pulse-retention"] });
+        queryClient.invalidateQueries({ queryKey: ["retention"] });
+        queryClient.invalidateQueries({ queryKey: ["pulse-missed-top"] });
+        queryClient.invalidateQueries({ queryKey: ["substrate-invalidation-stats"] });
+      } catch (e) {
+        console.error("substrate recompute failed:", e);
+        toast.error(
+          "Substrate recompute failed - cron will catch up within 10min.",
+          { id: toastId }
+        );
+      }
     },
     onError: (error) => { console.error("Price matrix save error:", error); toast.error("Failed to save pricing. Please try again."); }
   });

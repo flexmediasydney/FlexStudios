@@ -35,6 +35,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   AlertTriangle, Lock, LockOpen, History, ShieldCheck, Loader2, CheckCircle2,
   ArrowRight, ChevronLeft, ChevronRight, Database, RefreshCw, Inbox,
+  Timer, Gauge,
 } from "lucide-react";
 import FieldSourceChip from "@/components/fieldSources/FieldSourceChip";
 import { useSafrMutations } from "@/components/fieldSources/safrHooks";
@@ -562,6 +563,141 @@ function RecentChangesTab() {
   );
 }
 
+// ── Substrate invalidation diagnostics ────────────────────────────────────
+// Feeds off pulse_get_substrate_invalidation_stats() (migration 193) to show
+// how many Market Share / Retention substrate rows are stale, WHY they went
+// stale, when the compute cron last drained the queue, and a rough ETA.
+
+const INVALIDATION_REASON_LABELS = {
+  matrix_change:        "Price matrix edits",
+  package_change:       "Package tier edits",
+  product_change:       "Product tier edits",
+  project_change:       "Projects INSERT/UPDATE",
+  listing_change:       "Listing media/price",
+  linked_entity_change: "CRM linking",
+  captured_drift:       "Capture drift retro-fill",
+  manual:               "Manual trigger",
+  unspecified:          "Legacy / unspecified",
+};
+
+function SubstrateInvalidationPanel() {
+  const { data, isLoading, refetch, isFetching } = useQuery({
+    queryKey: ["substrate-invalidation-stats"],
+    queryFn: () => api.rpc("pulse_get_substrate_invalidation_stats"),
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
+  });
+
+  const stale = Number(data?.stale_total ?? 0);
+  const breakdown = data?.quote_status_breakdown || {};
+  const fresh = Number(breakdown.fresh ?? 0);
+  const pending = Number(breakdown.pending_enrichment ?? 0);
+  const dataGap = Number(breakdown.data_gap ?? 0);
+  const byReason = data?.stale_by_reason || {};
+  const lastDrain = data?.last_cron_drain_at;
+  const oldestStale = data?.oldest_stale_computed_at;
+  const etaMin = Number(data?.backlog_eta_minutes ?? 0);
+
+  return (
+    <Card className="border-l-4 border-l-amber-500/60">
+      <CardContent className="pt-5 pb-5 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-1.5">
+              <Gauge className="h-4 w-4 text-amber-600" />
+              Market Share substrate
+            </h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              pulse_listing_missed_opportunity — cache driving Market Share + Client Retention.
+              Cron <code className="text-[10px] bg-muted px-1 rounded">pulse-compute-stale-quotes</code> drains staleness every 10min.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => refetch()} disabled={isFetching}>
+            {isFetching ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+            Refresh
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+          <div className="rounded border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Fresh</div>
+            <div className="text-base font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+              {isLoading ? <Skeleton className="h-5 w-10" /> : fresh.toLocaleString()}
+            </div>
+          </div>
+          <div className="rounded border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Stale (backlog)</div>
+            <div className="text-base font-semibold tabular-nums text-amber-600 dark:text-amber-400">
+              {isLoading ? <Skeleton className="h-5 w-10" /> : stale.toLocaleString()}
+            </div>
+          </div>
+          <div className="rounded border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Pending enrichment</div>
+            <div className="text-base font-semibold tabular-nums text-muted-foreground">
+              {isLoading ? <Skeleton className="h-5 w-10" /> : pending.toLocaleString()}
+            </div>
+          </div>
+          <div className="rounded border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Data gap</div>
+            <div className="text-base font-semibold tabular-nums text-muted-foreground">
+              {isLoading ? <Skeleton className="h-5 w-10" /> : dataGap.toLocaleString()}
+            </div>
+          </div>
+          <div className="rounded border p-2">
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+              <Timer className="h-3 w-3" /> Backlog ETA
+            </div>
+            <div className="text-base font-semibold tabular-nums">
+              {isLoading ? <Skeleton className="h-5 w-10" />
+                : etaMin === 0 ? "—" : `~${etaMin}m`}
+            </div>
+          </div>
+        </div>
+
+        {stale > 0 && (
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">
+              Stale by reason
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(byReason).map(([key, count]) => {
+                const n = Number(count || 0);
+                if (n === 0) return null;
+                return (
+                  <Badge key={key} variant="outline" className="text-[10px] font-normal">
+                    {INVALIDATION_REASON_LABELS[key] || key}
+                    <span className="ml-1.5 font-semibold tabular-nums">{n.toLocaleString()}</span>
+                  </Badge>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-muted-foreground pt-1 border-t">
+          <span>
+            Last cron drain:{" "}
+            <span className="font-medium text-foreground">
+              {lastDrain ? fmtRel(lastDrain) : "—"}
+            </span>
+          </span>
+          {oldestStale && (
+            <span>
+              Oldest stale row:{" "}
+              <span className="font-medium text-foreground">{fmtRel(oldestStale)}</span>
+            </span>
+          )}
+          {data?.generated_at && (
+            <span>
+              Generated: <span className="font-medium text-foreground">{fmtRel(data.generated_at)}</span>
+            </span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────
 
 export default function SettingsDataConsistency() {
@@ -581,6 +717,8 @@ export default function SettingsDataConsistency() {
         </div>
 
         <StatsStrip />
+
+        <SubstrateInvalidationPanel />
 
         <Tabs defaultValue="conflicts" className="space-y-4">
           <TabsList>

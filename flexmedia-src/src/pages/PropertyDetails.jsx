@@ -2155,6 +2155,11 @@ function TimelineTab({ events, listings, projects, flashedEventId }) {
 
 function classifyEventKind(e) {
   const t = String(e.event_type || "").toLowerCase();
+  // Missed-opportunity lifecycle events (migration 194) — treat as "sales"
+  // signals so they stay visible in the Sales filter on the property timeline.
+  if (t === "quote_materially_changed" || t === "listing_captured"
+      || t === "listing_un_captured" || t === "classification_changed"
+      || t === "tier_changed") return "sale";
   if (t.includes("shoot") || t.includes("project") || t.includes("booking") || t.includes("delivered")) return "shoot";
   if (t.includes("sold") || t.includes("sale")) return "sale";
   if (t.includes("list") || t.includes("withdraw") || t.includes("price") || t.includes("auction")) return "rea";

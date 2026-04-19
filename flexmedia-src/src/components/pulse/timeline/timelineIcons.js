@@ -15,7 +15,8 @@ import {
   ArrowRight, Star, Home, User, Zap, RefreshCw, Link2, UserPlus,
   TrendingUp, DollarSign, Play, CheckCircle2, Timer, ListPlus,
   Sparkles, AtSign, Phone, Gavel, FileImage, Video, XCircle,
-  ArrowRightLeft, Database,
+  ArrowRightLeft, Database, Target, CircleDollarSign, ShieldOff,
+  LayoutGrid, ArrowUpDown,
 } from "lucide-react";
 
 /* ── System event types filtered out in compact dossier mode ──────────────── */
@@ -72,6 +73,16 @@ export const EVENT_CONFIG = {
   // to_source) in TimelineRow's renderDetail pathway.
   field_promoted:           { icon: Database,       color: "bg-indigo-500",  label: "Field promoted",       category_color: "text-indigo-600 dark:text-indigo-400", category: "safr"    },
   agent_movement_detected:  { icon: ArrowRightLeft, color: "bg-violet-500",  label: "Agent movement",       category_color: "text-violet-600 dark:text-violet-400", category: "movement" },
+
+  // Missed-opportunity quote lifecycle — migration 194. Emitted by the
+  // substrate (pulse_listing_missed_opportunity) AFTER UPDATE trigger when
+  // pulse_compute_listing_quote produces a materially different quote vs the
+  // previous row. Answers "why did Market Share shift?" per listing.
+  quote_materially_changed: { icon: CircleDollarSign, color: "bg-amber-500",   label: "Quote Shifted",       category_color: "text-amber-600 dark:text-amber-400",   category: "market"  },
+  listing_captured:         { icon: Target,           color: "bg-emerald-500", label: "Newly Captured",      category_color: "text-emerald-600 dark:text-emerald-400", category: "market"  },
+  listing_un_captured:      { icon: ShieldOff,        color: "bg-rose-500",    label: "Lost Capture",        category_color: "text-rose-600 dark:text-rose-400",     category: "market"  },
+  classification_changed:   { icon: LayoutGrid,       color: "bg-indigo-500",  label: "Re-classified",       category_color: "text-indigo-600 dark:text-indigo-400", category: "market"  },
+  tier_changed:             { icon: ArrowUpDown,      color: "bg-blue-500",    label: "Tier Changed",        category_color: "text-blue-600 dark:text-blue-400",     category: "market"  },
 };
 
 /* ── Fallback config for unknown event types ─────────────────────────────── */
