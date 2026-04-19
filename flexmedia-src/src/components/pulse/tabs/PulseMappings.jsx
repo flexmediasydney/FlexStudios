@@ -4,8 +4,9 @@
  */
 import React, { useState, useMemo, useCallback } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -266,15 +267,56 @@ export default function PulseMappings({
   const [autoConfirmOpen, setAutoConfirmOpen] = useState(false);
   const [autoConfirmBusy, setAutoConfirmBusy] = useState(false);
 
+  // BUG FIX (2026-04-19): since the IndustryPulse refactor (ed1ddce) dropped
+  // the top-level `useEntityList("PulseAgent"/"PulseAgency")` fetches, the
+  // props `pulseAgents` / `pulseAgencies` arrive as empty arrays. Without
+  // those lookup lists the rows below render just the raw `rea_id` with no
+  // name. We pull our own slim projection here (id, display-name, rea_id
+  // only) — ~500KB total vs the old 50MB full-row cache — tab-local so other
+  // tabs don't pay for it.
+  const { data: pulseAgentLookup = [] } = useQuery({
+    queryKey: ["pulse-mappings-agent-lookup"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("pulse_agents")
+        .select("id, full_name, rea_agent_id")
+        .limit(25000);
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 5 * 60 * 1000,
+    enabled: pulseAgents.length === 0,
+  });
+
+  const { data: pulseAgencyLookup = [] } = useQuery({
+    queryKey: ["pulse-mappings-agency-lookup"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("pulse_agencies")
+        .select("id, name, rea_agency_id")
+        .limit(10000);
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 5 * 60 * 1000,
+    enabled: pulseAgencies.length === 0,
+  });
+
+  // Use parent-provided arrays when available; otherwise fall back to our
+  // own projection. Prevents duplicate fetches if IndustryPulse is ever
+  // reverted to pass these props.
+  const effectivePulseAgents = pulseAgents.length > 0 ? pulseAgents : pulseAgentLookup;
+  const effectivePulseAgencies = pulseAgencies.length > 0 ? pulseAgencies : pulseAgencyLookup;
+
   // Resolved rows
   const rows = useMemo(() => {
     return pulseMappings.map((m) => {
       const pulseRecord =
         m.entity_type === "agency"
-          ? pulseAgencies.find(
+          ? effectivePulseAgencies.find(
               (a) => a.id === m.pulse_entity_id || (a.rea_agency_id && a.rea_agency_id === m.rea_id)
             )
-          : pulseAgents.find(
+          : effectivePulseAgents.find(
               (a) => a.id === m.pulse_entity_id || a.rea_agent_id === m.rea_id
             );
 
@@ -297,7 +339,7 @@ export default function PulseMappings({
 
       return { mapping: m, pulseName, crmName };
     });
-  }, [pulseMappings, pulseAgents, pulseAgencies, crmAgents, crmAgencies]);
+  }, [pulseMappings, effectivePulseAgents, effectivePulseAgencies, crmAgents, crmAgencies]);
 
   // Filtered rows
   const filtered = useMemo(() => {
