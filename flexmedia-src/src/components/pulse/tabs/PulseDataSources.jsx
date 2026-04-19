@@ -2985,6 +2985,9 @@ function downloadCsv(rows) {
     "records_fetched", "records_new", "records_updated",
     // Migration 148 — Changes counter surfaced as its own column.
     "timeline_events_emitted",
+    // Migration 150 — resolved suburb (raw + fallback ladder). Exported so
+    // downstream analysis can group "truly all Ashfield" without re-deriving.
+    "suburb_raw", "suburb_resolved",
     "agents_processed", "listings_stored", "records_saved",
     "triggered_by", "triggered_by_name", "apify_run_id", "error_message",
   ];
@@ -3011,6 +3014,8 @@ function downloadCsv(rows) {
       log.records_new ?? "",
       log.records_updated ?? "",
       log.timeline_events_emitted ?? "",
+      log.raw_suburb ?? "",
+      log.resolved_suburb ?? "",
       sums.agents,
       sums.listings,
       sums.records,
@@ -3047,8 +3052,18 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
   const [error, setError] = useState(null);
   const [lastFetched, setLastFetched] = useState(null);
 
+  // Suburb filter — uses the resolved-suburb RPC (migration 150) so we catch
+  // Ashfield runs even when the raw `suburb` column is NULL (manual runs,
+  // legacy rows, batch orchestrators). Debounced 300ms.
+  const [suburbFilterRaw, setSuburbFilterRaw] = useState("");
+  const [suburbFilter, setSuburbFilter] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setSuburbFilter(suburbFilterRaw.trim()), 300);
+    return () => clearTimeout(id);
+  }, [suburbFilterRaw]);
+
   // Reset page on filter change
-  useEffect(() => { setPage(0); }, [filterSourceId, statusFilter, timeWindow, pageSize]);
+  useEffect(() => { setPage(0); }, [filterSourceId, statusFilter, timeWindow, pageSize, suburbFilter]);
 
   // Build dropdown of distinct source_ids — combine known configs + any
   // source_ids seen on the current page (so historical/legacy ids still appear).
@@ -3065,47 +3080,38 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
   }, [sourceConfigs, rows]);
 
   // ── server fetch ──
+  //
+  // Uses `pulse_get_sync_logs_with_resolved_suburb` (migration 150) so the
+  // suburb filter catches runs where `pulse_sync_logs.suburb` is NULL but
+  // the suburb is inferable from input_config, apify_run_ids keys, or the
+  // downstream pulse_listings touched on that run. The RPC also returns the
+  // same slim-row columns as the old direct-select path, so other filters
+  // (status / time-window / source) keep working.
   const fetchPage = useCallback(async () => {
     setError(null);
     try {
-      let q = api._supabase
-        .from("pulse_sync_logs")
-        .select(
-          "id, source_id, source_label, status, started_at, completed_at, " +
-          "result_summary, triggered_by, triggered_by_name, apify_run_id, error_message, " +
-          // Slim-row record counters (migration 095) — rendered in dedicated
-          // Fetched / New / Updated columns below, matching the per-source
-          // card's DispatchTable row layout.
-          "records_fetched, records_new, records_updated, " +
-          // Migration 148: timeline-event counter rendered in the "Changes"
-          // column. Captures entity-level change events emitted during the
-          // run (price/status/agent moves/etc), complementing records_updated
-          // which only counts row-level DB updates.
-          "timeline_events_emitted, " +
-          // Batch attribution (migration 088) — rendered as "3/10" chip below.
-          "batch_id, batch_number, total_batches",
-          { count: "exact" }
-        )
-        .order("started_at", { ascending: false });
-
-      if (filterSourceId && filterSourceId !== "all") {
-        q = q.eq("source_id", filterSourceId);
-      }
-      if (statusFilter !== "all") {
-        q = q.eq("status", statusFilter);
-      }
       const tw = TIME_WINDOWS.find(t => t.value === timeWindow);
-      if (tw && tw.ms != null) {
-        q = q.gte("started_at", new Date(Date.now() - tw.ms).toISOString());
-      }
-      const from = page * pageSize;
-      const to = from + pageSize - 1;
-      q = q.range(from, to);
-
-      const { data, error, count } = await q;
+      const since = (tw && tw.ms != null)
+        ? new Date(Date.now() - tw.ms).toISOString()
+        : null;
+      const { data, error } = await api._supabase.rpc(
+        "pulse_get_sync_logs_with_resolved_suburb",
+        {
+          p_source_id:     filterSourceId && filterSourceId !== "all" ? filterSourceId : null,
+          p_suburb_filter: suburbFilter || null,
+          p_status_filter: statusFilter !== "all" ? statusFilter : null,
+          p_since:         since,
+          p_limit:         pageSize,
+          p_offset:        page * pageSize,
+        }
+      );
       if (error) throw error;
-      setRows(data || []);
-      setTotal(count || 0);
+      // RPC returns { rows: [...], total: N }. Normalise to our local state
+      // shape, and surface resolved_suburb alongside the raw column so the
+      // render layer can distinguish labelled vs inferred.
+      const payload = data || { rows: [], total: 0 };
+      setRows(Array.isArray(payload.rows) ? payload.rows : []);
+      setTotal(Number(payload.total) || 0);
       setLastFetched(new Date());
     } catch (err) {
       setError(err?.message || "Fetch failed");
@@ -3114,7 +3120,7 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
     } finally {
       setLoading(false);
     }
-  }, [filterSourceId, statusFilter, timeWindow, page, pageSize]);
+  }, [filterSourceId, statusFilter, timeWindow, page, pageSize, suburbFilter]);
 
   useEffect(() => {
     setLoading(true);
@@ -3137,7 +3143,8 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
   const filterCount =
     (filterSourceId && filterSourceId !== "all" ? 1 : 0) +
     (statusFilter !== "all" ? 1 : 0) +
-    (timeWindow !== "all" ? 1 : 0);
+    (timeWindow !== "all" ? 1 : 0) +
+    (suburbFilter ? 1 : 0);
 
   return (
     <Card id="sync-history" className="rounded-xl border shadow-sm scroll-mt-16">
@@ -3197,7 +3204,7 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
         </div>
 
         {/* Filter row */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-3">
           <div>
             <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
               Source
@@ -3218,6 +3225,40 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          {/* Suburb filter — matches `pulse_sync_logs.suburb` OR any of three
+              fallback tiers (input_config.suburbs[0], apify_run_ids key, the
+              most-common pulse_listings.suburb touched by this run). Catches
+              runs whose suburb column was never populated (manual,
+              pre-migration 121, batch orchestrators). */}
+          <div>
+            <label
+              htmlFor="sync-history-suburb-filter"
+              className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide"
+            >
+              Suburb
+            </label>
+            <div className="relative mt-0.5">
+              <Search className="h-3 w-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <Input
+                id="sync-history-suburb-filter"
+                value={suburbFilterRaw}
+                onChange={(e) => setSuburbFilterRaw(e.target.value)}
+                placeholder="e.g. Ashfield"
+                className="h-8 text-xs pl-7 pr-7"
+              />
+              {suburbFilterRaw && (
+                <button
+                  type="button"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted"
+                  onClick={() => { setSuburbFilterRaw(""); setSuburbFilter(""); }}
+                  title="Clear suburb filter"
+                  aria-label="Clear suburb filter"
+                >
+                  <X className="h-3 w-3 text-muted-foreground" />
+                </button>
+              )}
+            </div>
           </div>
           <div>
             <label className="text-[9px] font-medium text-muted-foreground uppercase tracking-wide">
@@ -3269,7 +3310,7 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
         </div>
 
         {filterCount > 0 && (
-          <div className="mt-2">
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
             <Button
               variant="ghost"
               size="sm"
@@ -3278,11 +3319,22 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                 onChangeFilter?.(null);
                 setStatusFilter("all");
                 setTimeWindow("all");
+                setSuburbFilterRaw("");
+                setSuburbFilter("");
               }}
             >
               <X className="h-3 w-3" />
               Clear all filters
             </Button>
+            {suburbFilter && !loading && (
+              <span className="text-[10px] text-muted-foreground">
+                <span className="font-medium text-foreground tabular-nums">
+                  {total.toLocaleString()}
+                </span>{" "}
+                run{total === 1 ? "" : "s"} matching{" "}
+                <span className="font-medium text-foreground">{suburbFilter}</span>
+              </span>
+            )}
           </div>
         )}
       </CardHeader>
@@ -3299,15 +3351,23 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
         <div className="overflow-x-auto">
           {rows.length === 0 && !loading ? (
             <p className="text-xs text-muted-foreground py-8 text-center">
-              {filterCount > 0
+              {suburbFilter
+                ? <>No sync logs match suburb <span className="font-medium text-foreground">{suburbFilter}</span>.</>
+                : filterCount > 0
                 ? "No sync logs match the current filters."
                 : "No sync logs yet."}
             </p>
           ) : (
-            <table className="w-full text-xs min-w-[820px]">
+            <table className="w-full text-xs min-w-[900px]">
               <thead>
                 <tr className="border-b">
                   <th className="text-left pb-2 font-medium text-muted-foreground">Source</th>
+                  {/* Suburb (resolved). Uses migration 150's fallback ladder:
+                      raw `suburb` → input_config → apify_run_ids key →
+                      pulse_timeline join. Italic-muted when inferred (no
+                      raw label), so the user can tell labelled vs inferred
+                      at a glance. */}
+                  <th className="text-left pb-2 font-medium text-muted-foreground" title="Suburb this run targeted. Falls back to input config, apify run keys, or downstream listings when the raw column is NULL.">Suburb</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Status</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Started</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Duration</th>
@@ -3334,6 +3394,23 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                   <tr key={log.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                     <td className="py-2 pr-3 font-medium max-w-[200px] truncate" title={log.source_id || ""}>
                       {log.source_label || log.source_id || "—"}
+                    </td>
+                    {/* Suburb cell — shows `raw_suburb` in default styling, or
+                        `resolved_suburb` in italic-muted when the raw column
+                        was NULL (signalling "inferred, not labelled"). */}
+                    <td className="py-2 pr-3 max-w-[140px] truncate">
+                      {log.raw_suburb ? (
+                        <span className="text-foreground">{log.raw_suburb}</span>
+                      ) : log.resolved_suburb ? (
+                        <span
+                          className="italic text-muted-foreground"
+                          title="Inferred from input config / Apify keys / downstream listings — raw suburb column was NULL"
+                        >
+                          {log.resolved_suburb}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
                     </td>
                     <td className="py-2 pr-3"><StatusBadge status={log.status} /></td>
                     <td className="py-2 pr-3 text-muted-foreground whitespace-nowrap">{fmtTs(log.started_at)}</td>
