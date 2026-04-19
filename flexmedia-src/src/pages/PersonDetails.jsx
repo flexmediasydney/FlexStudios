@@ -35,6 +35,8 @@ import NurturingSequences from '@/components/nurturing/NurturingSequences';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { toast } from 'sonner';
+import FieldWithSource from '@/components/fieldSources/FieldWithSource';
+import { backfillEntityFields, DEFAULT_FIELDS } from '@/components/fieldSources/backfillUtils';
 
 const STATE_BADGE = {
   Active: 'bg-green-100 text-green-800 border-green-200',
@@ -68,6 +70,51 @@ const INTEGRITY_FIELDS = {
   email: 'Missing email',
   phone: 'Missing phone',
 };
+
+// ── SafrInlineField — visual row wrapper around FieldWithSource ─────────────
+// Keeps the Pipedrive-style "label | value" layout used by InlineField, but
+// delegates value resolution, editing, and persistence to the source-aware
+// FieldWithSource component. Onchange calls the supplied cache-invalidator so
+// the legacy mirror column re-fetches after SAFR updates propagate through
+// the trigger.
+function SafrInlineField({
+  label, entityType, entityId, fieldName, fallbackValue,
+  editable, onChanged, placeholder, prefixIcon: PrefixIcon, actionHref, actionIcon: ActionIcon,
+}) {
+  return (
+    <div className="group flex items-start gap-2 py-1 px-3 rounded-md transition-colors hover:bg-muted/40">
+      <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">
+        {label}
+      </label>
+      <div className="flex-1 min-w-0 flex items-start gap-1">
+        {PrefixIcon && <PrefixIcon className="h-3.5 w-3.5 text-muted-foreground/60 shrink-0 mt-1" />}
+        <div className="flex-1 min-w-0">
+          <FieldWithSource
+            entityType={entityType}
+            entityId={entityId}
+            fieldName={fieldName}
+            label={label}
+            editable={editable}
+            fallbackValue={fallbackValue}
+            size="sm"
+            inline={false}
+            onValueChange={onChanged}
+            placeholder={placeholder}
+          />
+        </div>
+        {actionHref && ActionIcon && fallbackValue && (
+          <a
+            href={actionHref}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-primary/10 shrink-0"
+            onClick={e => e.stopPropagation()}
+          >
+            <ActionIcon className="h-3 w-3 text-primary" />
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ── SelectCombobox: searchable popover used for type="select" fields ──────────
 function SelectCombobox({ value, options, onSave, field, placeholder, prefixIcon: PrefixIcon, onCancel }) {
@@ -744,6 +791,34 @@ export default function PersonDetails() {
     }
   }, [agent, allAgencies, allTeams]);
 
+  // ── SAFR field change: FieldWithSource already wrote via the SAFR RPCs.
+  // We invalidate the entity cache so the legacy mirror column that the trigger
+  // writes back refetches and the page re-reflects the canonical value.
+  const handleSafrChange = useCallback(() => {
+    if (!agentId) return;
+    queryClient.invalidateQueries({ queryKey: ['Agent', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['contact', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['safr_resolved', 'contact', agentId] });
+    refetchEntityList('Agent');
+  }, [agentId, queryClient]);
+
+  // ── One-click backfill: when SAFR resolves to null for any tracked field,
+  // the page surfaces this button so users can migrate the legacy mirror into
+  // a proper SAFR observation in one shot.
+  const handleBackfill = useCallback(async () => {
+    if (!agent) return;
+    const res = await backfillEntityFields('contact', agent.id, {
+      full_name: agent.name,
+      email: agent.email,
+      mobile: agent.phone,
+      phone: agent.phone,
+      job_title: agent.title,
+      linkedin_url: agent.linkedin_url,
+      profile_image: agent.profile_image,
+    }, DEFAULT_FIELDS.contact);
+    if (res.recorded > 0) handleSafrChange();
+  }, [agent, handleSafrChange]);
+
   const handleAddTag = useCallback(async () => {
     if (!newTag.trim() || !agent) return;
     const oldTags = agent.tags || [];
@@ -997,9 +1072,29 @@ export default function PersonDetails() {
                 </span>
               </div>
               <div className="flex-1 min-w-0">
-                <InlineName value={agent.name} field="name" onSave={handleFieldSave} />
+                <FieldWithSource
+                  entityType="contact"
+                  entityId={agent.id}
+                  fieldName="full_name"
+                  label="Name"
+                  editable={canEdit}
+                  fallbackValue={agent.name}
+                  size="lg"
+                  inline
+                  onValueChange={handleSafrChange}
+                />
                 {agent.title && (
-                  <p className="text-xs text-muted-foreground truncate">{agent.title}</p>
+                  <FieldWithSource
+                    entityType="contact"
+                    entityId={agent.id}
+                    fieldName="job_title"
+                    label="Title"
+                    editable={canEdit}
+                    fallbackValue={agent.title}
+                    size="sm"
+                    inline
+                    onValueChange={handleSafrChange}
+                  />
                 )}
               </div>
             </div>
@@ -1014,6 +1109,25 @@ export default function PersonDetails() {
               </Badge>
             )}
           </div>
+
+          {/* SAFR backfill prompt — appears when user has edit rights and at
+              least one SAFR-tracked field still has a legacy mirror value.
+              FieldWithSource surfaces the Legacy chip itself; this is the
+              one-click migrate to SAFR observations. */}
+          {canEdit && (agent.name || agent.email || agent.phone || agent.title) && (
+            <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 dark:bg-sky-950/20 dark:border-sky-800/50 px-3 py-2 flex items-start gap-2">
+              <Shield className="h-3.5 w-3.5 text-sky-600 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-semibold text-sky-900 dark:text-sky-200">Field sources</p>
+                <p className="text-[10px] text-sky-700 dark:text-sky-400 leading-relaxed">
+                  Record the CRM values as observations so source-aware resolution can use them.
+                </p>
+              </div>
+              <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 shrink-0" onClick={handleBackfill}>
+                Backfill to SAFR
+              </Button>
+            </div>
+          )}
 
           {/* Data integrity banner */}
           {agent.needs_review && (
@@ -1039,26 +1153,40 @@ export default function PersonDetails() {
 
           {/* Summary section */}
           <Section title="Summary" defaultOpen>
-            <InlineField label="Position" value={agent.title} field="title" onSave={handleFieldSave}
-              type="select"
-              options={[
-                { value: 'Partner', label: 'Partner' },
-                { value: 'Senior', label: 'Senior' },
-                { value: 'Junior', label: 'Junior' },
-                { value: 'Admin', label: 'Admin' },
-                { value: 'Payroll', label: 'Payroll' },
-                { value: 'Marketing', label: 'Marketing' },
-              ]} />
-            <InlineField label="Email" value={agent.email} field="email" onSave={handleFieldSave}
+            <SafrInlineField
+              label="Position"
+              entityType="contact"
+              entityId={agent.id}
+              fieldName="job_title"
+              fallbackValue={agent.title}
+              editable={canEdit}
+              onChanged={handleSafrChange}
+              placeholder="Add position..."
+            />
+            <SafrInlineField
+              label="Email"
+              entityType="contact"
+              entityId={agent.id}
+              fieldName="email"
+              fallbackValue={agent.email}
+              editable={canEdit}
+              onChanged={handleSafrChange}
               placeholder="Add email..."
               actionHref={agent.email ? `mailto:${agent.email}` : null}
               actionIcon={Mail}
-              actionLabel="Send email" />
-            <InlineField label="Phone" value={agent.phone} field="phone" onSave={handleFieldSave}
+            />
+            <SafrInlineField
+              label="Phone"
+              entityType="contact"
+              entityId={agent.id}
+              fieldName="mobile"
+              fallbackValue={agent.phone}
+              editable={canEdit}
+              onChanged={handleSafrChange}
               placeholder="Add phone..."
               actionHref={agent.phone ? `tel:${agent.phone}` : null}
               actionIcon={Phone}
-              actionLabel="Call" />
+            />
             <InlineField label="Organisation" value={agent.current_agency_id} field="current_agency_id"
               onSave={handleFieldSave} type="select"
               options={allAgencies.map(a => ({ value: a.id, label: a.name }))} />

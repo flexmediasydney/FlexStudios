@@ -51,6 +51,7 @@ import {
   primaryContact,
   alternateContacts,
 } from "@/components/pulse/utils/listingHelpers";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
 
 /* ── Helpers ─────────────────────────────────────────────────────────────────── */
 
@@ -1344,9 +1345,33 @@ export default function PulseIntelligencePanel({
                 </div>
               )}
               <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-lg leading-tight">{a.full_name}</h3>
+                <h3 className="font-bold text-lg leading-tight">
+                  <FieldWithSource
+                    entityType="agent"
+                    entityId={a?.id}
+                    fieldName="full_name"
+                    label="Name"
+                    editable={false}
+                    fallbackValue={a.full_name}
+                    size="md"
+                    inline
+                  />
+                </h3>
                 <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                  {a.job_title && <span className="text-xs text-muted-foreground">{a.job_title}</span>}
+                  {a.job_title && (
+                    <span className="text-xs text-muted-foreground">
+                      <FieldWithSource
+                        entityType="agent"
+                        entityId={a?.id}
+                        fieldName="job_title"
+                        label="Job title"
+                        editable={false}
+                        fallbackValue={a.job_title}
+                        size="sm"
+                        inline
+                      />
+                    </span>
+                  )}
                   <Badge variant="outline" className={cn("text-[8px]", positionColor(mapPosition(a.job_title)))}>
                     {mapPosition(a.job_title)}
                   </Badge>
@@ -1404,21 +1429,51 @@ export default function PulseIntelligencePanel({
                         {mobInfo.value && (
                           <div className="flex items-center gap-1 text-xs">
                             <Phone className="h-3 w-3 text-muted-foreground" />
-                            <a href={`tel:${mobInfo.value}`} className="text-primary hover:underline">{mobInfo.value}</a>
+                            <FieldWithSource
+                              entityType="agent"
+                              entityId={a?.id}
+                              fieldName="mobile"
+                              label="Mobile"
+                              editable={false}
+                              fallbackValue={mobInfo.value}
+                              size="sm"
+                              inline
+                            />
+                            <a href={`tel:${mobInfo.value}`} className="text-muted-foreground hover:text-primary" title="Call"><Phone className="h-3 w-3" /></a>
                             <ContactProvBadges info={mobInfo} />
                           </div>
                         )}
                         {bizInfo.value && !mobInfo.value && (
                           <div className="flex items-center gap-1 text-xs">
                             <Phone className="h-3 w-3 text-muted-foreground" />
-                            <a href={`tel:${bizInfo.value}`} className="text-primary hover:underline">{bizInfo.value}</a>
+                            <FieldWithSource
+                              entityType="agent"
+                              entityId={a?.id}
+                              fieldName="phone"
+                              label="Phone"
+                              editable={false}
+                              fallbackValue={bizInfo.value}
+                              size="sm"
+                              inline
+                            />
+                            <a href={`tel:${bizInfo.value}`} className="text-muted-foreground hover:text-primary" title="Call"><Phone className="h-3 w-3" /></a>
                             <ContactProvBadges info={bizInfo} />
                           </div>
                         )}
                         {emailInfo.value && (
                           <div className="flex items-center gap-1 text-xs">
                             <Mail className="h-3 w-3 text-muted-foreground" />
-                            <a href={`mailto:${emailInfo.value}`} className="text-primary hover:underline">{emailInfo.value}</a>
+                            <FieldWithSource
+                              entityType="agent"
+                              entityId={a?.id}
+                              fieldName="email"
+                              label="Email"
+                              editable={false}
+                              fallbackValue={emailInfo.value}
+                              size="sm"
+                              inline
+                            />
+                            <a href={`mailto:${emailInfo.value}`} className="text-muted-foreground hover:text-primary" title="Email"><Mail className="h-3 w-3" /></a>
                             <ContactProvBadges info={emailInfo} />
                           </div>
                         )}
@@ -1851,7 +1906,18 @@ export default function PulseIntelligencePanel({
                           ? { backgroundColor: hexToRgba(a.brand_color_primary, 0.06) }
                           : undefined
                       }
-                    >{a.name}</h3>
+                    >
+                      <FieldWithSource
+                        entityType="agency"
+                        entityId={a?.id}
+                        fieldName="name"
+                        label="Name"
+                        editable={false}
+                        fallbackValue={a.name}
+                        size="md"
+                        inline
+                      />
+                    </h3>
                     {(a.suburb || a.address) && (
                       (() => {
                         const parts = [
@@ -1886,7 +1952,17 @@ export default function PulseIntelligencePanel({
                             {phoneInfo.value && (
                               <div className="group flex items-center gap-1 text-xs">
                                 <Phone className="h-3 w-3 text-muted-foreground" />
-                                <a href={`tel:${phoneInfo.value}`} className="text-primary hover:underline">{phoneInfo.value}</a>
+                                <FieldWithSource
+                                  entityType="agency"
+                                  entityId={a?.id}
+                                  fieldName="phone"
+                                  label="Phone"
+                                  editable={false}
+                                  fallbackValue={phoneInfo.value}
+                                  size="sm"
+                                  inline
+                                />
+                                <a href={`tel:${phoneInfo.value}`} className="text-muted-foreground hover:text-primary" title="Call"><Phone className="h-3 w-3" /></a>
                                 <ContactProvBadges info={phoneInfo} />
                                 <CopyInlineButton value={phoneInfo.value} label="Copy phone" />
                               </div>
@@ -1894,7 +1970,17 @@ export default function PulseIntelligencePanel({
                             {emailInfo.value && (
                               <div className="group flex items-center gap-1 text-xs">
                                 <Mail className="h-3 w-3 text-muted-foreground" />
-                                <a href={`mailto:${emailInfo.value}`} className="text-primary hover:underline">{emailInfo.value}</a>
+                                <FieldWithSource
+                                  entityType="agency"
+                                  entityId={a?.id}
+                                  fieldName="email"
+                                  label="Email"
+                                  editable={false}
+                                  fallbackValue={emailInfo.value}
+                                  size="sm"
+                                  inline
+                                />
+                                <a href={`mailto:${emailInfo.value}`} className="text-muted-foreground hover:text-primary" title="Email"><Mail className="h-3 w-3" /></a>
                                 <ContactProvBadges info={emailInfo} />
                                 <CopyInlineButton value={emailInfo.value} label="Copy email" />
                               </div>
@@ -1902,11 +1988,17 @@ export default function PulseIntelligencePanel({
                             {a.website && (
                               <div className="group flex items-center gap-1 text-xs">
                                 <Globe className="h-3 w-3 text-muted-foreground" />
-                                <a
-                                  href={a.website.startsWith("http") ? a.website : `https://${a.website}`}
-                                  target="_blank" rel="noopener noreferrer"
-                                  className="text-primary hover:underline truncate max-w-[200px]"
-                                >{a.website}</a>
+                                <FieldWithSource
+                                  entityType="agency"
+                                  entityId={a?.id}
+                                  fieldName="website"
+                                  label="Website"
+                                  editable={false}
+                                  fallbackValue={a.website}
+                                  size="sm"
+                                  inline
+                                />
+                                <a href={a.website.startsWith("http") ? a.website : `https://${a.website}`} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-primary" title="Open"><ExternalLink className="h-3 w-3" /></a>
                                 <CopyInlineButton value={a.website} label="Copy website" />
                               </div>
                             )}

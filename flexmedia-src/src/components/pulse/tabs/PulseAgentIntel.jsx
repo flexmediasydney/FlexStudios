@@ -87,6 +87,7 @@ import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import AgentMarketShareSection from "@/components/marketshare/AgentMarketShareSection";
 import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
 import {
   displayPrice as sharedDisplayPrice,
   isActiveListing,
@@ -1077,7 +1078,18 @@ export function AgentSlideout({
             <AgentAvatar agent={agent} size={56} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
-                <h2 className="text-base font-bold leading-tight">{agent.full_name}</h2>
+                <h2 className="text-base font-bold leading-tight">
+                  <FieldWithSource
+                    entityType="agent"
+                    entityId={agent?.id}
+                    fieldName="full_name"
+                    label="Name"
+                    editable={false}
+                    fallbackValue={agent.full_name}
+                    size="md"
+                    inline
+                  />
+                </h2>
                 <PositionBadge position={position} />
                 <ReaBadge />
                 {/* Tier 3: when mapped, the In CRM badge links to the CRM page. */}
@@ -1102,7 +1114,18 @@ export function AgentSlideout({
                 )}
               </div>
               {agent.job_title && (
-                <p className="text-xs text-muted-foreground">{agent.job_title}</p>
+                <p className="text-xs text-muted-foreground">
+                  <FieldWithSource
+                    entityType="agent"
+                    entityId={agent?.id}
+                    fieldName="job_title"
+                    label="Job title"
+                    editable={false}
+                    fallbackValue={agent.job_title}
+                    size="sm"
+                    inline
+                  />
+                </p>
               )}
             </div>
             {/* Close button is provided by <SheetContent>; we keep the right-hand
@@ -1119,13 +1142,24 @@ export function AgentSlideout({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
               {agent.mobile && (
                 <div className="flex flex-col">
-                  <a
-                    href={`tel:${agent.mobile}`}
-                    className="flex items-center gap-2 text-foreground hover:text-primary transition-colors"
-                  >
+                  <div className="flex items-center gap-2 text-foreground">
                     <Phone className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                    <span className="truncate">{agent.mobile}</span>
-                  </a>
+                    <div className="min-w-0 flex-1">
+                      <FieldWithSource
+                        entityType="agent"
+                        entityId={agent?.id}
+                        fieldName="mobile"
+                        label="Mobile"
+                        editable={false}
+                        fallbackValue={agent.mobile}
+                        size="sm"
+                        inline
+                      />
+                    </div>
+                    <a href={`tel:${agent.mobile}`} className="text-muted-foreground hover:text-primary" title="Call">
+                      <Phone className="h-3 w-3" />
+                    </a>
+                  </div>
                   {(() => {
                     const alts = alternateContacts(agent, "mobile");
                     if (alts.length === 0) return null;
@@ -1165,13 +1199,24 @@ export function AgentSlideout({
               {agent.email && (
                 <div className="flex flex-col sm:col-span-2">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <a
-                      href={`mailto:${agent.email}`}
-                      className="flex items-center gap-2 text-foreground hover:text-primary transition-colors min-w-0"
-                    >
+                    <div className="flex items-center gap-2 min-w-0 flex-1 text-foreground">
                       <Mail className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                      <span className="truncate">{agent.email}</span>
-                    </a>
+                      <div className="min-w-0 flex-1">
+                        <FieldWithSource
+                          entityType="agent"
+                          entityId={agent?.id}
+                          fieldName="email"
+                          label="Email"
+                          editable={false}
+                          fallbackValue={agent.email}
+                          size="sm"
+                          inline
+                        />
+                      </div>
+                      <a href={`mailto:${agent.email}`} className="text-muted-foreground hover:text-primary shrink-0" title="Email">
+                        <Mail className="h-3 w-3" />
+                      </a>
+                    </div>
                     {(() => {
                       // Provenance chip: show current email source + confidence if present.
                       const src = agent.email_source;

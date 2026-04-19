@@ -12,6 +12,7 @@ import {
   Copy, Check, Trash2, Pencil
 } from "lucide-react";
 import { fmtDate, fmtTimestampCustom, isOverdue, parseDate, todaySydney } from "@/components/utils/dateUtils";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
 
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
 
@@ -110,6 +111,21 @@ function InlineField({ label, value, field, onSave, type = 'text', options, plac
             </button>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ── SafrRow ── matches InlineField's label/value layout but hosts a
+   FieldWithSource in the value slot so SAFR handles resolution + editing. */
+function SafrRow({ label, icon: Icon, children }) {
+  return (
+    <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+      <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1 justify-end">
+        {Icon && <Icon className="h-3 w-3" />} {label}
+      </label>
+      <div className="flex-1 min-w-0 flex items-start gap-1">
+        <div className="flex-1 min-w-0">{children}</div>
       </div>
     </div>
   );
@@ -250,6 +266,9 @@ export default function Org2LeftPanel({
   activeAgents = [], dormantAgents = [], atRiskAgents = [],
   revenueByAgent = [],
   onFieldSave,
+  canEdit = true,
+  onSafrChanged,
+  onBackfillSafr,
 }) {
    const navigate = useNavigate();
    const openProjects  = projects.filter(p => p.outcome === 'open');
@@ -307,15 +326,41 @@ export default function Org2LeftPanel({
    return (
      <div className="text-sm flex flex-col h-full">
        <div className="flex-1 overflow-y-auto">
+         {/* Backfill prompt — one-click migrate legacy column values into SAFR */}
+         {canEdit && onBackfillSafr && (agency.name || agency.email || agency.phone || agency.address || agency.website) && (
+           <div className="mx-4 mt-3 mb-1 rounded-md border border-sky-200 bg-sky-50 dark:bg-sky-950/20 dark:border-sky-800/50 px-3 py-2 flex items-start gap-2">
+             <AlertCircle className="h-3.5 w-3.5 text-sky-600 shrink-0 mt-0.5" />
+             <div className="flex-1 min-w-0">
+               <p className="text-[11px] font-semibold text-sky-900 dark:text-sky-200">Field sources</p>
+               <p className="text-[10px] text-sky-700 dark:text-sky-400 leading-relaxed">
+                 Record CRM values as SAFR observations.
+               </p>
+             </div>
+             <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 shrink-0" onClick={onBackfillSafr}>
+               Backfill
+             </Button>
+           </div>
+         )}
+
          {/* ── Inline-editable Details ── */}
          <Section title="Details" defaultOpen={true}>
            <div className="space-y-1">
-             {/* Organisation Name — prominent inline edit */}
+             {/* Organisation Name — source-aware */}
              <div className="pb-2 mb-1 border-b border-border/40">
-               <InlineNameField value={agency.name} onSave={handleFieldSave} />
+               <FieldWithSource
+                 entityType="organization"
+                 entityId={agency.id}
+                 fieldName="name"
+                 label="Name"
+                 editable={canEdit}
+                 fallbackValue={agency.name}
+                 size="md"
+                 inline
+                 onValueChange={onSafrChanged}
+               />
              </div>
 
-             {/* Relationship State */}
+             {/* Relationship State (select — stays in legacy flow, not SAFR-tracked) */}
              <InlineField
                label="Relationship State"
                value={agency.relationship_state || ''}
@@ -325,10 +370,49 @@ export default function Org2LeftPanel({
                options={RELATIONSHIP_STATES}
              />
 
-             {/* Contact info */}
-             <InlineField label="Email" value={agency.email} field="email" onSave={handleFieldSave} icon={Mail} placeholder="Add email..." />
-             <InlineField label="Phone" value={agency.phone} field="phone" onSave={handleFieldSave} icon={Phone} placeholder="Add phone..." />
-             <InlineField label="Address" value={agency.address} field="address" onSave={handleFieldSave} icon={MapPin} placeholder="Add address..." />
+             {/* Contact info — SAFR-tracked */}
+             <SafrRow label="Email" icon={Mail}>
+               <FieldWithSource
+                 entityType="organization"
+                 entityId={agency.id}
+                 fieldName="email"
+                 label="Email"
+                 editable={canEdit}
+                 fallbackValue={agency.email}
+                 size="sm"
+                 inline
+                 onValueChange={onSafrChanged}
+                 placeholder="Add email..."
+               />
+             </SafrRow>
+             <SafrRow label="Phone" icon={Phone}>
+               <FieldWithSource
+                 entityType="organization"
+                 entityId={agency.id}
+                 fieldName="phone"
+                 label="Phone"
+                 editable={canEdit}
+                 fallbackValue={agency.phone}
+                 size="sm"
+                 inline
+                 onValueChange={onSafrChanged}
+                 placeholder="Add phone..."
+               />
+             </SafrRow>
+             <SafrRow label="Address" icon={MapPin}>
+               <FieldWithSource
+                 entityType="organization"
+                 entityId={agency.id}
+                 fieldName="address"
+                 label="Address"
+                 editable={canEdit}
+                 fallbackValue={agency.address}
+                 size="sm"
+                 inline
+                 onValueChange={onSafrChanged}
+                 placeholder="Add address..."
+               />
+             </SafrRow>
 
              {/* Dates */}
              <InlineField label="Onboarding Date" value={toInputDate(agency.onboarding_date)} field="onboarding_date" onSave={handleFieldSave} type="date" icon={Calendar} placeholder="Set date..." />

@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useEntityList, useEntityData } from '@/components/hooks/useEntityData';
 import { useCurrentUser, usePermissions } from '@/components/auth/PermissionGuard';
 import { api } from '@/api/supabaseClient';
+import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, Mail, Phone, Building, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Mail, Phone, Building, AlertCircle, Shield } from 'lucide-react';
 import { createPageUrl } from '@/utils';
 import { toast } from 'sonner';
 import { Link, useNavigate } from 'react-router-dom';
@@ -12,6 +13,8 @@ import ProspectEditPanel from '@/components/prospecting/ProspectEditPanel';
 import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
 import ProspectTimeline from '@/components/prospecting/ProspectTimeline';
 import ProspectStatusManager from '@/components/prospecting/ProspectStatusManager';
+import FieldWithSource from '@/components/fieldSources/FieldWithSource';
+import { backfillEntityFields, DEFAULT_FIELDS } from '@/components/fieldSources/backfillUtils';
 
 export default function ProspectDetails() {
   const navigate = useNavigate();
@@ -19,7 +22,28 @@ export default function ProspectDetails() {
   const agentId = urlParams.get('id');
   const { data: currentUser } = useCurrentUser();
   const { canManageContacts } = usePermissions();
+  const queryClient = useQueryClient();
   const { data: agent, loading, error } = useEntityData('Agent', agentId);
+
+  const handleSafrChange = useCallback(() => {
+    if (!agentId) return;
+    queryClient.invalidateQueries({ queryKey: ['Agent', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['prospect', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['contact', agentId] });
+    queryClient.invalidateQueries({ queryKey: ['safr_resolved', 'prospect', agentId] });
+  }, [agentId, queryClient]);
+
+  const handleBackfill = useCallback(async () => {
+    if (!agent) return;
+    const res = await backfillEntityFields('prospect', agent.id, {
+      full_name: agent.name,
+      email: agent.email,
+      mobile: agent.phone,
+      phone: agent.phone,
+      job_title: agent.title,
+    }, DEFAULT_FIELDS.prospect);
+    if (res.recorded > 0) handleSafrChange();
+  }, [agent, handleSafrChange]);
    const { data: interactions = [] } = useEntityList(agentId ? 'InteractionLog' : null, '-date_time', 500, agentId ? { entity_type: 'Agent', entity_id: agentId } : null);
    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -116,33 +140,77 @@ export default function ProspectDetails() {
         {/* Header Card with Depth Indicator */}
         <div className="bg-card border border-l-4 border-l-primary rounded-xl p-8 mb-6 shadow-md hover:shadow-lg transition-shadow">
           <div className="flex items-start justify-between mb-6">
-            <div>
-              <h1 className="text-3xl font-bold">{agent.name}</h1>
-              <p className="text-muted-foreground mt-1">{agent.title}</p>
+            <div className="min-w-0 flex-1">
+              <div className="text-3xl font-bold">
+                <FieldWithSource
+                  entityType="prospect"
+                  entityId={agent.id}
+                  fieldName="full_name"
+                  label="Name"
+                  editable={canManageContacts}
+                  fallbackValue={agent.name}
+                  size="lg"
+                  inline
+                  onValueChange={handleSafrChange}
+                />
+              </div>
+              <div className="text-muted-foreground mt-1">
+                <FieldWithSource
+                  entityType="prospect"
+                  entityId={agent.id}
+                  fieldName="job_title"
+                  label="Title"
+                  editable={canManageContacts}
+                  fallbackValue={agent.title}
+                  size="sm"
+                  inline
+                  onValueChange={handleSafrChange}
+                />
+              </div>
             </div>
             <ProspectStatusManager prospect={agent} />
           </div>
 
           {/* Contact Info */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {agent.email && (
-              <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">Email</p>
-                  <p className="text-sm font-medium truncate">{agent.email}</p>
+            <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
+              <Mail className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-muted-foreground">Email</p>
+                <div className="text-sm font-medium truncate">
+                  <FieldWithSource
+                    entityType="prospect"
+                    entityId={agent.id}
+                    fieldName="email"
+                    label="Email"
+                    editable={canManageContacts}
+                    fallbackValue={agent.email}
+                    size="sm"
+                    inline
+                    onValueChange={handleSafrChange}
+                  />
                 </div>
               </div>
-            )}
-            {agent.phone && (
-              <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                <Phone className="h-4 w-4 text-muted-foreground" />
-                <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">Phone</p>
-                  <p className="text-sm font-medium">{agent.phone}</p>
+            </div>
+            <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
+              <Phone className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-muted-foreground">Phone</p>
+                <div className="text-sm font-medium">
+                  <FieldWithSource
+                    entityType="prospect"
+                    entityId={agent.id}
+                    fieldName="mobile"
+                    label="Phone"
+                    editable={canManageContacts}
+                    fallbackValue={agent.phone}
+                    size="sm"
+                    inline
+                    onValueChange={handleSafrChange}
+                  />
                 </div>
               </div>
-            )}
+            </div>
             <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
               <Building className="h-4 w-4 text-muted-foreground" />
               <div className="min-w-0">
@@ -151,6 +219,19 @@ export default function ProspectDetails() {
               </div>
             </div>
           </div>
+
+          {canManageContacts && (agent.name || agent.email || agent.phone) && (
+            <div className="mt-4 rounded-md border border-sky-200 bg-sky-50 dark:bg-sky-950/20 dark:border-sky-800/50 px-3 py-2 flex items-start gap-2">
+              <Shield className="h-3.5 w-3.5 text-sky-600 shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-semibold text-sky-900 dark:text-sky-200">Field sources</p>
+                <p className="text-[10px] text-sky-700 dark:text-sky-400 leading-relaxed">Record CRM values as SAFR observations.</p>
+              </div>
+              <Button size="sm" variant="outline" className="h-7 text-xs px-2 shrink-0" onClick={handleBackfill}>
+                Backfill to SAFR
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Tabs */}

@@ -34,6 +34,8 @@ import { Input } from "@/components/ui/input";
 import { api, supabase } from "@/api/supabaseClient";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
+import { backfillEntityFields, DEFAULT_FIELDS } from "@/components/fieldSources/backfillUtils";
 
 const STATE_BADGE = {
   Active:           "bg-green-100 text-green-800 border-green-200",
@@ -154,6 +156,27 @@ export default function OrgDetails() {
     });
   }, [agencyId, queryClient]);
   const { data: agency, loading, error } = useSmartEntityData("Agency", agencyId);
+
+  // ── SAFR cache invalidation after a FieldWithSource write propagates.
+  const handleSafrChange = useCallback(() => {
+    if (!agencyId) return;
+    queryClient.invalidateQueries({ queryKey: ["Agency", agencyId] });
+    queryClient.invalidateQueries({ queryKey: ["organization", agencyId] });
+    queryClient.invalidateQueries({ queryKey: ["safr_resolved", "organization", agencyId] });
+  }, [agencyId, queryClient]);
+
+  const handleBackfill = useCallback(async () => {
+    if (!agency) return;
+    const res = await backfillEntityFields("organization", agency.id, {
+      name: agency.name,
+      email: agency.email,
+      phone: agency.phone,
+      website: agency.website,
+      address: agency.address,
+      logo_url: agency.logo_url,
+    }, DEFAULT_FIELDS.organization);
+    if (res.recorded > 0) handleSafrChange();
+  }, [agency, handleSafrChange]);
 
   // ── Market Share support: resolve the pulse_agencies row linked to this CRM
   // agency. We key off linked_agency_id (the pulse_agencies back-reference) or
@@ -433,8 +456,32 @@ export default function OrgDetails() {
         </div>
 
         <div className="min-w-0">
-          <h1 className="text-sm font-bold truncate leading-tight">{agency.name}</h1>
-          {agency.address && <p className="text-[11px] text-muted-foreground truncate leading-tight">{agency.address}</p>}
+          <div className="text-sm font-bold truncate leading-tight">
+            <FieldWithSource
+              entityType="organization"
+              entityId={agency.id}
+              fieldName="name"
+              label="Name"
+              editable={false}
+              fallbackValue={agency.name}
+              size="sm"
+              inline
+            />
+          </div>
+          {agency.address && (
+            <div className="text-[11px] text-muted-foreground truncate leading-tight">
+              <FieldWithSource
+                entityType="organization"
+                entityId={agency.id}
+                fieldName="address"
+                label="Address"
+                editable={false}
+                fallbackValue={agency.address}
+                size="sm"
+                inline
+              />
+            </div>
+          )}
         </div>
 
         <Badge className={`text-[11px] shrink-0 border font-medium px-2 py-0.5 ${STATE_BADGE[agency.relationship_state] || 'bg-muted text-muted-foreground'}`}>
@@ -534,6 +581,9 @@ export default function OrgDetails() {
               dormantAgents={dormantAgents}
               atRiskAgents={atRiskAgents}
               revenueByAgent={showPricing ? revenueByAgent : []}
+              canEdit={canEdit}
+              onSafrChanged={handleSafrChange}
+              onBackfillSafr={handleBackfill}
             />
             <div className="border-t pt-2">
               <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide px-4 py-2 select-none">Analytics</div>

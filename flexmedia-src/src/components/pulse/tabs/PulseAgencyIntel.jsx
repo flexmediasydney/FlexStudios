@@ -75,6 +75,7 @@ import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import AgencyMarketShareSection from "@/components/marketshare/AgencyMarketShareSection";
 import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
 import {
   displayPrice as sharedDisplayPrice,
   LISTING_TYPE_LABEL,
@@ -1375,7 +1376,16 @@ export function AgencySlideout({
                           : undefined
                       }
                     >
-                      {agency.name || "—"}
+                      <FieldWithSource
+                        entityType="agency"
+                        entityId={agency?.id}
+                        fieldName="name"
+                        label="Name"
+                        editable={false}
+                        fallbackValue={agency.name || "—"}
+                        size="md"
+                        inline
+                      />
                     </h2>
                     <REABadge />
                     {/* Tier 3: when mapped, the In CRM badge links to OrgDetails. */}
@@ -1445,13 +1455,20 @@ export function AgencySlideout({
             <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
               {agency.phone && (
                 <div className="flex flex-col">
-                  <a
-                    href={`tel:${agency.phone}`}
-                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                  >
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
                     <Phone className="h-3.5 w-3.5 text-primary" />
-                    {agency.phone}
-                  </a>
+                    <FieldWithSource
+                      entityType="agency"
+                      entityId={agency?.id}
+                      fieldName="phone"
+                      label="Phone"
+                      editable={false}
+                      fallbackValue={agency.phone}
+                      size="sm"
+                      inline
+                    />
+                    <a href={`tel:${agency.phone}`} className="hover:text-foreground" title="Call"><Phone className="h-3 w-3" /></a>
+                  </div>
                   {(() => {
                     const alts = alternateContacts(agency, "phone");
                     if (alts.length === 0) return null;
@@ -1479,13 +1496,20 @@ export function AgencySlideout({
               )}
               {agency.email && (
                 <div className="flex flex-col">
-                  <a
-                    href={`mailto:${agency.email}`}
-                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                  >
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
                     <Mail className="h-3.5 w-3.5 text-primary" />
-                    {agency.email}
-                  </a>
+                    <FieldWithSource
+                      entityType="agency"
+                      entityId={agency?.id}
+                      fieldName="email"
+                      label="Email"
+                      editable={false}
+                      fallbackValue={agency.email}
+                      size="sm"
+                      inline
+                    />
+                    <a href={`mailto:${agency.email}`} className="hover:text-foreground" title="Email"><Mail className="h-3 w-3" /></a>
+                  </div>
                   {(() => {
                     const alts = alternateContacts(agency, "email");
                     if (alts.length === 0) return null;
@@ -1512,15 +1536,20 @@ export function AgencySlideout({
                 </div>
               )}
               {agency.website && (
-                <a
-                  href={agency.website}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                >
+                <div className="flex items-center gap-1.5 text-muted-foreground">
                   <Globe className="h-3.5 w-3.5 text-primary" />
-                  {agency.website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
-                </a>
+                  <FieldWithSource
+                    entityType="agency"
+                    entityId={agency?.id}
+                    fieldName="website"
+                    label="Website"
+                    editable={false}
+                    fallbackValue={agency.website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                    size="sm"
+                    inline
+                  />
+                  <a href={agency.website} target="_blank" rel="noopener noreferrer" className="hover:text-foreground" title="Open"><ExternalLink className="h-3 w-3" /></a>
+                </div>
               )}
               {(agency.address_street || agency.address) && (
                 <AddressCluster
