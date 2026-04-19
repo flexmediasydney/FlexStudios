@@ -165,6 +165,40 @@ function parseLandSizeSqm(landSize: any): number | null {
   return null;
 }
 
+/**
+ * Rewrite a REA reastatic.net CDN URL to include a size/format prefix.
+ *
+ * REA's CDN 302-redirects bare URLs (/HASH/image.jpg) to a placeholder. The
+ * browser-renderable variant has a prefix baked into the first path segment:
+ *   /800x600-fit,format=webp/HASH/image.jpg → real image
+ *   /HASH/image.jpg                         → placeholder.png
+ *
+ * We write the prefixed variant at enrichment time so every downstream
+ * consumer (frontend, exports, APIs) gets a usable URL without having to
+ * rewrite. Idempotent — passes already-prefixed URLs through unchanged.
+ *
+ * 2026-04-19 fix for "no media other than hero" bug on enriched listings.
+ */
+function toReaDisplayUrl(url: string, variant = '800x600-fit,format=webp'): string {
+  if (!url || typeof url !== 'string') return url;
+  if (!url.includes('reastatic.net')) return url;
+  try {
+    const u = new URL(url);
+    const segments = u.pathname.split('/').filter(Boolean);
+    if (segments.length === 0) return url;
+    const first = segments[0];
+    const hasPrefix =
+      first.includes(',') ||
+      /^\d+x\d+/.test(first) ||
+      first.startsWith('format=');
+    if (hasPrefix) return url;
+    u.pathname = '/' + variant + '/' + segments.join('/');
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 function extractMediaItems(images: any[]): {
   floorplans: string[];
   videoUrl: string | null;
@@ -187,20 +221,22 @@ function extractMediaItems(images: any[]): {
     if (img.video === true || name === 'video' || server.includes('youtube.com')) {
       // B36 fix: each video gets its own URL (no first-video-wins overwrite)
       const thisVideoUrl = img.id ? `https://www.youtube.com/watch?v=${img.id}` : `${server}${uri}`;
+      // Video thumb (YouTube img URL or REA thumb) — only REA ones need rewriting
+      const thisVideoThumb = toReaDisplayUrl(`${server}${uri}`, '160x120-fit,format=webp');
       if (!videoUrl) {
         videoUrl = thisVideoUrl;
-        videoThumb = `${server}${uri}`;
+        videoThumb = thisVideoThumb;
       }
-      mediaItems.push({ type: 'video', url: thisVideoUrl, thumb: `${server}${uri}`, order_index: idx });
+      mediaItems.push({ type: 'video', url: thisVideoUrl, thumb: thisVideoThumb, order_index: idx });
     } else if (name === 'floorplan') {
-      const full = `${server}${uri}`;
+      const full = toReaDisplayUrl(`${server}${uri}`);
       floorplans.push(full);
       mediaItems.push({ type: 'floorplan', url: full, order_index: idx });
     } else if (name === 'photo' || name === 'main photo') {
-      const full = `${server}${uri}`;
+      const full = toReaDisplayUrl(`${server}${uri}`);
       mediaItems.push({ type: 'photo', url: full, order_index: idx });
     } else if (uri) {
-      mediaItems.push({ type: name || 'photo', url: `${server}${uri}`, order_index: idx });
+      mediaItems.push({ type: name || 'photo', url: toReaDisplayUrl(`${server}${uri}`), order_index: idx });
     }
   });
 
