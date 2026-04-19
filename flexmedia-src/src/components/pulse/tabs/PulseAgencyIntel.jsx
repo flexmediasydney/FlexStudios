@@ -3,7 +3,7 @@
  * REA-only. Tabular agency roster with live agent counts, full-detail slideout.
  */
 import React, { useState, useMemo, useCallback, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
 import { api } from "@/api/supabaseClient";
@@ -18,6 +18,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -1873,9 +1878,45 @@ export default function PulseAgencyIntel({
   stats = {},
   onOpenEntity,
 }) {
+  /* ── URL-driven deep-link seed (Φ2 HIGH) ──────────────────────────────
+     Command Center's "Money on the table" banner links here with
+     `?tab=agencies&in_crm=false&sort=listings.desc`. We seed initial state
+     from those params on first mount, then strip them from the URL so a
+     refresh / back-nav doesn't re-apply them on top of user edits. */
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Read-once snapshot on mount (not reactive — we consume + strip below).
+  const initialUrlFilter = (() => {
+    const v = searchParams.get("in_crm");
+    if (v === "true") return "in_crm";
+    if (v === "false") return "not_in_crm";
+    return null;
+  })();
+  const initialUrlSort = (() => {
+    const raw = searchParams.get("sort");
+    if (!raw) return null;
+    // Accepts `${col}.${dir}`. We map the banner's virtual `listings` key
+    // onto the real sort column (`active_listings`) so the table's server
+    // sort-builder picks it up unchanged.
+    const [rawCol, rawDir] = raw.split(".");
+    if (!rawCol) return null;
+    const COL_ALIAS = {
+      listings: "active_listings",
+      sold: "total_sold_12m",
+      price: "avg_sold_price",
+      rating: "avg_agent_rating",
+      agents: "live_agent_count",
+    };
+    const col = COL_ALIAS[rawCol] || rawCol;
+    const dir = rawDir === "asc" ? "asc" : "desc";
+    if (!AGENCY_SERVER_SORT_MAP[col]) return null;
+    return { col, dir };
+  })();
+
   /* ── Local state ─────────────────────────────────────────────────────── */
-  const [agencyFilter, setAgencyFilter] = useState("all"); // all | not_in_crm | in_crm
-  const [agencySort, setAgencySort] = useState({ col: "live_agent_count", dir: "desc" });
+  const [agencyFilter, setAgencyFilter] = useState(initialUrlFilter || "all"); // all | not_in_crm | in_crm
+  const [agencySort, setAgencySort] = useState(
+    initialUrlSort || { col: "live_agent_count", dir: "desc" },
+  );
   const [agencyColFilter, setAgencyColFilter] = useState(""); // suburb text filter
   // Region filter (Auditor-11 F1) — "all" or a region name from pulse_target_suburbs.
   const [regionFilter, setRegionFilter] = useState("all");
@@ -1885,6 +1926,23 @@ export default function PulseAgencyIntel({
   const [selectedAgency, setSelectedAgency] = useState(null);
   // Auto-refresh — opt-in 60s. Agency data changes slowly.
   const [autoRefresh, setAutoRefresh] = useState(readStoredAutoRefresh);
+
+  /* Consume the deep-link params once so they don't re-seed on re-render.
+     Fires exactly once on mount; after that the user owns the filter/sort
+     state and the URL is clean (only `?tab=agencies` remains). */
+  useEffect(() => {
+    if (!initialUrlFilter && !initialUrlSort) return;
+    setSearchParams(
+      (prev) => {
+        const np = new URLSearchParams(prev);
+        np.delete("in_crm");
+        np.delete("sort");
+        return np;
+      },
+      { replace: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     try { window.localStorage.setItem(LS_PAGE_SIZE_KEY, String(pageSize)); } catch { /* quota / SSR */ }
@@ -2306,14 +2364,29 @@ export default function PulseAgencyIntel({
                   </td>
                 </tr>
               ) : (
-                pageRows.map((ag, idx) => (
+                pageRows.map((ag, idx) => {
+                  // B3: keyboard activation — wrap the click handler so Enter
+                  // and Space on a focused row match the mouse behaviour.
+                  const handleRowClick = () => {
+                    if (onOpenEntity) {
+                      onOpenEntity({ type: "agency", id: ag.id });
+                    } else {
+                      setSelectedAgency(ag);
+                    }
+                  };
+                  return (
                   <tr
                     key={ag.id || idx}
-                    onClick={() =>
-                      onOpenEntity
-                        ? onOpenEntity({ type: "agency", id: ag.id })
-                        : setSelectedAgency(ag)
-                    }
+                    onClick={handleRowClick}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleRowClick();
+                      }
+                    }}
+                    aria-label={`Open ${ag.name || "agency"} details`}
                     className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer transition-colors"
                   >
                     {/* Logo — #32: rounded-full everywhere */}
@@ -2352,28 +2425,70 @@ export default function PulseAgencyIntel({
                           {ag.state && `, ${ag.state}`}
                         </p>
                       )}
-                      {/* #27: duplicate warning chip when a loaded row shares
-                          the normalised (suffix-stripped) name. */}
+                      {/* #27 / B2: duplicate warning chip — clickable popover
+                          listing each sibling agency with a jump-to button. */}
                       {(() => {
                         const key = normAgencyNameForDupe(ag.name);
                         const grp = key ? duplicateIndex.get(key) : null;
                         if (!grp || grp.length < 2) return null;
                         const others = grp.filter((g) => g.id !== ag.id);
                         if (others.length === 0) return null;
-                        const title =
-                          "Possible duplicate of:\n" +
-                          others
-                            .map((o) => `\u2022 ${o.name} (${o.rea_agency_id || o.id})`)
-                            .join("\n");
                         return (
-                          <span
-                            title={title}
-                            className="inline-flex items-center gap-1 text-[9px] mt-1 px-1.5 py-0 rounded border border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-800"
-                          >
-                            <AlertTriangle className="h-2.5 w-2.5" />
-                            Possible duplicate
-                            {others.length > 1 ? ` (+${others.length - 1})` : ""}
-                          </span>
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <button
+                                type="button"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1 text-[9px] mt-1 px-1.5 py-0 rounded border border-amber-300 text-amber-700 bg-amber-50 dark:bg-amber-950/20 dark:text-amber-400 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-950/40 transition-colors cursor-pointer"
+                                title={`${others.length} possible duplicate${others.length === 1 ? "" : "s"} — click to view`}
+                              >
+                                <AlertTriangle className="h-2.5 w-2.5" />
+                                Possible duplicate
+                                {others.length > 1 ? ` (+${others.length - 1})` : ""}
+                              </button>
+                            </PopoverTrigger>
+                            <PopoverContent
+                              align="start"
+                              className="w-64 p-2"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1 px-1">
+                                Possible duplicates
+                              </div>
+                              <ul className="space-y-0.5">
+                                {others.map((o) => (
+                                  <li key={o.id}>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (onOpenEntity) {
+                                          onOpenEntity({ type: "agency", id: o.id });
+                                        } else {
+                                          // Fallback: open the local slideout by
+                                          // constructing a minimal agency stub —
+                                          // full data refetches inside the slideout.
+                                          setSelectedAgency({ id: o.id, name: o.name, rea_agency_id: o.rea_agency_id });
+                                        }
+                                      }}
+                                      className="w-full flex items-start gap-1.5 px-2 py-1.5 rounded text-left text-xs hover:bg-muted transition-colors"
+                                    >
+                                      <Building2 className="h-3 w-3 mt-0.5 text-muted-foreground shrink-0" />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="truncate font-medium">{o.name || "—"}</div>
+                                        {o.rea_agency_id && (
+                                          <div className="truncate text-[9px] font-mono text-muted-foreground">
+                                            #{o.rea_agency_id}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <ExternalLink className="h-2.5 w-2.5 mt-1 text-muted-foreground/60 shrink-0" />
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </PopoverContent>
+                          </Popover>
                         );
                       })()}
                     </td>
@@ -2495,7 +2610,8 @@ export default function PulseAgencyIntel({
                       <CrmBadge inCrm={!!ag.is_in_crm} />
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -2548,7 +2664,11 @@ export default function PulseAgencyIntel({
         )}
       </Card>
 
-      {/* ── Agency Slideout ── */}
+      {/* ── Agency Slideout (fallback path — when onOpenEntity is missing) ──
+          B1: forward onOpenEntity so nested drill (e.g. clicking an agent in
+          the roster) still round-trips through the global entity stack. When
+          the prop is missing the slideout silently falls back to its own
+          internal nav, which doesn't sync to URL. */}
       {selectedAgency && (
         <AgencySlideout
           agency={selectedAgency}
@@ -2558,6 +2678,7 @@ export default function PulseAgencyIntel({
           crmAgencies={crmAgencies}
           pulseMappings={pulseMappings}
           pulseAgencies={pulseAgencies}
+          onOpenEntity={onOpenEntity}
           onClose={() => setSelectedAgency(null)}
         />
       )}

@@ -1518,6 +1518,22 @@ export default function PulseAgentIntel({
     return m;
   }, [pulseMappings]);
 
+  // ── A3: CRM-entity-id lookup keyed by pulse_agent_id ──────────────────────
+  // Used to wrap the row's "In CRM" badge in a <Link> to PersonDetails when we
+  // can resolve a CRM id. Prefers mappings tagged `entity_type='agent'` so we
+  // don't accidentally grab an agency mapping attached to the same pulse id.
+  const crmIdByAgent = useMemo(() => {
+    const m = new Map();
+    for (const map of pulseMappings || []) {
+      if (map.entity_type && map.entity_type !== "agent") continue;
+      const key = map.pulse_agent_id || map.pulse_entity_id || map.pulse_id;
+      const crmId = map.crm_entity_id || map.crm_id;
+      if (!key || !crmId) continue;
+      if (!m.has(key)) m.set(key, crmId);
+    }
+    return m;
+  }, [pulseMappings]);
+
   // ── Auto-open Add-to-CRM dialog when triggered from CommandCenter ───────
   useEffect(() => {
     if (addToCrmFromCommand) {
@@ -2292,6 +2308,26 @@ export default function PulseAgentIntel({
               {paginated.map((agent) => {
                 const position = mapPosition(agent.job_title);
                 const isSelected = selectedIds.has(agent.id);
+                // A1/URL-fallback: onOpenEntity is wired through sharedProps in
+                // IndustryPulse.jsx, which also syncs the open entity into the
+                // URL (`?pulse_id=…&entity_type=agent`). If a future caller
+                // renders this tab standalone (tests, Storybook, ad-hoc host)
+                // without that prop we fall back to the local slideout — no
+                // URL sync, bookmark or back-button support. We warn in dev
+                // so regressions surface immediately.
+                const handleRowClick = () => {
+                  if (onOpenEntity) {
+                    onOpenEntity({ type: "agent", id: agent.id });
+                  } else {
+                    if (import.meta.env.DEV) {
+                      // eslint-disable-next-line no-console
+                      console.warn(
+                        "[PulseAgentIntel] onOpenEntity prop missing; fallback slideout has no URL sync",
+                      );
+                    }
+                    setSelectedAgent(agent);
+                  }
+                };
                 return (
                   <ContextMenu key={agent.id}>
                     <ContextMenuTrigger asChild>
@@ -2300,11 +2336,18 @@ export default function PulseAgentIntel({
                           "group border-b border-border/60 hover:bg-muted/40 cursor-pointer transition-colors",
                           isSelected && "bg-primary/5",
                         )}
-                        onClick={() =>
-                          onOpenEntity
-                            ? onOpenEntity({ type: "agent", id: agent.id })
-                            : setSelectedAgent(agent)
-                        }
+                        onClick={handleRowClick}
+                        // A4: keyboard activation — treat the row as a button
+                        // so Tab + Enter/Space opens the agent like clicking.
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            handleRowClick();
+                          }
+                        }}
+                        aria-label={`Open ${agent.full_name || "agent"} details`}
                       >
                         {/* #11 row checkbox */}
                         <td className="py-2 pl-3 pr-1" onClick={(e) => e.stopPropagation()}>
@@ -2503,9 +2546,29 @@ export default function PulseAgentIntel({
                       {fmtAgo(agent.first_seen_at)}
                     </td>
 
-                    {/* CRM status */}
+                    {/* CRM status — A3: when the agent is mapped to a CRM
+                        record, link the badge straight to PersonDetails so
+                        you can jump without opening the slideout first. */}
                     <td className="py-2 px-3 text-right">
-                      <CrmStatusBadge inCrm={agent.is_in_crm} />
+                      {(() => {
+                        const linkedCrmId =
+                          agent.linked_agent_id ||
+                          (agent.is_in_crm ? crmIdByAgent.get(agent.id) : null);
+                        if (agent.is_in_crm && linkedCrmId) {
+                          return (
+                            <Link
+                              to={createPageUrl(`PersonDetails?id=${linkedCrmId}`)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="inline-flex items-center gap-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800 px-1.5 py-0 text-[9px] font-medium leading-4 hover:underline"
+                              title="Open CRM record"
+                            >
+                              In CRM
+                              <ExternalLink className="h-2.5 w-2.5" />
+                            </Link>
+                          );
+                        }
+                        return <CrmStatusBadge inCrm={agent.is_in_crm} />;
+                      })()}
                     </td>
                       </tr>
                     </ContextMenuTrigger>
