@@ -60,6 +60,7 @@ export default function PulseSignalCard({
   onAction,
   onAcknowledge,
   onDismiss,
+  onOpenEntity,
 }) {
   const level    = (signal.level || "industry").toLowerCase();
   const category = (signal.category || "custom").toLowerCase();
@@ -171,23 +172,42 @@ export default function PulseSignalCard({
               </div>
             )}
 
-            {/* Linked contacts */}
+            {/* Linked contacts — clickable pills that open the entity slideout */}
             {linkedContacts.length > 0 && (
               <div className="flex flex-wrap gap-1 mb-1.5">
-                {linkedContacts.map((c) => (
-                  <Badge
-                    key={c.id}
-                    variant="outline"
-                    className="text-[10px] font-normal px-1.5 py-0 gap-0.5"
-                  >
-                    {c.type === "agent" ? (
-                      <User className="h-2.5 w-2.5" />
-                    ) : (
-                      <Building2 className="h-2.5 w-2.5" />
-                    )}
-                    {c.name}
-                  </Badge>
-                ))}
+                {linkedContacts.map((c) => {
+                  const Icon = c.type === "agent" ? User : Building2;
+                  const badge = (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] font-normal px-1.5 py-0 gap-0.5"
+                    >
+                      <Icon className="h-2.5 w-2.5" />
+                      {c.name}
+                    </Badge>
+                  );
+                  if (onOpenEntity) {
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring hover:opacity-80 transition-opacity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenEntity({ type: c.type, id: c.id });
+                        }}
+                        title={`Open ${c.type} ${c.name}`}
+                      >
+                        {badge}
+                      </button>
+                    );
+                  }
+                  return (
+                    <span key={c.id} title={`${c.type} ${c.name} (not clickable in this view)`}>
+                      {badge}
+                    </span>
+                  );
+                })}
               </div>
             )}
 

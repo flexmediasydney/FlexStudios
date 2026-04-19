@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { api } from "@/api/supabaseClient";
-import { refetchEntityList } from "@/components/hooks/useEntityData";
+import { refetchEntityList, useEntityList } from "@/components/hooks/useEntityData";
 import { cn } from "@/lib/utils";
 import {
   Plus, Zap, ArrowDownUp, HelpCircle,
@@ -204,7 +204,21 @@ function SignalLegendDialog({ open, onClose }) {
   );
 }
 
-export default function PulseSignals({ pulseSignals = [], search = "" }) {
+export default function PulseSignals({
+  pulseSignals = [],
+  pulseAgents: pulseAgentsProp = [],
+  pulseAgencies: pulseAgenciesProp = [],
+  onOpenEntity,
+  search = "",
+}) {
+  // IndustryPulse passes empty entity arrays ("tabs fetch what they need"),
+  // so hydrate agents/agencies locally when needed to resolve linked-contact
+  // pills. Falls back to whatever the parent threaded through if non-empty.
+  const { data: fetchedAgents }   = useEntityList("PulseAgent");
+  const { data: fetchedAgencies } = useEntityList("PulseAgency");
+  const pulseAgents   = pulseAgentsProp.length   ? pulseAgentsProp   : (fetchedAgents   || []);
+  const pulseAgencies = pulseAgenciesProp.length ? pulseAgenciesProp : (fetchedAgencies || []);
+
   const [levelFilter, setLevelFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
@@ -437,6 +451,9 @@ export default function PulseSignals({ pulseSignals = [], search = "" }) {
             <PulseSignalCard
               key={signal.id}
               signal={signal}
+              agents={pulseAgents}
+              agencies={pulseAgencies}
+              onOpenEntity={onOpenEntity}
               onAcknowledge={handleAcknowledge}
               onAction={handleAction}
               onDismiss={handleDismiss}
