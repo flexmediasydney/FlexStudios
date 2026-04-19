@@ -1057,13 +1057,13 @@ export default function IndustryPulse() {
 
         <TabsContent value="market_share" className="mt-2">
           <ErrorBoundary resetKey={tab} fallbackLabel="Market Share">
-            <PulseMarketShare />
+            <PulseMarketShare onOpenEntity={openEntity} onNavigateTab={navigateToTab} />
           </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="retention" className="mt-2">
           <ErrorBoundary resetKey={tab} fallbackLabel="Retention">
-            <PulseRetention />
+            <PulseRetention onOpenEntity={openEntity} onNavigateTab={navigateToTab} />
           </ErrorBoundary>
         </TabsContent>
 

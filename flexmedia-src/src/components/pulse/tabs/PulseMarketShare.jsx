@@ -65,10 +65,15 @@ function fmtPct(v) { if (v == null) return "—"; return `${Number(v).toFixed(2)
 
 // ── Main ────────────────────────────────────────────────────────────────────
 
-export default function PulseMarketShare() {
+export default function PulseMarketShare({ onOpenEntity, onNavigateTab }) {
   const [window, setWindow] = useState("12m");
   const [view, setView] = useState("dashboard"); // "dashboard" | "legend"
   const [suburbFilter, setSuburbFilter] = useState("");
+  // QoL drill-throughs: filter top-missed table by package / tier / quote_status
+  // clicked from the breakdowns + stat cards above it.
+  const [packageFilter, setPackageFilter] = useState(null);
+  const [tierFilter, setTierFilter] = useState(null);
+  const [statusFilter, setStatusFilter] = useState(null);
 
   const { fromDate, toDate } = useMemo(() => {
     const wd = WINDOWS.find(w => w.value === window) || WINDOWS[5];
@@ -177,7 +182,21 @@ export default function PulseMarketShare() {
       </div>
 
       {view === "dashboard" ? (
-        <DashboardView ms={ms} topMissed={topMissed} topLoading={topLoading} msLoading={msLoading} />
+        <DashboardView
+          ms={ms}
+          topMissed={topMissed}
+          topLoading={topLoading}
+          msLoading={msLoading}
+          onOpenEntity={onOpenEntity}
+          onNavigateTab={onNavigateTab}
+          packageFilter={packageFilter}
+          setPackageFilter={setPackageFilter}
+          tierFilter={tierFilter}
+          setTierFilter={setTierFilter}
+          statusFilter={statusFilter}
+          setStatusFilter={setStatusFilter}
+          onSuburbDrill={setSuburbFilter}
+        />
       ) : (
         <LegendView sourceMix={sourceMix} mixLoading={mixLoading} ms={ms} />
       )}
@@ -187,13 +206,41 @@ export default function PulseMarketShare() {
 
 // ── Dashboard view ──────────────────────────────────────────────────────────
 
-function DashboardView({ ms, topMissed, topLoading, msLoading }) {
+function DashboardView({
+  ms, topMissed, topLoading, msLoading,
+  onOpenEntity, onNavigateTab,
+  packageFilter, setPackageFilter,
+  tierFilter, setTierFilter,
+  statusFilter, setStatusFilter,
+  onSuburbDrill,
+}) {
   const qq = ms?.quote_quality || {};
   const hasPending = (qq.pending_enrichment || 0) > 0;
 
+  // Client-side filter the top-missed table by selected package/tier/status
+  const filteredTopMissed = useMemo(() => {
+    return (topMissed || []).filter((row) => {
+      if (packageFilter && row.classified_package_name !== packageFilter) return false;
+      if (tierFilter && row.resolved_tier !== tierFilter) return false;
+      // Top-missed rows all come from fresh/data_gap (RPC excludes pending),
+      // so statusFilter only subdivides those.
+      if (statusFilter === "data_gap" && !row.data_gap_flag) return false;
+      return true;
+    });
+  }, [topMissed, packageFilter, tierFilter, statusFilter]);
+
+  // Scroll-into-view helper for stat cards → top missed table
+  const scrollToTable = () => {
+    const el = document.getElementById("pulse-market-share-top-missed");
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const hasActiveFilter = !!(packageFilter || tierFilter || statusFilter);
+  const clearFilters = () => { setPackageFilter(null); setTierFilter(null); setStatusFilter(null); };
+
   return (
     <div className="space-y-4">
-      {/* ── Headline stat cards ──────────────────────────────────────── */}
+      {/* ── Headline stat cards (clickable) ──────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <StatCard
           icon={Target}
@@ -203,6 +250,8 @@ function DashboardView({ ms, topMissed, topLoading, msLoading }) {
           value={fmtPct(ms?.capture_rate_pct)}
           sub={`${fmtInt(ms?.captured_listings)} of ${fmtInt(ms?.total_listings)} listings`}
           loading={msLoading}
+          onClick={onNavigateTab ? (() => onNavigateTab("listings")) : null}
+          drillHint="View all listings →"
         />
         <StatCard
           icon={DollarSign}
@@ -212,6 +261,8 @@ function DashboardView({ ms, topMissed, topLoading, msLoading }) {
           value={fmtMoney(ms?.missed_opportunity_value)}
           sub={hasPending ? `+${fmtMoney((ms?.missed_opportunity_including_pending || 0) - (ms?.missed_opportunity_value || 0))} pending enrichment` : null}
           loading={msLoading}
+          onClick={scrollToTable}
+          drillHint="See top missed ↓"
         />
         <StatCard
           icon={TrendingUp}
@@ -224,26 +275,67 @@ function DashboardView({ ms, topMissed, topLoading, msLoading }) {
         />
       </div>
 
-      {/* ── Quote quality strip ──────────────────────────────────────── */}
-      <QuoteQualityStrip qq={qq} total={ms?.total_listings} />
+      {/* ── Quote quality strip (clickable segments) ─────────────────── */}
+      <QuoteQualityStrip
+        qq={qq}
+        total={ms?.total_listings}
+        statusFilter={statusFilter}
+        onSelectStatus={(s) => { setStatusFilter(s === statusFilter ? null : s); scrollToTable(); }}
+      />
 
-      {/* ── Breakdowns: by_package + by_tier ─────────────────────────── */}
+      {/* ── Breakdowns: by_package + by_tier (clickable rows) ────────── */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <Breakdown title="By package" icon={PkgIcon} rows={ms?.by_package || []} valueKey="value" countKey="listings" labelKey="package" />
-        <Breakdown title="By tier" icon={Award} rows={ms?.by_tier || []} valueKey="value" countKey="listings" labelKey="tier" />
+        <Breakdown
+          title="By package"
+          icon={PkgIcon}
+          rows={ms?.by_package || []}
+          valueKey="value" countKey="listings" labelKey="package"
+          activeValue={packageFilter}
+          onSelect={(val) => { setPackageFilter(val === packageFilter ? null : val); scrollToTable(); }}
+        />
+        <Breakdown
+          title="By tier"
+          icon={Award}
+          rows={ms?.by_tier || []}
+          valueKey="value" countKey="listings" labelKey="tier"
+          activeValue={tierFilter}
+          onSelect={(val) => { setTierFilter(val === tierFilter ? null : val); scrollToTable(); }}
+        />
       </div>
 
-      {/* ── Top missed table ─────────────────────────────────────────── */}
-      <Card className="p-3">
-        <div className="flex items-center gap-2 mb-2">
+      {/* ── Top missed table (row + cell drill-throughs) ─────────────── */}
+      <Card className="p-3" id="pulse-market-share-top-missed">
+        <div className="flex items-center gap-2 mb-2 flex-wrap">
           <ArrowUpRight className="h-4 w-4 text-amber-600" />
           <h3 className="text-sm font-semibold">Top missed opportunities</h3>
-          <Badge variant="secondary" className="ml-auto text-xs">{topMissed.length} listings</Badge>
+          {hasActiveFilter && (
+            <div className="flex items-center gap-1 flex-wrap">
+              {packageFilter && (
+                <Badge className="text-[10px] h-5 bg-amber-100 text-amber-800 border-amber-200 gap-0.5 cursor-pointer" onClick={() => setPackageFilter(null)}>
+                  pkg: {packageFilter.replace(" Package","")} ×
+                </Badge>
+              )}
+              {tierFilter && (
+                <Badge className="text-[10px] h-5 bg-amber-100 text-amber-800 border-amber-200 gap-0.5 cursor-pointer" onClick={() => setTierFilter(null)}>
+                  tier: {tierFilter} ×
+                </Badge>
+              )}
+              {statusFilter && (
+                <Badge className="text-[10px] h-5 bg-amber-100 text-amber-800 border-amber-200 gap-0.5 cursor-pointer" onClick={() => setStatusFilter(null)}>
+                  status: {statusFilter} ×
+                </Badge>
+              )}
+              <button className="text-[11px] text-muted-foreground hover:text-foreground underline" onClick={clearFilters}>clear all</button>
+            </div>
+          )}
+          <Badge variant="secondary" className="ml-auto text-xs">{filteredTopMissed.length} of {topMissed.length} listings</Badge>
         </div>
         {topLoading ? (
           <div className="text-xs text-muted-foreground py-8 text-center">Loading…</div>
-        ) : topMissed.length === 0 ? (
-          <div className="text-xs text-muted-foreground py-8 text-center">No missed opportunities in this window</div>
+        ) : filteredTopMissed.length === 0 ? (
+          <div className="text-xs text-muted-foreground py-8 text-center">
+            {hasActiveFilter ? "No listings match the active filters" : "No missed opportunities in this window"}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
@@ -256,31 +348,70 @@ function DashboardView({ ms, topMissed, topLoading, msLoading }) {
                   <th className="text-left py-1.5 font-medium">Tier</th>
                   <th className="text-right py-1.5 font-medium">Photos</th>
                   <th className="text-right py-1.5 font-medium">Quote</th>
-                  <th className="text-left py-1.5 font-medium">Agent</th>
+                  <th className="text-left py-1.5 font-medium">Agent / Agency</th>
                   <th className="text-right py-1.5 font-medium px-2">Link</th>
                 </tr>
               </thead>
               <tbody>
-                {topMissed.map((row, i) => (
-                  <tr key={row.listing_id} className="border-b last:border-b-0 hover:bg-muted/40">
+                {filteredTopMissed.map((row, i) => (
+                  <tr
+                    key={row.listing_id}
+                    className="border-b last:border-b-0 hover:bg-muted/40 cursor-pointer"
+                    onClick={() => onOpenEntity && onOpenEntity({ type: "listing", id: row.listing_id })}
+                    title="Click to open listing slideout"
+                  >
                     <td className="py-1.5 px-2 text-muted-foreground tabular-nums">{i + 1}</td>
-                    <td className="py-1.5 truncate max-w-[220px]" title={row.address}>{row.address || "—"}</td>
-                    <td className="py-1.5 text-muted-foreground">{row.suburb || "—"}</td>
-                    <td className="py-1.5">
-                      <PackageBadge name={row.classified_package_name} />
+                    <td className="py-1.5 truncate max-w-[220px] font-medium hover:underline" title={row.address}>{row.address || "—"}</td>
+                    <td className="py-1.5 text-muted-foreground">
+                      {row.suburb ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onSuburbDrill && onSuburbDrill(row.suburb); }}
+                          className="hover:text-foreground hover:underline"
+                          title={`Filter by suburb: ${row.suburb}`}
+                        >{row.suburb}</button>
+                      ) : "—"}
                     </td>
                     <td className="py-1.5">
-                      <TierBadge tier={row.resolved_tier} />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setPackageFilter(row.classified_package_name); }}
+                        title={`Filter by package: ${row.classified_package_name}`}
+                      ><PackageBadge name={row.classified_package_name} /></button>
+                    </td>
+                    <td className="py-1.5">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setTierFilter(row.resolved_tier); }}
+                        title={`Filter by tier: ${row.resolved_tier}`}
+                      ><TierBadge tier={row.resolved_tier} /></button>
                     </td>
                     <td className="py-1.5 text-right tabular-nums">{row.photo_count ?? "—"}</td>
                     <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(row.quoted_price)}</td>
-                    <td className="py-1.5 truncate max-w-[180px]" title={`${row.agent_name} (${row.agency_name || "—"})`}>
-                      {row.agent_name || "—"}
-                      {row.agency_name && <span className="text-muted-foreground"> · {row.agency_name}</span>}
+                    <td className="py-1.5 truncate max-w-[220px]">
+                      {row.agent_pulse_id && onOpenEntity ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onOpenEntity({ type: "agent", id: row.agent_pulse_id }); }}
+                          className="hover:underline font-medium"
+                          title="Open agent slideout"
+                        >{row.agent_name || "—"}</button>
+                      ) : (
+                        <span className="font-medium">{row.agent_name || "—"}</span>
+                      )}
+                      {row.agency_name && (
+                        row.agency_pulse_id && onOpenEntity ? (
+                          <>{" · "}
+                            <button
+                              onClick={(e) => { e.stopPropagation(); onOpenEntity({ type: "agency", id: row.agency_pulse_id }); }}
+                              className="text-muted-foreground hover:text-foreground hover:underline"
+                              title="Open agency slideout"
+                            >{row.agency_name}</button>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground"> · {row.agency_name}</span>
+                        )
+                      )}
                     </td>
-                    <td className="py-1.5 px-2 text-right">
+                    <td className="py-1.5 px-2 text-right" onClick={(e) => e.stopPropagation()}>
                       {row.source_url ? (
-                        <a href={row.source_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">
+                        <a href={row.source_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5" title="Open on REA">
                           <ExternalLink className="h-3 w-3" />
                         </a>
                       ) : null}
@@ -298,15 +429,25 @@ function DashboardView({ ms, topMissed, topLoading, msLoading }) {
 
 // ── Supporting subcomponents ────────────────────────────────────────────────
 
-function StatCard({ icon: Icon, color, bg, label, value, sub, loading }) {
+function StatCard({ icon: Icon, color, bg, label, value, sub, loading, onClick, drillHint }) {
+  const clickable = !!onClick;
   return (
-    <Card className="p-3">
+    <Card
+      className={cn("p-3", clickable && "cursor-pointer hover:shadow-md transition-shadow")}
+      onClick={onClick}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+    >
       <div className="flex items-start gap-3">
         <div className={cn("w-8 h-8 rounded-md flex items-center justify-center flex-shrink-0", bg)}>
           <Icon className={cn("h-4 w-4", color)} />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-xs text-muted-foreground">{label}</div>
+          <div className="text-xs text-muted-foreground flex items-center gap-1">
+            {label}
+            {clickable && drillHint && <span className="text-[10px] text-muted-foreground/70">· {drillHint}</span>}
+          </div>
           <div className={cn("text-xl font-semibold tabular-nums", loading && "opacity-50")}>
             {loading ? "…" : value}
           </div>
@@ -317,33 +458,44 @@ function StatCard({ icon: Icon, color, bg, label, value, sub, loading }) {
   );
 }
 
-function QuoteQualityStrip({ qq, total }) {
+function QuoteQualityStrip({ qq, total, statusFilter, onSelectStatus }) {
   const fresh = qq.fresh || 0;
   const dataGap = qq.data_gap || 0;
   const pending = qq.pending_enrichment || 0;
   const t = Math.max(total || 0, fresh + dataGap + pending, 1);
+  const chipClass = (key) =>
+    cn(
+      "flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer transition-colors",
+      statusFilter === key ? "bg-muted font-medium" : "hover:bg-muted/60"
+    );
   return (
     <Card className="p-2.5">
       <div className="flex items-center gap-2 mb-1.5">
         <Database className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-xs font-medium">Quote quality</span>
-        <span className="text-[11px] text-muted-foreground ml-auto tabular-nums">{fmtInt(total)} total</span>
+        <span className="text-[11px] text-muted-foreground ml-auto tabular-nums">{fmtInt(total)} total · click a chip to filter the table ↓</span>
       </div>
       <div className="flex h-2 rounded overflow-hidden bg-muted">
-        <div className="bg-emerald-400" style={{ width: `${(fresh/t)*100}%` }} title={`Fresh: ${fresh}`} />
-        <div className="bg-amber-400" style={{ width: `${(dataGap/t)*100}%` }} title={`Data gap: ${dataGap}`} />
-        <div className="bg-slate-300" style={{ width: `${(pending/t)*100}%` }} title={`Pending: ${pending}`} />
+        <div className="bg-emerald-400 cursor-pointer" style={{ width: `${(fresh/t)*100}%` }} title={`Fresh: ${fresh}`} onClick={() => onSelectStatus && onSelectStatus("fresh")} />
+        <div className="bg-amber-400 cursor-pointer" style={{ width: `${(dataGap/t)*100}%` }} title={`Data gap: ${dataGap}`} onClick={() => onSelectStatus && onSelectStatus("data_gap")} />
+        <div className="bg-slate-300 cursor-pointer" style={{ width: `${(pending/t)*100}%` }} title={`Pending: ${pending}`} onClick={() => onSelectStatus && onSelectStatus("pending_enrichment")} />
       </div>
-      <div className="flex items-center gap-3 mt-1.5 text-[11px]">
-        <span className="flex items-center gap-1 text-emerald-700"><CheckCircle2 className="h-3 w-3" />Fresh {fmtInt(fresh)}</span>
-        <span className="flex items-center gap-1 text-amber-700"><AlertTriangle className="h-3 w-3" />Data gap {fmtInt(dataGap)}</span>
-        <span className="flex items-center gap-1 text-slate-600"><Clock className="h-3 w-3" />Pending enrichment {fmtInt(pending)}</span>
+      <div className="flex items-center gap-1 mt-1.5 text-[11px]">
+        <button className={chipClass("fresh")} onClick={() => onSelectStatus && onSelectStatus("fresh")}>
+          <CheckCircle2 className="h-3 w-3 text-emerald-700" /><span className="text-emerald-700">Fresh {fmtInt(fresh)}</span>
+        </button>
+        <button className={chipClass("data_gap")} onClick={() => onSelectStatus && onSelectStatus("data_gap")}>
+          <AlertTriangle className="h-3 w-3 text-amber-700" /><span className="text-amber-700">Data gap {fmtInt(dataGap)}</span>
+        </button>
+        <button className={chipClass("pending_enrichment")} onClick={() => onSelectStatus && onSelectStatus("pending_enrichment")}>
+          <Clock className="h-3 w-3 text-slate-600" /><span className="text-slate-600">Pending {fmtInt(pending)}</span>
+        </button>
       </div>
     </Card>
   );
 }
 
-function Breakdown({ title, icon: Icon, rows, valueKey, countKey, labelKey }) {
+function Breakdown({ title, icon: Icon, rows, valueKey, countKey, labelKey, activeValue, onSelect }) {
   const sorted = [...(rows || [])].sort((a, b) => (b[valueKey] || 0) - (a[valueKey] || 0));
   const maxValue = Math.max(1, ...sorted.map(r => r[valueKey] || 0));
   return (
@@ -351,23 +503,38 @@ function Breakdown({ title, icon: Icon, rows, valueKey, countKey, labelKey }) {
       <div className="flex items-center gap-2 mb-2">
         <Icon className="h-4 w-4 text-muted-foreground" />
         <h3 className="text-sm font-semibold">{title}</h3>
+        {onSelect && <span className="text-[10px] text-muted-foreground ml-auto">click row to filter ↓</span>}
       </div>
       {sorted.length === 0 ? (
         <div className="text-xs text-muted-foreground py-4 text-center">No data in window</div>
       ) : (
         <div className="space-y-1.5">
-          {sorted.map((row, i) => (
-            <div key={i} className="space-y-0.5">
-              <div className="flex items-center text-xs gap-2">
-                <span className="font-medium truncate flex-1">{row[labelKey] || "—"}</span>
-                <span className="text-muted-foreground tabular-nums">{fmtInt(row[countKey])}</span>
-                <span className="tabular-nums w-16 text-right font-medium">{fmtMoney(row[valueKey])}</span>
-              </div>
-              <div className="h-1 bg-muted rounded overflow-hidden">
-                <div className="h-full bg-amber-400" style={{ width: `${(row[valueKey]/maxValue)*100}%` }} />
-              </div>
-            </div>
-          ))}
+          {sorted.map((row, i) => {
+            const label = row[labelKey] || "—";
+            const isActive = activeValue === label;
+            const clickable = !!onSelect;
+            return (
+              <button
+                key={i}
+                className={cn(
+                  "w-full space-y-0.5 text-left rounded px-1 py-0.5 transition-colors",
+                  clickable && "cursor-pointer hover:bg-muted/60",
+                  isActive && "bg-amber-50 ring-1 ring-amber-200"
+                )}
+                onClick={() => onSelect && onSelect(label)}
+                disabled={!clickable}
+              >
+                <div className="flex items-center text-xs gap-2">
+                  <span className="font-medium truncate flex-1">{label}</span>
+                  <span className="text-muted-foreground tabular-nums">{fmtInt(row[countKey])}</span>
+                  <span className="tabular-nums w-16 text-right font-medium">{fmtMoney(row[valueKey])}</span>
+                </div>
+                <div className="h-1 bg-muted rounded overflow-hidden">
+                  <div className={cn("h-full", isActive ? "bg-amber-500" : "bg-amber-400")} style={{ width: `${(row[valueKey]/maxValue)*100}%` }} />
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
     </Card>

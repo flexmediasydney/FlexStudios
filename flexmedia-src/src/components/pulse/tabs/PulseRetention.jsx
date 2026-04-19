@@ -58,7 +58,7 @@ function fmtPct(v) { return v == null ? "—" : `${Number(v).toFixed(1)}%`; }
 function fmtDate(d) { if (!d) return "—"; try { return new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short" }); } catch { return "—"; } }
 
 // ── Main ────────────────────────────────────────────────────────────────────
-export default function PulseRetention() {
+export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
   const [window, setWindow] = useState("12m");
   const [search, setSearch] = useState("");
   const [selectedAgent, setSelectedAgent] = useState(null); // { agent_rea_id, agent_name, agency_name }
@@ -89,7 +89,16 @@ export default function PulseRetention() {
   }, [agents, search]);
 
   if (selectedAgent) {
-    return <AgentDrillView agent={selectedAgent} fromIso={fromIso} toIso={toIso} onBack={() => setSelectedAgent(null)} windowLabel={WINDOWS.find(w => w.value === window)?.label} />;
+    return (
+      <AgentDrillView
+        agent={selectedAgent}
+        fromIso={fromIso}
+        toIso={toIso}
+        onBack={() => setSelectedAgent(null)}
+        windowLabel={WINDOWS.find(w => w.value === window)?.label}
+        onOpenEntity={onOpenEntity}
+      />
+    );
   }
 
   return (
@@ -154,10 +163,15 @@ export default function PulseRetention() {
                     key={a.agent_rea_id}
                     className="border-b last:border-b-0 hover:bg-muted/40 cursor-pointer"
                     onClick={() => setSelectedAgent(a)}
+                    title="Click row to drill into this agent's listings"
                   >
                     <td className="py-1.5 px-2 text-muted-foreground tabular-nums">{i + 1}</td>
-                    <td className="py-1.5 font-medium truncate max-w-[180px]" title={a.agent_name}>{a.agent_name || "—"}</td>
-                    <td className="py-1.5 text-muted-foreground truncate max-w-[200px]" title={a.agency_name}>{a.agency_name || "—"}</td>
+                    <td className="py-1.5 font-medium truncate max-w-[180px]">
+                      <span className="hover:underline" title={a.agent_name}>{a.agent_name || "—"}</span>
+                    </td>
+                    <td className="py-1.5 text-muted-foreground truncate max-w-[200px]" title={a.agency_name}>
+                      {a.agency_name || "—"}
+                    </td>
                     <td className="py-1.5 text-right tabular-nums">{fmtInt(a.total_listings)}</td>
                     <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(a.captured)}</td>
                     <td className="py-1.5 text-right tabular-nums text-amber-700">{fmtInt(a.missed)}</td>
@@ -220,7 +234,7 @@ function RetentionBadge({ pct }) {
 
 // ── Drill view ──────────────────────────────────────────────────────────────
 
-function AgentDrillView({ agent, fromIso, toIso, onBack, windowLabel }) {
+function AgentDrillView({ agent, fromIso, toIso, onBack, windowLabel, onOpenEntity }) {
   const { data: detail, isLoading } = useQuery({
     queryKey: ["pulse_agent_retention", agent.agent_rea_id, fromIso, toIso],
     queryFn: async () => {
@@ -252,8 +266,24 @@ function AgentDrillView({ agent, fromIso, toIso, onBack, windowLabel }) {
             <Users className="h-5 w-5 text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <div className="text-lg font-semibold truncate">{agent.agent_name}</div>
-            <div className="text-xs text-muted-foreground truncate">{agent.agency_name}</div>
+            {agent.agent_pulse_id && onOpenEntity ? (
+              <button
+                className="text-lg font-semibold truncate hover:underline text-left"
+                onClick={() => onOpenEntity({ type: "agent", id: agent.agent_pulse_id })}
+                title="Open agent slideout"
+              >{agent.agent_name}</button>
+            ) : (
+              <div className="text-lg font-semibold truncate">{agent.agent_name}</div>
+            )}
+            <div className="text-xs text-muted-foreground truncate">
+              {agent.agency_pulse_id && onOpenEntity ? (
+                <button
+                  className="hover:underline hover:text-foreground"
+                  onClick={() => onOpenEntity({ type: "agency", id: agent.agency_pulse_id })}
+                  title="Open agency slideout"
+                >{agent.agency_name}</button>
+              ) : agent.agency_name}
+            </div>
             <div className="text-[11px] text-muted-foreground">REA agent ID: <code>{agent.agent_rea_id}</code></div>
           </div>
           <div className="text-right">
@@ -274,15 +304,15 @@ function AgentDrillView({ agent, fromIso, toIso, onBack, windowLabel }) {
         <Card className="p-8 text-xs text-muted-foreground text-center">Loading detail…</Card>
       ) : (
         <>
-          <ListingTable title="Missed listings" rows={missed} kind="missed" />
-          <ListingTable title="Captured listings" rows={captured} kind="captured" />
+          <ListingTable title="Missed listings" rows={missed} kind="missed" onOpenEntity={onOpenEntity} />
+          <ListingTable title="Captured listings" rows={captured} kind="captured" onOpenEntity={onOpenEntity} />
         </>
       )}
     </div>
   );
 }
 
-function ListingTable({ title, rows, kind }) {
+function ListingTable({ title, rows, kind, onOpenEntity }) {
   const color = kind === "missed" ? "text-amber-600" : "text-emerald-600";
   const Icon = kind === "missed" ? AlertTriangle : CheckCircle2;
   return (
@@ -313,8 +343,13 @@ function ListingTable({ title, rows, kind }) {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.listing_id} className="border-b last:border-b-0 hover:bg-muted/40">
-                  <td className="py-1.5 px-2 truncate max-w-[200px]" title={r.address}>{r.address || "—"}</td>
+                <tr
+                  key={r.listing_id}
+                  className={cn("border-b last:border-b-0 hover:bg-muted/40", onOpenEntity && "cursor-pointer")}
+                  onClick={() => onOpenEntity && onOpenEntity({ type: "listing", id: r.listing_id })}
+                  title={onOpenEntity ? "Click to open listing slideout" : undefined}
+                >
+                  <td className="py-1.5 px-2 truncate max-w-[200px] hover:underline" title={r.address}>{r.address || "—"}</td>
                   <td className="py-1.5 text-muted-foreground">{r.suburb || "—"}</td>
                   <td className="py-1.5 tabular-nums">{fmtDate(r.first_seen_at)}</td>
                   <td className="py-1.5">
@@ -333,9 +368,9 @@ function ListingTable({ title, rows, kind }) {
                       {r.quote_status === "pending_enrichment" && <Badge className="text-[10px] h-4 px-1 bg-slate-100 text-slate-700 border-slate-200">pending</Badge>}
                     </td>
                   </>}
-                  <td className="py-1.5 px-2 text-right">
+                  <td className="py-1.5 px-2 text-right" onClick={(e) => e.stopPropagation()}>
                     {r.source_url && (
-                      <a href={r.source_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex">
+                      <a href={r.source_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex" title="Open on REA">
                         <ExternalLink className="h-3 w-3" />
                       </a>
                     )}
