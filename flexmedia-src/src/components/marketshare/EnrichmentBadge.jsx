@@ -12,7 +12,7 @@
  *   • stale    — enriched >14 days ago (media may have changed since)
  *
  * Throughput context in tooltip:
- *   pulseDetailEnrich runs */5min @ BATCH_SIZE=12 → 144/hr → ~3,500/day
+ *   pulseDetailEnrich runs every 5 min at BATCH_SIZE=12 (~144/hr, ~3,500/day)
  *   At ~4 days to clear the current backlog
  *
  * Usage:
