@@ -44,7 +44,7 @@ import {
   Clock, TrendingUp, TrendingDown, DollarSign, Building2, Tag, AlertTriangle,
   Bed, Bath, Car, ExternalLink, Phone, Mail, Users, History,
   ChevronDown, ChevronRight, ChevronsUpDown, ChevronUp, Play, FileText, CheckCircle2,
-  XCircle, Eye, List, BarChart3,
+  XCircle, Eye, List, BarChart3, Receipt,
 } from "lucide-react";
 import {
   formatAuctionDateTime,
@@ -54,6 +54,7 @@ import {
   listingTypeBadgeClasses,
 } from "@/components/pulse/utils/listingHelpers";
 import { ListingSlideout } from "@/components/pulse/tabs/PulseListings";
+import QuoteInspector from "@/components/marketshare/QuoteInspector";
 import {
   ComposedChart, Line, Scatter, XAxis, YAxis, Tooltip as RTooltip,
   Legend, ReferenceArea, ResponsiveContainer, CartesianGrid,
@@ -130,13 +131,14 @@ function initials(name) {
 
 export default function PropertyDetails() {
   const location = useLocation();
+  const navigate = useNavigate();
   const propertyKey = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return params.get("key");
   }, [location.search]);
 
   // Tabs: default = timeline. Arrow keys navigate between tabs (A11y).
-  const TAB_ORDER = ["timeline", "media", "listings", "projects", "agents", "market"];
+  const TAB_ORDER = ["timeline", "media", "listings", "quote", "projects", "agents", "market"];
   const [tab, setTabInner] = useState("timeline");
   const tabsRef = useRef(null);
 
@@ -283,6 +285,7 @@ export default function PropertyDetails() {
       t: "timeline",
       m: "media",
       l: "listings",
+      q: "quote",
       p: "projects",
       a: "agents",
       k: "market",
@@ -600,6 +603,10 @@ export default function PropertyDetails() {
                       </Badge>
                     )}
                   </TabsTrigger>
+                  <TabsTrigger value="quote" className="flex-1 text-xs sm:text-sm">
+                    <Receipt className="h-3.5 w-3.5 mr-1.5" />
+                    Quote Inspector
+                  </TabsTrigger>
                   <TabsTrigger value="projects" className="flex-1 text-xs sm:text-sm">
                     <Camera className="h-3.5 w-3.5 mr-1.5" />
                     Projects
@@ -649,6 +656,37 @@ export default function PropertyDetails() {
                       agencies={agencies}
                       propertyKey={propertyKey}
                     />
+                  </ErrorBoundary>
+                </TabsContent>
+
+                <TabsContent value="quote" className="mt-3">
+                  <ErrorBoundary compact fallbackLabel="Quote Inspector">
+                    {currentListing?.id ? (
+                      <QuoteInspector
+                        listingId={currentListing.id}
+                        onOpenEntity={(e) => {
+                          // Minimal drill-through: route by entity type to the
+                          // existing destinations used elsewhere on this page.
+                          if (!e?.id) return;
+                          if (e.type === "project") {
+                            navigate(createPageUrl(`ProjectDetails?id=${e.id}`));
+                          } else if (e.type === "agent") {
+                            navigate(`/IndustryPulse?tab=agents&pulse_id=${e.id}`);
+                          } else if (e.type === "agency" || e.type === "matrix") {
+                            navigate(`/IndustryPulse?tab=agencies&pulse_id=${e.id}`);
+                          } else if (e.type === "listing") {
+                            navigate(`/IndustryPulse?tab=listings&pulse_id=${e.id}`);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <Card>
+                        <CardContent className="py-12 text-center text-muted-foreground">
+                          <Receipt className="h-6 w-6 mx-auto mb-2 opacity-40" />
+                          <p className="text-sm">No active listing at this property to inspect.</p>
+                        </CardContent>
+                      </Card>
+                    )}
                   </ErrorBoundary>
                 </TabsContent>
 
@@ -731,6 +769,7 @@ function ShortcutHelpOverlay({ onClose }) {
     { keys: ["g", "t"], desc: "Jump to Timeline tab" },
     { keys: ["g", "m"], desc: "Jump to Media tab" },
     { keys: ["g", "l"], desc: "Jump to Listings tab" },
+    { keys: ["g", "q"], desc: "Jump to Quote Inspector tab" },
     { keys: ["g", "p"], desc: "Jump to Projects tab" },
     { keys: ["g", "a"], desc: "Jump to Agents tab" },
     { keys: ["g", "k"], desc: "Jump to Market tab" },
@@ -1007,7 +1046,7 @@ function PropertyHero({ property, listings, currentListing, currentAgent, curren
               </div>
             )}
             {/* Chips — bottom-left */}
-            <div className="absolute bottom-2 left-2 flex items-center gap-1.5">
+            <div className="absolute bottom-2 left-2 flex items-center gap-1.5 flex-wrap">
               {allPhotos.length > 0 && (
                 <span className="inline-flex items-center gap-1 rounded-full bg-black/70 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur">
                   <Images className="h-3 w-3" />
@@ -1018,6 +1057,31 @@ function PropertyHero({ property, listings, currentListing, currentAgent, curren
                 <span className="inline-flex items-center gap-1 rounded-full bg-black/70 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur">
                   <Video className="h-3 w-3" />
                   Video
+                </span>
+              )}
+              {/* 2026-04-19 — explicit enrichment-status chip so users know WHY
+                  they see only a hero thumbnail. pulseDetailEnrich cron runs
+                  every 5 min; only listings with detail_enriched_at set have
+                  the full media array (~4% of scraped listings today).
+                  For un-enriched listings the hero still renders from the
+                  thumbnail REA hands out at scrape time, but the gallery
+                  depends on the enriched media fetch. */}
+              {currentListing && !currentListing.detail_enriched_at && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-amber-500/90 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur"
+                  title="Listing is queued for media enrichment. Enrichment runs every 5 min via pulseDetailEnrich — gallery / floorplans / video will appear on the next pass."
+                >
+                  <AlertTriangle className="h-3 w-3" />
+                  Requires enrichment
+                </span>
+              )}
+              {currentListing?.detail_enriched_at && allPhotos.length <= 1 && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full bg-slate-500/80 text-white text-[10px] sm:text-xs px-2 py-1 backdrop-blur"
+                  title={`Enriched ${fmtDate(currentListing.detail_enriched_at)} — but only ${allPhotos.length} image parsed. Likely a CDN URL-format issue; contact support if persistent.`}
+                >
+                  <AlertTriangle className="h-3 w-3" />
+                  Low media coverage
                 </span>
               )}
             </div>

@@ -402,6 +402,48 @@ export function alternateContacts(entity, field) {
  *     video:      {url, thumb?} | null,
  *   }
  */
+/**
+ * Rewrite a REA reastatic.net CDN URL to the display-sized variant.
+ *
+ * 2026-04-19 — media_items stored by pulseDetailEnrich use the bare CDN URL
+ *   https://i3.au.reastatic.net/HASH/image.jpg
+ * which REA's CDN 302-redirects to a placeholder. The browser-renderable
+ * variant has a size/format prefix baked into the path:
+ *   https://i3.au.reastatic.net/800x600-fit,format=webp/HASH/image.jpg
+ * which serves the WebP at 200 OK.
+ *
+ * We default to 800x600-fit for thumbs/gallery (large enough for lightbox
+ * yet bandwidth-friendly), matching the hero URL format already produced
+ * by pulseRegionalListings at scrape time.
+ *
+ * Passthrough for non-reastatic URLs, already-prefixed URLs, and bare
+ * non-image paths. Keeps existing floorplan_urls and video URLs untouched.
+ */
+export function toReaDisplayUrl(url, variant = "800x600-fit,format=webp") {
+  if (!url || typeof url !== "string") return url;
+  // Only rewrite au.reastatic.net paths
+  if (!url.includes("reastatic.net")) return url;
+  // If it already has a size/format prefix, leave it alone. Prefixes are of
+  // the form "[A-Za-z0-9_-]*(x[0-9]+(-fit)?|format=[a-z]+)" — we detect them
+  // by the presence of a comma or 'x<digits>' in the first path segment.
+  try {
+    const u = new URL(url);
+    const segments = u.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return url;
+    const first = segments[0];
+    const hasPrefix =
+      first.includes(",") ||
+      /^\d+x\d+/.test(first) ||
+      first.startsWith("format=");
+    if (hasPrefix) return url;
+    // Prepend the variant
+    u.pathname = "/" + variant + "/" + segments.join("/");
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function parseMediaItems(listing) {
   if (!listing) return { photos: [], floorplans: [], video: null };
 
@@ -412,7 +454,11 @@ export function parseMediaItems(listing) {
     let video = null;
     for (const it of items) {
       if (!it || !it.url) continue;
-      const rec = { url: it.url, thumb: it.thumb || null, order_index: it.order_index ?? null };
+      const rec = {
+        url: toReaDisplayUrl(it.url),
+        thumb: it.thumb ? toReaDisplayUrl(it.thumb, "160x120-fit,format=webp") : null,
+        order_index: it.order_index ?? null,
+      };
       if (it.type === "photo") photos.push(rec);
       else if (it.type === "floorplan") floorplans.push(rec);
       else if (it.type === "video" && !video) video = rec;
@@ -439,12 +485,13 @@ export function parseMediaItems(listing) {
   let legacyVideoFromImages = null;
   if (Array.isArray(imgRaw)) {
     imgRaw.forEach((img, i) => {
-      const url = typeof img === "string" ? img : img?.url || img?.src;
-      if (!url) return;
+      const rawUrl = typeof img === "string" ? img : img?.url || img?.src;
+      if (!rawUrl) return;
+      const url = toReaDisplayUrl(rawUrl);
       const urlLc = String(url).toLowerCase();
       const rec = {
         url,
-        thumb: typeof img === "object" ? img?.thumb || null : null,
+        thumb: typeof img === "object" ? toReaDisplayUrl(img?.thumb, "160x120-fit,format=webp") || null : null,
         order_index: i,
       };
       if (
