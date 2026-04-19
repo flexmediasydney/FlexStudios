@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# .githooks/pre-push
+# Activated via: git config core.hooksPath .githooks
+#
+# Delegates to scripts/check-deploy-safety.sh which scans for the two classes
+# of bug that have silently broken Vercel auto-deploys in the past:
+#   • untracked source files imported by committed files (ENOENT on Vercel)
+#   • JSDoc comments containing "*/" mid-line (esbuild comment-terminator bug)
+# and runs a local Vite build smoke-test.
+#
+# Hard-fails the push on any issue. Bypass: `git push --no-verify`.
+
+exec "$(git rev-parse --show-toplevel)/scripts/check-deploy-safety.sh"
