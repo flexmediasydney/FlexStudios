@@ -15,6 +15,7 @@ import {
   Calendar, ArrowRight, Trophy, TrendingUp, TrendingDown, Star,
   MoreHorizontal, Eye, CheckCircle2, XCircle, Pencil,
   Zap, Globe, Building2, User, Newspaper, ExternalLink, History,
+  ArrowRightLeft, Mail, Phone, Briefcase, Pencil as EditIcon,
 } from "lucide-react";
 
 // ── Level config ─────────────────────────────────────────────────────────────
@@ -28,11 +29,16 @@ const LEVEL_CONFIG = {
 // ── Category config ──────────────────────────────────────────────────────────
 
 const CATEGORY_CONFIG = {
-  event:     { label: "Event",     icon: Calendar },
-  movement:  { label: "Movement",  icon: ArrowRight },
-  milestone: { label: "Milestone", icon: Trophy },
-  market:    { label: "Market",    icon: TrendingUp },
-  custom:    { label: "Custom",    icon: Star },
+  event:     { label: "Event",         icon: Calendar },
+  movement:  { label: "Movement",      icon: ArrowRight },
+  milestone: { label: "Milestone",     icon: Trophy },
+  market:    { label: "Market",        icon: TrendingUp },
+  custom:    { label: "Custom",        icon: Star },
+  // SAFR categories (migration 180). Each gets a bespoke icon so the card
+  // header avatar telegraphs the movement type at a glance.
+  agent_movement: { label: "Agent moved",    icon: ArrowRightLeft },
+  contact_change: { label: "Contact change", icon: Mail },
+  role_change:    { label: "Role change",    icon: Briefcase },
 };
 
 // ── Status config ────────────────────────────────────────────────────────────
@@ -110,6 +116,169 @@ export function PriceDeltaBadge({ delta, compact = false }) {
   );
 }
 
+// ── SAFR detail block ────────────────────────────────────────────────────────
+// Rendered on cards for the three SAFR-emitted categories (agent_movement,
+// contact_change, role_change). Provides an at-a-glance "from X to Y" with
+// a provenance chip showing which source promoted the value.
+
+function truncatedText(v, n = 42) {
+  if (v === null || v === undefined || v === "") return "(empty)";
+  const s = String(v);
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function SafrDetailBlock({ category, data, relativeTime }) {
+  const from = data?.from_value;
+  const to   = data?.to_value;
+  const fromSrc = data?.from_source;
+  const toSrc   = data?.to_source;
+  const fieldName = data?.field_name;
+
+  let line;
+  if (category === "agent_movement") {
+    line = (
+      <>
+        From <span className="font-medium text-foreground">{truncatedText(from, 28)}</span>
+        {" "}to{" "}
+        <span className="font-medium text-foreground">{truncatedText(to, 28)}</span>
+        {relativeTime ? <> — first observed {relativeTime}</> : null}
+      </>
+    );
+  } else if (category === "contact_change") {
+    line = (
+      <>
+        <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-muted text-foreground">{fieldName || "contact"}</span>
+        {" "}changed from{" "}
+        <span className="font-medium text-foreground">{truncatedText(from, 28)}</span>
+        {" "}to{" "}
+        <span className="font-medium text-foreground">{truncatedText(to, 28)}</span>
+      </>
+    );
+  } else if (category === "role_change") {
+    const person = data?.entity_name;
+    line = (
+      <>
+        {person ? <><span className="font-medium text-foreground">{person}</span> now </> : <>Now </>}
+        <span className="font-medium text-foreground">{truncatedText(to, 40)}</span>
+        {from ? <> (was {truncatedText(from, 28)})</> : null}
+      </>
+    );
+  }
+
+  return (
+    <div className="text-xs text-muted-foreground leading-relaxed mb-1.5 space-y-1">
+      <p>{line}</p>
+      {(fromSrc || toSrc) && (
+        <p className="flex items-center gap-1 flex-wrap">
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">Source</span>
+          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">{fromSrc || "unknown"}</Badge>
+          <ArrowRight className="h-2.5 w-2.5 text-muted-foreground/70" />
+          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">{toSrc || "unknown"}</Badge>
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── SAFR CTA row ─────────────────────────────────────────────────────────────
+// Category-aware call-to-action row, rendered in the main content column.
+//   agent_movement → "Open agent", "Open new agency" (if resolvable),
+//                    "Email a check-in" (mailto scaffold).
+//   contact_change → "Open entity" (only one needed — the CTAs above already
+//                    cover the generic open + acknowledge paths).
+//   role_change    → "Open entity" + "Update CRM notes" (navigates to the
+//                    entity and will open the notes tab if supported; falls
+//                    back to plain openEntity otherwise).
+
+function SafrCtaRow({ category, data, signal, onOpenEntity }) {
+  const entityType = data?.entity_type;
+  const entityId   = data?.entity_id;
+  const toAgencyId = data?.to_agency_id;
+  const contactEmail = data?.contact_email
+    || (signal?.source_data?.email)
+    || null;
+
+  const openPerson = () => {
+    if (!onOpenEntity) return;
+    // Prefer the explicit entity_id / entity_type from source_data.
+    if (entityType && entityId) onOpenEntity({ type: entityType, id: entityId });
+  };
+
+  const openAgency = () => {
+    if (!onOpenEntity || !toAgencyId) return;
+    onOpenEntity({ type: "agency", id: toAgencyId });
+  };
+
+  const openNotes = () => {
+    if (!onOpenEntity) return;
+    if (entityType && entityId) {
+      // tab hint is ignored by handlers that don't understand it, but
+      // slideout implementations that do (e.g. PulseAgentIntel) land on the
+      // Notes tab directly.
+      onOpenEntity({ type: entityType, id: entityId, tab: "notes" });
+    }
+  };
+
+  const emailCheckIn = () => {
+    // Compose a light-touch check-in mail. The body includes the observed
+    // agency move so the operator can personalise. Uses contact_email when
+    // available; falls back to an empty address so the user's mail client
+    // still opens with a prefilled subject / body.
+    const to = contactEmail || "";
+    const name = data?.entity_name || "there";
+    const newAgency = data?.to_value || "your new agency";
+    const subject = encodeURIComponent(`Congrats on the move to ${newAgency}`);
+    const body = encodeURIComponent(
+      `Hi ${name},\n\n`
+      + `Heard on the grapevine you've moved to ${newAgency} — congratulations!\n\n`
+      + `Would love to grab a quick coffee and chat about how FlexStudios can support your new listings.\n\n`
+      + `Cheers`
+    );
+    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+      {category === "agent_movement" && (
+        <>
+          {entityType && entityId && (
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] gap-1" onClick={openPerson}>
+              <User className="h-3 w-3" /> Open agent
+            </Button>
+          )}
+          {toAgencyId && (
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] gap-1" onClick={openAgency}>
+              <Building2 className="h-3 w-3" /> Open new agency
+            </Button>
+          )}
+          <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] gap-1" onClick={emailCheckIn}>
+            <Mail className="h-3 w-3" /> Email a check-in
+          </Button>
+        </>
+      )}
+      {category === "contact_change" && entityType && entityId && (
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] gap-1" onClick={openPerson}>
+          <User className="h-3 w-3" /> Open entity
+        </Button>
+      )}
+      {category === "role_change" && (
+        <>
+          {entityType && entityId && (
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] gap-1" onClick={openPerson}>
+              <User className="h-3 w-3" /> Open entity
+            </Button>
+          )}
+          {entityType && entityId && (
+            <Button size="sm" variant="outline" className="h-6 px-2 text-[11px] gap-1" onClick={openNotes}>
+              <EditIcon className="h-3 w-3" /> Update CRM notes
+            </Button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Main card ────────────────────────────────────────────────────────────────
 
 export default function PulseSignalCard({
@@ -132,7 +301,19 @@ export default function PulseSignalCard({
   const statusCfg   = STATUS_CONFIG[status]  || STATUS_CONFIG.new;
   const sourceCfg   = SOURCE_CONFIG[source]  || SOURCE_CONFIG.manual;
 
-  const CategoryIcon = categoryCfg.icon;
+  // SAFR (Source-Aware Field Resolution) flag — true for the three categories
+  // emitted by entity_field_sources promotion triggers (migration 180).
+  const isSafr = category === "agent_movement" || category === "contact_change" || category === "role_change";
+  const safrData = isSafr ? (signal.source_data || {}) : null;
+
+  // For contact_change, pick the header icon based on which field moved.
+  // Defaults fall back to the category icon.
+  let CategoryIcon = categoryCfg.icon;
+  if (category === "contact_change") {
+    const f = String(safrData?.field_name || "").toLowerCase();
+    if (f === "mobile" || f === "phone") CategoryIcon = Phone;
+    else if (f === "email") CategoryIcon = Mail;
+  }
   const SourceIcon   = sourceCfg.icon;
 
   // ── Resolve linked contacts ────────────────────────────────────────────────
@@ -228,11 +409,18 @@ export default function PulseSignalCard({
             {/* Title */}
             <h3 className="text-sm font-semibold leading-tight mb-0.5">{signal.title}</h3>
 
-            {/* Description */}
-            {signal.description && (
+            {/* Description — suppressed for SAFR categories in favour of the */}
+            {/* explicit from → to rendering below; otherwise render as-is. */}
+            {signal.description && !isSafr && (
               <p className="text-xs text-muted-foreground leading-relaxed mb-1.5">
                 {signal.description}
               </p>
+            )}
+
+            {/* SAFR detail: from → to rich description, with optional */}
+            {/* provenance chip for source migration (from_source → to_source). */}
+            {isSafr && (
+              <SafrDetailBlock category={category} data={safrData} relativeTime={relativeTime} />
             )}
 
             {/* Price delta badge (price_drop signals only) */}
@@ -328,6 +516,16 @@ export default function PulseSignalCard({
                   </a>
                 )}
               </div>
+            )}
+
+            {/* SAFR category-specific CTAs ────────────────────────────────── */}
+            {isSafr && (
+              <SafrCtaRow
+                category={category}
+                data={safrData}
+                signal={signal}
+                onOpenEntity={onOpenEntity}
+              />
             )}
 
             {/* Footer: created by */}

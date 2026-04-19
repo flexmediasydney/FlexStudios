@@ -15,6 +15,7 @@ import {
   ArrowRight, Star, Home, User, Zap, RefreshCw, Link2, UserPlus,
   TrendingUp, DollarSign, Play, CheckCircle2, Timer, ListPlus,
   Sparkles, AtSign, Phone, Gavel, FileImage, Video, XCircle,
+  ArrowRightLeft, Database,
 } from "lucide-react";
 
 /* ── System event types filtered out in compact dossier mode ──────────────── */
@@ -64,6 +65,13 @@ export const EVENT_CONFIG = {
   sold_date_captured:       { icon: CheckCircle2, color: "bg-emerald-500", label: "Sold Date Captured", category_color: "text-emerald-600 dark:text-emerald-400", category: "market"   },
   agency_contact_discovered:{ icon: AtSign,       color: "bg-emerald-500", label: "Agency Contact Found", category_color: "text-emerald-600 dark:text-emerald-400", category: "contact" },
   signal_emitted:           { icon: Zap,          color: "bg-yellow-500",  label: "Signal",             category_color: "text-yellow-600 dark:text-yellow-400", category: "signal"  },
+
+  // SAFR (Source-Aware Field Resolution) — migration 180 writes these event
+  // types onto pulse_timeline whenever entity_field_sources promotes a value
+  // from one source to another. Rendered with provenance chip (from_source →
+  // to_source) in TimelineRow's renderDetail pathway.
+  field_promoted:           { icon: Database,       color: "bg-indigo-500",  label: "Field promoted",       category_color: "text-indigo-600 dark:text-indigo-400", category: "safr"    },
+  agent_movement_detected:  { icon: ArrowRightLeft, color: "bg-violet-500",  label: "Agent movement",       category_color: "text-violet-600 dark:text-violet-400", category: "movement" },
 };
 
 /* ── Fallback config for unknown event types ─────────────────────────────── */
@@ -88,6 +96,7 @@ export const CATEGORY_BORDER = {
   media:    "border-l-sky-400/70",
   movement: "border-l-blue-400/70",
   signal:   "border-l-yellow-400/70",
+  safr:     "border-l-indigo-400/70",
   system:   "border-l-gray-300",
   other:    "border-l-gray-300",
 };

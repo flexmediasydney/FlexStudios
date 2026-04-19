@@ -32,6 +32,7 @@ import {
   ArrowRight, Building2, DollarSign, Link2, RefreshCw, Download,
   LayoutGrid, ListIcon, User, ExternalLink, MoreHorizontal,
   CheckCircle2, Eye, XCircle, History,
+  ArrowRightLeft, Mail, Phone, Briefcase,
 } from "lucide-react";
 import { exportFilteredCsv } from "@/components/pulse/utils/qolHelpers";
 import PresetControls from "@/components/pulse/utils/PresetControls";
@@ -70,6 +71,20 @@ const SIGNAL_LEGEND = [
         action: "Open the Mappings tab and confirm or reject." },
     ],
   },
+  {
+    group: "SAFR (Source-Aware Field Resolution)",
+    items: [
+      { kind: "agent_movement", label: "Agent moved agency", icon: ArrowRightLeft, level: "person", category: "agent_movement",
+        trigger: "SAFR trigger on entity_field_sources fires when agent.agency_name or agent.agency_rea_id is promoted to a new value.",
+        action: "Congratulate and reconnect with the agent at their new agency." },
+      { kind: "contact_change", label: "Contact details changed", icon: Mail, level: "person", category: "contact_change",
+        trigger: "SAFR trigger on entity_field_sources fires when contact.email, contact.mobile or contact.phone is promoted.",
+        action: "Update CRM; follow up if the change suggests a life event." },
+      { kind: "role_change", label: "Job title / role change", icon: Briefcase, level: "person", category: "role_change",
+        trigger: "SAFR trigger on entity_field_sources fires when contact.job_title is promoted to a new value.",
+        action: "Update CRM notes; send a congratulatory touchpoint." },
+    ],
+  },
 ];
 
 const LEVEL_BADGE = {
@@ -95,14 +110,19 @@ const STATUS_OPTIONS = [
   { value: "dismissed",    label: "Dismissed" },
 ];
 
-// Category filter — lines up with pulse_signals.category CHECK.
+// Category filter — lines up with pulse_signals.category CHECK plus the three
+// SAFR categories introduced by migration 180 (agent_movement / contact_change /
+// role_change).
 const CATEGORY_OPTIONS = [
-  { value: "all",       label: "All" },
-  { value: "event",     label: "Event" },
-  { value: "movement",  label: "Movement" },
-  { value: "milestone", label: "Milestone" },
-  { value: "market",    label: "Market" },
-  { value: "custom",    label: "Custom" },
+  { value: "all",             label: "All" },
+  { value: "event",           label: "Event" },
+  { value: "movement",        label: "Movement" },
+  { value: "milestone",       label: "Milestone" },
+  { value: "market",          label: "Market" },
+  { value: "custom",          label: "Custom" },
+  { value: "agent_movement",  label: "Agent moved" },
+  { value: "contact_change",  label: "Contact change" },
+  { value: "role_change",     label: "Role change" },
 ];
 
 // Source type filter — only the values a real pulse_signals row can carry.
@@ -454,7 +474,14 @@ export default function PulseSignals({
 
   const [levelFilter, setLevelFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [categoryFilter, setCategoryFilter] = useState("all");
+  // Seed the category filter from ?category= so deep-links from the Command
+  // Center "Movements this week" widget land pre-filtered. Validated against
+  // the known CATEGORY_OPTIONS so a stray ?category=foo doesn't hide every row.
+  const [categoryFilter, setCategoryFilter] = useState(() => {
+    const urlCat = searchParams.get("category");
+    const valid = CATEGORY_OPTIONS.some((o) => o.value === urlCat);
+    return valid ? urlCat : "all";
+  });
   const [sourceFilter, setSourceFilter] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
   const [addOpen, setAddOpen] = useState(false);

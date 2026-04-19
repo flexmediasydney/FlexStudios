@@ -23,6 +23,7 @@ import SourceDrillDrawer from "@/components/pulse/timeline/SourceDrillDrawer";
 import useEntityNameMap from "@/components/pulse/timeline/useEntityNameMap";
 import { SYSTEM_EVENT_TYPES } from "@/components/pulse/timeline/timelineIcons";
 import DataFreshnessCard from "@/components/marketshare/DataFreshnessCard";
+import MovementsThisWeekCard from "@/components/pulse/commandCenter/MovementsThisWeekCard";
 import {
   Line, LineChart, ResponsiveContainer, Tooltip as RTooltip,
 } from "recharts";
@@ -1489,6 +1490,15 @@ export default function PulseCommandCenter({
           </ErrorBoundary>
         </div>
       </div>
+
+      {/* 3b. SAFR "Movements this week" widget ------------------------------ */}
+      {/* Surfaces agent_movement / contact_change / role_change signals the   */}
+      {/* SAFR triggers (migration 180) emit. Powered by pulse_get_movements_  */}
+      {/* digest (migration 182). Rendered full-width above KPIs so agency     */}
+      {/* moves land in the eye's first sweep of the cockpit.                  */}
+      <ErrorBoundary compact resetKey="movements" fallbackLabel="Movements this week">
+        <MovementsThisWeekCard onOpenEntity={onOpenEntity} />
+      </ErrorBoundary>
 
       {/* 4. Pipeline KPI tiles --------------------------------------------- */}
       <ErrorBoundary compact resetKey="kpis" fallbackLabel="Pipeline KPIs">

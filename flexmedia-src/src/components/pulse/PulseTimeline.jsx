@@ -61,6 +61,7 @@ const CATEGORY_FILTER_OPTIONS = [
   { value: "media",    label: "Media" },
   { value: "mapping",  label: "Mapping" },
   { value: "signal",   label: "Signal" },
+  { value: "safr",     label: "SAFR" },
   { value: "agent",    label: "Agent" },
   { value: "system",   label: "System" },
 ];
@@ -389,6 +390,95 @@ function GenericPrevNewDetail({ prevVal, newVal }) {
   );
 }
 
+// ── SAFR detail renderers (migration 180 event types) ───────────────────────
+// Both `field_promoted` and `agent_movement_detected` share the same
+// source_data envelope written by entity_field_sources triggers:
+//   { field_name, from_value, to_value, from_source, to_source, confidence }
+// We read from entry.metadata / entry.new_value to tolerate both shapes —
+// pulse_timeline stores the enrichment payload in new_value and the provenance
+// in metadata depending on the generator path.
+
+function safrEnvelope(entry) {
+  // Coerce prev/new values that may be raw strings or already-objects.
+  const md = entry?.metadata || {};
+  const nv = entry?.new_value;
+  const pv = entry?.previous_value;
+  const nvObj = nv && typeof nv === "object" ? nv : {};
+  const pvObj = pv && typeof pv === "object" ? pv : {};
+  return {
+    field_name:  md.field_name  || nvObj.field_name  || null,
+    from_value:  md.from_value  != null ? md.from_value  : (nvObj.from_value  != null ? nvObj.from_value  : (typeof pv === "string" ? pv : pvObj.value ?? null)),
+    to_value:    md.to_value    != null ? md.to_value    : (nvObj.to_value    != null ? nvObj.to_value    : (typeof nv === "string" ? nv : nvObj.value ?? null)),
+    from_source: md.from_source || nvObj.from_source || null,
+    to_source:   md.to_source   || nvObj.to_source   || null,
+    confidence:  md.confidence  != null ? md.confidence  : nvObj.confidence ?? null,
+  };
+}
+
+function FieldPromotedDetail({ entry }) {
+  const e = safrEnvelope(entry);
+  if (!e.field_name && !e.to_value) return null;
+  return (
+    <div className="mt-2 text-xs bg-indigo-50/50 dark:bg-indigo-950/20 rounded-lg p-2.5 space-y-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/40 text-indigo-900 dark:text-indigo-200 font-semibold">
+          {e.field_name || "field"}
+        </span>
+        {e.from_value != null && e.from_value !== "" && (
+          <span className="text-muted-foreground line-through text-[11px]">{String(e.from_value)}</span>
+        )}
+        {e.from_value != null && e.to_value != null && (
+          <ArrowRight className="h-3 w-3 text-muted-foreground" />
+        )}
+        {e.to_value != null && (
+          <span className="font-semibold text-emerald-700 dark:text-emerald-300 text-[11px]">
+            {String(e.to_value)}
+          </span>
+        )}
+      </div>
+      {(e.from_source || e.to_source) && (
+        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span className="uppercase tracking-wide">Source</span>
+          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">{e.from_source || "—"}</Badge>
+          <ArrowRight className="h-2.5 w-2.5" />
+          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">{e.to_source || "—"}</Badge>
+          {e.confidence != null && (
+            <span className="ml-auto text-[9px]">conf {Number(e.confidence).toFixed(2)}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentMovementDetectedDetail({ entry }) {
+  const e = safrEnvelope(entry);
+  return (
+    <div className="mt-2 text-xs bg-violet-50/60 dark:bg-violet-950/20 rounded-lg p-2.5 space-y-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] uppercase tracking-wide text-violet-700 dark:text-violet-300 font-semibold">
+          Agency move
+        </span>
+        {e.from_value && (
+          <span className="text-muted-foreground line-through">{String(e.from_value)}</span>
+        )}
+        {(e.from_value || e.to_value) && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
+        {e.to_value && (
+          <span className="font-semibold text-foreground">{String(e.to_value)}</span>
+        )}
+      </div>
+      {(e.from_source || e.to_source) && (
+        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+          <span className="uppercase tracking-wide">Source</span>
+          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">{e.from_source || "—"}</Badge>
+          <ArrowRight className="h-2.5 w-2.5" />
+          <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">{e.to_source || "—"}</Badge>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const BESPOKE_RENDERED_TYPES = new Set([
   "agency_change", "price_change", "status_change", "first_seen",
   "agent_email_discovered", "agent_mobile_discovered",
@@ -397,6 +487,8 @@ const BESPOKE_RENDERED_TYPES = new Set([
   "listing_floorplan_added", "listing_video_added",
   "listing_withdrawn", "listing_relisted",
   "agency_contact_discovered",
+  // SAFR event types emitted by migration 180 triggers
+  "field_promoted", "agent_movement_detected",
 ]);
 
 function renderEntryDetail(entry) {
@@ -418,6 +510,8 @@ function renderEntryDetail(entry) {
     case "listing_withdrawn":         return <WithdrawnDetail newVal={newVal} />;
     case "listing_relisted":          return <RelistedDetail prevVal={prevVal} newVal={newVal} />;
     case "agency_contact_discovered": return <AgencyContactDiscoveredDetail newVal={newVal} />;
+    case "field_promoted":            return <FieldPromotedDetail entry={entry} />;
+    case "agent_movement_detected":   return <AgentMovementDetectedDetail entry={entry} />;
     default:
       if (BESPOKE_RENDERED_TYPES.has(entry.event_type)) return null;
       return <GenericPrevNewDetail prevVal={prevVal} newVal={newVal} />;
