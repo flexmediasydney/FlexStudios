@@ -1169,15 +1169,46 @@ serveWithAudit('pulseDataSync', async (req) => {
     }
 
     // Upsert agencies — pre-load existing for batch lookup (replaces N+1 pattern)
+    //
+    // BUG FIX (2026-04-19): previously loaded ALL agencies via
+    // `admin.from('pulse_agencies').select('id, name')` — hit PostgREST's
+    // 1000-row default cap, so any agency with a name sorted outside the
+    // first 1000 was silently misclassified as "new" → attempted INSERT →
+    // unique-key collision → silently swallowed by unchecked error handling
+    // → `agenciesInserted++` incremented for non-inserts → sync_log lied
+    // about records_new. Same class of bug as Agent E (agent bridge) and
+    // Agent I (listings _isNew). Fix: scope the pre-load to ONLY the
+    // candidate agency names this run is about to upsert, chunked 500 at
+    // a time (matches Agent E's and Agent I's pattern). Also check the
+    // error return from every insert/update so the counter stays honest.
     let agenciesInserted = 0;
     let agenciesUpdated = 0;
 
-    const { data: existingAgenciesList = [] } = await admin.from('pulse_agencies')
-      .select('id, name');
+    // Build candidate name set using the ORIGINAL case from the payload (we
+    // match case-sensitively because agency names from azzouzana are stable).
+    // If the same agency appears in pulse_agencies with different casing we'll
+    // still detect the existing row via rea_agency_id-based checks upstream
+    // in Step 4 (CRM cross-reference). Belt-and-braces: the UNIQUE-name
+    // constraint on pulse_agencies protects against duplicate-by-name inserts
+    // getting in. Cap-safe because we .in() only against the candidate set.
+    const candidateAgencyNames = Array.from(new Set(
+      mergedAgencies
+        .map(a => (a?.name || '').trim())
+        .filter(Boolean)
+    ));
     const existingAgencyMap = new Map<string, string>();
-    existingAgenciesList.forEach((a: any) => {
-      existingAgencyMap.set((a.name || '').trim().toLowerCase(), a.id);
-    });
+    if (candidateAgencyNames.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < candidateAgencyNames.length; i += CHUNK) {
+        const slice = candidateAgencyNames.slice(i, i + CHUNK);
+        const { data: rows = [] } = await admin.from('pulse_agencies')
+          .select('id, name')
+          .in('name', slice);
+        for (const r of rows as any[]) {
+          existingAgencyMap.set((r.name || '').trim().toLowerCase(), r.id);
+        }
+      }
+    }
 
     for (const agency of mergedAgencies) {
       const cleaned: Record<string, any> = {
@@ -1192,18 +1223,15 @@ serveWithAudit('pulseDataSync', async (req) => {
       if (cleaned.rea_agency_id == null) {
         delete cleaned.rea_agency_id;
       }
-      try {
-        const existingId = existingAgencyMap.get(agency.name.trim().toLowerCase());
-
-        if (existingId) {
-          await admin.from('pulse_agencies').update(cleaned).eq('id', existingId);
-          agenciesUpdated++;
-        } else {
-          await admin.from('pulse_agencies').insert(cleaned);
-          agenciesInserted++;
-        }
-      } catch (err: any) {
-        if (agenciesInserted < 3) console.error(`Agency upsert error for ${agency.name}:`, err.message?.substring(0, 200));
+      const existingId = existingAgencyMap.get((agency.name || '').trim().toLowerCase());
+      if (existingId) {
+        const { error: updErr } = await admin.from('pulse_agencies').update(cleaned).eq('id', existingId);
+        if (!updErr) agenciesUpdated++;
+        else if (agenciesInserted + agenciesUpdated < 3) console.error(`Agency update error for ${agency.name}:`, updErr.message?.substring(0, 200));
+      } else {
+        const { error: insErr } = await admin.from('pulse_agencies').insert(cleaned);
+        if (!insErr) agenciesInserted++;
+        else if (agenciesInserted < 3) console.error(`Agency insert error for ${agency.name}:`, insErr.message?.substring(0, 200));
       }
     }
 
