@@ -8,7 +8,7 @@ import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -185,6 +185,24 @@ export default function IndustryPulse() {
   const { data: crmAgencies = [] } = useEntityList("Agency", "name");
   const { data: projects = [] } = useEntityList("Project", "-shoot_date");
   const { data: pulseMappings = [] } = useEntityList("PulseCrmMapping", "-created_at");
+
+  // Linkage integrity orphan count (migration 191) — surfaced as a badge on
+  // the Mappings tab so admins notice is_in_crm=true / linked_*_id=NULL drift
+  // at a glance. Query is tiny (HEAD+count) and refreshes on a 60s stale so
+  // the number tracks the reconciler cron without hammering the DB.
+  const { data: linkageOrphanCount = 0 } = useQuery({
+    queryKey: ["pulse-linkage-orphan-count"],
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("pulse_linkage_issues")
+        .select("id", { count: "exact", head: true })
+        .is("resolved_at", null);
+      if (error) throw error;
+      return count ?? 0;
+    },
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: false,
+  });
   const { data: pulseTimeline = [] } = useEntityList("PulseTimeline", "-created_at", 500);
   const { data: syncLogs = [] } = useEntityList("PulseSyncLog", "-started_at", 100);
   const { data: sourceConfigs = [] } = useEntityList("PulseSourceConfig", "label");
@@ -547,6 +565,7 @@ export default function IndustryPulse() {
         totalListings: 0, activeListings: 0, rentals: 0, sold: 0, underContract: 0, withdrawn: 0,
         avgDom: 0, upcomingEvents: 0, newSignals: 0, agentMovements: 0,
         recentProjects: 0, recentListings: 0, marketShare: 0, suggestedMappings: 0,
+        linkageOrphans: 0,
       };
     }
     const recentListings = t.recent_listings_30d ?? 0;
@@ -572,11 +591,13 @@ export default function IndustryPulse() {
       recentListings,
       marketShare: recentListings > 0 ? Math.round((recentProjects / recentListings) * 100) : 0,
       suggestedMappings: t.suggested_mappings ?? 0,
+      // Linkage integrity — unresolved pulse_linkage_issues rows (mig 191)
+      linkageOrphans: linkageOrphanCount ?? 0,
       // Pass through the funnel inputs so PulseCommandCenter can render its
       // Territory → Booked chart off-RPC.
       _funnel: f || null,
     };
-  }, [dashboardStats]);
+  }, [dashboardStats, linkageOrphanCount]);
 
   // Deep-link handler — Command Center → Timeline tab
   const handleViewFullTimeline = useCallback(() => {
@@ -872,6 +893,12 @@ export default function IndustryPulse() {
           {TABS.map(({ value, label, badgeKey }) => {
             const rawCount = badgeKey ? (stats[badgeKey] || 0) : 0;
             const count = badgeKey && rawCount > 0 ? rawCount : null;
+            // Migration 191: surface linkage integrity orphans as a red warning
+            // badge on the Mappings tab — separate from the existing suggested-
+            // mapping count so admins see "1 thing needs review" not a blended
+            // number. Click behaviour is unchanged; the card inside the tab
+            // handles the actual workflow.
+            const linkageWarn = value === "mappings" ? (stats.linkageOrphans || 0) : 0;
             return (
               <TabsTrigger
                 key={value}
@@ -896,6 +923,14 @@ export default function IndustryPulse() {
                   >
                     {/* QoL #3: compact formatting (5000 → 5k) */}
                     {formatCountShort(count)}
+                  </Badge>
+                )}
+                {linkageWarn > 0 && (
+                  <Badge
+                    className="h-4 min-w-[1rem] px-1 text-[9px] tabular-nums rounded-full bg-red-500 hover:bg-red-600 text-white"
+                    title={`${linkageWarn} CRM linkage integrity issue${linkageWarn === 1 ? "" : "s"} — price_matrix not applying`}
+                  >
+                    {formatCountShort(linkageWarn)}
                   </Badge>
                 )}
               </TabsTrigger>

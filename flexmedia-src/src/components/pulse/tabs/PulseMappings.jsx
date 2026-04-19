@@ -21,7 +21,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink, Search, X, Sparkles, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, Link2, Users, Building2, ExternalLink, Search, X, Sparkles, Loader2, AlertTriangle, RefreshCw, ChevronRight } from "lucide-react";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -454,6 +454,118 @@ export default function PulseMappings({
     }
   }, [selectedIds]);
 
+  // ── Linkage integrity (migration 191) ────────────────────────────────────
+  // Surfaces pulse_linkage_issues rows — agencies/agents with is_in_crm=true
+  // but linked_*_id NULL (and their inverses). Auto-reconciler runs nightly;
+  // this panel lets an admin kick it off manually and accept/reject the
+  // lower-confidence proposals that don't cross the 0.9 auto-apply bar.
+  const [reconcileBusy, setReconcileBusy] = useState(false);
+  const [orphanActionBusy, setOrphanActionBusy] = useState(null); // issue id
+
+  const { data: linkageIssues = [], refetch: refetchLinkageIssues } = useQuery({
+    queryKey: ["pulse-linkage-issues"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("pulse_linkage_issues")
+        .select("id, entity_type, entity_id, issue_type, detected_at, proposed_crm_id, proposed_confidence, runner_up_crm_id, runner_up_confidence, auto_fixed, notes")
+        .is("resolved_at", null)
+        .order("detected_at", { ascending: false })
+        .limit(500);
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const orphanRows = useMemo(() => {
+    // Shape the rows to a common {kind: 'linkage_orphan', ...} structure that
+    // downstream UI code can branch on alongside the existing mapping rows.
+    return linkageIssues.map((iss) => {
+      const pulseRow = iss.entity_type === "agency"
+        ? effectivePulseAgencies.find((a) => a.id === iss.entity_id)
+        : effectivePulseAgents.find((a) => a.id === iss.entity_id);
+      const crmRow = iss.entity_type === "agency"
+        ? crmAgencies.find((a) => a.id === iss.proposed_crm_id)
+        : crmAgents.find((a) => a.id === iss.proposed_crm_id);
+      const runnerUp = iss.entity_type === "agency"
+        ? crmAgencies.find((a) => a.id === iss.runner_up_crm_id)
+        : crmAgents.find((a) => a.id === iss.runner_up_crm_id);
+      return {
+        kind: "linkage_orphan",
+        issue: iss,
+        pulseId: iss.entity_id,
+        pulseName: pulseRow?.full_name || pulseRow?.name || "(unknown)",
+        topMatchCrmId: iss.proposed_crm_id,
+        topMatchCrmName: crmRow?.name || null,
+        topMatchConfidence: Number(iss.proposed_confidence ?? 0),
+        runnerUpCrmName: runnerUp?.name || null,
+        runnerUpConfidence: Number(iss.runner_up_confidence ?? 0),
+      };
+    });
+  }, [linkageIssues, effectivePulseAgencies, effectivePulseAgents, crmAgencies, crmAgents]);
+
+  const runReconcile = useCallback(async () => {
+    setReconcileBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("pulseReconcileCrmLinks", {
+        body: {},
+      });
+      if (error) throw error;
+      const t = data?.totals || {};
+      toast.success(
+        `Reconcile complete: ${t.auto_applied ?? 0} auto-linked, ` +
+        `${t.proposed_for_review ?? 0} to review, ${t.ambiguous ?? 0} ambiguous`
+      );
+      await refetchLinkageIssues();
+    } catch (err) {
+      toast.error(`Reconcile failed: ${err.message}`);
+    } finally {
+      setReconcileBusy(false);
+    }
+  }, [refetchLinkageIssues]);
+
+  // Accept a proposed auto-link — updates the pulse_* row; the trigger then
+  // emits the timeline event + marks the substrate stale, and marks the
+  // pulse_linkage_issues row resolved.
+  const acceptOrphan = useCallback(async (row) => {
+    if (!row?.topMatchCrmId) { toast.error("No proposed CRM match to accept"); return; }
+    setOrphanActionBusy(row.issue.id);
+    try {
+      const table = row.issue.entity_type === "agency" ? "pulse_agencies" : "pulse_agents";
+      const column = row.issue.entity_type === "agency" ? "linked_agency_id" : "linked_agent_id";
+      const { error } = await supabase.from(table)
+        .update({ [column]: row.topMatchCrmId })
+        .eq("id", row.pulseId);
+      if (error) throw error;
+      toast.success(`Linked ${row.pulseName} to ${row.topMatchCrmName || "CRM record"}`);
+      await refetchLinkageIssues();
+    } catch (err) {
+      toast.error(`Accept failed: ${err.message}`);
+    } finally {
+      setOrphanActionBusy(null);
+    }
+  }, [refetchLinkageIssues]);
+
+  // Reject — mark issue resolved without linking (human says "this is wrong
+  // or not resolvable"). Human can re-run reconcile later.
+  const rejectOrphan = useCallback(async (row) => {
+    setOrphanActionBusy(row.issue.id);
+    try {
+      const { error } = await supabase.from("pulse_linkage_issues")
+        .update({ resolved_at: new Date().toISOString(), notes: (row.issue.notes || "") + " | rejected by user" })
+        .eq("id", row.issue.id);
+      if (error) throw error;
+      toast.success("Marked as reviewed");
+      await refetchLinkageIssues();
+    } catch (err) {
+      toast.error(`Reject failed: ${err.message}`);
+    } finally {
+      setOrphanActionBusy(null);
+    }
+  }, [refetchLinkageIssues]);
+
+  const ignoreOrphan = rejectOrphan; // same backend action, different UI label
+
   // QoL #64: auto-confirm every rea_id+name match still in "suggested" state.
   const runAutoConfirm = useCallback(async () => {
     const ids = exactMatchSuggested.map((m) => m.id);
@@ -501,6 +613,136 @@ export default function PulseMappings({
 
   return (
     <div className="space-y-4">
+      {/* ── Linkage integrity card (migration 191) ── */}
+      {orphanRows.length > 0 && (
+        <Card className="rounded-xl border-amber-300/60 bg-amber-50/40 dark:bg-amber-950/10 shadow-sm">
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <div>
+                  <h3 className="text-sm font-semibold text-amber-900 dark:text-amber-300">
+                    Linkage integrity
+                  </h3>
+                  <p className="text-xs text-amber-800/80 dark:text-amber-300/70 mt-0.5">
+                    <strong>{orphanRows.length}</strong> entit{orphanRows.length === 1 ? "y is" : "ies are"}{" "}
+                    flagged as in CRM but missing the direct link — price matrix and package
+                    overrides will silently skip their listings until resolved.
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2.5 text-xs gap-1 border-amber-400/60 bg-white dark:bg-amber-900/20"
+                onClick={runReconcile}
+                disabled={reconcileBusy}
+                title="Re-run fuzzy-match reconciler against CRM agencies/agents"
+              >
+                {reconcileBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                Reconcile now
+              </Button>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-amber-200/60 text-amber-900/80 dark:text-amber-300/70">
+                    <th className="text-left py-1.5 pr-3 font-medium">Type</th>
+                    <th className="text-left py-1.5 pr-3 font-medium">Pulse</th>
+                    <th className="text-left py-1.5 pr-3 font-medium">Proposed CRM match</th>
+                    <th className="text-left py-1.5 pr-3 font-medium">Confidence</th>
+                    <th className="text-left py-1.5 pr-3 font-medium">Runner-up</th>
+                    <th className="text-right py-1.5 font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orphanRows.map((row) => {
+                    const pct = Math.round((row.topMatchConfidence || 0) * 100);
+                    const runnerPct = Math.round((row.runnerUpConfidence || 0) * 100);
+                    const busy = orphanActionBusy === row.issue.id;
+                    const canAccept = !!row.topMatchCrmId && row.topMatchConfidence >= 0.5;
+                    return (
+                      <tr key={row.issue.id} className="border-b border-amber-100 last:border-0 align-top">
+                        <td className="py-2 pr-3">
+                          <div className="flex items-center gap-1.5">
+                            {row.issue.entity_type === "agency"
+                              ? <Building2 className="h-3.5 w-3.5 text-violet-500 shrink-0" />
+                              : <Users className="h-3.5 w-3.5 text-blue-500 shrink-0" />}
+                            <span className="capitalize">{row.issue.entity_type}</span>
+                          </div>
+                        </td>
+                        <td className="py-2 pr-3 max-w-[200px]">
+                          <div className="font-medium truncate">{row.pulseName}</div>
+                        </td>
+                        <td className="py-2 pr-3 max-w-[220px]">
+                          <div className="truncate">
+                            {row.topMatchCrmName || <span className="italic text-muted-foreground">no match</span>}
+                          </div>
+                        </td>
+                        <td className="py-2 pr-3">
+                          <Badge
+                            className={cn(
+                              "text-[10px] px-1.5 py-0",
+                              pct >= 90 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                : pct >= 70 ? "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                            )}
+                          >
+                            {pct}%
+                          </Badge>
+                        </td>
+                        <td className="py-2 pr-3 text-[10px] text-muted-foreground max-w-[180px] truncate">
+                          {row.runnerUpCrmName
+                            ? <>{row.runnerUpCrmName} ({runnerPct}%)</>
+                            : <span className="italic">—</span>}
+                        </td>
+                        <td className="py-2 text-right">
+                          <div className="flex items-center justify-end gap-1 flex-wrap">
+                            {canAccept && (
+                              <Button
+                                size="sm" variant="outline"
+                                className="h-6 px-2 text-[10px] gap-1 border-emerald-400/60 text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400"
+                                onClick={() => acceptOrphan(row)}
+                                disabled={busy}
+                                title={`Set ${row.issue.entity_type === 'agency' ? 'linked_agency_id' : 'linked_agent_id'} to ${row.topMatchCrmName}`}
+                              >
+                                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                                Accept ({pct}%)
+                              </Button>
+                            )}
+                            <Button
+                              size="sm" variant="ghost"
+                              className="h-6 px-2 text-[10px] gap-1 text-red-600 hover:bg-red-50"
+                              onClick={() => rejectOrphan(row)}
+                              disabled={busy}
+                              title="Dismiss — the reconciler will propose again next run"
+                            >
+                              <XCircle className="h-3 w-3" />
+                              Reject
+                            </Button>
+                            <Button
+                              size="sm" variant="ghost"
+                              className="h-6 px-2 text-[10px] gap-1 text-muted-foreground hover:bg-muted"
+                              onClick={() => ignoreOrphan(row)}
+                              disabled={busy}
+                              title="Mark as reviewed without action"
+                            >
+                              <ChevronRight className="h-3 w-3" />
+                              Ignore
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Header + filters ── */}
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         <div className="flex items-center gap-2">
