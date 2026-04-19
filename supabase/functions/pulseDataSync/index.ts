@@ -1212,25 +1212,35 @@ serveWithAudit('pulseDataSync', async (req) => {
     let newListingsDetected = 0;
     const _listingErrorMsgs: string[] = [];
 
-    // Load existing listing IDs for new-listing detection
+    // Load existing listing IDs for new-listing detection.
+    // BUG FIX (Agent E-parity, 2026-04-19): previously this was an unscoped
+    // .select('source_listing_id').not('source_listing_id','is',null) which
+    // PostgREST silently capped at 1000 rows. With ~27k listings, every id
+    // outside that first page was classified `_isNew: true`, inflating the
+    // `newListingsDetected` counter and the "N new listings detected"
+    // rollup timeline emit. Fix: scope the pre-check to ONLY the candidate
+    // ids in this run (bounded by maxItems, typically <few hundred), chunked
+    // in 500s — same pattern used by the agent/agency bridge pre-check and
+    // the existingListingData query below.
     const existingListingIds = new Set<string>();
-    if (allListings.length > 0) {
-      const { data: existingListings = [] } = await admin.from('pulse_listings')
-        .select('source_listing_id')
-        .not('source_listing_id', 'is', null);
-      existingListings.forEach((l: any) => { if (l.source_listing_id) existingListingIds.add(l.source_listing_id); });
-    }
+    const candidateListingIds = allListings
+      .map(l => l.listingId ? String(l.listingId) : null)
+      .filter(Boolean) as string[];
 
     // Load existing listing prices + types for change detection (MUST be before listingRecords mapping)
     const existingListingData = new Map<string, { asking_price: number | null; listing_type: string | null }>();
-    if (allListings.length > 0) {
-      const listingIds = allListings.map(l => l.listingId ? String(l.listingId) : null).filter(Boolean) as string[];
-      if (listingIds.length > 0) {
-        const { data: existingPriceData = [] } = await admin.from('pulse_listings')
+    if (candidateListingIds.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < candidateListingIds.length; i += CHUNK) {
+        const chunk = candidateListingIds.slice(i, i + CHUNK);
+        const { data: chunkExisting = [] } = await admin.from('pulse_listings')
           .select('source_listing_id, asking_price, listing_type')
-          .in('source_listing_id', listingIds.slice(0, 1000));
-        existingPriceData.forEach((l: any) => {
-          existingListingData.set(l.source_listing_id, { asking_price: l.asking_price, listing_type: l.listing_type });
+          .in('source_listing_id', chunk);
+        chunkExisting.forEach((l: any) => {
+          if (l.source_listing_id) {
+            existingListingIds.add(l.source_listing_id);
+            existingListingData.set(l.source_listing_id, { asking_price: l.asking_price, listing_type: l.listing_type });
+          }
         });
       }
     }
@@ -2390,9 +2400,17 @@ serveWithAudit('pulseDataSync', async (req) => {
       // records_new lives in the header (the UI reads it directly). endRun
       // doesn't expose it because the shared-module vocab is deliberately
       // minimal — patch it in as a direct update.
+      // BUG FIX (2026-04-19): listings were missing from this sum, so the
+      // Sync History "N new" column never reflected listings — the most
+      // visible type of new record. Using newListingsDetected (not
+      // listingsInserted) because listingsInserted counts upserted rows
+      // including UPDATES (batch-size on success), whereas
+      // newListingsDetected counts only rows whose source_listing_id was
+      // absent from pulse_listings before this run (now accurate post
+      // Bug-1 fix).
       try {
         await admin.from('pulse_sync_logs').update({
-          records_new: agentsInserted + agenciesInserted,
+          records_new: newListingsDetected + agentsInserted + agenciesInserted,
         }).eq('id', syncLogId);
       } catch (pErr) {
         console.warn('pulseDataSync: records_new patch failed (non-fatal):', (pErr as any)?.message);
