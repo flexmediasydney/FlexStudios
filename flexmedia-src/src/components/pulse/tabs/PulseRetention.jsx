@@ -27,6 +27,7 @@ import {
   ExternalLink, Search, RefreshCw, DollarSign, Target,
   ChevronRight, Flame, Droplet, Star, Building2, Download,
   Mail, UserCheck, User as UserIcon, Briefcase, Package as PkgIcon,
+  Filter,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
@@ -46,6 +47,16 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(null);    // drill target
 
+  // Advanced filters — dimension-aware + retention band + activity + agency
+  const [dimFocus, setDimFocus] = useState("both");           // "both" | "current" | "sold"
+  const [retentionBand, setRetentionBand] = useState("all");  // "all" | "at_risk" | "mid" | "healthy"  (<25 / 25-75 / >=75)
+  const [missedMin, setMissedMin] = useState(0);              // $ threshold
+  const [activityFilter, setActivityFilter] = useState("all");// "all" | "active_only" | "no_projects"
+  const [agencyFilter, setAgencyFilter] = useState("");       // text match on agency_name (agent mode)
+  const [sortKey, setSortKey] = useState("current_missed_value"); // column to sort by
+  const [sortDir, setSortDir] = useState("desc");
+  const [showFilters, setShowFilters] = useState(false);
+
   const { fromDate, toDate } = useMemo(() => {
     const wd = WINDOWS.find(w => w.value === windowKey) || WINDOWS[5];
     return { fromDate: wd.from(), toDate: new Date() };
@@ -53,13 +64,13 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
   const fromIso = fromDate.toISOString();
   const toIso = toDate.toISOString();
 
-  // --- Scope rows ------------------------------------------------------------
-  const rpcName = mode === "agent" ? "pulse_get_retention_agent_scope" : "pulse_get_retention_agency_scope";
+  // --- Scope rows (v2 — strict CRM-only, dual dimension current + sold) -----
+  const rpcName = mode === "agent" ? "pulse_get_retention_agent_scope_v2" : "pulse_get_retention_agency_scope_v2";
   const { data: rows = [], isLoading, refetch } = useQuery({
-    queryKey: ["pulse_retention_scope", mode, fromIso, toIso],
+    queryKey: ["pulse_retention_scope_v2", mode, fromIso, toIso],
     queryFn: async () => {
       const { data, error } = await api._supabase.rpc(rpcName, {
-        p_from: fromIso, p_to: toIso, p_min_activity: 1,
+        p_from: fromIso, p_to: toIso,
       });
       if (error) throw error;
       return data || [];
@@ -71,10 +82,10 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
   // + leaky-bucket share data across the whole viz block -----------------
   const trendFrom = useMemo(() => minusWeeks(new Date(), 12).toISOString(), []);
   const { data: trendAgents = [] } = useQuery({
-    queryKey: ["pulse_retention_trend_rows", mode, trendFrom],
+    queryKey: ["pulse_retention_trend_rows_v2", mode, trendFrom],
     queryFn: async () => {
       const { data, error } = await api._supabase.rpc(rpcName, {
-        p_from: trendFrom, p_to: new Date().toISOString(), p_min_activity: 1,
+        p_from: trendFrom, p_to: new Date().toISOString(),
       });
       if (error) throw error;
       return data || [];
@@ -82,16 +93,94 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
     staleTime: 120_000,
   });
 
-  // Filtering
+  // Filtering — advanced filter chain
   const filtered = useMemo(() => {
-    if (!search) return rows;
-    const q = search.toLowerCase();
-    return rows.filter(r =>
-      (r.agent_name || r.agency_name || "").toLowerCase().includes(q)
-      || (r.agency_name || "").toLowerCase().includes(q)
-      || (r.agent_rea_id || "").toLowerCase().includes(q)
-    );
-  }, [rows, search]);
+    let out = rows;
+
+    // Free-text search
+    if (search) {
+      const q = search.toLowerCase();
+      out = out.filter(r =>
+        (r.agent_name || r.agency_name || "").toLowerCase().includes(q)
+        || (r.agency_name || "").toLowerCase().includes(q)
+        || (r.agent_rea_id || r.rea_agency_id || "").toLowerCase().includes(q)
+      );
+    }
+
+    // Agency narrowing (agent mode)
+    if (agencyFilter && mode === "agent") {
+      const a = agencyFilter.toLowerCase();
+      out = out.filter(r => (r.agency_name || "").toLowerCase().includes(a));
+    }
+
+    // Dimension focus — hide rows with zero activity in the focused dimension
+    if (dimFocus === "current") out = out.filter(r => (Number(r.current_listings) || 0) > 0);
+    else if (dimFocus === "sold") out = out.filter(r => (Number(r.sold_listings) || 0) > 0);
+
+    // Retention band — against the focused dimension (or "any" for both)
+    const getRet = r => {
+      if (dimFocus === "sold") return Number(r.sold_retention_pct) || 0;
+      // both / current → use current when it has any listings, else sold
+      return (Number(r.current_listings) || 0) > 0
+        ? (Number(r.current_retention_pct) || 0)
+        : (Number(r.sold_retention_pct) || 0);
+    };
+    if (retentionBand === "at_risk")  out = out.filter(r => getRet(r) < 25);
+    else if (retentionBand === "mid") out = out.filter(r => getRet(r) >= 25 && getRet(r) < 75);
+    else if (retentionBand === "healthy") out = out.filter(r => getRet(r) >= 75);
+
+    // Missed $ threshold
+    if (missedMin > 0) {
+      out = out.filter(r => {
+        const missed = (Number(r.current_missed_value) || 0) + (Number(r.sold_missed_value) || 0);
+        return missed >= missedMin;
+      });
+    }
+
+    // Activity filter
+    if (activityFilter === "active_only") {
+      out = out.filter(r =>
+        (Number(r.current_listings) || 0) > 0
+        || (Number(r.sold_listings) || 0) > 0
+        || (Number(r.projects_in_window) || 0) > 0
+      );
+    } else if (activityFilter === "no_projects") {
+      out = out.filter(r => (Number(r.projects_in_window) || 0) === 0);
+    }
+
+    // Sort
+    const sortGetter = {
+      current_missed_value: r => Number(r.current_missed_value) || 0,
+      current_retention_pct: r => Number(r.current_retention_pct) || 0,
+      current_listings: r => Number(r.current_listings) || 0,
+      sold_listings: r => Number(r.sold_listings) || 0,
+      sold_retention_pct: r => Number(r.sold_retention_pct) || 0,
+      projects_in_window: r => Number(r.projects_in_window) || 0,
+      name: r => (r.agent_name || r.agency_name || "").toLowerCase(),
+    }[sortKey] || (r => Number(r.current_missed_value) || 0);
+
+    out = [...out].sort((a, b) => {
+      const av = sortGetter(a), bv = sortGetter(b);
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+
+    return out;
+  }, [rows, search, agencyFilter, dimFocus, retentionBand, missedMin, activityFilter, mode, sortKey, sortDir]);
+
+  const activeFilterCount = [
+    agencyFilter, dimFocus !== "both", retentionBand !== "all",
+    missedMin > 0, activityFilter !== "all",
+  ].filter(Boolean).length;
+
+  const clearFilters = () => {
+    setAgencyFilter("");
+    setDimFocus("both");
+    setRetentionBand("all");
+    setMissedMin(0);
+    setActivityFilter("all");
+  };
 
   const totals = useMemo(() => aggregateTotals(filtered), [filtered]);
 
@@ -149,6 +238,18 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Filter name or REA id" className="h-8 text-xs w-56 pl-7" />
           </div>
+          <Button
+            variant={showFilters || activeFilterCount > 0 ? "secondary" : "ghost"}
+            size="sm"
+            className="h-8 gap-1"
+            onClick={() => setShowFilters(v => !v)}
+            title="Advanced filters"
+          >
+            <Filter className="h-3.5 w-3.5" />
+            {activeFilterCount > 0 && (
+              <span className="text-[10px] bg-primary text-primary-foreground rounded-full px-1 tabular-nums">{activeFilterCount}</span>
+            )}
+          </Button>
           <Button variant="ghost" size="sm" className="h-8 gap-1" title="Export CSV"
             onClick={() => exportCsv(filtered, mode)}>
             <Download className="h-3.5 w-3.5" />
@@ -158,6 +259,125 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
           </Button>
         </div>
       </div>
+
+      {/* ── Advanced filters panel ──────────────────────────────── */}
+      {showFilters && (
+        <Card className="p-3 space-y-2">
+          <div className="flex items-center gap-2">
+            <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-xs font-semibold">Advanced filters</span>
+            {activeFilterCount > 0 && (
+              <button onClick={clearFilters} className="ml-auto text-[11px] text-muted-foreground hover:text-foreground underline">
+                Clear all ({activeFilterCount})
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2">
+            {/* Dimension focus */}
+            <FilterPill label="Dimension">
+              {["both", "current", "sold"].map(v => (
+                <button
+                  key={v}
+                  onClick={() => setDimFocus(v)}
+                  className={cn(
+                    "text-[11px] px-2 py-0.5 rounded border transition-colors capitalize",
+                    dimFocus === v ? "bg-primary text-primary-foreground border-primary" : "bg-transparent border-border hover:bg-muted"
+                  )}
+                >{v}</button>
+              ))}
+            </FilterPill>
+
+            {/* Retention band */}
+            <FilterPill label="Retention">
+              {[
+                { v: "all",     l: "All",       cls: "" },
+                { v: "at_risk", l: "<25%",      cls: "text-red-700" },
+                { v: "mid",     l: "25-75%",    cls: "text-amber-700" },
+                { v: "healthy", l: "≥75%",      cls: "text-emerald-700" },
+              ].map(opt => (
+                <button
+                  key={opt.v}
+                  onClick={() => setRetentionBand(opt.v)}
+                  className={cn(
+                    "text-[11px] px-2 py-0.5 rounded border transition-colors",
+                    retentionBand === opt.v ? "bg-primary text-primary-foreground border-primary" : cn("bg-transparent border-border hover:bg-muted", opt.cls)
+                  )}
+                >{opt.l}</button>
+              ))}
+            </FilterPill>
+
+            {/* Missed $ min */}
+            <FilterPill label="Missed $ ≥">
+              <Input
+                type="number"
+                value={missedMin || ""}
+                onChange={(e) => setMissedMin(Number(e.target.value) || 0)}
+                placeholder="0"
+                min={0} step={500}
+                className="h-7 text-[11px] w-28"
+              />
+            </FilterPill>
+
+            {/* Activity */}
+            <FilterPill label="Activity">
+              {[
+                { v: "all",          l: "All" },
+                { v: "active_only",  l: "Has activity" },
+                { v: "no_projects",  l: "No projects" },
+              ].map(opt => (
+                <button
+                  key={opt.v}
+                  onClick={() => setActivityFilter(opt.v)}
+                  className={cn(
+                    "text-[11px] px-2 py-0.5 rounded border transition-colors",
+                    activityFilter === opt.v ? "bg-primary text-primary-foreground border-primary" : "bg-transparent border-border hover:bg-muted"
+                  )}
+                >{opt.l}</button>
+              ))}
+            </FilterPill>
+
+            {/* Agency text-match (agent mode only) */}
+            {mode === "agent" && (
+              <FilterPill label="Agency">
+                <Input
+                  value={agencyFilter}
+                  onChange={(e) => setAgencyFilter(e.target.value)}
+                  placeholder="e.g. Belle Property"
+                  className="h-7 text-[11px] w-36"
+                />
+              </FilterPill>
+            )}
+          </div>
+          {/* Sort controls */}
+          <div className="flex items-center gap-2 pt-1 border-t">
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wide">Sort by</span>
+            {[
+              { k: "current_missed_value",  l: "Current missed $" },
+              { k: "current_retention_pct", l: "Current retention %" },
+              { k: "current_listings",      l: "Current listings" },
+              { k: "sold_listings",         l: "Sold listings" },
+              { k: "sold_retention_pct",    l: "Sold retention %" },
+              { k: "projects_in_window",    l: "Projects" },
+              { k: "name",                  l: "Name" },
+            ].map(opt => (
+              <button
+                key={opt.k}
+                onClick={() => {
+                  if (sortKey === opt.k) setSortDir(d => d === "desc" ? "asc" : "desc");
+                  else { setSortKey(opt.k); setSortDir("desc"); }
+                }}
+                className={cn(
+                  "text-[11px] px-1.5 py-0.5 rounded transition-colors inline-flex items-center gap-0.5",
+                  sortKey === opt.k ? "bg-muted font-medium" : "hover:bg-muted/60 text-muted-foreground"
+                )}
+              >
+                {opt.l}
+                {sortKey === opt.k && (sortDir === "desc" ? "↓" : "↑")}
+              </button>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* ── Data freshness strip — visibility on enrichment coverage ── */}
       <DataFreshnessCard compact className="px-1" />
@@ -198,30 +418,65 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// Totals + KPI
+// Totals + KPI (v2 — dual dimension: current for_sale + sold)
 // ══════════════════════════════════════════════════════════════════════════
 function aggregateTotals(rows) {
   return rows.reduce((acc, r) => {
-    acc.projects  += Number(r.projects_in_scope)    || 0;
-    acc.listings  += Number(r.listings_in_window)   || 0;
-    acc.captured  += Number(r.listings_captured)    || 0;
-    acc.missed    += Number(r.listings_missed)      || 0;
-    acc.missed_$  += Number(r.missed_opportunity_value) || 0;
+    acc.current_listings += Number(r.current_listings) || 0;
+    acc.current_captured += Number(r.current_captured) || 0;
+    acc.current_missed   += Number(r.current_missed)   || 0;
+    acc.current_missed_$ += Number(r.current_missed_value) || 0;
+    acc.sold_listings    += Number(r.sold_listings)    || 0;
+    acc.sold_captured    += Number(r.sold_captured)    || 0;
+    acc.sold_missed      += Number(r.sold_missed)      || 0;
+    acc.sold_missed_$    += Number(r.sold_missed_value)|| 0;
+    acc.projects_in_window += Number(r.projects_in_window) || 0;
     return acc;
-  }, { projects: 0, listings: 0, captured: 0, missed: 0, missed_$: 0 });
+  }, {
+    current_listings: 0, current_captured: 0, current_missed: 0, current_missed_$: 0,
+    sold_listings: 0, sold_captured: 0, sold_missed: 0, sold_missed_$: 0,
+    projects_in_window: 0,
+  });
 }
 
 function KpiStrip({ mode, totals, count }) {
-  const capturedPct = totals.listings > 0 ? (100 * totals.captured / totals.listings) : 0;
+  const currentPct = totals.current_listings > 0 ? (100 * totals.current_captured / totals.current_listings) : 0;
+  const soldPct    = totals.sold_listings    > 0 ? (100 * totals.sold_captured    / totals.sold_listings)    : 0;
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-      <Kpi icon={mode === "agent" ? UserIcon : Building2}
-           label={mode === "agent" ? "In-scope agents" : "In-scope agencies"}
-           value={fmtInt(count)} color="text-slate-700" bg="bg-slate-50" />
-      <Kpi icon={Target}           label="Listings in window" value={fmtInt(totals.listings)} color="text-blue-600" bg="bg-blue-50" />
-      <Kpi icon={CheckCircle2}     label="Captured"           value={fmtInt(totals.captured)} sub={fmtPct(capturedPct)} color="text-emerald-600" bg="bg-emerald-50" />
-      <Kpi icon={AlertTriangle}    label="Missed"             value={fmtInt(totals.missed)}   color="text-amber-600" bg="bg-amber-50" />
-      <Kpi icon={DollarSign}       label="Missed $"           value={fmtMoney(totals.missed_$)} color="text-amber-700" bg="bg-amber-50" emphasis />
+    <div className="space-y-2">
+      {/* Scope + projects row */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        <Kpi icon={mode === "agent" ? UserIcon : Building2}
+             label={mode === "agent" ? "CRM agents in scope" : "CRM agencies in scope"}
+             value={fmtInt(count)} color="text-slate-700" bg="bg-slate-50" />
+        <Kpi icon={Briefcase}    label="Projects in window" value={fmtInt(totals.projects_in_window)} color="text-indigo-700" bg="bg-indigo-50" />
+        <Kpi icon={DollarSign}   label="Total missed $"     value={fmtMoney(totals.current_missed_$ + totals.sold_missed_$)}
+             sub={`${fmtMoney(totals.current_missed_$)} current · ${fmtMoney(totals.sold_missed_$)} sold`}
+             color="text-amber-700" bg="bg-amber-50" emphasis />
+      </div>
+      {/* Current listings dimension */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Kpi icon={Target}           label="Current listings"  value={fmtInt(totals.current_listings)} color="text-blue-600"    bg="bg-blue-50" />
+        <Kpi icon={CheckCircle2}     label="Current captured"  value={fmtInt(totals.current_captured)} sub={fmtPct(currentPct)} color="text-emerald-600" bg="bg-emerald-50" />
+        <Kpi icon={AlertTriangle}    label="Current missed"    value={fmtInt(totals.current_missed)}   color="text-amber-600"   bg="bg-amber-50" />
+        <Kpi icon={DollarSign}       label="Current missed $"  value={fmtMoney(totals.current_missed_$)} color="text-amber-700" bg="bg-amber-50" />
+      </div>
+      {/* Sold listings dimension */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Kpi icon={Target}           label="Sold listings"     value={fmtInt(totals.sold_listings)}    color="text-purple-600" bg="bg-purple-50" />
+        <Kpi icon={CheckCircle2}     label="Sold captured"     value={fmtInt(totals.sold_captured)}    sub={fmtPct(soldPct)}    color="text-emerald-600" bg="bg-emerald-50" />
+        <Kpi icon={AlertTriangle}    label="Sold missed"       value={fmtInt(totals.sold_missed)}      color="text-amber-600"   bg="bg-amber-50" />
+        <Kpi icon={DollarSign}       label="Sold missed $"     value={fmtMoney(totals.sold_missed_$)}  color="text-amber-700" bg="bg-amber-50" />
+      </div>
+    </div>
+  );
+}
+
+function FilterPill({ label, children }) {
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</span>
+      {children}
     </div>
   );
 }
@@ -244,29 +499,52 @@ function Kpi({ icon: Icon, label, value, sub, color, bg, emphasis }) {
 }
 
 function LeakyBucketBar({ totals }) {
-  const total = totals.listings;
-  if (!total) return null;
-  const capturedPct = 100 * totals.captured / total;
-  const missedPct = 100 - capturedPct;
+  const curTotal = totals.current_listings;
+  const soldTotal = totals.sold_listings;
+  if (!curTotal && !soldTotal) return null;
+  const curPct = curTotal ? 100 * totals.current_captured / curTotal : 0;
+  const soldPct = soldTotal ? 100 * totals.sold_captured / soldTotal : 0;
   return (
-    <Card className="p-3">
-      <div className="flex items-baseline gap-2 mb-1.5">
+    <Card className="p-3 space-y-2">
+      <div className="flex items-baseline gap-2">
         <h4 className="text-xs font-semibold">Leaky-bucket summary</h4>
-        <span className="text-[11px] text-muted-foreground">
-          {fmtInt(totals.captured)} captured · {fmtInt(totals.missed)} missed of {fmtInt(total)} listings
-        </span>
-        <span className="ml-auto text-[11px]">
-          <span className="text-emerald-700 font-medium">{capturedPct.toFixed(1)}%</span>
-          <span className="text-muted-foreground mx-1">/</span>
-          <span className="text-amber-700 font-medium">{missedPct.toFixed(1)}%</span>
-        </span>
+        <span className="text-[11px] text-muted-foreground">captured vs missed by dimension</span>
       </div>
-      <div
-        className="h-3 rounded-full overflow-hidden flex ring-1 ring-border/60"
-        title={`${fmtInt(totals.captured)} captured · ${fmtInt(totals.missed)} missed`}
-      >
-        <div style={{ width: `${capturedPct}%` }} className="bg-emerald-500" />
-        <div style={{ width: `${missedPct}%`   }} className="bg-amber-500"   />
+      {/* Current dimension */}
+      <div>
+        <div className="flex items-baseline gap-2 mb-1">
+          <span className="text-[11px] font-medium text-blue-700">Current listings</span>
+          <span className="text-[11px] text-muted-foreground">
+            {fmtInt(totals.current_captured)} captured · {fmtInt(totals.current_missed)} missed of {fmtInt(curTotal)}
+          </span>
+          <span className="ml-auto text-[11px] tabular-nums">
+            <span className="text-emerald-700 font-medium">{curPct.toFixed(1)}%</span>
+            <span className="text-muted-foreground mx-1">/</span>
+            <span className="text-amber-700 font-medium">{(100 - curPct).toFixed(1)}%</span>
+          </span>
+        </div>
+        <div className="h-2.5 rounded-full overflow-hidden flex ring-1 ring-border/60">
+          <div style={{ width: `${curPct}%` }} className="bg-emerald-500" />
+          <div style={{ width: `${100 - curPct}%` }} className="bg-amber-500" />
+        </div>
+      </div>
+      {/* Sold dimension */}
+      <div>
+        <div className="flex items-baseline gap-2 mb-1">
+          <span className="text-[11px] font-medium text-purple-700">Sold listings</span>
+          <span className="text-[11px] text-muted-foreground">
+            {fmtInt(totals.sold_captured)} captured · {fmtInt(totals.sold_missed)} missed of {fmtInt(soldTotal)}
+          </span>
+          <span className="ml-auto text-[11px] tabular-nums">
+            <span className="text-emerald-700 font-medium">{soldPct.toFixed(1)}%</span>
+            <span className="text-muted-foreground mx-1">/</span>
+            <span className="text-amber-700 font-medium">{(100 - soldPct).toFixed(1)}%</span>
+          </span>
+        </div>
+        <div className="h-2.5 rounded-full overflow-hidden flex ring-1 ring-border/60">
+          <div style={{ width: `${soldPct}%` }} className="bg-emerald-500" />
+          <div style={{ width: `${100 - soldPct}%` }} className="bg-amber-500" />
+        </div>
       </div>
     </Card>
   );
@@ -280,19 +558,24 @@ function AgentTable({ rows, onSelect }) {
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
+          {/* Grouped header: Current dimension + Sold dimension */}
           <tr className="border-b text-muted-foreground">
-            <th className="text-left py-1.5 font-medium px-2">#</th>
-            <th className="text-left py-1.5 font-medium">Agent</th>
-            <th className="text-left py-1.5 font-medium">Agency</th>
-            <th className="text-right py-1.5 font-medium">Projects</th>
-            <th className="text-right py-1.5 font-medium">Listings</th>
-            <th className="text-right py-1.5 font-medium">Captured</th>
-            <th className="text-right py-1.5 font-medium">Missed</th>
-            <th className="text-right py-1.5 font-medium">Retention</th>
+            <th className="text-left py-1.5 font-medium px-2" rowSpan={2}>#</th>
+            <th className="text-left py-1.5 font-medium" rowSpan={2}>Agent</th>
+            <th className="text-left py-1.5 font-medium" rowSpan={2}>Agency</th>
+            <th className="text-right py-1.5 font-medium" rowSpan={2}>Proj</th>
+            <th className="text-center py-1 font-semibold text-blue-700 border-l" colSpan={4}>Current (for sale)</th>
+            <th className="text-center py-1 font-semibold text-purple-700 border-l" colSpan={3}>Sold</th>
+            <th className="w-4" rowSpan={2}></th>
+          </tr>
+          <tr className="border-b text-muted-foreground">
+            <th className="text-right py-1.5 font-medium border-l">Listings</th>
+            <th className="text-right py-1.5 font-medium">Cap</th>
+            <th className="text-right py-1.5 font-medium">Ret %</th>
             <th className="text-right py-1.5 font-medium">Missed $</th>
-            <th className="text-left  py-1.5 font-medium">Last project</th>
-            <th className="text-left  py-1.5 font-medium">Last listing</th>
-            <th className="w-4"></th>
+            <th className="text-right py-1.5 font-medium border-l">Listings</th>
+            <th className="text-right py-1.5 font-medium">Cap</th>
+            <th className="text-right py-1.5 font-medium">Ret %</th>
           </tr>
         </thead>
         <tbody>
@@ -306,11 +589,12 @@ function AgentTable({ rows, onSelect }) {
 }
 
 function AgentRow({ r, idx, onSelect }) {
-  const retention = Number(r.retention_rate_pct) || 0;
-  const delta     = r.retention_delta_pct == null ? null : Number(r.retention_delta_pct);
-  const atRisk    = delta != null && delta <= -20;
-  const leaky     = (monthsSince(r.last_project_date) ?? 0) > 6 && Number(r.listings_in_window) > 0;
-  const newOppty  = Number(r.missed_opportunity_value) > 5000 && Number(r.projects_in_scope) === 0;
+  const curRet  = Number(r.current_retention_pct) || 0;
+  const soldRet = Number(r.sold_retention_pct) || 0;
+  const curListings = Number(r.current_listings) || 0;
+  const projects = Number(r.projects_in_window) || 0;
+  const leaky    = (monthsSince(r.last_project_date) ?? 0) > 6 && curListings > 0;
+  const newOppty = Number(r.current_missed_value) > 5000 && projects === 0;
   return (
     <tr
       className="border-b last:border-b-0 hover:bg-muted/40 cursor-pointer"
@@ -325,18 +609,20 @@ function AgentRow({ r, idx, onSelect }) {
             <div className="font-medium truncate max-w-[170px]" title={r.agent_name}>{r.agent_name || "—"}</div>
             <div className="text-[10px] text-muted-foreground truncate max-w-[170px]" title={r.agent_rea_id}>REA {r.agent_rea_id}</div>
           </div>
-          <FlagIcons atRisk={atRisk} leaky={leaky} newOppty={newOppty} />
+          <FlagIcons atRisk={false} leaky={leaky} newOppty={newOppty} />
         </div>
       </td>
       <td className="py-1.5 text-muted-foreground truncate max-w-[200px]" title={r.agency_name}>{r.agency_name || "—"}</td>
-      <td className="py-1.5 text-right tabular-nums">{fmtInt(r.projects_in_scope)}</td>
-      <td className="py-1.5 text-right tabular-nums">{fmtInt(r.listings_in_window)}</td>
-      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.listings_captured)}</td>
-      <td className="py-1.5 text-right tabular-nums text-amber-700">{fmtInt(r.listings_missed)}</td>
-      <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={retention} delta={delta} /></td>
-      <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(r.missed_opportunity_value)}</td>
-      <td className="py-1.5 text-muted-foreground tabular-nums">{fmtDate(r.last_project_date)}</td>
-      <td className="py-1.5 text-muted-foreground tabular-nums">{fmtDate(r.last_listing_date)}</td>
+      <td className="py-1.5 text-right tabular-nums">{fmtInt(projects)}</td>
+      {/* Current */}
+      <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(curListings)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.current_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={curRet} /></td>
+      <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(r.current_missed_value)}</td>
+      {/* Sold */}
+      <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(r.sold_listings)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.sold_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={soldRet} /></td>
       <td className="py-1.5 text-muted-foreground"><ChevronRight className="h-3.5 w-3.5" /></td>
     </tr>
   );
@@ -351,18 +637,22 @@ function AgencyTable({ rows, onSelect }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="border-b text-muted-foreground">
-            <th className="text-left py-1.5 font-medium px-2">#</th>
-            <th className="text-left py-1.5 font-medium">Agency</th>
-            <th className="text-right py-1.5 font-medium">Agents</th>
-            <th className="text-right py-1.5 font-medium">Projects</th>
-            <th className="text-right py-1.5 font-medium">Listings</th>
-            <th className="text-right py-1.5 font-medium">Captured</th>
-            <th className="text-right py-1.5 font-medium">Missed</th>
-            <th className="text-right py-1.5 font-medium">Retention</th>
+            <th className="text-left py-1.5 font-medium px-2" rowSpan={2}>#</th>
+            <th className="text-left py-1.5 font-medium" rowSpan={2}>Agency</th>
+            <th className="text-right py-1.5 font-medium" rowSpan={2}>Agents</th>
+            <th className="text-right py-1.5 font-medium" rowSpan={2}>Proj</th>
+            <th className="text-center py-1 font-semibold text-blue-700 border-l" colSpan={4}>Current (for sale)</th>
+            <th className="text-center py-1 font-semibold text-purple-700 border-l" colSpan={3}>Sold</th>
+            <th className="w-4" rowSpan={2}></th>
+          </tr>
+          <tr className="border-b text-muted-foreground">
+            <th className="text-right py-1.5 font-medium border-l">Listings</th>
+            <th className="text-right py-1.5 font-medium">Cap</th>
+            <th className="text-right py-1.5 font-medium">Ret %</th>
             <th className="text-right py-1.5 font-medium">Missed $</th>
-            <th className="text-left  py-1.5 font-medium">Last project</th>
-            <th className="text-left  py-1.5 font-medium">Last listing</th>
-            <th className="w-4"></th>
+            <th className="text-right py-1.5 font-medium border-l">Listings</th>
+            <th className="text-right py-1.5 font-medium">Cap</th>
+            <th className="text-right py-1.5 font-medium">Ret %</th>
           </tr>
         </thead>
         <tbody>
@@ -376,10 +666,11 @@ function AgencyTable({ rows, onSelect }) {
 }
 
 function AgencyRow({ r, idx, onSelect }) {
-  const retention = Number(r.retention_rate_pct) || 0;
-  const delta     = r.retention_delta_pct == null ? null : Number(r.retention_delta_pct);
-  const atRisk    = delta != null && delta <= -20;
-  const leaky     = (monthsSince(r.last_project_date) ?? 0) > 6 && Number(r.listings_in_window) > 0;
+  const curRet  = Number(r.current_retention_pct) || 0;
+  const soldRet = Number(r.sold_retention_pct) || 0;
+  const curListings = Number(r.current_listings) || 0;
+  const projects = Number(r.projects_in_window) || 0;
+  const leaky    = (monthsSince(r.last_project_date) ?? 0) > 6 && curListings > 0;
   return (
     <tr
       className="border-b last:border-b-0 hover:bg-muted/40 cursor-pointer"
@@ -391,20 +682,22 @@ function AgencyRow({ r, idx, onSelect }) {
           <Avatar url={r.logo_url} name={r.agency_name} shape="square" />
           <div className="min-w-0">
             <div className="font-medium truncate max-w-[240px]" title={r.agency_name}>{r.agency_name || "—"}</div>
-            <div className="text-[10px] text-muted-foreground">REA {r.agency_rea_id || "—"}</div>
+            <div className="text-[10px] text-muted-foreground">REA {r.rea_agency_id || "—"}</div>
           </div>
-          <FlagIcons atRisk={atRisk} leaky={leaky} newOppty={false} />
+          <FlagIcons atRisk={false} leaky={leaky} newOppty={false} />
         </div>
       </td>
-      <td className="py-1.5 text-right tabular-nums">{fmtInt(r.agent_count)}</td>
-      <td className="py-1.5 text-right tabular-nums">{fmtInt(r.projects_in_scope)}</td>
-      <td className="py-1.5 text-right tabular-nums">{fmtInt(r.listings_in_window)}</td>
-      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.listings_captured)}</td>
-      <td className="py-1.5 text-right tabular-nums text-amber-700">{fmtInt(r.listings_missed)}</td>
-      <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={retention} delta={delta} /></td>
-      <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(r.missed_opportunity_value)}</td>
-      <td className="py-1.5 text-muted-foreground tabular-nums">{fmtDate(r.last_project_date)}</td>
-      <td className="py-1.5 text-muted-foreground tabular-nums">{fmtDate(r.last_listing_date)}</td>
+      <td className="py-1.5 text-right tabular-nums">{fmtInt(r.agents_in_agency)}</td>
+      <td className="py-1.5 text-right tabular-nums">{fmtInt(projects)}</td>
+      {/* Current */}
+      <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(curListings)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.current_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={curRet} /></td>
+      <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(r.current_missed_value)}</td>
+      {/* Sold */}
+      <td className="py-1.5 text-right tabular-nums border-l">{fmtInt(r.sold_listings)}</td>
+      <td className="py-1.5 text-right tabular-nums text-emerald-700">{fmtInt(r.sold_captured)}</td>
+      <td className="py-1.5 text-right tabular-nums"><RetentionBadge pct={soldRet} /></td>
       <td className="py-1.5 text-muted-foreground"><ChevronRight className="h-3.5 w-3.5" /></td>
     </tr>
   );
@@ -846,33 +1139,40 @@ function MissedListingsTable({ listings, onOpenEntity }) {
 // ══════════════════════════════════════════════════════════════════════════
 function exportCsv(rows, mode) {
   if (!rows?.length) return;
+  const commonCurrent = [
+    { key: "current_listings",      label: "Current listings" },
+    { key: "current_captured",      label: "Current captured" },
+    { key: "current_missed",        label: "Current missed" },
+    { key: "current_retention_pct", label: "Current retention %" },
+    { key: "current_missed_value",  label: "Current missed $" },
+  ];
+  const commonSold = [
+    { key: "sold_listings",      label: "Sold listings" },
+    { key: "sold_captured",      label: "Sold captured" },
+    { key: "sold_missed",        label: "Sold missed" },
+    { key: "sold_retention_pct", label: "Sold retention %" },
+    { key: "sold_missed_value",  label: "Sold missed $" },
+  ];
+  const commonTail = [
+    { key: "projects_in_window", label: "Projects in window" },
+    { key: "last_project_date",  label: "Last project" },
+    { key: "last_listing_date",  label: "Last listing" },
+  ];
   const cols = mode === "agent" ? [
-    { key: "agent_rea_id",             label: "REA ID" },
-    { key: "agent_name",               label: "Agent" },
-    { key: "agency_name",              label: "Agency" },
-    { key: "projects_in_scope",        label: "Projects in scope" },
-    { key: "listings_in_window",       label: "Listings in window" },
-    { key: "listings_captured",        label: "Captured" },
-    { key: "listings_missed",          label: "Missed" },
-    { key: "retention_rate_pct",       label: "Retention %" },
-    { key: "retention_delta_pct",      label: "Retention Δ%" },
-    { key: "missed_opportunity_value", label: "Missed $" },
-    { key: "last_project_date",        label: "Last project" },
-    { key: "last_listing_date",        label: "Last listing" },
+    { key: "agent_rea_id",  label: "REA ID" },
+    { key: "agent_name",    label: "Agent" },
+    { key: "agency_name",   label: "Agency" },
+    ...commonCurrent,
+    ...commonSold,
+    ...commonTail,
   ] : [
-    { key: "agency_pulse_id",          label: "Agency UUID" },
-    { key: "agency_name",              label: "Agency" },
-    { key: "agency_rea_id",            label: "REA ID" },
-    { key: "agent_count",              label: "Agents" },
-    { key: "projects_in_scope",        label: "Projects in scope" },
-    { key: "listings_in_window",       label: "Listings in window" },
-    { key: "listings_captured",        label: "Captured" },
-    { key: "listings_missed",          label: "Missed" },
-    { key: "retention_rate_pct",       label: "Retention %" },
-    { key: "retention_delta_pct",      label: "Retention Δ%" },
-    { key: "missed_opportunity_value", label: "Missed $" },
-    { key: "last_project_date",        label: "Last project" },
-    { key: "last_listing_date",        label: "Last listing" },
+    { key: "agency_pulse_id", label: "Agency UUID" },
+    { key: "agency_name",     label: "Agency" },
+    { key: "rea_agency_id",   label: "REA ID" },
+    { key: "agents_in_agency", label: "Agents" },
+    ...commonCurrent,
+    ...commonSold,
+    ...commonTail,
   ];
   const csv = toCsv(rows, cols);
   const ts = new Date().toISOString().slice(0, 10);
