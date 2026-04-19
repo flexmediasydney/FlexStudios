@@ -387,6 +387,24 @@ export function ListingSlideout({
     }
   }, [tab]);
 
+  // Fetch the missed-opportunity row for this listing so we can surface
+  // tier + tier_source inline at the top of the slideout (not just inside
+  // QuoteInspector further down). Reuses the same row the table would have
+  // loaded — react-query's cache will dedupe if the table already fetched it.
+  const { data: slideoutMo } = useQuery({
+    enabled: !!listing?.id,
+    queryKey: ["pulse-mo-single", listing?.id],
+    queryFn: async () => {
+      const { data } = await api._supabase
+        .from("pulse_listing_missed_opportunity")
+        .select("listing_id,classified_package_name,resolved_tier,quoted_price,quote_status,tier_source")
+        .eq("listing_id", listing.id)
+        .maybeSingle();
+      return data || null;
+    },
+    staleTime: 60_000,
+  });
+
   if (!listing) return null;
 
   // Canonical price label via shared helper — handles sold/rent/under_contract
@@ -482,6 +500,16 @@ export function ListingSlideout({
           {/* Price + badges */}
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-2xl font-bold tabular-nums">{displayPriceLabel}</span>
+            {/* At-a-glance quote pills — matches table row format. Click the
+                QuoteInspector section further down for full cascade detail. */}
+            {slideoutMo?.classified_package_name && (
+              <PackageBadge listingId={listing.id} name={slideoutMo.classified_package_name} />
+            )}
+            {slideoutMo?.resolved_tier && <TierBadge tier={slideoutMo.resolved_tier} />}
+            {slideoutMo?.tier_source && <TierSourceStep tierSource={slideoutMo.tier_source} />}
+            {slideoutMo?.quoted_price != null && (
+              <QuoteAmount listingId={listing.id} amount={slideoutMo.quoted_price} className="text-xs" />
+            )}
             {listing.listing_type && (
               <span
                 className={cn(
