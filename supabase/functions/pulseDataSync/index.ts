@@ -1595,25 +1595,44 @@ serveWithAudit('pulseDataSync', async (req) => {
             // migration 132 this path silently skipped timeline entirely;
             // see also pulse_reconcile_bridge_agents_from_listings() which
             // emits first_seen inline for the cron reconciler path.
+            // Belt-and-braces: idempotency_key ensures the UNIQUE partial index
+            // (idx_pulse_timeline_idempotency) blocks duplicates if the guard
+            // ever regresses.
             try {
-              const { data: bridgeInserted = [] } = await admin.from('pulse_agents')
-                .select('id, rea_agent_id, full_name, agency_name, agency_rea_id')
-                .in('rea_agent_id', listingOnlyAgentRows.map((a: any) => a.rea_agent_id));
-              const timelineRows = bridgeInserted.map((pa: any) => ({
-                entity_type: 'agent',
-                pulse_entity_id: pa.id,
-                rea_id: pa.rea_agent_id,
-                event_type: 'first_seen',
-                event_category: 'system',
-                title: `${pa.full_name || 'Unknown agent'} first detected`,
-                description: `Agent first seen via listing bridge${pa.agency_name ? ` at ${pa.agency_name}` : ''}`,
-                new_value: { agency_name: pa.agency_name, agency_rea_id: pa.agency_rea_id, source: 'rea_listings_bridge' },
-                source: 'rea_listings_bridge',
-                sync_log_id: syncLogId,
-                apify_run_id: timelineApifyRunId,
-              }));
-              if (timelineRows.length > 0) {
-                await admin.from('pulse_timeline').insert(timelineRows);
+              // Only emit for agents that were NOT in preCheckIds — these are
+              // the genuine inserts (we've already filtered listingOnlyAgentRows
+              // the same way, so this is belt+braces).
+              const newlyInsertedReaIds = listingOnlyAgentRows
+                .map((a: any) => a.rea_agent_id)
+                .filter((rid: string) => !preCheckIds.has(rid));
+              if (newlyInsertedReaIds.length === 0) {
+                console.log('bridge-agent first_seen: no genuinely new agents, skipping');
+              } else {
+                const { data: bridgeInserted = [] } = await admin.from('pulse_agents')
+                  .select('id, rea_agent_id, full_name, agency_name, agency_rea_id')
+                  .in('rea_agent_id', newlyInsertedReaIds);
+                const timelineRows = bridgeInserted.map((pa: any) => ({
+                  entity_type: 'agent',
+                  pulse_entity_id: pa.id,
+                  rea_id: pa.rea_agent_id,
+                  event_type: 'first_seen',
+                  event_category: 'system',
+                  title: `${pa.full_name || 'Unknown agent'} first detected`,
+                  description: `Agent first seen via listing bridge${pa.agency_name ? ` at ${pa.agency_name}` : ''}`,
+                  new_value: { agency_name: pa.agency_name, agency_rea_id: pa.agency_rea_id, source: 'rea_listings_bridge' },
+                  source: 'rea_listings_bridge',
+                  sync_log_id: syncLogId,
+                  apify_run_id: timelineApifyRunId,
+                  idempotency_key: `first_seen:agent:${pa.id}`,
+                }));
+                if (timelineRows.length > 0) {
+                  // upsert with ignoreDuplicates so the UNIQUE index on
+                  // idempotency_key silently absorbs any accidental re-runs.
+                  await admin.from('pulse_timeline').upsert(timelineRows, {
+                    onConflict: 'idempotency_key',
+                    ignoreDuplicates: true,
+                  });
+                }
               }
             } catch (e) {
               console.warn(`bridge-agent first_seen emit failed: ${(e as Error)?.message?.substring(0, 300)}`);
@@ -1622,10 +1641,20 @@ serveWithAudit('pulseDataSync', async (req) => {
         }
 
         // ── NEW: Create missing pulse_agencies from listing data ─────────
-        const { data: preCheckAg = [] } = await admin.from('pulse_agencies')
-          .select('rea_agency_id')
-          .not('rea_agency_id', 'is', null);
-        const preCheckAgIds = new Set(preCheckAg.map((r: any) => r.rea_agency_id));
+        // BUG FIX: Same 1000-row cap issue as the agents path above. Scope
+        // the pre-check to the exact candidate ids.
+        const candidateAgencyIds = Array.from(agencyByReaId.keys());
+        const preCheckAgIds = new Set<string>();
+        if (candidateAgencyIds.length > 0) {
+          const CHUNK = 500;
+          for (let i = 0; i < candidateAgencyIds.length; i += CHUNK) {
+            const chunk = candidateAgencyIds.slice(i, i + CHUNK);
+            const { data: chunkExistingAg = [] } = await admin.from('pulse_agencies')
+              .select('rea_agency_id')
+              .in('rea_agency_id', chunk);
+            for (const r of chunkExistingAg) if (r.rea_agency_id) preCheckAgIds.add(r.rea_agency_id);
+          }
+        }
 
         const listingOnlyAgencyRows: any[] = [];
         for (const [reaAgId, info] of agencyByReaId.entries()) {
@@ -1653,24 +1682,35 @@ serveWithAudit('pulseDataSync', async (req) => {
             console.log(`Created ${listingOnlyAgencyRows.length} agencies from listing data (previously orphan FKs)`);
             // Companion first_seen emit — see agent-bridge rationale above.
             try {
-              const { data: bridgeInserted = [] } = await admin.from('pulse_agencies')
-                .select('id, rea_agency_id, name')
-                .in('rea_agency_id', listingOnlyAgencyRows.map((a: any) => a.rea_agency_id));
-              const timelineRows = bridgeInserted.map((ag: any) => ({
-                entity_type: 'agency',
-                pulse_entity_id: ag.id,
-                rea_id: ag.rea_agency_id,
-                event_type: 'first_seen',
-                event_category: 'system',
-                title: `${ag.name || 'Unknown agency'} first detected`,
-                description: 'Agency first seen via listing bridge',
-                new_value: { name: ag.name, rea_agency_id: ag.rea_agency_id, source: 'rea_listings_bridge' },
-                source: 'rea_listings_bridge',
-                sync_log_id: syncLogId,
-                apify_run_id: timelineApifyRunId,
-              }));
-              if (timelineRows.length > 0) {
-                await admin.from('pulse_timeline').insert(timelineRows);
+              const newlyInsertedAgencyReaIds = listingOnlyAgencyRows
+                .map((a: any) => a.rea_agency_id)
+                .filter((rid: string) => !preCheckAgIds.has(rid));
+              if (newlyInsertedAgencyReaIds.length === 0) {
+                console.log('bridge-agency first_seen: no genuinely new agencies, skipping');
+              } else {
+                const { data: bridgeInserted = [] } = await admin.from('pulse_agencies')
+                  .select('id, rea_agency_id, name')
+                  .in('rea_agency_id', newlyInsertedAgencyReaIds);
+                const timelineRows = bridgeInserted.map((ag: any) => ({
+                  entity_type: 'agency',
+                  pulse_entity_id: ag.id,
+                  rea_id: ag.rea_agency_id,
+                  event_type: 'first_seen',
+                  event_category: 'system',
+                  title: `${ag.name || 'Unknown agency'} first detected`,
+                  description: 'Agency first seen via listing bridge',
+                  new_value: { name: ag.name, rea_agency_id: ag.rea_agency_id, source: 'rea_listings_bridge' },
+                  source: 'rea_listings_bridge',
+                  sync_log_id: syncLogId,
+                  apify_run_id: timelineApifyRunId,
+                  idempotency_key: `first_seen:agency:${ag.id}`,
+                }));
+                if (timelineRows.length > 0) {
+                  await admin.from('pulse_timeline').upsert(timelineRows, {
+                    onConflict: 'idempotency_key',
+                    ignoreDuplicates: true,
+                  });
+                }
               }
             } catch (e) {
               console.warn(`bridge-agency first_seen emit failed: ${(e as Error)?.message?.substring(0, 300)}`);
