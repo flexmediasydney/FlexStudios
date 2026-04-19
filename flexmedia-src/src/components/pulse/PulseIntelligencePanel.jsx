@@ -1371,15 +1371,35 @@ export default function PulseIntelligencePanel({
                 {/* Contact row — primary value + provenance badges. Legacy
                     `all_emails` extras still render below for backwards compat,
                     but the newer `alternate_emails` disclosure is preferred.
-                    AG15: contact lookups are memoized at the component level. */}
+                    AG15: contact lookups are memoized at the component level.
+
+                    2026-04-19 (Q5-fix): when ALL three primary contact fields
+                    are null the row used to collapse silently, leaving no
+                    feedback to the user. ~4,114 Pulse agents in the DB are
+                    in this "zero contact" state (bridge-created stubs from
+                    listing cross-enrichment that never supplied contact
+                    info). We now render an amber alert so it's clear this
+                    is a known enrichment gap, not a rendering bug. */}
                 {(() => {
                   const mobInfo   = agentMobInfo;
                   const bizInfo   = agentBizInfo;
                   const emailInfo = agentEmailInfo;
                   const altBizPhones = agentAltBizPhones;
                   const altEmails = agentAltEmails;
+                  const hasAnyContact = !!(mobInfo.value || bizInfo.value || emailInfo.value || altBizPhones.length > 0 || altEmails.length > 0);
                   return (
                     <div className="mt-1.5 space-y-1">
+                      {!hasAnyContact && (
+                        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-950/20 px-2.5 py-1.5 text-[11px] text-amber-900 dark:text-amber-200">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                          <div className="flex-1 leading-tight">
+                            <span className="font-medium">No contact info yet.</span>{" "}
+                            <span className="text-amber-800/80 dark:text-amber-300/80">
+                              This agent was discovered via a listing but didn't include email/mobile details. Detail enrichment will backfill on the next sync (every 5 min).
+                            </span>
+                          </div>
+                        </div>
+                      )}
                       <div className="flex items-center gap-3 flex-wrap">
                         {mobInfo.value && (
                           <div className="flex items-center gap-1 text-xs">
@@ -2733,7 +2753,11 @@ function AddToCrmInlineDialog({ entityType, pulseRecord, onClose, onSuccess }) {
           current_agency_id: agencyId,
           rea_agent_id: pulseRecord.rea_agent_id || null,
           title: pulseRecord.job_title || null,
-          relationship_state: "prospect",
+          // Q4-fix 2026-04-19: was "prospect" (lowercase) which isn't a valid
+          // RELATIONSHIP_STATES enum value — downstream filters/dashboards
+          // dropped these rows. Matches the capitalized form used in the
+          // agency branch above.
+          relationship_state: "Prospecting",
           source: "pulse",
         });
 
