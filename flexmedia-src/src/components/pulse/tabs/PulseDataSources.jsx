@@ -3685,50 +3685,87 @@ function fmtRelative(ts) {
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 }
 
-// Compact row for the "New (N)" tab. Prominent display_name → deep-link into
-// Industry Pulse; subtitle gives context; external_id lives in a tooltip.
+// Compact row for the "New (N)" tab. Styled to match the "Payload: Listings"
+// tab (DrillPayloadRow) for visual parity: same collapsible row, same density,
+// same colours. Extra affordance: an entity-type prefix-chip (id/agent/ag) and
+// a deep-link button into Industry Pulse for the entity.
+function fmtPriceShort(v) {
+  if (v == null) return null;
+  const n = Number(v);
+  if (!isFinite(n) || n <= 0) return null;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1).replace(/\.0$/, "")}M`;
+  if (n >= 1_000)     return `$${Math.round(n / 1_000)}k`;
+  return `$${n}`;
+}
 function NewRecordRow({ row }) {
+  const [expanded, setExpanded] = useState(false);
   const Icon = ENTITY_ICON[row.entity_type] || Database;
   const href = deepLinkForEntity(row.entity_type, row.pulse_entity_id);
-  const body = (
-    <div className="flex items-start gap-2 px-3 py-2 w-full text-left">
-      <Icon className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 shrink-0 mt-0.5" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="font-medium text-[12px] truncate text-foreground">
-            {row.display_name || row.title || `New ${row.entity_type}`}
-          </span>
-          {row.external_id && (
-            <Badge
-              variant="outline"
-              className="text-[9px] px-1 py-0 tabular-nums font-mono text-muted-foreground"
-              title={`External ID: ${row.external_id}`}
-            >
-              {row.entity_type === "listing" ? "id" : row.entity_type === "agent" ? "agent" : "ag"} {String(row.external_id).slice(0, 10)}
-            </Badge>
-          )}
-        </div>
-        {row.subtitle && (
-          <p className="text-[10.5px] text-muted-foreground truncate mt-0.5">{row.subtitle}</p>
-        )}
-      </div>
-      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums pt-0.5" title={row.created_at || ""}>
-        {fmtRelative(row.created_at)}
-      </span>
-      {href && <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />}
-    </div>
-  );
-  if (!href) {
-    return <div className="border-b last:border-0 bg-transparent">{body}</div>;
-  }
+  // Match DrillPayloadRow preview style: "Name — sub" on a single tight line.
+  const name = row.display_name || row.title || `New ${row.entity_type}`;
+  const sub  = row.subtitle || "";
+  const preview = sub ? `${name} — ${sub}` : name;
+
+  // Listing-specific chips (mirroring what "Payload: Listings" shows after
+  // expanding) — surfaced inline so the new-tab row is information-dense
+  // without forcing a click.
+  const isListing = row.entity_type === "listing";
+  const priceLbl  = isListing ? (row.l_price_text || fmtPriceShort(row.l_asking_price)) : null;
+  const beds      = isListing ? row.l_bedrooms  : null;
+  const baths     = isListing ? row.l_bathrooms : null;
+  const parking   = isListing ? row.l_parking   : null;
+  const typeChip  = isListing ? (row.l_listing_type || row.l_property_type) : null;
+
   return (
-    <a
-      href={href}
-      className="block border-b last:border-0 hover:bg-muted/40 transition-colors"
-      title={row.pulse_entity_id ? `Open ${row.entity_type} in Industry Pulse` : undefined}
-    >
-      {body}
-    </a>
+    <div className="border-b last:border-0">
+      <button
+        type="button"
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-muted/30 transition-colors"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <Icon className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
+        <span className="font-medium truncate pr-1 flex-1 min-w-0">{preview}</span>
+        {typeChip && (
+          <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">{typeChip}</Badge>
+        )}
+        {priceLbl && (
+          <span className="text-[10.5px] font-mono text-emerald-700 dark:text-emerald-400 shrink-0 tabular-nums">{priceLbl}</span>
+        )}
+        {(beds != null || baths != null || parking != null) && (
+          <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+            {beds != null ? `${beds}b` : ""}{baths != null ? `·${baths}b` : ""}{parking != null ? `·${parking}c` : ""}
+          </span>
+        )}
+        {row.external_id && (
+          <Badge
+            variant="outline"
+            className="text-[9px] px-1 py-0 tabular-nums font-mono text-muted-foreground shrink-0"
+            title={`External ID: ${row.external_id}`}
+          >
+            {row.entity_type === "listing" ? "id" : row.entity_type === "agent" ? "agent" : "ag"} {String(row.external_id).slice(0, 10)}
+          </Badge>
+        )}
+        <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums" title={row.created_at || ""}>
+          {fmtRelative(row.created_at)}
+        </span>
+        {href && (
+          <a
+            href={href}
+            onClick={(e) => e.stopPropagation()}
+            className="shrink-0 p-0.5 rounded hover:bg-muted"
+            title={`Open ${row.entity_type} in Industry Pulse`}
+          >
+            <ExternalLink className="h-3 w-3 text-muted-foreground" />
+          </a>
+        )}
+        {expanded ? <ChevronUp className="h-3 w-3 shrink-0" /> : <ChevronDown className="h-3 w-3 shrink-0" />}
+      </button>
+      {expanded && (
+        <pre className="bg-muted/30 text-[10px] px-3 py-2 overflow-x-auto rounded-b-md whitespace-pre-wrap break-all">
+          {JSON.stringify(row, null, 2)}
+        </pre>
+      )}
+    </div>
   );
 }
 
