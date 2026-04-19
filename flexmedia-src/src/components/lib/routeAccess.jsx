@@ -89,6 +89,7 @@ export const ROUTE_ACCESS = {
   SettingsNotifications: ADMIN_AND_ABOVE,
   SettingsClients: ADMIN_AND_ABOVE,
   SettingsDataConsistency: ADMIN_AND_ABOVE,
+  SettingsLegacyPackageMapping: ADMIN_AND_ABOVE,
   SettingsProjectRulebook: ADMIN_AND_ABOVE,
   SettingsTonomoWebhooks: ADMIN_AND_ABOVE,
   SettingsAI: ADMIN_AND_ABOVE,
