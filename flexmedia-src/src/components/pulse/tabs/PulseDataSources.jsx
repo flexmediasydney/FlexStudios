@@ -31,6 +31,13 @@ import {
   Sparkles, Search, Building2, Zap,
 } from "lucide-react";
 import { configFor, CATEGORY_BORDER } from "@/components/pulse/timeline/timelineIcons";
+import {
+  PipelineHealthRibbon,
+  DeadLetterBanner,
+  PipelineTimelineSwimlane,
+  SourceDrillPanel,
+  AdminControls,
+} from "@/components/pulse/sources/PulseSourceObservability";
 
 // ── Source UI metadata ────────────────────────────────────────────────────────
 // The authoritative config (actor_input, max_results_per_suburb, schedule_cron,
@@ -1924,7 +1931,7 @@ function QueuePipelineBlock({ queueStats, circuit, coverage, onOpenDlq, sourceId
 // (never truncated), has a Copy button, and an Edit button that opens the
 // editor dialog.
 
-function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, cardStats, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory, isAdmin, sourceCost }) {
+function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, cardStats, isRunning, onRun, onOpenPayload, onOpenSchedule, onEdit, onDrillDispatch, onViewHistory, onOpenObservability, isAdmin, sourceCost }) {
   const meta = getSourceMeta(sourceConfig.source_id);
   const [dlqOpen, setDlqOpen] = useState(false);
   const Icon = meta.icon;
@@ -2376,6 +2383,17 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
           >
             <Calendar className="h-3 w-3" />
           </Button>
+          {onOpenObservability && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => onOpenObservability(sourceConfig.source_id)}
+              title="Open observability drill panel (runs, throughput, errors, dead-letter, schedule)"
+            >
+              <Activity className="h-3 w-3" />
+            </Button>
+          )}
         </div>
       </CardContent>
       {dlqOpen && (
@@ -4830,8 +4848,50 @@ export default function PulseDataSources({
   const perSuburbCount = visibleSources.filter((s) => s.approach !== "bounding_box").length;
   const boundingBoxCount = visibleSources.filter((s) => s.approach === "bounding_box").length;
 
+  // ── Drill panel state (slide-out observability view for a source) ─────
+  const [drillPanelSourceId, setDrillPanelSourceId] = useState(null);
+  const drillPanelSource = useMemo(
+    () => (drillPanelSourceId ? sourceConfigByIdMap[drillPanelSourceId] : null),
+    [drillPanelSourceId, sourceConfigByIdMap]
+  );
+
+  // Click handler for the swimlane blocks — opens the sync-log drill dialog
+  // directly (skips the per-source panel, since the block represents one run).
+  const handleSwimlaneRunClick = useCallback((run) => {
+    if (run?.id) handleDrillDispatch(run.id);
+  }, [handleDrillDispatch]);
+
+  // Map sourceId → label for swimlane lane headers.
+  const sourceLabelsById = useMemo(() => {
+    const m = {};
+    for (const s of visibleSources) m[s.source_id] = s.label || s.source_id;
+    return m;
+  }, [visibleSources]);
+
+  // Click handler from the health ribbon sub-badges. Scrolls to or opens
+  // the relevant sub-view depending on the metric clicked.
+  const scrollToId = useCallback((id) => {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+  const handleDrillDLQ = useCallback(() => scrollToId("pulse-pipeline-swimlane"), [scrollToId]);
+  const handleDrillSLO = useCallback(() => scrollToId("pulse-source-tiles"), [scrollToId]);
+  const handleDrillCoverage = useCallback(() => scrollToId("pulse-source-tiles"), [scrollToId]);
+  const handleDrillSuccess = useCallback(() => scrollToId("sync-history"), [scrollToId]);
+
   return (
     <div className="space-y-5">
+      {/* ── Pipeline health ribbon (letter grade + 4 sub-badges) ── */}
+      <PipelineHealthRibbon
+        onDrillSLO={handleDrillSLO}
+        onDrillSuccess={handleDrillSuccess}
+        onDrillCoverage={handleDrillCoverage}
+        onDrillDLQ={handleDrillDLQ}
+      />
+
+      {/* ── Dead-letter banner (auto-hides when queue is clean) ── */}
+      <DeadLetterBanner onClick={handleDrillDLQ} />
+
       {/* ── Header summary ── */}
       <Card className="rounded-xl border shadow-sm bg-gradient-to-br from-primary/5 via-background to-background">
         <CardContent className="p-4 flex flex-wrap items-center gap-4 text-xs">
@@ -4854,8 +4914,19 @@ export default function PulseDataSources({
         </CardContent>
       </Card>
 
+      {/* ── Admin-only controls row (pause toggles + clear-stuck) ── */}
+      {isAdmin && (
+        <AdminControls
+          sources={visibleSources}
+          onRefresh={() => {
+            refetchEntityList("PulseSourceConfig");
+            refetchEntityList("PulseSyncLog");
+          }}
+        />
+      )}
+
       {/* ── Source cards grid ── */}
-      <div>
+      <div id="pulse-source-tiles">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
             Data Sources
@@ -4902,6 +4973,7 @@ export default function PulseDataSources({
               onEdit={setEditConfig}
               onDrillDispatch={handleDrillDispatch}
               onViewHistory={openHistoryForSource}
+              onOpenObservability={setDrillPanelSourceId}
             />
           ))}
           {visibleSources.length === 0 && (
@@ -4922,6 +4994,14 @@ export default function PulseDataSources({
           sourceConfigs={visibleSources}
         />
         <SuburbPoolSummary targetSuburbs={targetSuburbs} />
+      </div>
+
+      {/* ── Global pipeline swimlane (last 6 hours, all sources) ── */}
+      <div id="pulse-pipeline-swimlane">
+        <PipelineTimelineSwimlane
+          onRunClick={handleSwimlaneRunClick}
+          sourceLabels={sourceLabelsById}
+        />
       </div>
 
       {/* ── Sync history ── */}
@@ -4954,6 +5034,18 @@ export default function PulseDataSources({
       {runConfirm && (
         <RunConfirmDialog payload={runConfirm} onClose={() => setRunConfirm(null)} />
       )}
+
+      {/* ── Per-source observability drill panel (slide-out) ── */}
+      <SourceDrillPanel
+        open={!!drillPanelSourceId}
+        onClose={() => setDrillPanelSourceId(null)}
+        sourceConfig={drillPanelSource}
+        onRun={runSource}
+        onOpenSyncLog={(syncLogId) => handleDrillDispatch(syncLogId)}
+        onOpenSchedule={(cfg) => setScheduleSource(cfg)}
+        isAdmin={isAdmin}
+        runningNow={drillPanelSourceId ? runningSources.has(drillPanelSourceId) : false}
+      />
     </div>
   );
 }
