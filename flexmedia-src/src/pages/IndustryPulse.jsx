@@ -34,6 +34,7 @@ import PulseAgencyIntel, { AgencySlideout } from "@/components/pulse/tabs/PulseA
 import PulseListingsTab, { ListingSlideout } from "@/components/pulse/tabs/PulseListings";
 import PulseEventsTab from "@/components/pulse/tabs/PulseEvents";
 import PulseMarketData from "@/components/pulse/tabs/PulseMarketData";
+import PulseMarketShare from "@/components/pulse/tabs/PulseMarketShare";
 import PulseDataSources from "@/components/pulse/tabs/PulseDataSources";
 import PulseSuburbs from "@/components/pulse/tabs/PulseSuburbs";
 import PulseMappings from "@/components/pulse/tabs/PulseMappings";
@@ -210,6 +211,7 @@ const TABS = [
   { value: "listings", label: "Listings", badgeKey: "totalListings" },
   { value: "events",   label: "Events",   badgeKey: "upcomingEvents" },
   { value: "market",   label: "Market",   badgeKey: null },
+  { value: "market_share", label: "Market Share", badgeKey: null },
   { value: "sources",  label: "Sources",  badgeKey: null },
   { value: "suburbs",  label: "Suburbs",  badgeKey: null },
   { value: "mappings", label: "Mappings", badgeKey: "suggestedMappings" },
@@ -1048,6 +1050,12 @@ export default function IndustryPulse() {
         <TabsContent value="market" className="mt-2">
           <ErrorBoundary resetKey={tab} fallbackLabel="Market">
             <PulseMarketData {...sharedProps} />
+          </ErrorBoundary>
+        </TabsContent>
+
+        <TabsContent value="market_share" className="mt-2">
+          <ErrorBoundary resetKey={tab} fallbackLabel="Market Share">
+            <PulseMarketShare />
           </ErrorBoundary>
         </TabsContent>
 
