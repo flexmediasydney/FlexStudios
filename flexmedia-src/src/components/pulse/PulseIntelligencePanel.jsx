@@ -51,6 +51,8 @@ import {
   primaryContact,
   alternateContacts,
 } from "@/components/pulse/utils/listingHelpers";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
+import BackfillEntityButton from "@/components/fieldSources/BackfillEntityButton";
 
 /* ── Helpers ─────────────────────────────────────────────────────────────────── */
 
@@ -1447,6 +1449,32 @@ export default function PulseIntelligencePanel({
                   );
                 })()}
 
+                {/* ── SAFR-aware fields (source chip + lock + history) ── */}
+                <div className="mt-2 rounded-md border border-border/40 bg-muted/20 px-3 py-2 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Source-aware fields</span>
+                    <BackfillEntityButton entityType="agent" entityId={a.id} entity={a} />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                    <div>
+                      <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5 flex items-center gap-1"><Phone className="h-3 w-3" /> Mobile</div>
+                      <FieldWithSource entityType="agent" entityId={a.id} fieldName="mobile" fallbackValue={a.mobile} size="sm" inline />
+                    </div>
+                    <div>
+                      <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5 flex items-center gap-1"><Mail className="h-3 w-3" /> Email</div>
+                      <FieldWithSource entityType="agent" entityId={a.id} fieldName="email" fallbackValue={a.email} size="sm" inline />
+                    </div>
+                    <div>
+                      <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5">Full name</div>
+                      <FieldWithSource entityType="agent" entityId={a.id} fieldName="full_name" fallbackValue={a.full_name} size="sm" inline />
+                    </div>
+                    <div>
+                      <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5">Job title</div>
+                      <FieldWithSource entityType="agent" entityId={a.id} fieldName="job_title" fallbackValue={a.job_title} size="sm" inline />
+                    </div>
+                  </div>
+                </div>
+
                 {/* REA profile link */}
                 {a.rea_profile_url && (
                   <a
@@ -1926,6 +1954,35 @@ export default function PulseIntelligencePanel({
                         <ExternalLink className="h-3 w-3" /> View REA Profile
                       </a>
                     )}
+                    {/* ── SAFR-aware fields (source chip + lock + history) ── */}
+                    <div className="mt-2 rounded-md border border-border/40 bg-muted/10 px-3 py-2 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Source-aware fields</span>
+                        <BackfillEntityButton entityType="agency" entityId={a.id} entity={a} />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                        <div>
+                          <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5">Name</div>
+                          <FieldWithSource entityType="agency" entityId={a.id} fieldName="name" fallbackValue={a.name} size="sm" inline />
+                        </div>
+                        <div>
+                          <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5 flex items-center gap-1"><Phone className="h-3 w-3" /> Phone</div>
+                          <FieldWithSource entityType="agency" entityId={a.id} fieldName="phone" fallbackValue={a.phone} size="sm" inline />
+                        </div>
+                        <div>
+                          <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5 flex items-center gap-1"><Mail className="h-3 w-3" /> Email</div>
+                          <FieldWithSource entityType="agency" entityId={a.id} fieldName="email" fallbackValue={a.email} size="sm" inline />
+                        </div>
+                        <div>
+                          <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5 flex items-center gap-1"><Globe className="h-3 w-3" /> Website</div>
+                          <FieldWithSource entityType="agency" entityId={a.id} fieldName="website" fallbackValue={a.website} size="sm" inline />
+                        </div>
+                        <div className="sm:col-span-2">
+                          <div className="text-[9px] uppercase text-muted-foreground/60 mb-0.5">Logo URL</div>
+                          <FieldWithSource entityType="agency" entityId={a.id} fieldName="logo_url" fallbackValue={a.logo_url} size="sm" inline />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </CardContent>

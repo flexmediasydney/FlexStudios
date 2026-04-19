@@ -35,6 +35,8 @@ import NurturingSequences from '@/components/nurturing/NurturingSequences';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { toast } from 'sonner';
+import FieldWithSource from '@/components/fieldSources/FieldWithSource';
+import BackfillEntityButton from '@/components/fieldSources/BackfillEntityButton';
 
 const STATE_BADGE = {
   Active: 'bg-green-100 text-green-800 border-green-200',
@@ -953,6 +955,7 @@ export default function PersonDetails() {
 
         {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          <BackfillEntityButton entityType="contact" entityId={agent.id} entity={agent} />
           <Button
             size="sm"
             className="gap-1.5 h-8 text-xs font-semibold shadow-sm transition-all duration-150"
@@ -1049,16 +1052,79 @@ export default function PersonDetails() {
                 { value: 'Payroll', label: 'Payroll' },
                 { value: 'Marketing', label: 'Marketing' },
               ]} />
-            <InlineField label="Email" value={agent.email} field="email" onSave={handleFieldSave}
-              placeholder="Add email..."
-              actionHref={agent.email ? `mailto:${agent.email}` : null}
-              actionIcon={Mail}
-              actionLabel="Send email" />
-            <InlineField label="Phone" value={agent.phone} field="phone" onSave={handleFieldSave}
-              placeholder="Add phone..."
-              actionHref={agent.phone ? `tel:${agent.phone}` : null}
-              actionIcon={Phone}
-              actionLabel="Call" />
+            {/* SAFR-aware email + phone (multi-value for email). Source chip + lock + history. */}
+            <div className="flex items-start gap-2 py-1 px-3">
+              <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">Email</label>
+              <div className="flex-1 min-w-0">
+                <FieldWithSource
+                  entityType="contact"
+                  entityId={agent.id}
+                  fieldName="email"
+                  fallbackValue={agent.email}
+                  editable={canEdit}
+                  size="sm"
+                  inline
+                  onValueChange={() => {
+                    queryClient.invalidateQueries({ queryKey: ['agent', agent.id] });
+                    refetchEntityList('Agent');
+                  }}
+                />
+              </div>
+            </div>
+            <div className="flex items-start gap-2 py-1 px-3">
+              <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">Phone</label>
+              <div className="flex-1 min-w-0">
+                <FieldWithSource
+                  entityType="contact"
+                  entityId={agent.id}
+                  fieldName="phone"
+                  fallbackValue={agent.phone}
+                  editable={canEdit}
+                  size="sm"
+                  inline
+                  onValueChange={() => {
+                    queryClient.invalidateQueries({ queryKey: ['agent', agent.id] });
+                    refetchEntityList('Agent');
+                  }}
+                />
+              </div>
+            </div>
+            <div className="flex items-start gap-2 py-1 px-3">
+              <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">Mobile</label>
+              <div className="flex-1 min-w-0">
+                <FieldWithSource
+                  entityType="contact"
+                  entityId={agent.id}
+                  fieldName="mobile"
+                  fallbackValue={agent.mobile || agent.phone}
+                  editable={canEdit}
+                  size="sm"
+                  inline
+                  onValueChange={() => {
+                    queryClient.invalidateQueries({ queryKey: ['agent', agent.id] });
+                    refetchEntityList('Agent');
+                  }}
+                />
+              </div>
+            </div>
+            <div className="flex items-start gap-2 py-1 px-3">
+              <label className="text-xs text-muted-foreground text-right w-28 shrink-0 pt-0.5 select-none uppercase tracking-wide leading-relaxed">LinkedIn</label>
+              <div className="flex-1 min-w-0">
+                <FieldWithSource
+                  entityType="contact"
+                  entityId={agent.id}
+                  fieldName="linkedin_url"
+                  fallbackValue={agent.linkedin_url}
+                  editable={canEdit}
+                  size="sm"
+                  inline
+                  onValueChange={() => {
+                    queryClient.invalidateQueries({ queryKey: ['agent', agent.id] });
+                    refetchEntityList('Agent');
+                  }}
+                />
+              </div>
+            </div>
             <InlineField label="Organisation" value={agent.current_agency_id} field="current_agency_id"
               onSave={handleFieldSave} type="select"
               options={allAgencies.map(a => ({ value: a.id, label: a.name }))} />

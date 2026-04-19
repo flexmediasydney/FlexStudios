@@ -8,6 +8,41 @@ import {
 } from '../_shared/emailCleanup.ts';
 import { startRun, endRun, recordError } from '../_shared/observability.ts';
 import { emitTimeline, makeIdempotencyKey } from '../_shared/timeline.ts';
+import { recordFieldObservation } from '../_shared/fieldSources.ts';
+
+// ── SAFR ingestion helper (silent-fails) ─────────────────────────────────────
+// Wraps recordFieldObservation in a try/catch so a SAFR hiccup never breaks
+// the sync. One observation per (entity, field, value). Multi-value fields
+// (email) must call this once per value from the caller.
+async function safrObserve(
+  admin: any,
+  entity_type: 'agent' | 'agency' | 'contact' | 'organization' | 'prospect',
+  entity_id: string | null | undefined,
+  field_name: string,
+  value: string | null | undefined,
+  source: string,
+  opts?: { source_ref_type?: string | null; source_ref_id?: string | null; confidence?: number | null },
+): Promise<void> {
+  if (!entity_id) return;
+  if (value == null) return;
+  const trimmed = typeof value === 'string' ? value.trim() : String(value).trim();
+  if (!trimmed) return;
+  try {
+    await recordFieldObservation(admin, {
+      entity_type,
+      entity_id,
+      field_name: field_name as any,
+      value: trimmed,
+      source,
+      source_ref_type: opts?.source_ref_type ?? null,
+      source_ref_id: opts?.source_ref_id ?? null,
+      confidence: opts?.confidence ?? null,
+    });
+  } catch (e) {
+    // Intentionally swallow — never break a sync due to SAFR.
+    console.warn(`[safrObserve] ${entity_type}.${field_name} failed: ${(e as Error)?.message?.substring(0, 160)}`);
+  }
+}
 
 /**
  * Pulse Data Sync — REA-Only 2-Actor Merge Engine (v3 DB-driven config)
@@ -2302,6 +2337,82 @@ const rows = __rows_raw.data ?? [];
         }
       }
     }
+
+    // ── SAFR observation emit ─────────────────────────────────────────────
+    // Emit one observation per (entity, field) for every agent + agency
+    // touched in this run. Runs ONCE here (after ID maps are built, before
+    // CRM mapping) rather than inline at every upsert site. Silent-fails so
+    // SAFR hiccups can't break the sync.
+    //
+    // Sources:
+    //   · processedAgents / mergedAgencies → source = 'rea_scrape'
+    //   · listingOnlyAgentRows / listingOnlyAgencyRows → source = 'rea_listings_bridge'
+    //     (those carry `source = 'rea_listings_bridge'` marker on the row).
+    // Multi-value email arrays emit one observation per value.
+    let safrAgentObs = 0;
+    let safrAgencyObs = 0;
+    for (const agent of processedAgents) {
+      const reaId = agent?.rea_agent_id;
+      if (!reaId) continue;
+      const pulseAgentId = pulseAgentIdMap.get(reaId);
+      if (!pulseAgentId) continue;
+      const src = agent.source === 'rea_listings_bridge' ? 'rea_listings_bridge' : 'rea_scrape';
+      // full_name
+      if (agent.full_name) { await safrObserve(admin, 'agent', pulseAgentId, 'full_name', agent.full_name, src); safrAgentObs++; }
+      // mobile + alternates
+      if (agent.mobile) { await safrObserve(admin, 'agent', pulseAgentId, 'mobile', agent.mobile, src); safrAgentObs++; }
+      const altMob = agent.alternate_mobiles;
+      if (altMob) {
+        let altArr: any[] = [];
+        try { altArr = Array.isArray(altMob) ? altMob : JSON.parse(altMob); } catch { altArr = []; }
+        for (const m of altArr) {
+          const mv = typeof m === 'string' ? m : (m?.value ?? null);
+          if (mv) { await safrObserve(admin, 'agent', pulseAgentId, 'mobile', mv, src); safrAgentObs++; }
+        }
+      }
+      // email + all_emails
+      if (agent.email) { await safrObserve(admin, 'agent', pulseAgentId, 'email', agent.email, src); safrAgentObs++; }
+      const allEmails = agent.all_emails;
+      if (allEmails) {
+        let ae: any[] = [];
+        try { ae = Array.isArray(allEmails) ? allEmails : JSON.parse(allEmails); } catch { ae = []; }
+        for (const em of ae) {
+          if (em && typeof em === 'string') { await safrObserve(admin, 'agent', pulseAgentId, 'email', em, src); safrAgentObs++; }
+        }
+      }
+      // business_phone + alternate_phones (→ SAFR 'phone')
+      if (agent.business_phone) { await safrObserve(admin, 'agent', pulseAgentId, 'phone', agent.business_phone, src); safrAgentObs++; }
+      const altPh = agent.alternate_phones;
+      if (altPh) {
+        let ap: any[] = [];
+        try { ap = Array.isArray(altPh) ? altPh : JSON.parse(altPh); } catch { ap = []; }
+        for (const p of ap) {
+          const pv = typeof p === 'string' ? p : (p?.value ?? null);
+          if (pv) { await safrObserve(admin, 'agent', pulseAgentId, 'phone', pv, src); safrAgentObs++; }
+        }
+      }
+      // job_title
+      if (agent.job_title) { await safrObserve(admin, 'agent', pulseAgentId, 'job_title', agent.job_title, src); safrAgentObs++; }
+      // profile_image
+      if (agent.profile_image) { await safrObserve(admin, 'agent', pulseAgentId, 'profile_image', agent.profile_image, src); safrAgentObs++; }
+    }
+    for (const agency of mergedAgencies) {
+      const name = (agency?.name || '').trim();
+      if (!name) continue;
+      const pulseAgencyId = pulseAgencyIdMap.get(name.toLowerCase());
+      if (!pulseAgencyId) continue;
+      const src = agency.source === 'rea_listings_bridge' ? 'rea_listings_bridge' : 'rea_scrape';
+      if (agency.name) { await safrObserve(admin, 'agency', pulseAgencyId, 'name', agency.name, src); safrAgencyObs++; }
+      if (agency.email) { await safrObserve(admin, 'agency', pulseAgencyId, 'email', agency.email, src); safrAgencyObs++; }
+      if (agency.phone) { await safrObserve(admin, 'agency', pulseAgencyId, 'phone', agency.phone, src); safrAgencyObs++; }
+      if (agency.website) { await safrObserve(admin, 'agency', pulseAgencyId, 'website', agency.website, src); safrAgencyObs++; }
+      if (agency.address || agency.address_street) {
+        await safrObserve(admin, 'agency', pulseAgencyId, 'address', agency.address || agency.address_street, src);
+        safrAgencyObs++;
+      }
+      if (agency.logo_url) { await safrObserve(admin, 'agency', pulseAgencyId, 'logo_url', agency.logo_url, src); safrAgencyObs++; }
+    }
+    console.log(`[SAFR] pulseDataSync emitted ${safrAgentObs} agent + ${safrAgencyObs} agency observations`);
 
     // 10a: Agent mapping
     for (const agent of processedAgents) {
