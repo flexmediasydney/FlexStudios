@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
 import { useEntityList, refetchEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
-import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, AtSign, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield, Activity, Rss } from "lucide-react";
+import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, AtSign, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield, Activity, Rss, BarChart3 } from "lucide-react";
 import BrandingPreferencesModule from "@/components/agencies/BrandingPreferencesModule";
 import AgencyEmailDomainsModule from "@/components/agencies/AgencyEmailDomainsModule";
 import { createPageUrl } from "@/utils";
@@ -22,6 +22,7 @@ import ContactFiles from "@/components/contacts/ContactFiles";
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
+import AgencyMarketShareSection from '@/components/marketshare/AgencyMarketShareSection';
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
@@ -31,7 +32,7 @@ import TeamForm from "@/components/clients/TeamForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { api, supabase } from "@/api/supabaseClient";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 const STATE_BADGE = {
@@ -54,6 +55,7 @@ const TABS = [
   { id: 'touchpoints', label: 'Touchpoints', icon: Activity },
   { id: 'retention', label: 'Retention', icon: Shield },
   { id: 'intelligence', label: 'Intelligence', icon: Rss },
+  { id: 'market-share', label: 'Market Share', icon: BarChart3 },
 ];
 
 // Valid tab ids (must stay in sync with TABS above) — used to validate the
@@ -152,6 +154,36 @@ export default function OrgDetails() {
     });
   }, [agencyId, queryClient]);
   const { data: agency, loading, error } = useSmartEntityData("Agency", agencyId);
+
+  // ── Market Share support: resolve the pulse_agencies row linked to this CRM
+  // agency. We key off linked_agency_id (the pulse_agencies back-reference) or
+  // rea_agency_id as a fallback. Only fired when the CRM agency has a
+  // rea_agency_id — that's our proxy for "Real-Estate industry".
+  const reaAgencyId = agency?.rea_agency_id || null;
+  const isRealEstate = !!reaAgencyId;
+  const { data: linkedPulseAgency } = useQuery({
+    queryKey: ["pulse_agency_for_crm", agencyId, reaAgencyId],
+    queryFn: async () => {
+      // Prefer linked_agency_id match (explicit CRM link); fall back to
+      // matching on rea_agency_id if the back-reference isn't populated yet.
+      let q = supabase.from("pulse_agencies").select("id").limit(1);
+      if (agencyId) q = q.eq("linked_agency_id", agencyId);
+      const { data: byLink } = await q;
+      if (byLink && byLink.length > 0) return byLink[0];
+      if (reaAgencyId) {
+        const { data: byRea } = await supabase
+          .from("pulse_agencies")
+          .select("id")
+          .eq("rea_agency_id", reaAgencyId)
+          .limit(1);
+        if (byRea && byRea.length > 0) return byRea[0];
+      }
+      return null;
+    },
+    enabled: isRealEstate,
+    staleTime: 5 * 60_000,
+  });
+  const agencyPulseId = linkedPulseAgency?.id || null;
 
   const agentFilter       = useCallback(e => e.current_agency_id === agencyId, [agencyId]);
   const teamFilter        = useCallback(e => e.agency_id === agencyId, [agencyId]);
@@ -522,7 +554,12 @@ export default function OrgDetails() {
         <div ref={tabsRef} className="flex-1 overflow-hidden bg-background flex flex-col">
           {/* Pipedrive-style tab bar */}
           <div className="flex items-center gap-0 border-b px-4 shrink-0">
-            {TABS.filter(tab => tab.id !== 'pricing' || showPricing).map(tab => (
+            {TABS.filter(tab => {
+              if (tab.id === 'pricing' && !showPricing) return false;
+              // Market Share only for Real-Estate (proxied via REA linkage).
+              if (tab.id === 'market-share' && !isRealEstate) return false;
+              return true;
+            }).map(tab => (
               <button
                 key={tab.id}
                 onClick={() => handleTabChange(tab.id)}
@@ -724,6 +761,33 @@ export default function OrgDetails() {
               <div className="h-full overflow-y-auto">
                 <div className="p-4 pb-6">
                   <PulseIntelligencePanel entityType="agency" crmEntityId={agencyId} crmEntity={agency} />
+                </div>
+              </div>
+            )}
+            {activeTab === 'market-share' && isRealEstate && (
+              <div className="h-full overflow-y-auto">
+                <div className="p-4 pb-6">
+                  {agencyPulseId ? (
+                    <AgencyMarketShareSection
+                      agencyPulseId={agencyPulseId}
+                      onOpenEntity={({ type, id }) => {
+                        // Pulse agent slideouts live inside IndustryPulse; deep-link across.
+                        if (type === 'agent') navigate(`/IndustryPulse?tab=agents&agent=${id}`);
+                        else if (type === 'agency') navigate(`/IndustryPulse?tab=agencies&agency=${id}`);
+                        else if (type === 'listing') navigate(`/IndustryPulse?tab=listings&listing=${id}`);
+                      }}
+                    />
+                  ) : (
+                    <Card className="bg-muted/30 border-dashed">
+                      <CardContent className="pt-6 pb-6 text-center">
+                        <BarChart3 className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+                        <p className="text-muted-foreground text-sm font-medium">No pulse linkage</p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          This agency isn't linked to a pulse_agencies record yet — Market Share will appear once it syncs.
+                        </p>
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               </div>
             )}

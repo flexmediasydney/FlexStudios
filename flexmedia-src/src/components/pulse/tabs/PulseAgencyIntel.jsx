@@ -56,6 +56,7 @@ import {
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
+import AgencyMarketShareSection from "@/components/marketshare/AgencyMarketShareSection";
 import {
   displayPrice as sharedDisplayPrice,
   LISTING_TYPE_LABEL,
@@ -1721,6 +1722,18 @@ export function AgencySlideout({
               </div>
             </section>
           )}
+
+          {/* ── Market Share (compact) ── */}
+          <section className="mt-4">
+            <h4 className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1.5">
+              <BarChart3 className="h-3.5 w-3.5" /> Market Share
+            </h4>
+            <AgencyMarketShareSection
+              agencyPulseId={agency.id}
+              onOpenEntity={onOpenEntity}
+              compact
+            />
+          </section>
 
           {/* ── Timeline ── */}
           <div className="mt-4">
