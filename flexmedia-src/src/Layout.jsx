@@ -35,6 +35,7 @@ import {
   Briefcase,
   Gauge,
   ClipboardList,
+  ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -326,6 +327,7 @@ function LayoutContent({ currentPageName, children }) {
           // Integrations removed — use Tonomo Integration page instead
           can("EmailSyncSettings") && { name: "Email Sync", href: "EmailSyncSettings" },
           can("SettingsEmailSyncHealth") && { name: "Email Sync Health", href: "SettingsEmailSyncHealth" },
+          can("SettingsDataConsistency") && { name: "Data Consistency", href: "SettingsDataConsistency", icon: ShieldCheck },
           can("EdgeFunctionHealth") && { name: "Edge Function Health", href: "EdgeFunctionHealth", icon: Gauge },
           can("EdgeFunctionAuditLog") && { name: "Edge Function Audit Log", href: "EdgeFunctionAuditLog", icon: ClipboardList },
           can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration" },
