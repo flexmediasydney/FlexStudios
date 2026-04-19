@@ -3054,13 +3054,31 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
 
   // Suburb filter — uses the resolved-suburb RPC (migration 150) so we catch
   // Ashfield runs even when the raw `suburb` column is NULL (manual runs,
-  // legacy rows, batch orchestrators). Debounced 300ms.
-  const [suburbFilterRaw, setSuburbFilterRaw] = useState("");
+  // legacy rows, batch orchestrators). Driven by a dropdown whose options
+  // come from `pulse_target_suburbs` (is_active=true) — the canonical
+  // "suburbs we actually scrape" set configured in the Suburbs subtab.
+  // Empty string = "All suburbs".
   const [suburbFilter, setSuburbFilter] = useState("");
-  useEffect(() => {
-    const id = setTimeout(() => setSuburbFilter(suburbFilterRaw.trim()), 300);
-    return () => clearTimeout(id);
-  }, [suburbFilterRaw]);
+
+  // Pull the live active-suburb list. Shared queryKey across all SyncHistory
+  // mounts so react-query dedupes. Long staleTime — suburb pool changes
+  // infrequently.
+  const { data: activeSuburbs = [] } = useQuery({
+    queryKey: ["pulse-active-target-suburbs"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("pulse_target_suburbs")
+        .select("name, postcode, priority")
+        .eq("is_active", true)
+        .order("priority", { ascending: false })
+        .order("name", { ascending: true })
+        .limit(5000);
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 5 * 60_000, // 5 min
+    refetchOnWindowFocus: false,
+  });
 
   // Reset page on filter change
   useEffect(() => { setPage(0); }, [filterSourceId, statusFilter, timeWindow, pageSize, suburbFilter]);
@@ -3239,25 +3257,32 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
               Suburb
             </label>
             <div className="relative mt-0.5">
-              <Search className="h-3 w-3 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-              <Input
-                id="sync-history-suburb-filter"
-                value={suburbFilterRaw}
-                onChange={(e) => setSuburbFilterRaw(e.target.value)}
-                placeholder="e.g. Ashfield"
-                className="h-8 text-xs pl-7 pr-7"
-              />
-              {suburbFilterRaw && (
-                <button
-                  type="button"
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted"
-                  onClick={() => { setSuburbFilterRaw(""); setSuburbFilter(""); }}
-                  title="Clear suburb filter"
-                  aria-label="Clear suburb filter"
+              <Select
+                value={suburbFilter || "__all__"}
+                onValueChange={(v) => setSuburbFilter(v === "__all__" ? "" : v)}
+              >
+                <SelectTrigger
+                  id="sync-history-suburb-filter"
+                  className="h-8 text-xs"
                 >
-                  <X className="h-3 w-3 text-muted-foreground" />
-                </button>
-              )}
+                  <SelectValue placeholder="All suburbs" />
+                </SelectTrigger>
+                <SelectContent className="max-h-[320px]">
+                  <SelectItem value="__all__" className="text-xs">
+                    All suburbs ({activeSuburbs.length})
+                  </SelectItem>
+                  {activeSuburbs.map((s) => (
+                    <SelectItem key={s.name} value={s.name} className="text-xs">
+                      {s.name}
+                      {s.postcode && (
+                        <span className="ml-1.5 text-[10px] text-muted-foreground">
+                          {s.postcode}
+                        </span>
+                      )}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
           <div>
