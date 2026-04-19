@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
 import { useEntityList, refetchEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
 import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, AtSign, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield, Activity, Rss } from "lucide-react";
@@ -56,6 +56,31 @@ const TABS = [
   { id: 'intelligence', label: 'Intelligence', icon: Rss },
 ];
 
+// Valid tab ids (must stay in sync with TABS above) — used to validate the
+// `?tab=` URL param so arbitrary strings can't end up in state.
+const VALID_TAB_IDS = new Set(TABS.map(t => t.id));
+// Legacy session-stored tab values that should migrate to a current tab id.
+const LEGACY_TAB_MAP = {
+  'activity-log': 'notes',
+  interactions: 'notes',
+  audit: 'notes',
+};
+const DEFAULT_TAB = 'notes';
+
+// Resolve the tab to show on first render. Priority:
+//   1. `?tab=` URL param (if valid) — enables deep-linking
+//      (e.g. `/OrgDetails?id=<uuid>&tab=intelligence`).
+//   2. sessionStorage (cross-navigation recall within a session).
+//   3. DEFAULT_TAB.
+function resolveInitialTab(searchParams, agencyId) {
+  const urlTab = searchParams.get('tab');
+  if (urlTab && VALID_TAB_IDS.has(urlTab)) return urlTab;
+  const saved = agencyId ? sessionStorage.getItem(`tab-org-${agencyId}`) : null;
+  if (saved && LEGACY_TAB_MAP[saved]) return LEGACY_TAB_MAP[saved];
+  if (saved && VALID_TAB_IDS.has(saved)) return saved;
+  return DEFAULT_TAB;
+}
+
 function ErrorState({ navigate, title, message }) {
   return (
     <div className="p-8">
@@ -78,21 +103,35 @@ export default function OrgDetails() {
   const { visible: showPricing } = usePriceGate();
   const { isManagerOrAbove } = usePermissions();
   const navigate = useNavigate();
-  const urlParams = new URLSearchParams(window.location.search);
-  const agencyId = urlParams.get("id");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const agencyId = searchParams.get("id");
   const tabsRef = useRef(null);
 
-  // Remember last selected tab
-  const [activeTab, setActiveTab] = useState(() => {
-    const saved = sessionStorage.getItem(`tab-org-${agencyId}`);
-    // Map old tab values to consolidated ones
-    if (saved === 'activity-log' || saved === 'interactions' || saved === 'audit') return 'notes';
-    return saved || 'notes';
-  });
-  const handleTabChange = (tab) => {
+  // Active tab: URL is the source of truth. Initialised from URL → sessionStorage → default.
+  const [activeTab, setActiveTab] = useState(() => resolveInitialTab(searchParams, agencyId));
+
+  // Tab changes must (a) preserve `id` and any other existing params,
+  // (b) push a new history entry so the browser Back button returns to the
+  // prior tab, (c) continue mirroring to sessionStorage for cross-session recall.
+  const handleTabChange = useCallback((tab) => {
     setActiveTab(tab);
-    sessionStorage.setItem(`tab-org-${agencyId}`, tab);
-  };
+    if (agencyId) sessionStorage.setItem(`tab-org-${agencyId}`, tab);
+    setSearchParams(prev => {
+      const np = new URLSearchParams(prev);
+      np.set('tab', tab);
+      return np;
+    });
+  }, [agencyId, setSearchParams]);
+
+  // Keep local state in sync with the URL when the user uses browser
+  // back/forward or an in-app deep-link mutates `?tab=`.
+  useEffect(() => {
+    const urlTab = searchParams.get('tab');
+    if (urlTab && VALID_TAB_IDS.has(urlTab) && urlTab !== activeTab) {
+      setActiveTab(urlTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // #79 — prefetch dossier RPC on Intelligence tab hover so the tab loads
   // instantly on click. Safe to fire repeatedly; react-query dedupes.

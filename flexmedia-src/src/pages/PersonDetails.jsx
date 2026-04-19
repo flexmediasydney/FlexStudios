@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import ErrorBoundary from "@/components/common/ErrorBoundary";
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
 import { useEntityList, refetchEntityList, updateEntityInCache } from '@/components/hooks/useEntityData';
 import { api, supabase } from '@/api/supabaseClient';
@@ -555,29 +555,68 @@ const HISTORY_FILTERS = [
   { id: 'changelog', label: 'Changelog' },
 ];
 
+// Valid tab ids (must stay in sync with TABS above) — used to validate the
+// `?tab=` URL param so arbitrary strings can't end up in state.
+const VALID_TAB_IDS = new Set(TABS.map(t => t.id));
+// Legacy session-stored tab values that should migrate to a current tab id.
+const LEGACY_TAB_MAP = {
+  activity: 'notes',
+  interactions: 'notes',
+  timeline: 'notes',
+  audit: 'notes',
+  details: 'notes',
+};
+const DEFAULT_TAB = 'notes';
+
+// Resolve the tab to show on first render. Priority:
+//   1. `?tab=` URL param (if valid) — enables deep-linking
+//      (e.g. `/PersonDetails?id=<uuid>&tab=intelligence`).
+//   2. sessionStorage (cross-navigation recall within a session).
+//   3. DEFAULT_TAB.
+function resolveInitialTab(searchParams, agentId) {
+  const urlTab = searchParams.get('tab');
+  if (urlTab && VALID_TAB_IDS.has(urlTab)) return urlTab;
+  const saved = agentId ? sessionStorage.getItem(`tab-person-${agentId}`) : null;
+  if (saved && LEGACY_TAB_MAP[saved]) return LEGACY_TAB_MAP[saved];
+  if (saved && VALID_TAB_IDS.has(saved)) return saved;
+  return DEFAULT_TAB;
+}
+
 export default function PersonDetails() {
   const { canEdit, canView } = useEntityAccess('agents');
   const { visible: showPricing } = usePriceGate();
   const navigate = useNavigate();
-  const urlParams = new URLSearchParams(window.location.search);
-  const agentId = urlParams.get('id');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const agentId = searchParams.get('id');
 
-  // Remember last selected tab
-  const [activeTab, setActiveTab] = useState(() => {
-    const saved = sessionStorage.getItem(`tab-person-${agentId}`);
-    // Map old tab values to new ones
-    if (saved === 'activity' || saved === 'interactions' || saved === 'timeline' || saved === 'audit') return 'notes';
-    if (saved === 'details') return 'notes';
-    return saved || 'notes';
-  });
+  // Active tab: URL is the source of truth. Initialised from URL → sessionStorage → default.
+  const [activeTab, setActiveTab] = useState(() => resolveInitialTab(searchParams, agentId));
   const [historyFilter, setHistoryFilter] = useState('all');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [emailActivities, setEmailActivities] = useState([]);
 
-  const handleTabChange = (tab) => {
+  // Tab changes must (a) preserve `id` and any other existing params,
+  // (b) push a new history entry so the browser Back button returns to the
+  // prior tab, (c) continue mirroring to sessionStorage for cross-session recall.
+  const handleTabChange = useCallback((tab) => {
     setActiveTab(tab);
-    sessionStorage.setItem(`tab-person-${agentId}`, tab);
-  };
+    if (agentId) sessionStorage.setItem(`tab-person-${agentId}`, tab);
+    setSearchParams(prev => {
+      const np = new URLSearchParams(prev);
+      np.set('tab', tab);
+      return np;
+    });
+  }, [agentId, setSearchParams]);
+
+  // Keep local state in sync with the URL when the user uses browser
+  // back/forward or an in-app deep-link mutates `?tab=`.
+  useEffect(() => {
+    const urlTab = searchParams.get('tab');
+    if (urlTab && VALID_TAB_IDS.has(urlTab) && urlTab !== activeTab) {
+      setActiveTab(urlTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // #79 — prefetch dossier RPC on Intelligence tab hover so the tab loads
   // instantly on click. Safe to fire repeatedly; react-query dedupes.
