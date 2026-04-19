@@ -39,6 +39,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -67,10 +72,21 @@ import {
   History,
   Copy,
   Sparkles,
+  DollarSign,
+  TrendingUp,
+  LayoutGrid,
+  Table2,
+  Bookmark,
+  BookmarkCheck,
+  Save,
+  Sliders,
+  Zap,
+  Eye,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import AgentMarketShareSection from "@/components/marketshare/AgentMarketShareSection";
+import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
 import {
   displayPrice as sharedDisplayPrice,
   isActiveListing,
@@ -78,6 +94,17 @@ import {
   reaIdEquals,
   alternateContacts,
 } from "@/components/pulse/utils/listingHelpers";
+import {
+  useAgentsRetentionBulk,
+  fmtMissedDollars,
+  retentionBand,
+  retentionBandClass,
+  readWatchlist,
+  toggleWatchlistId,
+  readSavedViews,
+  addSavedView,
+  deleteSavedView,
+} from "@/components/pulse/utils/retentionBulk";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -371,6 +398,197 @@ function TierPill({ tier }) {
       {tier === "Elite" && <Sparkles className="h-2.5 w-2.5" />}
       {tier}
     </span>
+  );
+}
+
+/* ── Retention chips (bulk RPC driven — see migration 174) ────────────────
+ * Rendered on every card + every table row. Reads from the memoised Map
+ * returned by useAgentsRetentionBulk so render cost is ~O(1) per row after
+ * the initial page-wide RPC fires. Falls back to a dash placeholder when
+ * the RPC hasn't resolved or when the agent has no listings in the window. */
+function MissedOppChip({ value, size = "sm", loading }) {
+  if (loading) {
+    return (
+      <span className={cn(
+        "inline-flex items-center gap-0.5 rounded-full border border-dashed border-amber-200/60 text-amber-600/50 dark:border-amber-800/60 dark:text-amber-400/40 tabular-nums",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4",
+      )}>
+        <DollarSign className={cn(size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3", "animate-pulse")} />
+        <span className="opacity-60">…</span>
+      </span>
+    );
+  }
+  const n = Number(value || 0);
+  const zero = n <= 0;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-full border tabular-nums",
+        zero
+          ? "border-muted text-muted-foreground bg-muted/30"
+          : "border-amber-200 text-amber-700 bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:bg-amber-950/30",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4",
+      )}
+      title={zero ? "No missed opportunities in last 12 months" : `Missed opportunity over last 12 months: ${fmtMissedDollars(n)}`}
+    >
+      <DollarSign className={size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3"} />
+      <span>{fmtMissedDollars(n)}</span>
+    </span>
+  );
+}
+
+function RetentionChip({ pct, total, size = "sm", loading }) {
+  if (loading) {
+    return (
+      <span className={cn(
+        "inline-flex items-center gap-0.5 rounded-full border border-dashed border-border text-muted-foreground tabular-nums",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4",
+      )}>
+        <TrendingUp className={cn(size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3", "animate-pulse")} />
+        <span className="opacity-60">…</span>
+      </span>
+    );
+  }
+  if (total == null || total === 0) {
+    return (
+      <span className={cn(
+        "inline-flex items-center gap-0.5 rounded-full border border-muted text-muted-foreground bg-muted/30 tabular-nums",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4",
+      )} title="No scored listings in last 12 months">
+        <TrendingUp className={size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3"} />
+        <span>no data</span>
+      </span>
+    );
+  }
+  const n = Number(pct || 0);
+  const band = retentionBand(n);
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-full border tabular-nums",
+        retentionBandClass(band),
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4",
+      )}
+      title={`Retention rate over last 12 months: ${n}% — ${total} listings (${band === "healthy" ? "healthy" : band === "mid" ? "mid" : "at risk"})`}
+    >
+      <TrendingUp className={size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3"} />
+      <span>{n.toFixed(0)}%</span>
+    </span>
+  );
+}
+
+/* WatchButton — toggles the entity id in the localStorage watchlist. Renders
+ * a bookmark icon; filled when watched. Works for both agents and agencies. */
+function WatchButton({ type, id, size = "sm", className }) {
+  const [watched, setWatched] = React.useState(() => readWatchlist(type).has(String(id)));
+  const onClick = (e) => {
+    e.stopPropagation();
+    const next = toggleWatchlistId(type, id);
+    setWatched(next.has(String(id)));
+    toast.success(next.has(String(id)) ? "Added to watchlist" : "Removed from watchlist");
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={watched ? "Remove from watchlist" : "Add to watchlist"}
+      className={cn(
+        "inline-flex items-center justify-center rounded-md transition-colors",
+        size === "sm" ? "h-6 w-6" : "h-7 w-7",
+        watched
+          ? "text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+          : "text-muted-foreground hover:text-foreground hover:bg-muted",
+        className,
+      )}
+      aria-pressed={watched}
+    >
+      {watched ? <BookmarkCheck className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} /> : <Bookmark className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} />}
+    </button>
+  );
+}
+
+/* QuickActionRibbon — compact row of icon-buttons shown at the top of the
+ * slideout header (Watch / Email / Call / CRM / Copy URL). Matches the other
+ * pulse surfaces (DataFreshnessCard ribbon). */
+function QuickActionRibbon({ entity, type, onWatch, watched, onOpenCrm, inCrm, url, label }) {
+  const copyUrl = async () => {
+    const u = url || (typeof window !== "undefined" ? window.location.href : "");
+    try {
+      await navigator.clipboard.writeText(u);
+      toast.success("Link copied");
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
+  const phone = entity?.mobile || entity?.business_phone || entity?.phone || null;
+  const email = entity?.email || null;
+  return (
+    <div className="flex items-center gap-1 px-1 py-1 rounded-lg bg-muted/30 border border-border">
+      <button
+        type="button"
+        onClick={onWatch}
+        title={watched ? "Remove from watchlist" : "Add to watchlist"}
+        className={cn(
+          "inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors",
+          watched
+            ? "text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-950/50"
+            : "text-muted-foreground hover:text-foreground hover:bg-muted",
+        )}
+      >
+        {watched ? <BookmarkCheck className="h-3 w-3" /> : <Bookmark className="h-3 w-3" />}
+        {watched ? "Watching" : "Watch"}
+      </button>
+      {email ? (
+        <a
+          href={`mailto:${email}`}
+          title={`Email ${label || ""}`.trim()}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <Mail className="h-3 w-3" />
+          Email
+        </a>
+      ) : (
+        <span className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground/50 cursor-not-allowed">
+          <Mail className="h-3 w-3" />
+          Email
+        </span>
+      )}
+      {phone ? (
+        <a
+          href={`tel:${phone}`}
+          title={`Call ${phone}`}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+        >
+          <Phone className="h-3 w-3" />
+          Call
+        </a>
+      ) : (
+        <span className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground/50 cursor-not-allowed">
+          <Phone className="h-3 w-3" />
+          Call
+        </span>
+      )}
+      {inCrm && onOpenCrm ? (
+        <button
+          type="button"
+          onClick={onOpenCrm}
+          title="Open in CRM"
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
+        >
+          <ExternalLink className="h-3 w-3" />
+          CRM
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={copyUrl}
+        title="Copy shareable link"
+        className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+      >
+        <Copy className="h-3 w-3" />
+        Copy URL
+      </button>
+    </div>
   );
 }
 
@@ -806,11 +1024,46 @@ export function AgentSlideout({
     return () => window.removeEventListener("keydown", onKey);
   }, [agent, onNavigate, onAddToCrm]);
 
+  /* Most-recent listing for the EnrichmentBadge header slot. Uses the
+   * dossier's own listing list (server-side, pre-filtered to this agent).
+   * Picks the row with the largest first_seen_at; falls back to the first
+   * entry when dates are missing. Undefined when no listings. */
+  const mostRecentListing = useMemo(() => {
+    const list = (Array.isArray(agentDossier?.listings) ? agentDossier.listings : []);
+    if (list.length === 0) return null;
+    let best = list[0];
+    let bestT = new Date(best.first_seen_at || 0).getTime();
+    for (const l of list) {
+      const t = new Date(l.first_seen_at || 0).getTime();
+      if (t > bestT) { best = l; bestT = t; }
+    }
+    return best;
+  }, [agentDossier]);
+
+  const [watched, setWatched] = React.useState(() => readWatchlist("agent").has(String(agent?.id || "")));
+  const handleWatch = () => {
+    const next = toggleWatchlistId("agent", agent?.id);
+    setWatched(next.has(String(agent?.id)));
+    toast.success(next.has(String(agent?.id)) ? "Agent added to watchlist" : "Agent removed from watchlist");
+  };
+
   return (
     <Sheet open onOpenChange={(o) => { if (!o) onClose?.(); }}>
       <SheetContent side="right" className="sm:max-w-3xl w-full p-0 overflow-y-auto">
         {/* ── Header ── */}
-        <div className="sticky top-0 z-10 bg-background border-b border-border px-5 pt-5 pb-4">
+        <div className="sticky top-0 z-10 bg-background border-b border-border px-5 pt-5 pb-4 space-y-3">
+          {/* Quick action ribbon — top slot above the name block. */}
+          <QuickActionRibbon
+            entity={agent}
+            type="agent"
+            onWatch={handleWatch}
+            watched={watched}
+            inCrm={!!agent?.is_in_crm}
+            onOpenCrm={crmMapping?.crm_entity_id ? () => {
+              window.location.href = createPageUrl("PersonDetails") + `?id=${crmMapping.crm_entity_id}`;
+            } : null}
+            label={agent?.full_name}
+          />
           <div className="flex items-start gap-4">
             {hasHistory && onBack && (
               <button
@@ -840,6 +1093,12 @@ export function AgentSlideout({
                   </Link>
                 ) : (
                   <CrmStatusBadge inCrm={agent.is_in_crm} />
+                )}
+                {/* Enrichment state for their most-recent listing — one glance
+                 * tells you whether the sold/active blocks below are working
+                 * from a full enrichment pull or scrape-only snapshot. */}
+                {mostRecentListing && (
+                  <EnrichmentBadge listing={mostRecentListing} size="sm" />
                 )}
               </div>
               {agent.job_title && (
@@ -1459,6 +1718,32 @@ export default function PulseAgentIntel({
   const suburbParam = searchParams.get("suburb");
   const [agentColFilters, setAgentColFilters] = useState({ agency: "", suburb: suburbParam || "" });
 
+  // View toggle (Table | Grid). Persisted in the URL so links are shareable.
+  const agentsViewParam = searchParams.get("agents_view");
+  const [view, setView] = useState(agentsViewParam === "grid" ? "grid" : "table");
+  useEffect(() => {
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (view === "grid") np.set("agents_view", "grid");
+      else np.delete("agents_view");
+      return np;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // Advanced filter panel — open/closed state + state values. These feed the
+  // in-memory narrow after the server fetch (retention RPC and sales band
+  // aren't server-indexable; activity / data-quality are applied server-side).
+  const [advFiltersOpen, setAdvFiltersOpen] = useState(false);
+  const [retentionBandFilter, setRetentionBandFilter] = useState("all"); // all | at_risk | mid | healthy
+  const [missedThreshold, setMissedThreshold] = useState(0); // $ floor
+  const [activityFilter, setActivityFilter] = useState("all"); // all | active | dormant
+  const [salesBandFilter, setSalesBandFilter] = useState("all"); // all | low | mid | high
+  const [dqTierFilter, setDqTierFilter] = useState("all"); // all | 90 | 70 | 50 | low
+  // Saved views — localStorage. Name input lives in the panel.
+  const [savedViews, setSavedViews] = useState(() => readSavedViews("agents"));
+  const [newViewName, setNewViewName] = useState("");
+
   // Consume the URL param once seeded, so back/forward + refresh don't
   // re-seed the filter and the URL stays tidy.
   useEffect(() => {
@@ -1586,7 +1871,7 @@ export default function PulseAgentIntel({
   //    drive a new query, so the page index must reset or we'd page past).
   useEffect(() => {
     setAgentPage(0);
-  }, [agentFilter, integrityFilter, mappingFilter, regionFilter, agentColFilters.agency, agentColFilters.suburb, search, agentSort.col, agentSort.dir, pageSize, activePreset]);
+  }, [agentFilter, integrityFilter, mappingFilter, regionFilter, agentColFilters.agency, agentColFilters.suburb, search, agentSort.col, agentSort.dir, pageSize, activePreset, dqTierFilter, activityFilter, retentionBandFilter, salesBandFilter, missedThreshold]);
 
   // ── Server-side query builder ─────────────────────────────────────────────
   // Returns a PostgREST query with every server-applicable filter applied.
@@ -1605,6 +1890,16 @@ export default function PulseAgentIntel({
     if (integrityFilter === "high") q = q.gte("data_integrity_score", 80);
     else if (integrityFilter === "medium") q = q.gte("data_integrity_score", 50).lt("data_integrity_score", 80);
     else if (integrityFilter === "low") q = q.lt("data_integrity_score", 50);
+
+    // Data-quality tier (new, from advanced panel). Composes with integrityFilter.
+    if (dqTierFilter === "90") q = q.gte("data_integrity_score", 90);
+    else if (dqTierFilter === "70") q = q.gte("data_integrity_score", 70).lt("data_integrity_score", 90);
+    else if (dqTierFilter === "50") q = q.gte("data_integrity_score", 50).lt("data_integrity_score", 70);
+    else if (dqTierFilter === "low") q = q.lt("data_integrity_score", 50);
+
+    // Activity filter — active = has active listings; dormant = zero.
+    if (activityFilter === "active") q = q.gt("total_listings_active", 0);
+    else if (activityFilter === "dormant") q = q.or("total_listings_active.eq.0,total_listings_active.is.null");
 
     // Column filters
     const agencyQ = (agentColFilters.agency || "").trim();
@@ -1665,7 +1960,7 @@ export default function PulseAgentIntel({
 
     // Preset hard-caps (e.g. "Top 20") applied via range at fetch-time below.
     return q;
-  }, [agentFilter, integrityFilter, agentColFilters, search, agentSort, suburbsInRegion, activePreset]);
+  }, [agentFilter, integrityFilter, agentColFilters, search, agentSort, suburbsInRegion, activePreset, dqTierFilter, activityFilter]);
 
   // Page fetch
   const queryKey = useMemo(
@@ -1674,8 +1969,9 @@ export default function PulseAgentIntel({
       agency: agentColFilters.agency, suburb: agentColFilters.suburb,
       search, sortCol: agentSort.col, sortDir: agentSort.dir,
       page: agentPage, pageSize, preset: activePreset,
+      dqTierFilter, activityFilter,
     }],
-    [agentFilter, integrityFilter, regionFilter, agentColFilters, search, agentSort, agentPage, pageSize, activePreset],
+    [agentFilter, integrityFilter, regionFilter, agentColFilters, search, agentSort, agentPage, pageSize, activePreset, dqTierFilter, activityFilter],
   );
 
   const { data: pageData, isLoading, isFetching } = useQuery({
@@ -1707,25 +2003,70 @@ export default function PulseAgentIntel({
     refetchIntervalInBackground: false,
   });
 
-  // Apply the ONE client-side filter (mapping status) to the fetched page.
+  // Apply client-side narrowing filters (mapping status + sales band).
+  // Retention band + missed $ are applied downstream once the bulk retention
+  // RPC resolves (see retentionNarrowed below) so we keep the main `paginated`
+  // snappy on first paint.
   const paginated = useMemo(() => {
     const rows = pageData?.rows || [];
-    if (mappingFilter === "all") return rows.slice(0, pageSize);
-    const narrowed = rows.filter((a) => {
-      const conf = mappingByAgent.get(a.id);
-      if (mappingFilter === "mapped") return conf === "mapped" || a.is_in_crm;
-      if (mappingFilter === "suggested") return conf === "suggested";
-      if (mappingFilter === "unmapped") return !conf && !a.is_in_crm;
+    let out = rows;
+    if (mappingFilter !== "all") {
+      out = out.filter((a) => {
+        const conf = mappingByAgent.get(a.id);
+        if (mappingFilter === "mapped") return conf === "mapped" || a.is_in_crm;
+        if (mappingFilter === "suggested") return conf === "suggested";
+        if (mappingFilter === "unmapped") return !conf && !a.is_in_crm;
+        return true;
+      });
+    }
+    if (salesBandFilter !== "all") {
+      out = out.filter((a) => {
+        const s = Number(a.sales_as_lead || 0);
+        if (salesBandFilter === "low") return s > 0 && s < 10;
+        if (salesBandFilter === "mid") return s >= 10 && s < 30;
+        if (salesBandFilter === "high") return s >= 30;
+        return true;
+      });
+    }
+    return out.slice(0, pageSize);
+  }, [pageData, mappingFilter, mappingByAgent, pageSize, salesBandFilter]);
+
+  // Bulk retention lookup for the CURRENT PAGE. One RPC per page render.
+  // Keys are rea_agent_id strings — we filter out nulls in the hook itself.
+  const visibleReaIds = useMemo(
+    () => (paginated || []).map((a) => a.rea_agent_id).filter(Boolean),
+    [paginated],
+  );
+  const { data: retentionMap, isFetching: retentionFetching } = useAgentsRetentionBulk(visibleReaIds);
+
+  // Apply retention band + missed $ threshold filters using the resolved map.
+  // These filters are purely cosmetic until retentionMap is non-empty — we
+  // show ALL rows while the RPC is still in-flight, then narrow. No flicker
+  // because chips render a "…" placeholder during the fetch.
+  const retentionNarrowed = useMemo(() => {
+    const hasRetentionFilter = retentionBandFilter !== "all" || (Number(missedThreshold) || 0) > 0;
+    if (!hasRetentionFilter) return paginated;
+    if (!retentionMap || retentionMap.size === 0) return paginated;
+    return paginated.filter((a) => {
+      const r = a.rea_agent_id ? retentionMap.get(String(a.rea_agent_id)) : null;
+      const total = r?.total_listings || 0;
+      const pct = Number(r?.retention_rate_pct || 0);
+      const missed = Number(r?.missed_opportunity_value || 0);
+      if ((Number(missedThreshold) || 0) > 0 && missed < Number(missedThreshold)) return false;
+      if (retentionBandFilter !== "all") {
+        if (total === 0) return false;
+        const band = retentionBand(pct);
+        if (band !== retentionBandFilter) return false;
+      }
       return true;
     });
-    return narrowed.slice(0, pageSize);
-  }, [pageData, mappingFilter, mappingByAgent, pageSize]);
+  }, [paginated, retentionMap, retentionBandFilter, missedThreshold]);
 
   const totalCount = pageData?.count || 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(agentPage, totalPages - 1);
   const showingStart = totalCount === 0 ? 0 : safePage * pageSize + 1;
-  const showingEnd = Math.min(showingStart + paginated.length - 1, totalCount);
+  const showingEnd = Math.min(showingStart + (retentionNarrowed?.length || paginated.length) - 1, totalCount);
 
   // `filtered` is exposed to the CSV button; we reshape this to a lazy-ish
   // "server filtered count" so button disable logic still works.
@@ -1804,7 +2145,7 @@ export default function PulseAgentIntel({
   }
 
   // #11 Bulk-select helpers — operate on the currently visible page.
-  const visibleIds = useMemo(() => (paginated || []).map((a) => a.id), [paginated]);
+  const visibleIds = useMemo(() => (retentionNarrowed || []).map((a) => a.id), [retentionNarrowed]);
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
   const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id));
   const toggleSelectOne = useCallback((id, checked) => {
@@ -1852,8 +2193,8 @@ export default function PulseAgentIntel({
 
   // #11 Bulk actions.
   const selectedAgentsFromVisible = useMemo(
-    () => (paginated || []).filter((a) => selectedIds.has(a.id)),
-    [paginated, selectedIds],
+    () => (retentionNarrowed || []).filter((a) => selectedIds.has(a.id)),
+    [retentionNarrowed, selectedIds],
   );
 
   const handleBulkAddToCrm = useCallback(() => {
@@ -1898,15 +2239,80 @@ export default function PulseAgentIntel({
     );
   }, [selectedAgentsFromVisible]);
 
-  // #17 Slideout navigation — map prev/next to neighbours in `paginated`.
+  // Final list the UI renders — after retention/missed$ narrowing.
+  const renderRows = retentionNarrowed;
+
+  // #17 Slideout navigation — map prev/next to neighbours in `renderRows`.
   const handleSlideoutNavigate = useCallback((dir) => {
-    if (!selectedAgent || !paginated?.length) return;
-    const idx = paginated.findIndex((a) => a.id === selectedAgent.id);
+    if (!selectedAgent || !renderRows?.length) return;
+    const idx = renderRows.findIndex((a) => a.id === selectedAgent.id);
     if (idx < 0) return;
     const nextIdx = idx + dir;
-    if (nextIdx < 0 || nextIdx >= paginated.length) return;
-    setSelectedAgent(paginated[nextIdx]);
-  }, [paginated, selectedAgent]);
+    if (nextIdx < 0 || nextIdx >= renderRows.length) return;
+    setSelectedAgent(renderRows[nextIdx]);
+  }, [renderRows, selectedAgent]);
+
+  // Save current filter state as a view (localStorage).
+  const handleSaveView = () => {
+    const name = (newViewName || "").trim();
+    if (!name) { toast.error("Name your view first"); return; }
+    const payload = {
+      view,
+      agentFilter, integrityFilter, mappingFilter, regionFilter,
+      agentColFilters, agentSort, retentionBandFilter, missedThreshold,
+      activityFilter, salesBandFilter, dqTierFilter, activePreset,
+    };
+    const next = addSavedView("agents", name, payload);
+    setSavedViews(next);
+    setNewViewName("");
+    toast.success(`Saved view "${name}"`);
+  };
+  const handleLoadView = (payload) => {
+    if (!payload) return;
+    if (payload.view) setView(payload.view);
+    if (payload.agentFilter != null) setAgentFilter(payload.agentFilter);
+    if (payload.integrityFilter != null) setIntegrityFilter(payload.integrityFilter);
+    if (payload.mappingFilter != null) setMappingFilter(payload.mappingFilter);
+    if (payload.regionFilter != null) setRegionFilter(payload.regionFilter);
+    if (payload.agentColFilters) setAgentColFilters(payload.agentColFilters);
+    if (payload.agentSort) setAgentSort(payload.agentSort);
+    if (payload.retentionBandFilter != null) setRetentionBandFilter(payload.retentionBandFilter);
+    if (payload.missedThreshold != null) setMissedThreshold(payload.missedThreshold);
+    if (payload.activityFilter != null) setActivityFilter(payload.activityFilter);
+    if (payload.salesBandFilter != null) setSalesBandFilter(payload.salesBandFilter);
+    if (payload.dqTierFilter != null) setDqTierFilter(payload.dqTierFilter);
+    if (payload.activePreset !== undefined) setActivePreset(payload.activePreset);
+    toast.success("View applied");
+  };
+  const handleDeleteView = (id) => {
+    setSavedViews(deleteSavedView("agents", id));
+  };
+
+  // j/k keyboard navigation — jump to next/prev row without a slideout.
+  // Only active when no modal/slideout is open and no input is focused.
+  useEffect(() => {
+    function onKey(e) {
+      if (selectedAgent || addToCrmCandidate) return;
+      const tag = (e.target?.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select" || e.target?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key !== "j" && e.key !== "k") return;
+      if (!renderRows || renderRows.length === 0) return;
+      e.preventDefault();
+      const curId = window.__pulseAgentsKeyCursor || null;
+      const curIdx = curId ? renderRows.findIndex((r) => r.id === curId) : -1;
+      let nextIdx = curIdx < 0 ? 0 : (e.key === "j" ? curIdx + 1 : curIdx - 1);
+      nextIdx = Math.max(0, Math.min(renderRows.length - 1, nextIdx));
+      const target = renderRows[nextIdx];
+      if (!target) return;
+      window.__pulseAgentsKeyCursor = target.id;
+      // Focus row if rendered — enter opens it
+      const el = document.querySelector(`[data-pulse-agent-row="${target.id}"]`);
+      if (el && typeof el.focus === "function") el.focus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [renderRows, selectedAgent, addToCrmCandidate]);
 
   /* ── Render ── */
   return (
@@ -1982,6 +2388,55 @@ export default function PulseAgentIntel({
         )}
 
         <div className="ml-auto flex items-center gap-2">
+          {/* View toggle — Table | Grid */}
+          <div className="inline-flex items-center rounded-md border border-border bg-background overflow-hidden" role="group" aria-label="View mode">
+            <button
+              type="button"
+              onClick={() => setView("table")}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 h-7 text-[11px] font-medium transition-colors",
+                view === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              )}
+              title="Table view"
+            >
+              <Table2 className="h-3 w-3" /> Table
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("grid")}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 h-7 text-[11px] font-medium transition-colors",
+                view === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              )}
+              title="Grid view"
+            >
+              <LayoutGrid className="h-3 w-3" /> Grid
+            </button>
+          </div>
+
+          {/* Advanced filter panel toggle */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs gap-1"
+            onClick={() => setAdvFiltersOpen((p) => !p)}
+            title="Advanced filters"
+          >
+            <Sliders className="h-3 w-3" />
+            Filters
+            {(retentionBandFilter !== "all" || Number(missedThreshold) > 0 || activityFilter !== "all" || salesBandFilter !== "all" || dqTierFilter !== "all") && (
+              <span className="inline-flex items-center h-4 min-w-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] tabular-nums">
+                {[
+                  retentionBandFilter !== "all" ? 1 : 0,
+                  Number(missedThreshold) > 0 ? 1 : 0,
+                  activityFilter !== "all" ? 1 : 0,
+                  salesBandFilter !== "all" ? 1 : 0,
+                  dqTierFilter !== "all" ? 1 : 0,
+                ].reduce((a, b) => a + b, 0)}
+              </span>
+            )}
+          </Button>
+
           <Button
             variant="outline"
             size="sm"
@@ -2046,6 +2501,129 @@ export default function PulseAgentIntel({
         })}
       </div>
 
+      {/* ── Advanced filter panel (collapsible) ── */}
+      {advFiltersOpen && (
+        <Card className="rounded-xl border border-border p-3 space-y-3 bg-muted/20">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Sliders className="h-3.5 w-3.5 text-primary" />
+              Advanced filters
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setRetentionBandFilter("all");
+                setMissedThreshold(0);
+                setActivityFilter("all");
+                setSalesBandFilter("all");
+                setDqTierFilter("all");
+              }}
+              className="text-[10px] text-primary hover:underline"
+            >
+              Reset advanced
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Retention band
+              <select
+                value={retentionBandFilter}
+                onChange={(e) => setRetentionBandFilter(e.target.value)}
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="all">All</option>
+                <option value="at_risk">At risk (&lt;25%)</option>
+                <option value="mid">Mid (25–75%)</option>
+                <option value="healthy">Healthy (≥75%)</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Missed $ ≥
+              <input
+                type="number"
+                min="0"
+                step="1000"
+                value={missedThreshold || ""}
+                onChange={(e) => setMissedThreshold(Number(e.target.value) || 0)}
+                placeholder="0"
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Activity
+              <select
+                value={activityFilter}
+                onChange={(e) => setActivityFilter(e.target.value)}
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="all">All</option>
+                <option value="active">Active (has listings)</option>
+                <option value="dormant">Dormant (no active listings)</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Sales volume
+              <select
+                value={salesBandFilter}
+                onChange={(e) => setSalesBandFilter(e.target.value)}
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="all">All</option>
+                <option value="low">Low (1–9 sales as lead)</option>
+                <option value="mid">Mid (10–29)</option>
+                <option value="high">High (30+)</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Data-quality tier
+              <select
+                value={dqTierFilter}
+                onChange={(e) => setDqTierFilter(e.target.value)}
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="all">All</option>
+                <option value="90">90+</option>
+                <option value="70">70–89</option>
+                <option value="50">50–69</option>
+                <option value="low">&lt;50</option>
+              </select>
+            </label>
+          </div>
+          {/* Saved views */}
+          <div className="pt-2 border-t border-border/60 space-y-2">
+            <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+              <Save className="h-3 w-3" /> Saved views
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newViewName}
+                onChange={(e) => setNewViewName(e.target.value)}
+                placeholder="My view name…"
+                className="h-7 flex-1 text-xs rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+              <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={handleSaveView}>
+                Save current
+              </Button>
+            </div>
+            {savedViews.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {savedViews.map((v) => (
+                  <span key={v.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-background pl-2 pr-1 py-0.5 text-[10px]">
+                    <button type="button" onClick={() => handleLoadView(v.payload)} className="hover:underline font-medium">
+                      {v.name}
+                    </button>
+                    <button type="button" onClick={() => handleDeleteView(v.id)} className="rounded-full p-0.5 hover:bg-muted text-muted-foreground" aria-label={`Delete view ${v.name}`}>
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
       {/* ── AG05: Active-filter chips ── */}
       {(() => {
         const chips = [];
@@ -2103,6 +2681,22 @@ export default function PulseAgentIntel({
             onClear: () => setRegionFilter("all"),
           });
         }
+        if (retentionBandFilter !== "all") {
+          const lbl = retentionBandFilter === "at_risk" ? "At risk" : retentionBandFilter === "mid" ? "Mid" : "Healthy";
+          chips.push({ key: "retention_band", label: "Retention", value: lbl, onClear: () => setRetentionBandFilter("all") });
+        }
+        if ((Number(missedThreshold) || 0) > 0) {
+          chips.push({ key: "missed_thr", label: "Missed $", value: `≥ ${fmtMissedDollars(missedThreshold)}`, onClear: () => setMissedThreshold(0) });
+        }
+        if (activityFilter !== "all") {
+          chips.push({ key: "activity", label: "Activity", value: activityFilter === "active" ? "Active" : "Dormant", onClear: () => setActivityFilter("all") });
+        }
+        if (salesBandFilter !== "all") {
+          chips.push({ key: "sales_band", label: "Sales", value: salesBandFilter, onClear: () => setSalesBandFilter("all") });
+        }
+        if (dqTierFilter !== "all") {
+          chips.push({ key: "dq_tier", label: "DQ", value: dqTierFilter === "low" ? "<50" : `${dqTierFilter}+`, onClear: () => setDqTierFilter("all") });
+        }
         if (chips.length === 0) return null;
         const clearAll = () => {
           setAgentFilter("all");
@@ -2110,6 +2704,11 @@ export default function PulseAgentIntel({
           setMappingFilter("all");
           setRegionFilter("all");
           setAgentColFilters({ agency: "", suburb: "" });
+          setRetentionBandFilter("all");
+          setMissedThreshold(0);
+          setActivityFilter("all");
+          setSalesBandFilter("all");
+          setDqTierFilter("all");
           setAgentPage(0);
         };
         return (
@@ -2146,7 +2745,164 @@ export default function PulseAgentIntel({
         );
       })()}
 
+      {/* ── Grid view ── */}
+      {view === "grid" && (
+        <div>
+          {isLoading && renderRows.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
+              Loading agents…
+            </div>
+          ) : renderRows.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              <Users className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+              No agents match your filters
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {renderRows.map((agent) => {
+                  const isSelected = selectedIds.has(agent.id);
+                  const ret = agent.rea_agent_id ? retentionMap?.get(String(agent.rea_agent_id)) : null;
+                  const handleClick = () => {
+                    if (onOpenEntity) onOpenEntity({ type: "agent", id: agent.id });
+                    else setSelectedAgent(agent);
+                  };
+                  return (
+                    <HoverCard key={agent.id} openDelay={400} closeDelay={120}>
+                      <HoverCardTrigger asChild>
+                        <Card
+                          role="button"
+                          tabIndex={0}
+                          onClick={handleClick}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleClick(); } }}
+                          className={cn(
+                            "p-3 cursor-pointer hover:border-primary/40 transition-colors relative flex flex-col gap-2",
+                            isSelected && "ring-2 ring-primary/40",
+                          )}
+                          aria-label={`Open ${agent.full_name || "agent"} details`}
+                        >
+                          <div className="absolute top-2 right-2 z-10" onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={(v) => toggleSelectOne(agent.id, !!v)}
+                              aria-label={`Select ${agent.full_name || "agent"}`}
+                            />
+                          </div>
+                          <div className="flex items-start gap-3">
+                            <AgentAvatar agent={agent} size={48} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1 flex-wrap mb-0.5">
+                                <p className="text-sm font-semibold truncate">{agent.full_name || "—"}</p>
+                                {agent.awards && <Award className="h-3 w-3 fill-amber-400 text-amber-500" title="Award recipient" />}
+                              </div>
+                              {agent.job_title && (
+                                <p className="text-[11px] text-muted-foreground truncate">{agent.job_title}</p>
+                              )}
+                              <p className="text-[11px] text-muted-foreground truncate">
+                                <Building2 className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+                                {agent.agency_name || "—"}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <CrmStatusBadge inCrm={agent.is_in_crm} />
+                            <PositionBadge position={mapPosition(agent.job_title)} />
+                            <MissedOppChip value={ret?.missed_opportunity_value} loading={!ret && retentionFetching} />
+                            <RetentionChip pct={ret?.retention_rate_pct} total={ret?.total_listings} loading={!ret && retentionFetching} />
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/60">
+                            <span title="Sales as lead (12m)">
+                              <strong className="text-foreground tabular-nums">{agent.sales_as_lead ?? 0}</strong> sales
+                            </span>
+                            <span title="Average sold price">{fmtPrice(agent.avg_sold_price)}</span>
+                            {agent.rea_rating > 0 && (
+                              <span className="inline-flex items-center gap-0.5 tabular-nums">
+                                <Star className="h-2.5 w-2.5 fill-amber-400 text-amber-400" />
+                                {Number(agent.rea_rating).toFixed(1)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-end gap-1 pt-1" onClick={(e) => e.stopPropagation()}>
+                            <WatchButton type="agent" id={agent.id} size="sm" />
+                            {!agent.is_in_crm && (
+                              <button
+                                type="button"
+                                onClick={() => setAddToCrmCandidate(agent)}
+                                className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium text-primary hover:bg-primary/10 transition-colors"
+                                title="Add to CRM"
+                              >
+                                <UserPlus className="h-3 w-3" /> Add
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={handleClick}
+                              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                              title="Open slideout"
+                            >
+                              <Eye className="h-3 w-3" /> Open
+                            </button>
+                          </div>
+                        </Card>
+                      </HoverCardTrigger>
+                      <HoverCardContent align="start" className="w-72 p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <AgentAvatar agent={agent} size={40} />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold truncate">{agent.full_name}</p>
+                            <p className="text-[11px] text-muted-foreground truncate">{agent.agency_name || "—"}</p>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="text-center rounded bg-muted/40 p-1.5">
+                            <p className="text-sm font-bold tabular-nums">{agent.total_listings_active ?? 0}</p>
+                            <p className="text-[9px] text-muted-foreground">Active</p>
+                          </div>
+                          <div className="text-center rounded bg-muted/40 p-1.5">
+                            <p className="text-sm font-bold tabular-nums">{agent.sales_as_lead ?? 0}</p>
+                            <p className="text-[9px] text-muted-foreground">Sales 12m</p>
+                          </div>
+                          <div className="text-center rounded bg-muted/40 p-1.5">
+                            <p className="text-sm font-bold tabular-nums">{fmtPrice(agent.avg_sold_price)}</p>
+                            <p className="text-[9px] text-muted-foreground">Avg sold</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <MissedOppChip value={ret?.missed_opportunity_value} loading={!ret && retentionFetching} />
+                          <RetentionChip pct={ret?.retention_rate_pct} total={ret?.total_listings} loading={!ret && retentionFetching} />
+                        </div>
+                        {agent.agency_suburb && (
+                          <p className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <MapPin className="h-2.5 w-2.5" /> {agent.agency_suburb}
+                          </p>
+                        )}
+                      </HoverCardContent>
+                    </HoverCard>
+                  );
+                })}
+              </div>
+              {/* Grid pagination */}
+              {totalCount > 0 && (
+                <div className="flex items-center justify-between mt-3 text-xs text-muted-foreground">
+                  <span>Page {safePage + 1} of {totalPages}</span>
+                  <div className="flex items-center gap-1">
+                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage === 0} onClick={() => setAgentPage((p) => Math.max(0, p - 1))}>
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage >= totalPages - 1} onClick={() => setAgentPage((p) => Math.min(totalPages - 1, p + 1))}>
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       {/* ── Table card ── */}
+      {view === "table" && (
       <Card className="rounded-xl border-0 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -2220,6 +2976,18 @@ export default function PulseAgentIntel({
                 >
                   Rating <SortIcon col="rea_rating" sort={agentSort} />
                 </th>
+                {/* Missed $ (bulk retention RPC) */}
+                <th className="py-2.5 px-2 text-right font-medium text-muted-foreground hidden md:table-cell whitespace-nowrap" title="Missed opportunity over last 12 months">
+                  Missed $
+                </th>
+                {/* Retention % */}
+                <th className="py-2.5 px-2 text-right font-medium text-muted-foreground hidden lg:table-cell whitespace-nowrap" title="Retention rate over last 12 months">
+                  Retention
+                </th>
+                {/* Captured */}
+                <th className="py-2.5 px-2 text-right font-medium text-muted-foreground hidden xl:table-cell whitespace-nowrap" title="Listings converted to FlexStudios projects (12m)">
+                  Captured
+                </th>
                 {/* Last synced */}
                 <th className="py-2.5 px-2 text-right font-medium text-muted-foreground hidden xl:table-cell whitespace-nowrap">
                   Synced
@@ -2273,6 +3041,12 @@ export default function PulseAgentIntel({
                 <td className="py-1 px-2 hidden md:table-cell" />
                 {/* Rating — no filter */}
                 <td className="py-1 px-2 hidden sm:table-cell" />
+                {/* Missed $ — no filter */}
+                <td className="py-1 px-2 hidden md:table-cell" />
+                {/* Retention — no filter */}
+                <td className="py-1 px-2 hidden lg:table-cell" />
+                {/* Captured — no filter */}
+                <td className="py-1 px-2 hidden xl:table-cell" />
                 {/* Last-synced — no filter */}
                 <td className="py-1 px-2 hidden xl:table-cell" />
                 {/* Added (first_seen_at) — no filter */}
@@ -2298,10 +3072,10 @@ export default function PulseAgentIntel({
 
             {/* ── tbody ── */}
             <tbody>
-              {isLoading && paginated.length === 0 && (
+              {isLoading && renderRows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={14}
+                    colSpan={17}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
@@ -2309,10 +3083,10 @@ export default function PulseAgentIntel({
                   </td>
                 </tr>
               )}
-              {!isLoading && paginated.length === 0 && (
+              {!isLoading && renderRows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={14}
+                    colSpan={17}
                     className="py-12 text-center text-sm text-muted-foreground"
                   >
                     <Users className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
@@ -2321,7 +3095,7 @@ export default function PulseAgentIntel({
                 </tr>
               )}
 
-              {paginated.map((agent) => {
+              {renderRows.map((agent) => {
                 const position = mapPosition(agent.job_title);
                 const isSelected = selectedIds.has(agent.id);
                 // A1/URL-fallback: onOpenEntity is wired through sharedProps in
@@ -2348,8 +3122,9 @@ export default function PulseAgentIntel({
                   <ContextMenu key={agent.id}>
                     <ContextMenuTrigger asChild>
                       <tr
+                        data-pulse-agent-row={agent.id}
                         className={cn(
-                          "group border-b border-border/60 hover:bg-muted/40 cursor-pointer transition-colors",
+                          "group border-b border-border/60 hover:bg-muted/40 cursor-pointer transition-colors focus:outline-none focus:bg-muted/60",
                           isSelected && "bg-primary/5",
                         )}
                         onClick={handleRowClick}
@@ -2535,6 +3310,35 @@ export default function PulseAgentIntel({
                       <StarRating rating={agent.rea_rating} count={agent.rea_review_count} />
                     </td>
 
+                    {/* Missed $ — from retentionMap */}
+                    <td className="py-2 px-2 text-right hidden md:table-cell">
+                      {(() => {
+                        const r = agent.rea_agent_id ? retentionMap?.get(String(agent.rea_agent_id)) : null;
+                        return <MissedOppChip value={r?.missed_opportunity_value} loading={!r && retentionFetching} />;
+                      })()}
+                    </td>
+
+                    {/* Retention % */}
+                    <td className="py-2 px-2 text-right hidden lg:table-cell">
+                      {(() => {
+                        const r = agent.rea_agent_id ? retentionMap?.get(String(agent.rea_agent_id)) : null;
+                        return <RetentionChip pct={r?.retention_rate_pct} total={r?.total_listings} loading={!r && retentionFetching} />;
+                      })()}
+                    </td>
+
+                    {/* Captured listings */}
+                    <td className="py-2 px-2 text-right hidden xl:table-cell tabular-nums">
+                      {(() => {
+                        const r = agent.rea_agent_id ? retentionMap?.get(String(agent.rea_agent_id)) : null;
+                        const n = r?.captured || 0;
+                        return n > 0 ? (
+                          <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{n}</span>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        );
+                      })()}
+                    </td>
+
                     {/* Last synced — with stale badge when last_synced_at is >7d old */}
                     <td
                       className="py-2 px-2 text-right text-[10px] text-muted-foreground hidden xl:table-cell whitespace-nowrap"
@@ -2694,6 +3498,7 @@ export default function PulseAgentIntel({
           </div>
         )}
       </Card>
+      )}
 
       {/* ── Agent slideout ── */}
       {selectedAgent && (
@@ -2735,19 +3540,49 @@ export default function PulseAgentIntel({
             size="sm"
             variant="outline"
             className="h-7 text-xs gap-1"
-            onClick={handleBulkExport}
+            onClick={() => {
+              for (const a of selectedAgentsFromVisible) toggleWatchlistId("agent", a.id);
+              toast.success(`Toggled watch on ${selectedAgentsFromVisible.length} agent${selectedAgentsFromVisible.length !== 1 ? "s" : ""}`);
+            }}
+            title="Add/remove selected agents from watchlist"
           >
-            <Download className="h-3.5 w-3.5" />
-            Export CSV
+            <Bookmark className="h-3.5 w-3.5" />
+            Watchlist
           </Button>
           <Button
             size="sm"
             variant="outline"
             className="h-7 text-xs gap-1"
-            disabled
-            title="Compare — coming soon"
+            onClick={async () => {
+              // Fire pulseDetailEnrich for the selected agents' listings via
+              // the existing Edge Function. We collect each agent's active
+              // listing rea_ids (from total_listings_active >0 rows loaded
+              // in the page). The Edge Function queues them for enrichment.
+              const reaIds = selectedAgentsFromVisible.map((a) => a.rea_agent_id).filter(Boolean);
+              if (reaIds.length === 0) { toast.error("No rea_agent_ids on selected rows"); return; }
+              try {
+                const { error } = await api._supabase.functions.invoke("pulseDetailEnrich", {
+                  body: { agent_rea_ids: reaIds, source: "pulse_agents_bulk" },
+                });
+                if (error) throw error;
+                toast.success(`Queued enrichment for ${reaIds.length} agent${reaIds.length !== 1 ? "s" : ""}' listings`);
+              } catch (err) {
+                toast.error(`Enrichment queue failed: ${err?.message || err}`);
+              }
+            }}
+            title="Queue pulseDetailEnrich for the selected agents' listings"
           >
-            Compare
+            <Zap className="h-3.5 w-3.5" />
+            Enrich
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            onClick={handleBulkExport}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export CSV
           </Button>
           <button
             type="button"

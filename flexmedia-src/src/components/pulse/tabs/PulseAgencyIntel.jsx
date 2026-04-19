@@ -23,6 +23,13 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Card as UICard } from "@/components/ui/card";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -53,10 +60,21 @@ import {
   Check,
   Map as MapIcon,
   AlertTriangle,
+  DollarSign,
+  TrendingUp,
+  LayoutGrid,
+  Table2,
+  Bookmark,
+  BookmarkCheck,
+  Save,
+  Sliders,
+  Zap,
+  Eye,
 } from "lucide-react";
 import PulseTimeline from "@/components/pulse/PulseTimeline";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import AgencyMarketShareSection from "@/components/marketshare/AgencyMarketShareSection";
+import EnrichmentBadge from "@/components/marketshare/EnrichmentBadge";
 import {
   displayPrice as sharedDisplayPrice,
   LISTING_TYPE_LABEL,
@@ -65,6 +83,18 @@ import {
   alternateContacts,
   primaryContact,
 } from "@/components/pulse/utils/listingHelpers";
+import { api as apiClient } from "@/api/supabaseClient";
+import {
+  useAgenciesRetentionBulk,
+  fmtMissedDollars,
+  retentionBand,
+  retentionBandClass,
+  readWatchlist,
+  toggleWatchlistId,
+  readSavedViews,
+  addSavedView,
+  deleteSavedView,
+} from "@/components/pulse/utils/retentionBulk";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -434,6 +464,141 @@ const CrmBadge = ({ inCrm }) =>
       Not in CRM
     </Badge>
   );
+
+/* Retention + missed$ chip components. See PulseAgentIntel for docs —
+ * duplicated here to keep the file self-contained and avoid a new shared file. */
+function MissedOppChip({ value, size = "sm", loading }) {
+  if (loading) {
+    return (
+      <span className={cn("inline-flex items-center gap-0.5 rounded-full border border-dashed border-amber-200/60 text-amber-600/50 dark:border-amber-800/60 dark:text-amber-400/40 tabular-nums",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4")}>
+        <DollarSign className={cn(size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3", "animate-pulse")} />
+        <span className="opacity-60">…</span>
+      </span>
+    );
+  }
+  const n = Number(value || 0);
+  const zero = n <= 0;
+  return (
+    <span
+      className={cn("inline-flex items-center gap-0.5 rounded-full border tabular-nums",
+        zero ? "border-muted text-muted-foreground bg-muted/30"
+             : "border-amber-200 text-amber-700 bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:bg-amber-950/30",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4")}
+      title={zero ? "No missed opportunities in last 12 months" : `Missed opportunity over last 12 months: ${fmtMissedDollars(n)}`}
+    >
+      <DollarSign className={size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3"} />
+      <span>{fmtMissedDollars(n)}</span>
+    </span>
+  );
+}
+
+function RetentionChip({ pct, total, size = "sm", loading }) {
+  if (loading) {
+    return (
+      <span className={cn("inline-flex items-center gap-0.5 rounded-full border border-dashed border-border text-muted-foreground tabular-nums",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4")}>
+        <TrendingUp className={cn(size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3", "animate-pulse")} />
+        <span className="opacity-60">…</span>
+      </span>
+    );
+  }
+  if (total == null || total === 0) {
+    return (
+      <span className={cn("inline-flex items-center gap-0.5 rounded-full border border-muted text-muted-foreground bg-muted/30 tabular-nums",
+        size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4")} title="No scored listings in last 12 months">
+        <TrendingUp className={size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3"} />
+        <span>no data</span>
+      </span>
+    );
+  }
+  const n = Number(pct || 0);
+  const band = retentionBand(n);
+  return (
+    <span className={cn("inline-flex items-center gap-0.5 rounded-full border tabular-nums", retentionBandClass(band),
+      size === "sm" ? "text-[9px] px-1.5 py-0 leading-4" : "text-[10px] px-2 py-0.5 leading-4")}
+      title={`Retention rate over last 12 months: ${n}% — ${total} listings (${band === "healthy" ? "healthy" : band === "mid" ? "mid" : "at risk"})`}>
+      <TrendingUp className={size === "sm" ? "h-2.5 w-2.5" : "h-3 w-3"} />
+      <span>{n.toFixed(0)}%</span>
+    </span>
+  );
+}
+
+function WatchButton({ type, id, size = "sm", className }) {
+  const [watched, setWatched] = React.useState(() => readWatchlist(type).has(String(id)));
+  const onClick = (e) => {
+    e.stopPropagation();
+    const next = toggleWatchlistId(type, id);
+    setWatched(next.has(String(id)));
+    toast.success(next.has(String(id)) ? "Added to watchlist" : "Removed from watchlist");
+  };
+  return (
+    <button type="button" onClick={onClick}
+      title={watched ? "Remove from watchlist" : "Add to watchlist"}
+      className={cn("inline-flex items-center justify-center rounded-md transition-colors",
+        size === "sm" ? "h-6 w-6" : "h-7 w-7",
+        watched ? "text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+        className)}
+      aria-pressed={watched}>
+      {watched ? <BookmarkCheck className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} /> : <Bookmark className={size === "sm" ? "h-3.5 w-3.5" : "h-4 w-4"} />}
+    </button>
+  );
+}
+
+function QuickActionRibbon({ entity, type, onWatch, watched, onOpenCrm, inCrm, url, label }) {
+  const copyUrl = async () => {
+    const u = url || (typeof window !== "undefined" ? window.location.href : "");
+    try {
+      await navigator.clipboard.writeText(u);
+      toast.success("Link copied");
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
+  const phone = entity?.mobile || entity?.business_phone || entity?.phone || null;
+  const email = entity?.email || null;
+  return (
+    <div className="flex items-center gap-1 px-1 py-1 rounded-lg bg-muted/30 border border-border">
+      <button type="button" onClick={onWatch}
+        title={watched ? "Remove from watchlist" : "Add to watchlist"}
+        className={cn("inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors",
+          watched ? "text-amber-600 bg-amber-50 dark:text-amber-400 dark:bg-amber-950/30 hover:bg-amber-100 dark:hover:bg-amber-950/50" : "text-muted-foreground hover:text-foreground hover:bg-muted")}>
+        {watched ? <BookmarkCheck className="h-3 w-3" /> : <Bookmark className="h-3 w-3" />}
+        {watched ? "Watching" : "Watch"}
+      </button>
+      {email ? (
+        <a href={`mailto:${email}`} title={`Email ${label || ""}`.trim()}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+          <Mail className="h-3 w-3" /> Email
+        </a>
+      ) : (
+        <span className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground/50 cursor-not-allowed">
+          <Mail className="h-3 w-3" /> Email
+        </span>
+      )}
+      {phone ? (
+        <a href={`tel:${phone}`} title={`Call ${phone}`}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+          <Phone className="h-3 w-3" /> Call
+        </a>
+      ) : (
+        <span className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground/50 cursor-not-allowed">
+          <Phone className="h-3 w-3" /> Call
+        </span>
+      )}
+      {inCrm && onOpenCrm ? (
+        <button type="button" onClick={onOpenCrm} title="Open in CRM"
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors">
+          <ExternalLink className="h-3 w-3" /> CRM
+        </button>
+      ) : null}
+      <button type="button" onClick={copyUrl} title="Copy shareable link"
+        className="inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+        <Copy className="h-3 w-3" /> Copy URL
+      </button>
+    </div>
+  );
+}
 
 /* #31: StatBox now accepts an optional brand color for 3px left border. */
 const StatBox = ({ label, value, sub, brandColor, title }) => (
@@ -1131,17 +1296,48 @@ export function AgencySlideout({
       }
     : undefined;
 
+  // Most-recent listing from the dossier for the EnrichmentBadge slot.
+  const mostRecentListing = React.useMemo(() => {
+    const list = agencyListings || [];
+    if (list.length === 0) return null;
+    let best = list[0];
+    let bestT = new Date(best.first_seen_at || 0).getTime();
+    for (const l of list) {
+      const t = new Date(l.first_seen_at || 0).getTime();
+      if (t > bestT) { best = l; bestT = t; }
+    }
+    return best;
+  }, [agencyListings]);
+
+  const [watched, setWatched] = React.useState(() => readWatchlist("agency").has(String(agency?.id || "")));
+  const handleWatch = () => {
+    const next = toggleWatchlistId("agency", agency?.id);
+    setWatched(next.has(String(agency?.id)));
+    toast.success(next.has(String(agency?.id)) ? "Agency added to watchlist" : "Agency removed from watchlist");
+  };
+
   return (
     <Dialog open={!!agency} onOpenChange={() => onClose()}>
       <DialogContent className="max-w-2xl w-full max-h-[90vh] overflow-y-auto p-0">
         {/* ── Header (AG07: brand color top-border + subtle tint when set) ── */}
         <div
           className={cn(
-            "sticky top-0 z-10 backdrop-blur border-b px-5 py-4",
+            "sticky top-0 z-10 backdrop-blur border-b px-5 py-4 space-y-3",
             brandAccent ? "" : "bg-background/95"
           )}
           style={headerStyle}
         >
+          <QuickActionRibbon
+            entity={agency}
+            type="agency"
+            onWatch={handleWatch}
+            watched={watched}
+            inCrm={isInCrm}
+            onOpenCrm={crmAgencyMapping?.crm_entity_id ? () => {
+              window.location.href = createPageUrl("OrgDetails") + `?id=${crmAgencyMapping.crm_entity_id}`;
+            } : null}
+            label={agency?.name}
+          />
           <DialogHeader>
             <DialogTitle asChild>
               <div className="flex items-start gap-3">
@@ -1195,6 +1391,12 @@ export function AgencySlideout({
                       </Link>
                     ) : (
                       <CrmBadge inCrm={isInCrm} />
+                    )}
+                    {/* Enrichment state of most-recent listing — one-glance
+                     * check of whether the sold/active blocks are showing
+                     * scrape-only or enriched data. */}
+                    {mostRecentListing && (
+                      <EnrichmentBadge listing={mostRecentListing} size="sm" />
                     )}
                     {/* #27: duplicate warning chip — tooltip lists duplicates */}
                     {duplicates.length > 0 && (
@@ -1940,6 +2142,31 @@ export default function PulseAgencyIntel({
   // Auto-refresh — opt-in 60s. Agency data changes slowly.
   const [autoRefresh, setAutoRefresh] = useState(readStoredAutoRefresh);
 
+  // View toggle (Table | Grid). URL-persisted via ?agencies_view=grid.
+  const agenciesViewParam = searchParams.get("agencies_view");
+  const [view, setView] = useState(agenciesViewParam === "grid" ? "grid" : "table");
+  useEffect(() => {
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (view === "grid") np.set("agencies_view", "grid");
+      else np.delete("agencies_view");
+      return np;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // Bulk selection + advanced filter state. Retention/missed$ are applied
+  // client-side via the bulk RPC once resolved. Sales-volume and data-quality
+  // live on pulse_agencies (active_listings / total_sold_12m etc).
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [advFiltersOpen, setAdvFiltersOpen] = useState(false);
+  const [retentionBandFilter, setRetentionBandFilter] = useState("all");
+  const [missedThreshold, setMissedThreshold] = useState(0);
+  const [activityFilter, setActivityFilter] = useState("all"); // all | active | dormant
+  const [sizeBandFilter, setSizeBandFilter] = useState("all"); // all | small | mid | large  (agents)
+  const [savedViews, setSavedViews] = useState(() => readSavedViews("agencies"));
+  const [newViewName, setNewViewName] = useState("");
+
   /* Consume the deep-link params once so they don't re-seed on re-render.
      Fires exactly once on mount; after that the user owns the filter/sort
      state and the URL is clean (only `?tab=agencies` remains). */
@@ -1993,7 +2220,7 @@ export default function PulseAgencyIntel({
   /* ── Reset page on any filter/sort change (server-pagination refactor) ── */
   useEffect(() => {
     setAgencyPage(0);
-  }, [agencyFilter, agencyColFilter, regionFilter, search, agencySort.col, agencySort.dir, pageSize]);
+  }, [agencyFilter, agencyColFilter, regionFilter, search, agencySort.col, agencySort.dir, pageSize, activityFilter, sizeBandFilter, retentionBandFilter, missedThreshold]);
 
   /* ── Server-side query builder ──────────────────────────────────────── */
   const buildQuery = useCallback((selectCols, withCount) => {
@@ -2003,6 +2230,15 @@ export default function PulseAgencyIntel({
 
     if (agencyFilter === "in_crm") q = q.eq("is_in_crm", true);
     else if (agencyFilter === "not_in_crm") q = q.eq("is_in_crm", false);
+
+    // Activity — agencies with active listings vs none.
+    if (activityFilter === "active") q = q.gt("active_listings", 0);
+    else if (activityFilter === "dormant") q = q.or("active_listings.eq.0,active_listings.is.null");
+
+    // Size band (agent count)
+    if (sizeBandFilter === "small") q = q.gt("agent_count", 0).lt("agent_count", 5);
+    else if (sizeBandFilter === "mid") q = q.gte("agent_count", 5).lt("agent_count", 20);
+    else if (sizeBandFilter === "large") q = q.gte("agent_count", 20);
 
     const sc = (agencyColFilter || "").trim();
     if (sc) {
@@ -2032,16 +2268,16 @@ export default function PulseAgencyIntel({
     q = q.order(sortCol, { ascending: agencySort.dir === "asc", nullsFirst: false });
 
     return q;
-  }, [agencyFilter, agencyColFilter, search, agencySort, suburbsInRegion]);
+  }, [agencyFilter, agencyColFilter, search, agencySort, suburbsInRegion, activityFilter, sizeBandFilter]);
 
   /* ── Page fetch ─────────────────────────────────────────────────────── */
   const queryKey = useMemo(
     () => ["pulse-agencies-page", {
       agencyFilter, agencyColFilter, regionFilter, search,
       sortCol: agencySort.col, sortDir: agencySort.dir,
-      page: agencyPage, pageSize,
+      page: agencyPage, pageSize, activityFilter, sizeBandFilter,
     }],
-    [agencyFilter, agencyColFilter, regionFilter, search, agencySort, agencyPage, pageSize],
+    [agencyFilter, agencyColFilter, regionFilter, search, agencySort, agencyPage, pageSize, activityFilter, sizeBandFilter],
   );
 
   const { data: pageData, isLoading, isFetching } = useQuery({
@@ -2102,6 +2338,87 @@ export default function PulseAgencyIntel({
       );
     }
   }, [duplicateIndex]);
+
+  // Bulk retention lookup for the CURRENT PAGE — one RPC per render.
+  const visibleAgencyIds = useMemo(() => pageRows.map((a) => a.id).filter(Boolean), [pageRows]);
+  const { data: retentionMap, isFetching: retentionFetching } = useAgenciesRetentionBulk(visibleAgencyIds);
+
+  // Client-side narrow: retention band + missed $ threshold.
+  const renderRows = useMemo(() => {
+    const hasFilter = retentionBandFilter !== "all" || (Number(missedThreshold) || 0) > 0;
+    if (!hasFilter) return pageRows;
+    if (!retentionMap || retentionMap.size === 0) return pageRows;
+    return pageRows.filter((ag) => {
+      const r = retentionMap.get(String(ag.id));
+      const total = r?.total_listings || 0;
+      const pct = Number(r?.retention_rate_pct || 0);
+      const missed = Number(r?.missed_opportunity_value || 0);
+      if ((Number(missedThreshold) || 0) > 0 && missed < Number(missedThreshold)) return false;
+      if (retentionBandFilter !== "all") {
+        if (total === 0) return false;
+        if (retentionBand(pct) !== retentionBandFilter) return false;
+      }
+      return true;
+    });
+  }, [pageRows, retentionMap, retentionBandFilter, missedThreshold]);
+
+  // Bulk-select helpers.
+  const visibleIds = useMemo(() => renderRows.map((a) => a.id), [renderRows]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id));
+  const toggleSelectOne = useCallback((id, checked) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }, []);
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const id of visibleIds) next.delete(id);
+      } else {
+        for (const id of visibleIds) next.add(id);
+      }
+      return next;
+    });
+  }, [visibleIds, allVisibleSelected]);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+  const selectedCount = selectedIds.size;
+
+  const selectedAgenciesFromVisible = useMemo(
+    () => renderRows.filter((a) => selectedIds.has(a.id)),
+    [renderRows, selectedIds],
+  );
+
+  // Saved views.
+  const handleSaveView = () => {
+    const name = (newViewName || "").trim();
+    if (!name) { toast.error("Name your view first"); return; }
+    const payload = {
+      view,
+      agencyFilter, agencyColFilter, regionFilter, agencySort,
+      retentionBandFilter, missedThreshold, activityFilter, sizeBandFilter,
+    };
+    setSavedViews(addSavedView("agencies", name, payload));
+    setNewViewName("");
+    toast.success(`Saved view "${name}"`);
+  };
+  const handleLoadView = (payload) => {
+    if (!payload) return;
+    if (payload.view) setView(payload.view);
+    if (payload.agencyFilter != null) setAgencyFilter(payload.agencyFilter);
+    if (payload.agencyColFilter != null) setAgencyColFilter(payload.agencyColFilter);
+    if (payload.regionFilter != null) setRegionFilter(payload.regionFilter);
+    if (payload.agencySort) setAgencySort(payload.agencySort);
+    if (payload.retentionBandFilter != null) setRetentionBandFilter(payload.retentionBandFilter);
+    if (payload.missedThreshold != null) setMissedThreshold(payload.missedThreshold);
+    if (payload.activityFilter != null) setActivityFilter(payload.activityFilter);
+    if (payload.sizeBandFilter != null) setSizeBandFilter(payload.sizeBandFilter);
+    toast.success("View applied");
+  };
+  const handleDeleteView = (id) => setSavedViews(deleteSavedView("agencies", id));
 
   const totalCount = pageData?.count || 0;
   const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -2258,6 +2575,45 @@ export default function PulseAgencyIntel({
 
         {/* CSV export + count + auto-refresh */}
         <div className="ml-auto flex items-center gap-2">
+          <div className="inline-flex items-center rounded-md border border-border bg-background overflow-hidden" role="group" aria-label="View mode">
+            <button
+              type="button"
+              onClick={() => setView("table")}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 h-7 text-[11px] font-medium transition-colors",
+                view === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              )}
+              title="Table view"
+            >
+              <Table2 className="h-3 w-3" /> Table
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("grid")}
+              className={cn(
+                "inline-flex items-center gap-1 px-2 h-7 text-[11px] font-medium transition-colors",
+                view === "grid" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
+              )}
+              title="Grid view"
+            >
+              <LayoutGrid className="h-3 w-3" /> Grid
+            </button>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-xs gap-1"
+            onClick={() => setAdvFiltersOpen((p) => !p)}
+            title="Advanced filters"
+          >
+            <Sliders className="h-3 w-3" />
+            Filters
+            {(retentionBandFilter !== "all" || Number(missedThreshold) > 0 || activityFilter !== "all" || sizeBandFilter !== "all") && (
+              <span className="inline-flex items-center h-4 min-w-4 px-1 rounded-full bg-primary text-primary-foreground text-[9px] tabular-nums">
+                {[retentionBandFilter !== "all" ? 1 : 0, Number(missedThreshold) > 0 ? 1 : 0, activityFilter !== "all" ? 1 : 0, sizeBandFilter !== "all" ? 1 : 0].reduce((a, b) => a + b, 0)}
+              </span>
+            )}
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -2296,11 +2652,248 @@ export default function PulseAgencyIntel({
       </div>
 
       {/* ── Table card ── */}
+      {/* ── Advanced filter panel ── */}
+      {advFiltersOpen && (
+        <UICard className="rounded-xl border border-border p-3 space-y-3 bg-muted/20">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Sliders className="h-3.5 w-3.5 text-primary" />
+              Advanced filters
+            </div>
+            <button
+              type="button"
+              onClick={() => { setRetentionBandFilter("all"); setMissedThreshold(0); setActivityFilter("all"); setSizeBandFilter("all"); }}
+              className="text-[10px] text-primary hover:underline"
+            >
+              Reset advanced
+            </button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Retention band
+              <select value={retentionBandFilter} onChange={(e) => setRetentionBandFilter(e.target.value)}
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring">
+                <option value="all">All</option>
+                <option value="at_risk">At risk (&lt;25%)</option>
+                <option value="mid">Mid (25–75%)</option>
+                <option value="healthy">Healthy (≥75%)</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Missed $ ≥
+              <input type="number" min="0" step="1000" value={missedThreshold || ""}
+                onChange={(e) => setMissedThreshold(Number(e.target.value) || 0)} placeholder="0"
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 tabular-nums focus:outline-none focus:ring-1 focus:ring-ring" />
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Activity
+              <select value={activityFilter} onChange={(e) => setActivityFilter(e.target.value)}
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring">
+                <option value="all">All</option>
+                <option value="active">Active (has listings)</option>
+                <option value="dormant">Dormant</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              Agency size
+              <select value={sizeBandFilter} onChange={(e) => setSizeBandFilter(e.target.value)}
+                className="h-7 text-xs normal-case tracking-normal rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring">
+                <option value="all">All</option>
+                <option value="small">Small (1–4 agents)</option>
+                <option value="mid">Mid (5–19)</option>
+                <option value="large">Large (20+)</option>
+              </select>
+            </label>
+          </div>
+          <div className="pt-2 border-t border-border/60 space-y-2">
+            <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+              <Save className="h-3 w-3" /> Saved views
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="text" value={newViewName} onChange={(e) => setNewViewName(e.target.value)}
+                placeholder="My view name…"
+                className="h-7 flex-1 text-xs rounded-md border bg-background px-2 focus:outline-none focus:ring-1 focus:ring-ring" />
+              <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={handleSaveView}>
+                Save current
+              </Button>
+            </div>
+            {savedViews.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {savedViews.map((v) => (
+                  <span key={v.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-background pl-2 pr-1 py-0.5 text-[10px]">
+                    <button type="button" onClick={() => handleLoadView(v.payload)} className="hover:underline font-medium">
+                      {v.name}
+                    </button>
+                    <button type="button" onClick={() => handleDeleteView(v.id)} className="rounded-full p-0.5 hover:bg-muted text-muted-foreground" aria-label={`Delete view ${v.name}`}>
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </UICard>
+      )}
+
+      {/* ── Grid view ── */}
+      {view === "grid" && (
+        <div>
+          {isLoading && renderRows.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
+              Loading agencies…
+            </div>
+          ) : renderRows.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground">
+              <Building2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground/30" />
+              No agencies match your filters
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {renderRows.map((ag) => {
+                  const ret = retentionMap?.get(String(ag.id));
+                  const isSelected = selectedIds.has(ag.id);
+                  const handleClick = () => {
+                    if (onOpenEntity) onOpenEntity({ type: "agency", id: ag.id });
+                    else setSelectedAgency(ag);
+                  };
+                  const brandRgba = ag.brand_color_primary || null;
+                  return (
+                    <HoverCard key={ag.id} openDelay={400} closeDelay={120}>
+                      <HoverCardTrigger asChild>
+                        <UICard
+                          role="button"
+                          tabIndex={0}
+                          onClick={handleClick}
+                          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleClick(); } }}
+                          className={cn(
+                            "p-3 cursor-pointer hover:border-primary/40 transition-colors flex flex-col gap-2 relative",
+                            isSelected && "ring-2 ring-primary/40",
+                          )}
+                          style={brandRgba ? { borderLeft: `3px solid ${brandRgba}` } : undefined}
+                          aria-label={`Open ${ag.name || "agency"} details`}
+                        >
+                          <div className="absolute top-2 right-2 z-10" onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={isSelected}
+                              onCheckedChange={(v) => toggleSelectOne(ag.id, !!v)}
+                              aria-label={`Select ${ag.name || "agency"}`}
+                            />
+                          </div>
+                          <div className="flex items-start gap-3">
+                            <div className="h-12 w-12 rounded-full overflow-hidden bg-muted flex items-center justify-center shrink-0 border">
+                              {ag.logo_url ? (
+                                <img src={ag.logo_url} alt={ag.name} className="h-full w-full object-cover" />
+                              ) : (
+                                <Building2 className="h-5 w-5 text-muted-foreground/40" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold truncate pr-8">{ag.name || "—"}</p>
+                              {ag.suburb && (
+                                <p className="text-[11px] text-muted-foreground truncate flex items-center gap-1">
+                                  <MapPin className="h-3 w-3 shrink-0" />
+                                  {ag.suburb}{ag.state ? `, ${ag.state}` : ""}
+                                </p>
+                              )}
+                              <div className="flex items-center gap-1 flex-wrap mt-1">
+                                <CrmBadge inCrm={!!ag.is_in_crm} />
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <MissedOppChip value={ret?.missed_opportunity_value} loading={!ret && retentionFetching} />
+                            <RetentionChip pct={ret?.retention_rate_pct} total={ret?.total_listings} loading={!ret && retentionFetching} />
+                          </div>
+                          <div className="grid grid-cols-3 gap-2 text-[10px] text-muted-foreground pt-1 border-t border-border/60">
+                            <div className="text-center">
+                              <p className="text-sm font-bold tabular-nums text-foreground">{ag.live_agent_count || 0}</p>
+                              <p>Agents</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-sm font-bold tabular-nums text-foreground">{ag.active_listings || 0}</p>
+                              <p>Active</p>
+                            </div>
+                            <div className="text-center">
+                              <p className="text-sm font-bold tabular-nums text-foreground">{ag.total_sold_12m || 0}</p>
+                              <p>Sold 12m</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-end gap-1 pt-1" onClick={(e) => e.stopPropagation()}>
+                            <WatchButton type="agency" id={ag.id} size="sm" />
+                            <button type="button" onClick={handleClick}
+                              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors">
+                              <Eye className="h-3 w-3" /> Open
+                            </button>
+                          </div>
+                        </UICard>
+                      </HoverCardTrigger>
+                      <HoverCardContent align="start" className="w-72 p-3 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <div className="h-10 w-10 rounded-full overflow-hidden bg-muted flex items-center justify-center border shrink-0">
+                            {ag.logo_url ? <img src={ag.logo_url} alt="" className="h-full w-full object-cover" /> : <Building2 className="h-5 w-5 text-muted-foreground/40" />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold truncate">{ag.name}</p>
+                            {ag.suburb && <p className="text-[11px] text-muted-foreground truncate">{ag.suburb}{ag.state ? `, ${ag.state}` : ""}</p>}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div className="text-center rounded bg-muted/40 p-1.5">
+                            <p className="text-sm font-bold tabular-nums">{ag.live_agent_count || 0}</p>
+                            <p className="text-[9px] text-muted-foreground">Agents</p>
+                          </div>
+                          <div className="text-center rounded bg-muted/40 p-1.5">
+                            <p className="text-sm font-bold tabular-nums">{ag.active_listings || 0}</p>
+                            <p className="text-[9px] text-muted-foreground">Active</p>
+                          </div>
+                          <div className="text-center rounded bg-muted/40 p-1.5">
+                            <p className="text-sm font-bold tabular-nums">{fmtPrice(ag.avg_sold_price)}</p>
+                            <p className="text-[9px] text-muted-foreground">Avg sold</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <MissedOppChip value={ret?.missed_opportunity_value} loading={!ret && retentionFetching} />
+                          <RetentionChip pct={ret?.retention_rate_pct} total={ret?.total_listings} loading={!ret && retentionFetching} />
+                        </div>
+                      </HoverCardContent>
+                    </HoverCard>
+                  );
+                })}
+              </div>
+              {totalCount > 0 && (
+                <div className="flex items-center justify-between mt-3 text-xs text-muted-foreground">
+                  <span>Page {safePage + 1} of {pageCount}</span>
+                  <div className="flex items-center gap-1">
+                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage === 0} onClick={() => setAgencyPage((p) => Math.max(0, p - 1))}>
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage >= pageCount - 1} onClick={() => setAgencyPage((p) => Math.min(pageCount - 1, p + 1))}>
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {view === "table" && (
       <Card className="rounded-xl border shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b bg-muted/30">
+                {/* Select-all */}
+                <th className="py-2 pl-3 pr-1 w-8">
+                  <Checkbox
+                    checked={allVisibleSelected ? true : (someVisibleSelected ? "indeterminate" : false)}
+                    onCheckedChange={toggleSelectAllVisible}
+                    aria-label="Select all visible agencies"
+                  />
+                </th>
                 {/* Logo */}
                 <th className="pl-3 pr-2 py-2 w-10" />
                 {/* Name */}
@@ -2345,6 +2938,18 @@ export default function PulseAgencyIntel({
                     Rating
                   </ColHeader>
                 </th>
+                {/* Missed $ */}
+                <th className="px-2 py-2 text-right hidden md:table-cell" title="Missed opportunity over last 12 months">
+                  <span className="text-muted-foreground font-medium">Missed $</span>
+                </th>
+                {/* Retention */}
+                <th className="px-2 py-2 text-right hidden lg:table-cell" title="Retention rate over last 12 months">
+                  <span className="text-muted-foreground font-medium">Retention</span>
+                </th>
+                {/* Captured */}
+                <th className="px-2 py-2 text-right hidden xl:table-cell" title="Listings converted to FlexStudios projects (12m)">
+                  <span className="text-muted-foreground font-medium">Captured</span>
+                </th>
                 {/* Last synced */}
                 <th className="px-2 py-2 text-right hidden xl:table-cell">
                   <span className="text-muted-foreground font-medium">Synced</span>
@@ -2356,20 +2961,20 @@ export default function PulseAgencyIntel({
               </tr>
             </thead>
             <tbody>
-              {isLoading && pageRows.length === 0 ? (
+              {isLoading && renderRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={15}
                     className="text-center py-12 text-muted-foreground"
                   >
                     <Loader2 className="h-6 w-6 mx-auto mb-2 text-muted-foreground/40 animate-spin" />
                     <p className="text-sm">Loading agencies…</p>
                   </td>
                 </tr>
-              ) : pageRows.length === 0 ? (
+              ) : renderRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={11}
+                    colSpan={15}
                     className="text-center py-12 text-muted-foreground"
                   >
                     <Building2 className="h-8 w-8 mx-auto mb-2 text-muted-foreground/20" />
@@ -2377,7 +2982,7 @@ export default function PulseAgencyIntel({
                   </td>
                 </tr>
               ) : (
-                pageRows.map((ag, idx) => {
+                renderRows.map((ag, idx) => {
                   // B3: keyboard activation — wrap the click handler so Enter
                   // and Space on a focused row match the mouse behaviour.
                   const handleRowClick = () => {
@@ -2400,8 +3005,19 @@ export default function PulseAgencyIntel({
                       }
                     }}
                     aria-label={`Open ${ag.name || "agency"} details`}
-                    className="border-b last:border-b-0 hover:bg-muted/30 cursor-pointer transition-colors"
+                    className={cn(
+                      "border-b last:border-b-0 hover:bg-muted/30 cursor-pointer transition-colors",
+                      selectedIds.has(ag.id) && "bg-primary/5",
+                    )}
                   >
+                    {/* Row checkbox */}
+                    <td className="py-2 pl-3 pr-1" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedIds.has(ag.id)}
+                        onCheckedChange={(v) => toggleSelectOne(ag.id, !!v)}
+                        aria-label={`Select ${ag.name || "agency"}`}
+                      />
+                    </td>
                     {/* Logo — #32: rounded-full everywhere */}
                     <td className="pl-3 pr-2 py-2 w-10">
                       <div className="h-8 w-8 rounded-full overflow-hidden bg-muted flex items-center justify-center border">
@@ -2608,6 +3224,32 @@ export default function PulseAgencyIntel({
                         />
                       </span>
                     </td>
+                    {/* Missed $ */}
+                    <td className="px-2 py-2 text-right hidden md:table-cell">
+                      {(() => {
+                        const r = retentionMap?.get(String(ag.id));
+                        return <MissedOppChip value={r?.missed_opportunity_value} loading={!r && retentionFetching} />;
+                      })()}
+                    </td>
+                    {/* Retention */}
+                    <td className="px-2 py-2 text-right hidden lg:table-cell">
+                      {(() => {
+                        const r = retentionMap?.get(String(ag.id));
+                        return <RetentionChip pct={r?.retention_rate_pct} total={r?.total_listings} loading={!r && retentionFetching} />;
+                      })()}
+                    </td>
+                    {/* Captured */}
+                    <td className="px-2 py-2 text-right hidden xl:table-cell tabular-nums">
+                      {(() => {
+                        const r = retentionMap?.get(String(ag.id));
+                        const n = r?.captured || 0;
+                        return n > 0 ? (
+                          <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{n}</span>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        );
+                      })()}
+                    </td>
                     {/* Last synced */}
                     <td
                       className="px-2 py-2 text-right text-[10px] text-muted-foreground hidden xl:table-cell whitespace-nowrap"
@@ -2676,6 +3318,122 @@ export default function PulseAgencyIntel({
           </div>
         )}
       </Card>
+      )}
+
+      {/* ── Bulk action sticky bar ── */}
+      {selectedCount > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 rounded-full border border-border bg-background/95 backdrop-blur shadow-lg px-3 py-2">
+          <span className="text-xs font-medium text-foreground px-2">
+            {selectedCount} selected
+          </span>
+          <span className="h-4 w-px bg-border" />
+          <Button
+            size="sm"
+            variant="default"
+            className="h-7 text-xs gap-1"
+            onClick={async () => {
+              // Bulk create CRM agencies for any selected rows not already in CRM.
+              const toAdd = selectedAgenciesFromVisible.filter((a) => !a.is_in_crm);
+              if (toAdd.length === 0) { toast.info("All selected agencies are already in CRM"); return; }
+              let ok = 0, fail = 0;
+              for (const ag of toAdd) {
+                try {
+                  const newAg = await apiClient.entities.Agency.create({
+                    name: ag.name,
+                    phone: ag.phone || null,
+                    email: ag.email || null,
+                    website: ag.website || null,
+                    rea_agency_id: ag.rea_agency_id || null,
+                    source: "pulse",
+                    relationship_state: "Prospecting",
+                  });
+                  await apiClient.entities.PulseCrmMapping.create({
+                    entity_type: "agency",
+                    pulse_entity_id: ag.id,
+                    crm_entity_id: newAg.id,
+                    rea_id: ag.rea_agency_id,
+                    match_type: "manual",
+                    confidence: "confirmed",
+                  });
+                  await apiClient.entities.PulseAgency.update(ag.id, { is_in_crm: true });
+                  ok += 1;
+                } catch (err) {
+                  console.error("bulk agency add failed:", err);
+                  fail += 1;
+                }
+              }
+              await refetchEntityList("PulseAgency");
+              await refetchEntityList("Agency");
+              await refetchEntityList("PulseCrmMapping");
+              if (ok > 0) toast.success(`Added ${ok} agenc${ok !== 1 ? "ies" : "y"} to CRM${fail > 0 ? ` (${fail} failed)` : ""}`);
+              if (ok === 0 && fail > 0) toast.error(`All ${fail} adds failed`);
+              clearSelection();
+            }}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            Add to CRM
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            onClick={() => {
+              for (const a of selectedAgenciesFromVisible) toggleWatchlistId("agency", a.id);
+              toast.success(`Toggled watch on ${selectedAgenciesFromVisible.length} agenc${selectedAgenciesFromVisible.length !== 1 ? "ies" : "y"}`);
+            }}
+          >
+            <Bookmark className="h-3.5 w-3.5" />
+            Watchlist
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            onClick={async () => {
+              const reaIds = selectedAgenciesFromVisible.map((a) => a.rea_agency_id).filter(Boolean);
+              if (reaIds.length === 0) { toast.error("No rea_agency_ids on selected rows"); return; }
+              try {
+                const { error } = await apiClient._supabase.functions.invoke("pulseDetailEnrich", {
+                  body: { agency_rea_ids: reaIds, source: "pulse_agencies_bulk" },
+                });
+                if (error) throw error;
+                toast.success(`Queued enrichment for ${reaIds.length} agenc${reaIds.length !== 1 ? "ies" : "y"}' listings`);
+              } catch (err) {
+                toast.error(`Enrichment queue failed: ${err?.message || err}`);
+              }
+            }}
+          >
+            <Zap className="h-3.5 w-3.5" />
+            Enrich
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs gap-1"
+            onClick={() => {
+              const header = ["name","suburb","state","phone","email","website","live_agent_count","active_listings","total_sold_12m","is_in_crm","rea_agency_id"];
+              exportCsv(
+                `pulse_agencies_selected_${new Date().toISOString().slice(0, 10)}.csv`,
+                header,
+                selectedAgenciesFromVisible,
+                { bom: true },
+              );
+            }}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export CSV
+          </Button>
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="ml-1 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+            aria-label="Clear selection"
+            title="Clear selection"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* ── Agency Slideout (fallback path — when onOpenEntity is missing) ──
           B1: forward onOpenEntity so nested drill (e.g. clicking an agent in
