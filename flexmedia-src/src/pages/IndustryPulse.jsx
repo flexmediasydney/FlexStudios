@@ -306,14 +306,19 @@ export default function IndustryPulse() {
 
   // ── Tier 4: URL-driven source payload deep-link ────────────────────────
   // Timeline entries (and EntitySyncHistoryDialog rows) link with
-  // `?tab=sources&sync_log_id=<id>`. We surface this param to PulseDataSources
-  // as a prop; that component watches it and opens its DrillDialog. Once
-  // consumed the param is stripped so refreshes / back-nav don't re-open.
-  const syncLogIdParam = searchParams.get("sync_log_id");
+  // `?tab=sources&sync_log_id=<id>` (legacy) or the newer
+  // `?tab=sources&drill_log=<id>&drill_tab=<new|changes>`. Either form
+  // surfaces to PulseDataSources as a prop; that component watches the id
+  // and opens its DrillDialog preselected to the requested tab. Once
+  // consumed the params are stripped so refreshes / back-nav don't re-open.
+  const syncLogIdParam = searchParams.get("drill_log") || searchParams.get("sync_log_id");
+  const drillTabParam  = searchParams.get("drill_tab") || null;
   const clearSyncLogIdParam = useCallback(() => {
     setSearchParams((prev) => {
       const np = new URLSearchParams(prev);
       np.delete("sync_log_id");
+      np.delete("drill_log");
+      np.delete("drill_tab");
       return np;
     }, { replace: true });
   }, [setSearchParams]);
@@ -1051,6 +1056,7 @@ export default function IndustryPulse() {
             <PulseDataSources
               {...sharedProps}
               deepLinkSyncLogId={syncLogIdParam}
+              deepLinkDrillTab={drillTabParam}
               onConsumeDeepLinkSyncLogId={clearSyncLogIdParam}
             />
           </ErrorBoundary>

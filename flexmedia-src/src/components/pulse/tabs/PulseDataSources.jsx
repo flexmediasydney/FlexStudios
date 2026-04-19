@@ -27,8 +27,9 @@ import {
   ExternalLink, Repeat, Globe, Calendar, Coins, FileCode2,
   User, XCircle, Activity, Copy, Edit3, Save, AlertCircle,
   ChevronLeft, ChevronRight, Filter, Download, History, X,
-  Sparkles, Search,
+  Sparkles, Search, Building2, Zap,
 } from "lucide-react";
+import { configFor, CATEGORY_BORDER } from "@/components/pulse/timeline/timelineIcons";
 
 // ── Source UI metadata ────────────────────────────────────────────────────────
 // The authoritative config (actor_input, max_results_per_suburb, schedule_cron,
@@ -3319,7 +3320,25 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                     )}
                       title={syncRecordsCellTitle(log, "new")}
                     >
-                      {syncRecordsCellText(log, "records_new")}
+                      {/* Click-through: "X new" opens DrillDialog preselected
+                          to the "New" tab so the user immediately sees *what*
+                          was inserted. Clicking elsewhere on the row still
+                          opens the dialog at the default tab. */}
+                      {(log.records_new ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          className="underline decoration-dotted underline-offset-2 hover:text-emerald-800 dark:hover:text-emerald-300"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDrill?.(log, "new");
+                          }}
+                          title="Show which records were inserted on this run"
+                        >
+                          {syncRecordsCellText(log, "records_new")}
+                        </button>
+                      ) : (
+                        syncRecordsCellText(log, "records_new")
+                      )}
                     </td>
                     <td className={cn(
                       "py-2 pr-3 text-right tabular-nums",
@@ -3327,7 +3346,21 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                     )}
                       title={syncRecordsCellTitle(log, "updated")}
                     >
-                      {syncRecordsCellText(log, "records_updated")}
+                      {(log.records_updated ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDrill?.(log, "changes");
+                          }}
+                          title="Show which records changed on this run"
+                        >
+                          {syncRecordsCellText(log, "records_updated")}
+                        </button>
+                      ) : (
+                        syncRecordsCellText(log, "records_updated")
+                      )}
                     </td>
                     <td className="py-2 pr-3">
                       {log.batch_number != null && log.total_batches != null ? (
@@ -3619,7 +3652,196 @@ function DrillPayloadRow({ item, index }) {
   );
 }
 
-function DrillDialog({ log, onClose }) {
+// ── Drill-down "What changed?" tabs (new in migration 145) ──────────────────
+// `pulse_get_sync_log_records(sync_log_id)` returns:
+//   new_records[]   → entity rows inserted during this run (first_seen)
+//   change_events[] → price / status / contact / media changes during this run
+//   *_count_total   → un-capped counts (display lists are hard-capped at 2000)
+// Rendered by the "New (N)" and "Changes (N)" tabs inside DrillDialog. The
+// legacy raw-payload tabs (Agents / Listings / Enrichments / Raw JSON) are
+// retained but moved behind these so the user's primary question — *what
+// changed?* — lands first.
+const ENTITY_TAB_SLUG = { agent: "agents", agency: "agencies", listing: "listings" };
+const ENTITY_ICON = { agent: User, agency: Building2, listing: Home };
+
+function deepLinkForEntity(entityType, pulseEntityId) {
+  const slug = ENTITY_TAB_SLUG[entityType];
+  if (!slug || !pulseEntityId) return null;
+  return `/IndustryPulse?tab=${slug}&entity_type=${entityType}&pulse_id=${encodeURIComponent(pulseEntityId)}`;
+}
+
+function fmtRelative(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return "";
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
+}
+
+// Compact row for the "New (N)" tab. Prominent display_name → deep-link into
+// Industry Pulse; subtitle gives context; external_id lives in a tooltip.
+function NewRecordRow({ row }) {
+  const Icon = ENTITY_ICON[row.entity_type] || Database;
+  const href = deepLinkForEntity(row.entity_type, row.pulse_entity_id);
+  const body = (
+    <div className="flex items-start gap-2 px-3 py-2 w-full text-left">
+      <Icon className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 shrink-0 mt-0.5" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="font-medium text-[12px] truncate text-foreground">
+            {row.display_name || row.title || `New ${row.entity_type}`}
+          </span>
+          {row.external_id && (
+            <Badge
+              variant="outline"
+              className="text-[9px] px-1 py-0 tabular-nums font-mono text-muted-foreground"
+              title={`External ID: ${row.external_id}`}
+            >
+              {row.entity_type === "listing" ? "id" : row.entity_type === "agent" ? "agent" : "ag"} {String(row.external_id).slice(0, 10)}
+            </Badge>
+          )}
+        </div>
+        {row.subtitle && (
+          <p className="text-[10.5px] text-muted-foreground truncate mt-0.5">{row.subtitle}</p>
+        )}
+      </div>
+      <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums pt-0.5" title={row.created_at || ""}>
+        {fmtRelative(row.created_at)}
+      </span>
+      {href && <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />}
+    </div>
+  );
+  if (!href) {
+    return <div className="border-b last:border-0 bg-transparent">{body}</div>;
+  }
+  return (
+    <a
+      href={href}
+      className="block border-b last:border-0 hover:bg-muted/40 transition-colors"
+      title={row.pulse_entity_id ? `Open ${row.entity_type} in Industry Pulse` : undefined}
+    >
+      {body}
+    </a>
+  );
+}
+
+// Compact diff rendering for prev → new jsonb pairs. Strings/numbers/bools are
+// shown inline; objects/arrays collapse to JSON.
+function formatDiffValue(v) {
+  if (v == null) return <span className="text-muted-foreground/60 italic">null</span>;
+  if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") {
+    return <span className="font-mono text-[10.5px] break-all">{String(v)}</span>;
+  }
+  return <span className="font-mono text-[10px] break-all">{JSON.stringify(v)}</span>;
+}
+
+function ChangeEventRow({ row }) {
+  const [expanded, setExpanded] = useState(false);
+  const cfg = configFor(row.event_type);
+  const Icon = cfg.icon;
+  const borderCls = CATEGORY_BORDER[cfg.category] || CATEGORY_BORDER.other;
+  const href = deepLinkForEntity(row.entity_type, row.pulse_entity_id);
+  const hasDiff = row.previous_value != null || row.new_value != null;
+  const prevStr = row.previous_value != null ? JSON.stringify(row.previous_value) : "";
+  const newStr  = row.new_value     != null ? JSON.stringify(row.new_value)     : "";
+  const isComplexDiff = prevStr.length > 80 || newStr.length > 80 ||
+    (typeof row.previous_value === "object" && row.previous_value !== null) ||
+    (typeof row.new_value     === "object" && row.new_value     !== null);
+  return (
+    <div className={cn("border-b last:border-0 border-l-2", borderCls)}>
+      <div className="flex items-start gap-2 px-3 py-2">
+        <span className={cn("h-4 w-4 rounded-full flex items-center justify-center shrink-0 mt-0.5", cfg.color)}>
+          <Icon className="h-2.5 w-2.5 text-white" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-medium text-[12px] text-foreground">{row.title || cfg.label}</span>
+            <Badge variant="outline" className={cn("text-[9px] px-1 py-0", cfg.category_color)}>
+              {cfg.label}
+            </Badge>
+            {row.display_name && (
+              href ? (
+                <a
+                  href={href}
+                  className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline truncate max-w-[180px]"
+                  title={`Open ${row.entity_type} in Industry Pulse`}
+                >
+                  <span className="truncate">{row.display_name}</span>
+                  <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                </a>
+              ) : (
+                <span className="text-[10px] text-muted-foreground truncate max-w-[180px]">{row.display_name}</span>
+              )
+            )}
+          </div>
+          {row.description && (
+            <p className="text-[10.5px] text-muted-foreground mt-0.5 line-clamp-2">{row.description}</p>
+          )}
+          {hasDiff && (
+            <div className="mt-1.5">
+              {!isComplexDiff ? (
+                <div className="flex items-center gap-1.5 text-[10px] flex-wrap">
+                  {formatDiffValue(row.previous_value)}
+                  <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />
+                  {formatDiffValue(row.new_value)}
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+                    onClick={() => setExpanded((v) => !v)}
+                  >
+                    {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    {expanded ? "Hide diff" : "Show diff"}
+                  </button>
+                  {expanded && (
+                    <div className="mt-1 grid grid-cols-2 gap-2">
+                      <div>
+                        <p className="text-[9px] uppercase text-muted-foreground mb-0.5">Previous</p>
+                        <pre className="bg-muted/30 text-[10px] p-2 rounded whitespace-pre-wrap break-all overflow-x-auto">
+                          {row.previous_value == null ? "null" : JSON.stringify(row.previous_value, null, 2)}
+                        </pre>
+                      </div>
+                      <div>
+                        <p className="text-[9px] uppercase text-muted-foreground mb-0.5">New</p>
+                        <pre className="bg-muted/30 text-[10px] p-2 rounded whitespace-pre-wrap break-all overflow-x-auto">
+                          {row.new_value == null ? "null" : JSON.stringify(row.new_value, null, 2)}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums pt-0.5" title={row.created_at || ""}>
+          {fmtRelative(row.created_at)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function TruncationBanner({ shown, total }) {
+  if (total <= shown) return null;
+  return (
+    <div className="px-3 py-1.5 text-[10px] text-amber-700 dark:text-amber-400 bg-amber-50/60 dark:bg-amber-950/30 border-b border-amber-200/50 dark:border-amber-800/40 flex items-center gap-1.5">
+      <AlertCircle className="h-3 w-3 shrink-0" />
+      Showing {shown.toLocaleString()} of {total.toLocaleString()} — larger runs are capped for performance.
+    </div>
+  );
+}
+
+function DrillDialog({ log, onClose, defaultTab: defaultTabProp }) {
   const [agentsPage, setAgentsPage] = useState(0);
   const [listingsPage, setListingsPage] = useState(0);
   // ── Migration 095 ────────────────────────────────────────────────────
@@ -3647,6 +3869,36 @@ function DrillDialog({ log, onClose }) {
       });
     return () => { cancelled = true; };
   }, [log?.id]);
+
+  // ── Migration 145: fetch new_records + change_events via RPC ────────────
+  const [recordsData, setRecordsData] = useState(null); // { new_records, new_count_total, change_events, change_count_total, counts_by_category }
+  const [loadingRecords, setLoadingRecords] = useState(false);
+  const [recordsError, setRecordsError] = useState(null);
+  useEffect(() => {
+    if (!log?.id) return;
+    let cancelled = false;
+    setLoadingRecords(true);
+    setRecordsError(null);
+    api._supabase
+      .rpc("pulse_get_sync_log_records", { p_sync_log_id: log.id })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) { setRecordsError(error.message || String(error)); setRecordsData(null); return; }
+        setRecordsData(data || null);
+      })
+      .catch((err) => {
+        if (!cancelled) setRecordsError(err?.message || String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRecords(false);
+      });
+    return () => { cancelled = true; };
+  }, [log?.id]);
+
+  const newRecords        = useMemo(() => Array.isArray(recordsData?.new_records) ? recordsData.new_records : [], [recordsData]);
+  const changeEvents      = useMemo(() => Array.isArray(recordsData?.change_events) ? recordsData.change_events : [], [recordsData]);
+  const newCountTotal     = recordsData?.new_count_total ?? 0;
+  const changeCountTotal  = recordsData?.change_count_total ?? 0;
 
   const payload = log?.raw_payload ?? sidePayload?.raw_payload ?? {};
   const agents   = useMemo(() => Array.isArray(payload?.rea_agents) ? payload.rea_agents : Array.isArray(payload?.agents) ? payload.agents : [], [payload]);
@@ -3697,28 +3949,106 @@ function DrillDialog({ log, onClose }) {
     });
   }, [payload]);
 
+  const hasNew     = newCountTotal > 0;
+  const hasChanges = changeCountTotal > 0;
   const hasAgents   = agents.length > 0;
   const hasListings = listings.length > 0;
   const hasEnrichments = enrichments.length > 0;
 
-  const defaultTab = hasAgents ? "agents" : hasListings ? "listings" : hasEnrichments ? "enrichments" : "raw";
+  // Default-tab selection: caller preference > "new" > "changes" > raw payload
+  // tabs > raw JSON. Recompute only when the underlying dimensions change so
+  // switching tabs doesn't snap the user back.
+  const computedDefaultTab = useMemo(() => {
+    if (defaultTabProp && [
+      "new", "changes", "agents", "listings", "enrichments", "raw",
+    ].includes(defaultTabProp)) {
+      // Only honour explicit request if the tab has content
+      if (defaultTabProp === "new"        && hasNew)        return "new";
+      if (defaultTabProp === "changes"    && hasChanges)    return "changes";
+      if (defaultTabProp === "agents"     && hasAgents)     return "agents";
+      if (defaultTabProp === "listings"   && hasListings)   return "listings";
+      if (defaultTabProp === "enrichments"&& hasEnrichments)return "enrichments";
+      if (defaultTabProp === "raw")                         return "raw";
+    }
+    if (hasNew)          return "new";
+    if (hasChanges)      return "changes";
+    if (hasAgents)       return "agents";
+    if (hasListings)     return "listings";
+    if (hasEnrichments)  return "enrichments";
+    return "raw";
+  }, [defaultTabProp, hasNew, hasChanges, hasAgents, hasListings, hasEnrichments]);
+  // Use a keyed Tabs instance so the default re-evaluates when records arrive
+  // (first render: recordsData null → "raw"; RPC returns → re-key to "new").
+  const tabsKey = `${log?.id || "x"}-${computedDefaultTab}`;
 
   return (
     <Dialog open={!!log} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col overflow-hidden">
+      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="text-sm">
-            Raw Payload — {log?.source_label || log?.source_id || "Sync Log"}
+            Run drill-down — {log?.source_label || log?.source_id || "Sync Log"}
             <span className="text-muted-foreground font-normal ml-2 text-xs">{fmtTs(log?.started_at)}</span>
           </DialogTitle>
+          {(hasNew || hasChanges) && (
+            <p className="text-[11px] text-muted-foreground">
+              {newCountTotal.toLocaleString()} new · {changeCountTotal.toLocaleString()} change event{changeCountTotal === 1 ? "" : "s"}
+              {recordsData?.counts_by_category && Object.keys(recordsData.counts_by_category).length > 0 && (
+                <span className="ml-2">
+                  ({Object.entries(recordsData.counts_by_category).map(([k, v]) => `${k}: ${v}`).join(" · ")})
+                </span>
+              )}
+            </p>
+          )}
         </DialogHeader>
-        <Tabs defaultValue={defaultTab} className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="shrink-0 h-8 text-xs">
-            {hasAgents   && <TabsTrigger value="agents"   className="text-xs h-7">{`Agents (${agents.length})`}</TabsTrigger>}
-            {hasListings && <TabsTrigger value="listings" className="text-xs h-7">{`Listings (${listings.length})`}</TabsTrigger>}
-            {hasEnrichments && <TabsTrigger value="enrichments" className="text-xs h-7">{`Enrichments (${enrichments.length})`}</TabsTrigger>}
+        <Tabs key={tabsKey} defaultValue={computedDefaultTab} className="flex-1 flex flex-col overflow-hidden">
+          <TabsList className="shrink-0 h-8 text-xs flex-wrap gap-1">
+            <TabsTrigger value="new"      className="text-xs h-7">{`New (${newCountTotal.toLocaleString()})`}</TabsTrigger>
+            <TabsTrigger value="changes"  className="text-xs h-7">{`Changes (${changeCountTotal.toLocaleString()})`}</TabsTrigger>
+            {hasAgents      && <TabsTrigger value="agents"      className="text-xs h-7">{`Payload: Agents (${agents.length})`}</TabsTrigger>}
+            {hasListings    && <TabsTrigger value="listings"    className="text-xs h-7">{`Payload: Listings (${listings.length})`}</TabsTrigger>}
+            {hasEnrichments && <TabsTrigger value="enrichments" className="text-xs h-7">{`Payload: Enrichments (${enrichments.length})`}</TabsTrigger>}
             <TabsTrigger value="raw" className="text-xs h-7">Raw JSON</TabsTrigger>
           </TabsList>
+
+          {/* ── Tab: New (first_seen events joined to entity) ──────────── */}
+          <TabsContent value="new" className="flex-1 overflow-y-auto mt-2 min-h-0">
+            {loadingRecords ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
+            ) : recordsError ? (
+              <div className="px-3 py-6 text-xs text-red-600 dark:text-red-400">Failed to load: {recordsError}</div>
+            ) : newRecords.length === 0 ? (
+              <div className="px-3 py-10 text-center text-xs text-muted-foreground">
+                No new records detected in this run.
+              </div>
+            ) : (
+              <div className="border rounded-lg overflow-hidden">
+                <TruncationBanner shown={newRecords.length} total={newCountTotal} />
+                {newRecords.map((r) => (
+                  <NewRecordRow key={r.timeline_id} row={r} />
+                ))}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* ── Tab: Changes (all non-first_seen events) ───────────────── */}
+          <TabsContent value="changes" className="flex-1 overflow-y-auto mt-2 min-h-0">
+            {loadingRecords ? (
+              <div className="flex justify-center py-8"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>
+            ) : recordsError ? (
+              <div className="px-3 py-6 text-xs text-red-600 dark:text-red-400">Failed to load: {recordsError}</div>
+            ) : changeEvents.length === 0 ? (
+              <div className="px-3 py-10 text-center text-xs text-muted-foreground">
+                No changes emitted during this run.
+              </div>
+            ) : (
+              <div className="border rounded-lg overflow-hidden">
+                <TruncationBanner shown={changeEvents.length} total={changeCountTotal} />
+                {changeEvents.map((r) => (
+                  <ChangeEventRow key={r.timeline_id} row={r} />
+                ))}
+              </div>
+            )}
+          </TabsContent>
 
           {hasAgents && (
             <TabsContent value="agents" className="flex-1 overflow-y-auto mt-2">
@@ -3885,14 +4215,26 @@ export default function PulseDataSources({
   pulseTimeline = [],
   stats = {},
   user,
-  // Tier 4: when IndustryPulse sees `?sync_log_id=X` on the sources tab, it
-  // passes the id down here. We open DrillDialog for that log and call
-  // onConsumeDeepLinkSyncLogId to strip the param so back-nav doesn't re-open.
+  // Tier 4: when IndustryPulse sees `?sync_log_id=X` (or the newer
+  // `?drill_log=X&drill_tab=new`) on the sources tab, it passes the id + tab
+  // down here. We open DrillDialog for that log preselected to the requested
+  // tab, then call onConsumeDeepLinkSyncLogId so refresh/back-nav doesn't
+  // re-open.
   deepLinkSyncLogId = null,
+  deepLinkDrillTab = null,
   onConsumeDeepLinkSyncLogId,
 }) {
   const [runningSources, setRunningSources] = useState(new Set());
   const [drillLog, setDrillLog] = useState(null);
+  // Preselected tab for DrillDialog. Set by "X new" / "X updated" click-throughs
+  // in SyncHistory and by the ?drill_tab=new deep-link param. Reset on close.
+  const [drillDefaultTab, setDrillDefaultTab] = useState(null);
+  // Wrapper: accept either (log) or (log, tab) from any onDrill consumer.
+  // If the 2-arg signature is used, stash the tab preference before opening.
+  const openDrill = useCallback((log, tab) => {
+    setDrillDefaultTab(tab || null);
+    setDrillLog(log || null);
+  }, []);
   const [scheduleSource, setScheduleSource] = useState(null);
 
   // Aggregate in-flight state (polled every 20s). Used for Run All button,
@@ -3932,7 +4274,7 @@ export default function PulseDataSources({
   // pulse_sync_logs and heavy payload from the side-table in parallel, then
   // merge into the single `log` object the dialog component expects.
   const handleDrillDispatch = useCallback(
-    async (syncLogId) => {
+    async (syncLogId, tab) => {
       if (!syncLogId) return;
       try {
         const [header, payloadRes] = await Promise.all([
@@ -3949,18 +4291,18 @@ export default function PulseDataSources({
         ]);
         if (!header) return;
         const payload = payloadRes?.data || {};
-        setDrillLog({
+        openDrill({
           ...header,
           raw_payload: payload.raw_payload ?? header.raw_payload ?? null,
           result_summary: payload.result_summary ?? header.result_summary ?? null,
           input_config: payload.input_config ?? header.input_config ?? null,
           records_detail: payload.records_detail ?? header.records_detail ?? null,
-        });
+        }, tab);
       } catch (err) {
         toast.error(`Could not load payload: ${err.message}`);
       }
     },
-    [syncLogs]
+    [syncLogs, openDrill]
   );
 
   // Tier 4 deep-link: when IndustryPulse passes a sync_log_id via URL, open
@@ -3976,9 +4318,9 @@ export default function PulseDataSources({
     }
     if (lastConsumedDeepLinkRef.current === deepLinkSyncLogId) return;
     lastConsumedDeepLinkRef.current = deepLinkSyncLogId;
-    handleDrillDispatch(deepLinkSyncLogId);
+    handleDrillDispatch(deepLinkSyncLogId, deepLinkDrillTab);
     onConsumeDeepLinkSyncLogId?.();
-  }, [deepLinkSyncLogId, handleDrillDispatch, onConsumeDeepLinkSyncLogId]);
+  }, [deepLinkSyncLogId, deepLinkDrillTab, handleDrillDispatch, onConsumeDeepLinkSyncLogId]);
 
   // Last log per source
   const lastLogBySource = useMemo(() => {
@@ -4347,7 +4689,7 @@ export default function PulseDataSources({
               isAdmin={isAdmin}
               isRunning={runningSources.has(config.source_id)}
               onRun={runSource}
-              onOpenPayload={setDrillLog}
+              onOpenPayload={openDrill}
               onOpenSchedule={setScheduleSource}
               onEdit={setEditConfig}
               onDrillDispatch={handleDrillDispatch}
@@ -4377,14 +4719,18 @@ export default function PulseDataSources({
       {/* ── Sync history ── */}
       <SyncHistory
         sourceConfigs={visibleSources}
-        onDrill={setDrillLog}
+        onDrill={openDrill}
         filterSourceId={historyFilterSourceId}
         onChangeFilter={setHistoryFilterSourceId}
       />
 
       {/* ── Dialogs ── */}
       {drillLog && (
-        <DrillDialog log={drillLog} onClose={() => setDrillLog(null)} />
+        <DrillDialog
+          log={drillLog}
+          defaultTab={drillDefaultTab}
+          onClose={() => { setDrillLog(null); setDrillDefaultTab(null); }}
+        />
       )}
       {scheduleSource && (
         <ScheduleDialog source={scheduleSource} onClose={() => setScheduleSource(null)} />
