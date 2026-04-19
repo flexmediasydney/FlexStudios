@@ -285,12 +285,42 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
   }
 
   const runData = await resp.json();
-  const status = runData?.data?.status;
+  let status = runData?.data?.status;
   const runId = runData?.data?.id;
   const datasetId = runData?.data?.defaultDatasetId;
-  const stats = runData?.data?.stats;
+  let stats = runData?.data?.stats;
 
-  if (status !== 'SUCCEEDED') {
+  // B40 fix (2026-04-19): Apify returns READY/RUNNING when the actor hasn't
+  // finished within our waitForFinish window. Before this, we hard-failed and
+  // lost 20–30% of runs even though the actor usually completed moments later
+  // and had items waiting in the dataset. New behaviour:
+  //   1. On READY/RUNNING, poll the run up to 3 more times (8s apart) —
+  //      cheap, still inside our edge-function budget.
+  //   2. If it eventually SUCCEEDS, proceed normally.
+  //   3. If it still isn't done, try fetching the dataset anyway — the actor
+  //      writes items incrementally, so partial results are common and useful.
+  //      We'll mark ok=true with status='PARTIAL' and let the caller decide.
+  //   4. Only truly error states (ABORTED/FAILED/TIMED-OUT) get ok=false.
+  if ((status === 'READY' || status === 'RUNNING') && runId) {
+    for (let attempt = 1; attempt <= 3 && (status === 'READY' || status === 'RUNNING'); attempt++) {
+      await new Promise(r => setTimeout(r, 8_000));
+      try {
+        const pollResp = await fetch(`${APIFY_BASE}/actor-runs/${runId}?clean=1`, {
+          headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
+          signal: AbortSignal.timeout(6_000),
+        });
+        if (pollResp.ok) {
+          const pollData = await pollResp.json();
+          status = pollData?.data?.status ?? status;
+          stats = pollData?.data?.stats ?? stats;
+        }
+      } catch { /* swallow; try next attempt */ }
+    }
+  }
+
+  const terminalError = status === 'ABORTED' || status === 'FAILED' || status === 'TIMED-OUT';
+
+  if (terminalError) {
     return { ok: false, status, runId, datasetId, stats, items: [], input, error: `Apify status=${status}` };
   }
 
@@ -298,7 +328,23 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
     headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` },
   });
   const items = itemsResp.ok ? await itemsResp.json() : [];
-  return { ok: true, status, runId, datasetId, stats, items: Array.isArray(items) ? items : [], input };
+  // If actor still isn't SUCCEEDED after polling, flag as PARTIAL — caller
+  // can decide whether to retry later. Items we did get are still worth
+  // ingesting (address → property_key is the key for matching + fresh media
+  // for partially-enriched listings is always better than nothing).
+  const effectiveStatus = status === 'SUCCEEDED'
+    ? status
+    : (Array.isArray(items) && items.length > 0 ? 'PARTIAL' : status);
+  return {
+    ok: true,
+    status: effectiveStatus,
+    runId,
+    datasetId,
+    stats,
+    items: Array.isArray(items) ? items : [],
+    input,
+    ...(effectiveStatus === 'PARTIAL' ? { partial: true, warning: `actor still ${status} after polling; accepted ${items?.length ?? 0} items` } : {}),
+  };
 }
 
 // Circuit breaker helpers now come from _shared/observability.ts.

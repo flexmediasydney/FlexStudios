@@ -331,6 +331,7 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsDataConsistency") && { name: "Data Consistency", href: "SettingsDataConsistency", icon: ShieldCheck },
           can("SettingsLegacyPackageMapping") && { name: "Legacy Package Mapping", href: "SettingsLegacyPackageMapping" },
           can("SettingsLegacyImport") && { name: "Legacy Import", href: "SettingsLegacyImport", icon: Upload },
+          can("SettingsLegacyCrmReconciliation") && { name: "Legacy CRM Reconciliation", href: "SettingsLegacyCrmReconciliation" },
           can("EdgeFunctionHealth") && { name: "Edge Function Health", href: "EdgeFunctionHealth", icon: Gauge },
           can("EdgeFunctionAuditLog") && { name: "Edge Function Audit Log", href: "EdgeFunctionAuditLog", icon: ClipboardList },
           can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration" },

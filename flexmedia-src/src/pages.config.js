@@ -115,6 +115,7 @@ const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
 const SettingsLegacyImport = React.lazy(() => import('./pages/SettingsLegacyImport'));
+const SettingsLegacyCrmReconciliation = React.lazy(() => import('./pages/SettingsLegacyCrmReconciliation'));
 const SettingsTonomoWebhooks = React.lazy(() => import('./pages/SettingsTonomoWebhooks'));
 const AIAuditLog = React.lazy(() => import('./pages/AIAuditLog'));
 const TeamDetails = React.lazy(() => import('./pages/TeamDetails'));
@@ -176,6 +177,7 @@ export const PAGES = {
     "SettingsDataConsistency": SettingsDataConsistency,
     "SettingsLegacyPackageMapping": SettingsLegacyPackageMapping,
     "SettingsLegacyImport": SettingsLegacyImport,
+    "SettingsLegacyCrmReconciliation": SettingsLegacyCrmReconciliation,
     "SettingsIntegrations": SettingsIntegrations,
     "SettingsNotifications": SettingsNotifications,
     "SettingsOrganisation": SettingsOrganisation,
