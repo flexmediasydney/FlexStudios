@@ -33,7 +33,10 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import AttachmentLightbox from "@/components/common/AttachmentLightbox";
-import PropertyGallery from "@/components/property/PropertyGallery";
+// PropertyGallery removed 2026-04-19 — the Media subtab below already renders
+// the full gallery with lightbox, so the top-of-page thumbnail grid was
+// redundant. Component file retained under components/property/ in case we
+// want to re-introduce it as a tab header later.
 import PropertyTimelineEventDrawer from "@/components/property/PropertyTimelineEventDrawer";
 import { toast } from "sonner";
 import {
@@ -571,11 +574,6 @@ export default function PropertyDetails() {
               />
             </ErrorBoundary>
 
-            {/* ── GALLERY — full thumbnail grid above the tab rail ── */}
-            <ErrorBoundary compact fallbackLabel="Gallery">
-              <PropertyGallery listings={listings} />
-            </ErrorBoundary>
-
             {/* ── TABS ── */}
             <div ref={tabsRef}>
               <Tabs value={tab} onValueChange={setTab}>
@@ -989,10 +987,15 @@ function PropertyHero({ property, listings, currentListing, currentAgent, curren
             )}
           >
             {heroImage ? (
+              // 2026-04-19 (user feedback): switched from object-cover +
+              // group-hover:scale-[1.03] to object-contain. User explicitly
+              // requested the hero render as the full image (no crop / zoom).
+              // A muted backdrop fills the letterbox area when aspect ratios
+              // differ from the 40vh container.
               <img
                 src={heroImage}
                 alt={property?.display_address || ""}
-                className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.03]"
+                className="w-full h-full object-contain bg-muted/40 transition-opacity duration-300 group-hover:opacity-95"
                 onError={(e) => {
                   e.currentTarget.style.display = "none";
                   e.currentTarget.parentElement.classList.add("flex", "items-center", "justify-center");
@@ -2185,10 +2188,14 @@ function MediaTab({ listings }) {
   const [visibleCount, setVisibleCount] = useState(40);
 
   // Aggregate photos / floorplans / video across all listings
-  const { allPhotos, allFloorplans, allVideos } = useMemo(() => {
+  // 2026-04-19: added per-listing diagnostic for the "no visuals despite
+  // enrichment" case. Each listing's parse result is captured alongside the
+  // aggregate so the empty state can explain WHY nothing is rendering.
+  const { allPhotos, allFloorplans, allVideos, diag } = useMemo(() => {
     const photos = [];
     const fps = [];
     const vids = [];
+    const diagnostics = [];
     for (const l of listings) {
       const media = parseMediaItems(l);
       const listPhotos = media.photos.length > 0
@@ -2210,18 +2217,57 @@ function MediaTab({ listings }) {
       if (media.video) {
         vids.push({ ...media.video, _agency: l.agency_name, _date: l.listed_date });
       }
+      diagnostics.push({
+        listing_type: l.listing_type,
+        listed_date: l.listed_date,
+        source_listing_id: l.source_listing_id,
+        has_hero: !!l.hero_image,
+        has_images: Array.isArray(l.images) && l.images.length > 0,
+        images_count: Array.isArray(l.images) ? l.images.length : 0,
+        has_media_items: Array.isArray(l.media_items) && l.media_items.length > 0,
+        media_items_count: Array.isArray(l.media_items) ? l.media_items.length : 0,
+        parsed_photos: media.photos.length,
+        parsed_floorplans: media.floorplans.length,
+        parsed_video: !!media.video,
+        enriched_at: l.detail_enriched_at,
+      });
     }
-    return { allPhotos: photos, allFloorplans: fps, allVideos: vids };
+    return { allPhotos: photos, allFloorplans: fps, allVideos: vids, diag: diagnostics };
   }, [listings]);
 
   const visiblePhotos = allPhotos.slice(0, visibleCount);
 
   if (allPhotos.length === 0 && allFloorplans.length === 0 && allVideos.length === 0) {
+    // Diagnostic-rich empty state — shows exactly what we tried and why
+    // nothing rendered. Lets the user (and us) tell "not-yet-enriched" apart
+    // from "data is there but the render failed".
+    const totalMediaItems = diag.reduce((s, d) => s + d.media_items_count, 0);
+    const totalImages = diag.reduce((s, d) => s + d.images_count, 0);
+    const anyEnriched = diag.some(d => d.enriched_at);
     return (
       <Card className="rounded-xl">
-        <CardContent className="py-10 text-center">
-          <Images className="h-10 w-10 mx-auto mb-2 opacity-30 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">No media yet for this property.</p>
+        <CardContent className="py-8">
+          <div className="text-center">
+            <Images className="h-10 w-10 mx-auto mb-2 opacity-30 text-muted-foreground" />
+            <p className="text-sm text-muted-foreground">
+              {listings.length === 0
+                ? "No listings on record for this property yet."
+                : !anyEnriched
+                ? "No media yet — detail enrichment hasn't reached this property (runs every 5 min, ~8 day backfill window)."
+                : totalMediaItems > 0 || totalImages > 0
+                ? "Media items exist in the database but nothing rendered. Likely a URL load failure — check the browser network tab."
+                : "No media yet for this property."}
+            </p>
+          </div>
+          {/* Collapsed debug for dev / support */}
+          {listings.length > 0 && (
+            <details className="mt-4 text-[10px] text-muted-foreground">
+              <summary className="cursor-pointer">Diagnostic ({listings.length} listing{listings.length !== 1 ? 's' : ''} checked)</summary>
+              <pre className="mt-2 bg-muted/40 rounded p-2 overflow-x-auto">
+                {JSON.stringify(diag, null, 2)}
+              </pre>
+            </details>
+          )}
         </CardContent>
       </Card>
     );
