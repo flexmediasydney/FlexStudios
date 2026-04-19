@@ -4,7 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useSmartEntityData } from '@/components/hooks/useSmartEntityData';
 import { useEntityList, refetchEntityList, updateEntityInCache } from '@/components/hooks/useEntityData';
 import { api, supabase } from '@/api/supabaseClient';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import SharedDashboard from '@/components/analytics/SharedDashboard';
 import { createPageUrl } from '@/utils';
 import { fmtDate, fmtTimestampCustom, fixTimestamp } from '@/components/utils/dateUtils';
@@ -30,6 +30,7 @@ import ContactFiles from '@/components/contacts/ContactFiles';
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
+import AgentMarketShareSection from '@/components/marketshare/AgentMarketShareSection';
 import NurturingSequences from '@/components/nurturing/NurturingSequences';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
@@ -645,6 +646,28 @@ export default function PersonDetails() {
   }, []);
 
   const { data: agent, loading: agentLoading, error: agentError } = useSmartEntityData('Agent', agentId);
+
+  // ── Market Share linkage: resolve REA agent ID + Pulse agent UUID ─────────
+  // The CRM Agent entity has no direct rea_agent_id column — the link lives in
+  // pulse_crm_mappings (entity_type='agent', crm_entity_id=agent.id). From that
+  // row we pull `rea_id` (used by the market-share RPCs) and `pulse_entity_id`
+  // (the pulse_agents UUID for CTAs back into Industry Pulse).
+  const { data: pulseAgentLink } = useQuery({
+    queryKey: ['person_pulse_mapping', agentId],
+    queryFn: async () => {
+      if (!agentId) return null;
+      const { data, error } = await supabase
+        .from('pulse_crm_mappings')
+        .select('rea_id, pulse_entity_id')
+        .eq('entity_type', 'agent')
+        .eq('crm_entity_id', agentId)
+        .maybeSingle();
+      if (error) return null;
+      return data || null;
+    },
+    enabled: !!agentId,
+    staleTime: 5 * 60_000,
+  });
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -1391,7 +1414,23 @@ export default function PersonDetails() {
             )}
             {activeTab === 'intelligence' && (
               <div className="h-full overflow-y-auto">
-                <div className="p-4 pb-6">
+                <div className="p-4 pb-6 space-y-6">
+                  {/* Market Share + Retention — only rendered when this person
+                      is linked to a real-estate Pulse agent (via pulse_crm_mappings). */}
+                  {pulseAgentLink?.rea_id && (
+                    <div>
+                      <div className="mb-2 flex items-center gap-2">
+                        <h2 className="text-sm font-semibold">Market Share &amp; Retention</h2>
+                        <span className="text-[11px] text-muted-foreground">
+                          Missed-opportunity intelligence from the Industry Pulse engine
+                        </span>
+                      </div>
+                      <AgentMarketShareSection
+                        agentReaId={pulseAgentLink.rea_id}
+                        agentPulseId={pulseAgentLink.pulse_entity_id}
+                      />
+                    </div>
+                  )}
                   <PulseIntelligencePanel entityType="agent" crmEntityId={agentId} crmEntity={agent} />
                 </div>
               </div>
