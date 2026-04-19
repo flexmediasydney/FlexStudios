@@ -604,11 +604,16 @@ serveWithAudit('calculateDashboardStats', async (req) => {
 
     console.log('Loading data...');
 
+    // IMPORTANT: use *All() variants for tables that can exceed the 25k default
+    // cap (projects, tasks, time logs). Revisions/agencies/users/roles are
+    // bounded in practice and fit well within the default cap, so the regular
+    // list/filter with implicit 25k cap is fine there. Underlying helper now
+    // paginates via .range() in 1000-row chunks — no silent truncation.
     const [projects, tasks, completedTimeLogs, activeTimeLogs, users, revisions, agencies, employeeRoles] = await Promise.all([
-      entities.Project.list('-created_at'),
-      entities.ProjectTask.filter({ is_deleted: false }),
-      entities.TaskTimeLog.filter({ status: 'completed' }),
-      entities.TaskTimeLog.filter({ is_active: true }),
+      entities.Project.listAll('-created_at'),
+      entities.ProjectTask.filterAll({ is_deleted: false }),
+      entities.TaskTimeLog.filterAll({ status: 'completed' }),
+      entities.TaskTimeLog.filterAll({ is_active: true }),
       entities.User.list(),
       entities.ProjectRevision.list(),
       entities.Agency.list(),

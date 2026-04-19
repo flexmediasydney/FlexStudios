@@ -43,7 +43,15 @@ const singleListeners = new Map(); // "Entity:id" → Set<fn>
 const subscriptions   = new Map(); // entityName → unsubscribeFn
 
 const CACHE_TTL  = 5 * 60 * 1000; // 5 minutes
-const LIST_LIMIT = 1000;           // default: fetch up to 1000; limit applied client-side
+// Default list cap bumped 1000 → 10000 (2026-04-19). The old 1000 default was
+// silently capping consumers like `useEntityList("Agency")` that pass no
+// explicit limit. 10000 is generous enough to cover every medium table we have
+// today (agencies/agents/users/teams/sources etc.) without blowing memory.
+// Large tables that regularly exceed 10k get explicit ENTITY_LIST_LIMITS
+// entries below. Consumers should still pass an explicit limit when they know
+// the shape — the dev-mode warn-on-exact-cap below flags any hook that hits
+// the default exactly (strong truncation signal).
+const LIST_LIMIT = 10000;
 // Large tables need higher fetch limits so per-page client-side slices don't silently drop rows.
 //
 // Pulse intelligence data can grow into the tens of thousands once the cron
@@ -51,16 +59,18 @@ const LIST_LIMIT = 1000;           // default: fetch up to 1000; limit applied c
 // (PulseListings, PulseAgentIntel, PulseAgencyIntel) use server-side pagination
 // (range + count:exact) so the TABLE itself doesn't rely on this cap. The cap
 // here only governs the shared cache that the parent Pulse page + cross-tab
-// slideouts + stat cards consume. 25k is generous headroom (~4x today's size)
-// while keeping memory reasonable (~75MB for 25k listings × 3KB each). Once
-// we cross ~50k and stat cards become the bottleneck, the parent page should
-// migrate to `count:exact, head:true` aggregate queries instead of pulling
-// the full list into memory.
+// slideouts + stat cards consume. PulseTimeline bumped 10k → 50k (2026-04-19)
+// because prod already has ~19k rows and the lower cap was silently dropping
+// ~9k events from every stat card / cross-tab slideout that reads this cache.
+// Memory still reasonable: 50k × ~1KB per timeline row = ~50MB worst case.
+// Once we cross ~100k and stat cards become the bottleneck, the parent page
+// should migrate to `count:exact, head:true` aggregate queries instead of
+// pulling the full list into memory.
 const ENTITY_LIST_LIMITS = {
   PulseListing: 25000,
   PulseAgent: 25000,
   PulseAgency: 10000,
-  PulseTimeline: 10000,
+  PulseTimeline: 50000,
   // ProjectTask can grow fast: ~17 tasks per project × hundreds of projects + revisions
   ProjectTask: 5000,
   TaskTimeLog: 5000,
@@ -282,8 +292,9 @@ function fetchEntityList(entityName) {
     return inFlight.get(entityName);
   }
 
+  const appliedLimit = ENTITY_LIST_LIMITS[entityName] || LIST_LIMIT;
   const promise = globalThrottler
-    .execute(() => api.entities[entityName].list(null, ENTITY_LIST_LIMITS[entityName] || LIST_LIMIT))
+    .execute(() => api.entities[entityName].list(null, appliedLimit))
     .then(items => {
       inFlight.delete(entityName);
       const raw = items || [];
@@ -291,6 +302,21 @@ function fetchEntityList(entityName) {
       // Dev-mode RLS warning: if we expected data but got nothing, it may be an
       // RLS policy misconfiguration (Supabase returns [] instead of an error).
       // Dev note: if raw.length === 0 unexpectedly, check RLS policies
+
+      // Dev-mode truncation signal: when the list returned exactly equals the
+      // applied limit, we're very likely silently dropping rows. Surfacing
+      // this in the console lets us audit for under-provisioned caps across
+      // the app without waiting for a user report.
+      if (
+        raw.length === appliedLimit &&
+        typeof import.meta !== 'undefined' &&
+        import.meta?.env?.DEV
+      ) {
+        console.warn(
+          `[useEntityData] ${entityName} returned exactly ${appliedLimit} rows — ` +
+          `cache likely truncated. Bump ENTITY_LIST_LIMITS.${entityName} or use server-side pagination.`
+        );
+      }
 
       entityCache.set(entityName, raw);
       const now = Date.now();

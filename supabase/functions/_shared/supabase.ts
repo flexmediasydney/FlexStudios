@@ -140,6 +140,21 @@ export async function getUserFromReq(req: Request): Promise<AppUser | null> {
 }
 
 // ─── Entity helpers (mirrors the Base44 SDK pattern) ──────────────────────────
+//
+// PostgREST's default `.select()` returns max 1000 rows — this has been the
+// root cause of many "unbounded select" bugs where callers forgot to pass an
+// explicit limit and silently got truncated. We now apply a generous DEFAULT
+// upper bound via `.range(0, DEFAULT_LIST_CAP - 1)` whenever the caller does
+// not pass an explicit limit. When the returned row count equals the cap
+// exactly, we emit a `console.warn` so future audits can spot truncation in
+// edge-function logs.
+//
+// Callers who genuinely need every row (cron backfills, analytics rollups)
+// should use `listAll()` / `filterAll()` which transparently paginate with
+// chunked ranges.
+
+const DEFAULT_LIST_CAP = 25000;
+const PAGE_SIZE = 1000;
 
 const _tableCache = new Map<string, string>();
 
@@ -187,44 +202,114 @@ export function createEntities(client: SupabaseClient) {
   return new Proxy({} as any, {
     get(_target, entityName: string) {
       const table = toTableName(entityName);
-      return {
-        async list(sortBy?: string, limit?: number) {
-          let q = client.from(table).select('*');
-          if (sortBy) {
-            const desc = sortBy.startsWith('-');
-            const field = desc ? sortBy.slice(1) : sortBy;
-            const mapped = field === 'created_date' ? 'created_at' : field === 'updated_date' ? 'updated_at' : field;
-            q = q.order(mapped, { ascending: !desc });
+
+      const applySort = (q: any, sortBy?: string | null) => {
+        if (!sortBy) return q;
+        const desc = sortBy.startsWith('-');
+        const field = desc ? sortBy.slice(1) : sortBy;
+        const mapped = field === 'created_date' ? 'created_at' : field === 'updated_date' ? 'updated_at' : field;
+        return q.order(mapped, { ascending: !desc });
+      };
+
+      const applyFilterObj = (q: any, filterObj: Record<string, any>) => {
+        for (const [field, value] of Object.entries(filterObj)) {
+          if (value == null) continue;
+          if (typeof value === 'object' && !Array.isArray(value)) {
+            if ('$in' in value) q = q.in(field, value.$in);
+            if ('$gte' in value) q = q.gte(field, value.$gte);
+            if ('$lte' in value) q = q.lte(field, value.$lte);
+            if ('$ne' in value) q = q.neq(field, value.$ne);
+          } else {
+            q = q.eq(field, value);
           }
-          if (limit) q = q.limit(limit);
-          const { data, error } = await q;
+        }
+        return q;
+      };
+
+      /** Warn when the result set exactly equals the cap — strong signal of truncation. */
+      const warnIfCapped = (rows: any[], effectiveCap: number, where: string) => {
+        if (rows.length === effectiveCap && effectiveCap >= PAGE_SIZE) {
+          console.warn(
+            `[entities] ${entityName}.${where}() returned exactly ${effectiveCap} rows — ` +
+            `likely truncated. Use listAll()/filterAll() or pass a larger explicit limit.`
+          );
+        }
+      };
+
+      /**
+       * Paginate a pre-built PostgREST query (no .limit() / .range() attached)
+       * in chunks of PAGE_SIZE until fewer than PAGE_SIZE rows come back or we
+       * reach the caller's cap. Handles the 1000-row PostgREST default cleanly.
+       */
+      const paginate = async (buildQuery: () => any, cap: number): Promise<any[]> => {
+        const out: any[] = [];
+        let offset = 0;
+        while (offset < cap) {
+          const end = Math.min(offset + PAGE_SIZE, cap) - 1;
+          const { data, error } = await buildQuery().range(offset, end);
           if (error) throw new Error(error.message);
-          return data || [];
+          const batch = data || [];
+          out.push(...batch);
+          if (batch.length < PAGE_SIZE) break; // exhausted
+          offset += PAGE_SIZE;
+        }
+        return out;
+      };
+
+      return {
+        /**
+         * Fetch a list of rows.
+         *   - `limit` undefined  → default cap of DEFAULT_LIST_CAP (25000) applied
+         *                          via .range(0, cap-1). Warns on exact-cap hit.
+         *   - `limit` number     → explicit .limit() applied (back-compat). If
+         *                          larger than PostgREST's 1000-row ceiling we
+         *                          use .range() instead so the cap is respected.
+         */
+        async list(sortBy?: string, limit?: number) {
+          const effectiveCap = limit && limit > 0 ? limit : DEFAULT_LIST_CAP;
+          const build = () => applySort(client.from(table).select('*'), sortBy);
+          // For caps ≤ PAGE_SIZE we can use the simpler .limit() path; otherwise
+          // we range-paginate so PostgREST's default 1000-row ceiling doesn't bite.
+          if (effectiveCap <= PAGE_SIZE) {
+            const { data, error } = await build().limit(effectiveCap);
+            if (error) throw new Error(error.message);
+            const rows = data || [];
+            warnIfCapped(rows, effectiveCap, 'list');
+            return rows;
+          }
+          const rows = await paginate(build, effectiveCap);
+          warnIfCapped(rows, effectiveCap, 'list');
+          return rows;
         },
 
         async filter(filterObj: Record<string, any> = {}, sortBy?: string | null, limit?: number) {
-          let q = client.from(table).select('*');
-          for (const [field, value] of Object.entries(filterObj)) {
-            if (value == null) continue;
-            if (typeof value === 'object' && !Array.isArray(value)) {
-              if ('$in' in value) q = q.in(field, value.$in);
-              if ('$gte' in value) q = q.gte(field, value.$gte);
-              if ('$lte' in value) q = q.lte(field, value.$lte);
-              if ('$ne' in value) q = q.neq(field, value.$ne);
-            } else {
-              q = q.eq(field, value);
-            }
+          const effectiveCap = limit && limit > 0 ? limit : DEFAULT_LIST_CAP;
+          const build = () => applySort(applyFilterObj(client.from(table).select('*'), filterObj), sortBy);
+          if (effectiveCap <= PAGE_SIZE) {
+            const { data, error } = await build().limit(effectiveCap);
+            if (error) throw new Error(error.message);
+            const rows = data || [];
+            warnIfCapped(rows, effectiveCap, 'filter');
+            return rows;
           }
-          if (sortBy) {
-            const desc = sortBy.startsWith('-');
-            const field = desc ? sortBy.slice(1) : sortBy;
-            const mapped = field === 'created_date' ? 'created_at' : field === 'updated_date' ? 'updated_at' : field;
-            q = q.order(mapped, { ascending: !desc });
-          }
-          if (limit) q = q.limit(limit);
-          const { data, error } = await q;
-          if (error) throw new Error(error.message);
-          return data || [];
+          const rows = await paginate(build, effectiveCap);
+          warnIfCapped(rows, effectiveCap, 'filter');
+          return rows;
+        },
+
+        /**
+         * Fetch ALL rows via chunked range pagination.
+         * Use for cron backfills and analytics rollups where truncation is
+         * unacceptable. No cap — will page until the table is exhausted.
+         */
+        async listAll(sortBy?: string | null) {
+          const build = () => applySort(client.from(table).select('*'), sortBy);
+          return paginate(build, Number.MAX_SAFE_INTEGER);
+        },
+
+        async filterAll(filterObj: Record<string, any> = {}, sortBy?: string | null) {
+          const build = () => applySort(applyFilterObj(client.from(table).select('*'), filterObj), sortBy);
+          return paginate(build, Number.MAX_SAFE_INTEGER);
         },
 
         async get(id: string) {
