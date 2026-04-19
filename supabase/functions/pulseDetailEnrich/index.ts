@@ -273,16 +273,36 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
 
 // ── Timeline emission (idempotent via idempotency_key) ──────────────────
 
-async function emitTimeline(admin: any, events: any[]): Promise<{ inserted: number; errors: Array<{ msg: string; count: number }> }> {
+async function emitTimeline(
+  admin: any,
+  events: any[],
+  ctx?: { syncLogId?: string | null; apifyRunId?: string | null },
+): Promise<{ inserted: number; errors: Array<{ msg: string; count: number }> }> {
   // B31: group errors by first 80 chars so a schema-mismatch avalanche
   // (e.g. "column ... does not exist" × 40 rows) collapses into a single
   // visible entry with a count, instead of losing all but the first 3.
   if (events.length === 0) return { inserted: 0, errors: [] };
+
+  // Migration 141: stamp sync_log_id + apify_run_id on every row so the
+  // Timeline drill-through can walk FK → sync_log → raw payload without the
+  // fragile source+time-range match. Individual push sites throughout this
+  // function don't know the runtime ctx, so we merge it in centrally here.
+  // Existing values on the event (unlikely) win — we only backfill when missing.
+  const syncLogId  = ctx?.syncLogId  ?? null;
+  const apifyRunId = ctx?.apifyRunId ?? null;
+  const stamped = (syncLogId || apifyRunId)
+    ? events.map((e) => ({
+        sync_log_id:  e.sync_log_id  ?? syncLogId,
+        apify_run_id: e.apify_run_id ?? apifyRunId,
+        ...e,
+      }))
+    : events;
+
   // Best-effort insert; duplicate idempotency_keys are caught by unique constraint.
   // We try bulk first, then fall back to per-row inserts so one bad row doesn't
   // drop the whole batch (which was the silent failure in the initial ship).
-  const { error, count } = await admin.from('pulse_timeline').insert(events, { count: 'exact' });
-  if (!error) return { inserted: count || events.length, errors: [] };
+  const { error, count } = await admin.from('pulse_timeline').insert(stamped, { count: 'exact' });
+  if (!error) return { inserted: count || stamped.length, errors: [] };
   // Dedup-only errors — expected, not a real problem
   if (String(error.message || '').includes('duplicate')) return { inserted: 0, errors: [] };
   // Otherwise try per-row for partial success, and group error strings by prefix.
@@ -294,7 +314,7 @@ async function emitTimeline(admin: any, events: any[]): Promise<{ inserted: numb
   // The bulk attempt's error applies to the whole first pass — count once.
   bump(error.message || '');
   let inserted = 0;
-  for (const e of events) {
+  for (const e of stamped) {
     const { error: e2 } = await admin.from('pulse_timeline').insert(e);
     if (!e2) inserted++;
     else if (!String(e2.message || '').includes('duplicate')) bump(e2.message || '');
@@ -981,7 +1001,13 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
 
       // Bulk inserts
       if (timelineEvents.length > 0) {
-        const tlResult = await emitTimeline(admin, timelineEvents);
+        // Migration 141: stamp the per-batch Apify run id + the outer
+        // syncLogId so the Timeline drill-through has an explicit FK to the
+        // sync_log that generated each event.
+        const tlResult = await emitTimeline(admin, timelineEvents, {
+          syncLogId,
+          apifyRunId: result.runId || null,
+        });
         // B31: emit grouped "<msg> (×<count>)" instead of first 3 raw strings.
         if (tlResult.errors.length > 0) {
           tlResult.errors.forEach(e => stats.errors.push(`timeline: ${e.msg} (×${e.count})`));

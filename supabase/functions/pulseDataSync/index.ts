@@ -1402,6 +1402,13 @@ serveWithAudit('pulseDataSync', async (req) => {
       newListingsDetected += batch.filter(l => l._isNew).length;
     }
 
+    // ── Resolve a single apify_run_id string for timeline stamping ─────────
+    // apifyRunIds is a per-step map (e.g. websift-Willoughby, listings-Willoughby).
+    // Migration 141 adds pulse_timeline.apify_run_id so drill-through can cross
+    // to the Apify dashboard without the fragile source+time-range match.
+    // We join all non-null ids the same way pulse_sync_logs.apify_run_id does.
+    const timelineApifyRunId = Object.values(apifyRunIds).filter(Boolean).join(',') || null;
+
     // Log new listings to timeline
     if (newListingsDetected > 0) {
       const sampleNew = listingRecords.filter(l => l._isNew).slice(0, 5);
@@ -1414,6 +1421,8 @@ serveWithAudit('pulseDataSync', async (req) => {
           description: sampleNew.map(l => `${l.address || l.suburb || '?'} - ${l.agency_name || '?'}`).join('; '),
           new_value: { count: newListingsDetected, sample: sampleNew.map(l => ({ address: l.address, suburb: l.suburb, price: l.asking_price, agency: l.agency_name, agent: l.agent_name })) },
           source: source_id || 'rea_sync',
+          sync_log_id: syncLogId,
+          apify_run_id: timelineApifyRunId,
         });
       } catch { /* non-fatal */ }
     }
@@ -1428,6 +1437,8 @@ serveWithAudit('pulseDataSync', async (req) => {
           description: priceChangedListings.slice(0, 5).map(l => `${l.address || l.suburb}: ${fmtPriceShort(l.previous_asking_price)} → ${fmtPriceShort(l.asking_price)}`).join('; '),
           new_value: { count: priceChangedListings.length, sample: priceChangedListings.slice(0, 5).map(l => ({ address: l.address, old: l.previous_asking_price, new: l.asking_price })) },
           source: source_id || 'rea_sync',
+          sync_log_id: syncLogId,
+          apify_run_id: timelineApifyRunId,
         });
       } catch { /* non-fatal */ }
     }
@@ -1442,6 +1453,8 @@ serveWithAudit('pulseDataSync', async (req) => {
           description: statusChangedListings.slice(0, 5).map(l => `${l.address || l.suburb}: ${l.previous_listing_type} → ${l.listing_type}`).join('; '),
           new_value: { count: statusChangedListings.length, sample: statusChangedListings.slice(0, 5).map(l => ({ address: l.address, old: l.previous_listing_type, new: l.listing_type })) },
           source: source_id || 'rea_sync',
+          sync_log_id: syncLogId,
+          apify_run_id: timelineApifyRunId,
         });
       } catch { /* non-fatal */ }
     }
@@ -1518,10 +1531,25 @@ serveWithAudit('pulseDataSync', async (req) => {
         // discovered in listing payloads (who weren't scraped by websift)
         // became orphan FKs on pulse_listings.agent_rea_id. Now we INSERT
         // minimal rows for them — websift can enrich later.
-        const { data: preCheck = [] } = await admin.from('pulse_agents')
-          .select('rea_agent_id')
-          .not('rea_agent_id', 'is', null);
-        const preCheckIds = new Set(preCheck.map((r: any) => r.rea_agent_id));
+        // BUG FIX: Previously this used `.select('rea_agent_id').not('rea_agent_id','is',null)`
+        // which is capped at 1000 rows by PostgREST. With >8k agents, ~7k existing
+        // agents fell outside the Set → upsert(ignoreDuplicates) silently no-op'd →
+        // but the subsequent .select().in() still fetched them → first_seen emitted
+        // on every discovery (22,934 spurious rows observed). Now we scope the
+        // pre-check to the EXACT set of ids we care about.
+        const candidateAgentIds = Array.from(enrichByReaId.keys());
+        const preCheckIds = new Set<string>();
+        if (candidateAgentIds.length > 0) {
+          // Chunk to stay under URL length limits on .in() filters
+          const CHUNK = 500;
+          for (let i = 0; i < candidateAgentIds.length; i += CHUNK) {
+            const chunk = candidateAgentIds.slice(i, i + CHUNK);
+            const { data: chunkExisting = [] } = await admin.from('pulse_agents')
+              .select('rea_agent_id')
+              .in('rea_agent_id', chunk);
+            for (const r of chunkExisting) if (r.rea_agent_id) preCheckIds.add(r.rea_agent_id);
+          }
+        }
 
         const listingOnlyAgentRows: any[] = [];
         for (const [reaId, enrichData] of enrichByReaId.entries()) {
@@ -1581,6 +1609,8 @@ serveWithAudit('pulseDataSync', async (req) => {
                 description: `Agent first seen via listing bridge${pa.agency_name ? ` at ${pa.agency_name}` : ''}`,
                 new_value: { agency_name: pa.agency_name, agency_rea_id: pa.agency_rea_id, source: 'rea_listings_bridge' },
                 source: 'rea_listings_bridge',
+                sync_log_id: syncLogId,
+                apify_run_id: timelineApifyRunId,
               }));
               if (timelineRows.length > 0) {
                 await admin.from('pulse_timeline').insert(timelineRows);
@@ -1636,6 +1666,8 @@ serveWithAudit('pulseDataSync', async (req) => {
                 description: 'Agency first seen via listing bridge',
                 new_value: { name: ag.name, rea_agency_id: ag.rea_agency_id, source: 'rea_listings_bridge' },
                 source: 'rea_listings_bridge',
+                sync_log_id: syncLogId,
+                apify_run_id: timelineApifyRunId,
               }));
               if (timelineRows.length > 0) {
                 await admin.from('pulse_timeline').insert(timelineRows);
@@ -1783,6 +1815,8 @@ serveWithAudit('pulseDataSync', async (req) => {
             title: `${newListingsFromCrmAgents.length} new listing${newListingsFromCrmAgents.length !== 1 ? 's' : ''} from CRM clients`,
             description: newListingsFromCrmAgents.slice(0, 3).map(l => `${l.agent_name}: ${l.address || l.suburb}`).join('; '),
             source: source_id || 'rea_sync',
+            sync_log_id: syncLogId,
+            apify_run_id: timelineApifyRunId,
           });
         } catch { /* non-fatal */ }
       }
@@ -1814,6 +1848,8 @@ serveWithAudit('pulseDataSync', async (req) => {
             description: `Agent first seen in ${agent.agency_name || 'unknown agency'}, ${agent.agency_suburb || ''}`,
             new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id, suburb: agent.agency_suburb },
             source: 'rea_sync',
+            sync_log_id: syncLogId,
+            apify_run_id: timelineApifyRunId,
           });
           timelineEntries++;
         } catch { /* non-fatal */ }
@@ -1832,6 +1868,8 @@ serveWithAudit('pulseDataSync', async (req) => {
             previous_value: { agency_name: existing.agency_name, agency_rea_id: existing.agency_rea_id },
             new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id },
             source: 'rea_sync',
+            sync_log_id: syncLogId,
+            apify_run_id: timelineApifyRunId,
           });
           timelineEntries++;
         } catch { /* non-fatal */ }

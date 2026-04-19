@@ -2276,6 +2276,12 @@ export default function PulseIntelligencePanel({
                 ? `No timeline events for this ${entityType} yet. Events will appear after data syncs detect changes.`
                 : `No events in this bucket. Try the "All" tab.`
             }
+            showFilters
+            onOpenEntity={({ type, id }) => {
+              if (!type || !id) return;
+              const tabSlug = type === "listing" ? "listings" : type === "agency" ? "agencies" : "agents";
+              navigate(`/IndustryPulse?tab=${tabSlug}&entity_type=${type}&pulse_id=${encodeURIComponent(id)}`);
+            }}
           />
         </CardContent>
       </Card>

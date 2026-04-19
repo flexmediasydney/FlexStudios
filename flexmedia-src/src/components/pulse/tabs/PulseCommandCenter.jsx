@@ -7,7 +7,10 @@ import React, { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import PulseTimeline from "@/components/pulse/PulseTimeline";
+import TimelineRow from "@/components/pulse/timeline/TimelineRow";
+import SourceDrillDrawer from "@/components/pulse/timeline/SourceDrillDrawer";
+import useEntityNameMap from "@/components/pulse/timeline/useEntityNameMap";
+import { SYSTEM_EVENT_TYPES } from "@/components/pulse/timeline/timelineIcons";
 import {
   BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell, LabelList,
@@ -687,11 +690,23 @@ function SuburbDistributionCard({ suburbDistribution }) {
 // switches to the dedicated Timeline tab on IndustryPulse, which renders the full
 // audit-style view with filters + paging.
 
-function RecentTimelineCard({ pulseTimeline, onViewFullTimeline }) {
+function RecentTimelineCard({ pulseTimeline, onViewFullTimeline, onOpenEntity }) {
+  // Compact tile: last 10 events, system noise filtered out, inline (not the
+  // heavy shared PulseTimeline component — it's read-only by design). Uses
+  // the shared TimelineRow + SourceDrillDrawer primitives so visual language
+  // stays identical to the full Timeline tab.
   const recentEntries = useMemo(
-    () => (pulseTimeline || []).slice(0, 10),
+    () => (pulseTimeline || [])
+      .filter(e => !SYSTEM_EVENT_TYPES.has(e.event_type))
+      .slice(0, 10),
     [pulseTimeline]
   );
+
+  // Auto-resolve entity names so pills show "Agent Name" not "agent <uuid>".
+  const nameMap = useEntityNameMap(recentEntries);
+
+  // Source-drill drawer state — same UX as the full timeline.
+  const [drillSource, setDrillSource] = useState(null);
 
   // Total events in the last 24h — gives ops the scope at a glance
   const events24h = useMemo(() => {
@@ -719,12 +734,26 @@ function RecentTimelineCard({ pulseTimeline, onViewFullTimeline }) {
         </div>
       </CardHeader>
       <CardContent className="px-4 pb-4">
-        <PulseTimeline
-          entries={recentEntries}
-          maxHeight="max-h-[300px]"
-          emptyMessage="No timeline events yet"
-          compact
-        />
+        {recentEntries.length === 0 ? (
+          <div className="text-center py-6">
+            <Activity className="h-5 w-5 text-muted-foreground/30 mx-auto mb-2" />
+            <p className="text-[10px] text-muted-foreground/50">No timeline events yet</p>
+          </div>
+        ) : (
+          <div className="max-h-[300px] overflow-y-auto space-y-0">
+            {recentEntries.map((entry, i) => (
+              <TimelineRow
+                key={entry.id || i}
+                entry={entry}
+                entityName={nameMap[`${entry.entity_type}:${entry.pulse_entity_id}`] || null}
+                onOpenEntity={onOpenEntity}
+                onOpenSourceDrill={(source, createdAt) => setDrillSource({ source, createdAt })}
+                compact
+                isLast={i === recentEntries.length - 1}
+              />
+            ))}
+          </div>
+        )}
         {onViewFullTimeline && (pulseTimeline?.length || 0) > 0 && (
           <div className="mt-3 pt-2 border-t border-border/40 flex items-center justify-between">
             <span className="text-[10px] text-muted-foreground tabular-nums">
@@ -741,6 +770,12 @@ function RecentTimelineCard({ pulseTimeline, onViewFullTimeline }) {
             </Button>
           </div>
         )}
+        <SourceDrillDrawer
+          source={drillSource?.source}
+          createdAt={drillSource?.createdAt}
+          open={!!drillSource}
+          onClose={() => setDrillSource(null)}
+        />
       </CardContent>
     </Card>
   );
@@ -937,6 +972,7 @@ export default function PulseCommandCenter({
         <RecentTimelineCard
           pulseTimeline={pulseTimeline}
           onViewFullTimeline={onViewFullTimeline}
+          onOpenEntity={onOpenEntity}
         />
       </div>
     </div>

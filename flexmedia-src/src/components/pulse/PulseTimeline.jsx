@@ -1,119 +1,65 @@
 /**
  * PulseTimeline — Reusable timeline component for Industry Pulse events.
  * Shows agent movements, listing activity, mapping events, and system syncs.
- * Used in: Industry Pulse (Mappings tab), PersonDetails (Intelligence tab), OrgDetails (Intelligence tab),
- *          PulseAgentIntel (slideout), PulseAgencyIntel (slideout)
  *
- * Props:
- *   entries        — array of timeline event objects
- *   showEntityName — show entity name on each entry
- *   maxHeight      — Tailwind max-height class
- *   emptyMessage   — message when no entries
- *   compact        — reduced padding, hides descriptions, filters system events
+ * Used in: Industry Pulse (Mappings tab), PersonDetails (Intelligence tab),
+ *          OrgDetails (Intelligence tab), PulseAgentIntel (slideout),
+ *          PulseAgencyIntel (slideout), PulseCommandCenter (preview tile),
+ *          PulseIntelligencePanel (dossier Section 12).
+ *
+ * Public API (all optional — backward compatible):
+ *   entries           — array of pulse_timeline rows
+ *   showEntityName    — legacy — now auto-resolves via entityNameMap when absent
+ *   maxHeight         — Tailwind max-h class (default "max-h-[600px]")
+ *   emptyMessage      — placeholder when no rows
+ *   compact           — dense mode, hides descriptions + system events
+ *   onOpenEntity      — ({type, id}) => void — preferred click handler
+ *
+ * Added in the big redesign (all optional, all nullable):
+ *   showFilters       — render filter + search toolbar (default: !compact)
+ *   showSourceDrill   — enable source chip drill-through (default: true)
+ *   virtualize        — force virtualization on/off; auto-enables >100 rows
+ *   entityNameMap     — {[`${type}:${id}`]: displayName} for pill labels (avoids UUIDs)
+ *   defaultCategory   — initial category filter value
+ *
+ * Data shape expected per entry:
+ *   { id, entity_type, pulse_entity_id, crm_entity_id, rea_id, event_type,
+ *     event_category, title, description, previous_value, new_value, source,
+ *     metadata, created_at, idempotency_key, sync_log_id? }
  */
-import React, { useMemo } from "react";
-import { Link } from "react-router-dom";
+import React, { useMemo, useState, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  ArrowRight, Star, Home, User, Zap, RefreshCw, Link2, UserPlus,
-  TrendingUp, Clock,
-  DollarSign, Play, CheckCircle2, Timer, ListPlus, Info,
-  Sparkles, AtSign, Phone, Gavel, FileImage, Video, XCircle,
+  ArrowRight, Clock, AtSign, Phone, Gavel, FileImage, Video, XCircle,
+  CheckCircle2, RefreshCw, Search, X,
 } from "lucide-react";
+import TimelineRow from "./timeline/TimelineRow";
+import SourceDrillDrawer from "./timeline/SourceDrillDrawer";
+import useEntityNameMap from "./timeline/useEntityNameMap";
+import {
+  EVENT_CONFIG, SYSTEM_EVENT_TYPES, configFor,
+} from "./timeline/timelineIcons";
 
-/* ── System event types that get filtered out in compact mode ────────────── */
-const SYSTEM_EVENT_TYPES = new Set([
-  "cron_dispatched",
-  "scheduled_scrape_started",
-  "scheduled_scrape_completed",
-  "data_sync",
-  // detail_enriched is a sync-side event — too noisy for the compact dossier.
-  "detail_enriched",
-]);
+/* ── Re-export EVENT_CONFIG so existing callers keep working ─────────────── */
+export { EVENT_CONFIG };
 
-/* ── Event type configuration ────────────────────────────────────────────── */
-const EVENT_CONFIG = {
-  // Agent / entity events
-  first_seen:               { icon: Zap,          color: "bg-cyan-500",    label: "First Detected",     category_color: "text-cyan-600 dark:text-cyan-400" },
-  agency_change:            { icon: ArrowRight,    color: "bg-blue-500",    label: "Agency Change",      category_color: "text-blue-600 dark:text-blue-400" },
-  new_listings_detected:    { icon: ListPlus,      color: "bg-green-500",   label: "New Listings",       category_color: "text-green-600 dark:text-green-400" },
-  client_new_listing:       { icon: Home,          color: "bg-emerald-500", label: "Client Listing",     category_color: "text-emerald-600 dark:text-emerald-400" },
-  price_change:             { icon: DollarSign,    color: "bg-amber-500",   label: "Price Change",       category_color: "text-amber-600 dark:text-amber-400" },
-  status_change:            { icon: ArrowRight,    color: "bg-blue-500",    label: "Status Change",      category_color: "text-blue-600 dark:text-blue-400" },
-
-  // Legacy / other entity events
-  listing_new:              { icon: Home,          color: "bg-green-500",   label: "New Listing",        category_color: "text-green-600 dark:text-green-400" },
-  listing_sold:             { icon: TrendingUp,    color: "bg-emerald-500", label: "Listing Sold",       category_color: "text-emerald-600 dark:text-emerald-400" },
-  rating_change:            { icon: Star,          color: "bg-amber-500",   label: "Rating Changed",     category_color: "text-amber-600 dark:text-amber-400" },
-  title_change:             { icon: User,          color: "bg-purple-500",  label: "Title Changed",      category_color: "text-purple-600 dark:text-purple-400" },
-  crm_mapped:               { icon: Link2,         color: "bg-indigo-500",  label: "CRM Mapped",         category_color: "text-indigo-600 dark:text-indigo-400" },
-  crm_added:                { icon: UserPlus,      color: "bg-green-600",   label: "Added to CRM",       category_color: "text-green-600 dark:text-green-400" },
-
-  // System events
-  cron_dispatched:          { icon: Timer,         color: "bg-gray-400",    label: "Cron Dispatched",    category_color: "text-gray-500" },
-  scheduled_scrape_started: { icon: Play,          color: "bg-gray-400",    label: "Scrape Started",     category_color: "text-gray-500" },
-  scheduled_scrape_completed: { icon: CheckCircle2, color: "bg-gray-400",   label: "Scrape Completed",   category_color: "text-gray-500" },
-  data_sync:                { icon: RefreshCw,     color: "bg-gray-400",    label: "Data Sync",          category_color: "text-gray-500" },
-
-  // Detail-enrichment events (migration 108+)
-  detail_enriched:          { icon: Sparkles,      color: "bg-indigo-500",  label: "Detail Enriched",    category_color: "text-indigo-600 dark:text-indigo-400" },
-  agent_email_discovered:   { icon: AtSign,        color: "bg-emerald-500", label: "Email Found",        category_color: "text-emerald-600 dark:text-emerald-400" },
-  agent_mobile_discovered:  { icon: Phone,         color: "bg-emerald-500", label: "Mobile Found",       category_color: "text-emerald-600 dark:text-emerald-400" },
-  agent_email_changed:      { icon: RefreshCw,     color: "bg-amber-500",   label: "Email Changed",      category_color: "text-amber-600 dark:text-amber-400" },
-  agent_mobile_changed:     { icon: RefreshCw,     color: "bg-amber-500",   label: "Mobile Changed",     category_color: "text-amber-600 dark:text-amber-400" },
-  listing_auction_scheduled:{ icon: Gavel,         color: "bg-amber-500",   label: "Auction Scheduled",  category_color: "text-amber-600 dark:text-amber-400" },
-  listing_floorplan_added:  { icon: FileImage,     color: "bg-blue-500",    label: "Floorplan Added",    category_color: "text-blue-600 dark:text-blue-400" },
-  listing_video_added:      { icon: Video,         color: "bg-blue-500",    label: "Video Added",        category_color: "text-blue-600 dark:text-blue-400" },
-  listing_withdrawn:        { icon: XCircle,       color: "bg-red-500",     label: "Withdrawn",          category_color: "text-red-600 dark:text-red-400" },
-  listing_relisted:         { icon: RefreshCw,     color: "bg-indigo-500",  label: "Relisted",           category_color: "text-indigo-600 dark:text-indigo-400" },
-  sold_date_captured:       { icon: CheckCircle2,  color: "bg-emerald-500", label: "Sold Date Captured", category_color: "text-emerald-600 dark:text-emerald-400" },
-  // B13 fix: agency contact events were emitted but had no config — rendered as generic gray fallback
-  agency_contact_discovered:{ icon: AtSign,        color: "bg-emerald-500", label: "Agency Contact Found", category_color: "text-emerald-600 dark:text-emerald-400" },
-  // Signal mirror events — every pulse_signals row emits one of these per linked entity so
-  // it shows up on the linked agent/agency/listing dossier timeline (migration 136).
-  signal_emitted:           { icon: Zap,           color: "bg-yellow-500",  label: "Signal",             category_color: "text-yellow-600 dark:text-yellow-400" },
-};
-
-/* ── Fallback config for unknown event types ─────────────────────────────── */
-const FALLBACK_CONFIG = { icon: RefreshCw, color: "bg-gray-400", label: "Event", category_color: "text-gray-500" };
-
-/* ── Date formatting ─────────────────────────────────────────────────────── */
-function formatDate(dateStr, compact = false) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now - d;
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-
-  // Very recent — show relative
-  if (diffMins < 1) return "Just now";
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) {
-    if (compact) return `${diffHours}h ago`;
-    return diffHours === 1
-      ? `1 hour ago`
-      : `${diffHours} hours ago`;
-  }
-
-  // Today / Yesterday with time (full mode)
-  if (!compact) {
-    if (diffDays === 0) return `Today at ${d.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`;
-    if (diffDays === 1) return `Yesterday at ${d.toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" })}`;
-  } else {
-    if (diffDays === 0) return "Today";
-    if (diffDays === 1) return "Yesterday";
-  }
-
-  if (diffDays < 7) return `${diffDays} days ago`;
-  if (diffDays < 30) {
-    const weeks = Math.floor(diffDays / 7);
-    return weeks === 1 ? "1 week ago" : `${weeks} weeks ago`;
-  }
-  return d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
-}
+/* ── Category registry for the filter dropdown ───────────────────────────── */
+const CATEGORY_FILTER_OPTIONS = [
+  { value: "all",      label: "All categories" },
+  { value: "movement", label: "Movement" },
+  { value: "market",   label: "Market" },
+  { value: "contact",  label: "Contact" },
+  { value: "media",    label: "Media" },
+  { value: "mapping",  label: "Mapping" },
+  { value: "signal",   label: "Signal" },
+  { value: "agent",    label: "Agent" },
+  { value: "system",   label: "System" },
+];
 
 /* ── Price formatting ────────────────────────────────────────────────────── */
 function formatPrice(val) {
@@ -137,12 +83,10 @@ function statusBadgeClass(status) {
 
 function humanizeStatus(status) {
   if (!status) return "Unknown";
-  return String(status)
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, c => c.toUpperCase());
+  return String(status).replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
 }
 
-/* ── Grouping ────────────────────────────────────────────────────────────── */
+/* ── Month grouping (only used for small lists; virtualized path skips) ──── */
 function groupByMonth(entries) {
   const groups = {};
   for (const entry of entries) {
@@ -155,28 +99,32 @@ function groupByMonth(entries) {
   return Object.entries(groups).sort((a, b) => b[0].localeCompare(a[0]));
 }
 
-/* ── Detail renderers ────────────────────────────────────────────────────── */
+/* ── Detail renderers (same as legacy — wired through renderDetail slot) ─── */
+
+function pickField(val, ...fields) {
+  if (val == null) return null;
+  if (typeof val !== "object") return val;
+  for (const f of fields) {
+    if (val[f] != null && val[f] !== "") return val[f];
+  }
+  return null;
+}
 
 function AgencyChangeDetail({ prevVal, newVal }) {
   if (!prevVal && !newVal) return null;
   const prevName = typeof prevVal === "string" ? prevVal : prevVal?.agency_name;
   const newName  = typeof newVal === "string"  ? newVal  : newVal?.agency_name;
-  const prevReaId = typeof prevVal === "object" ? prevVal?.agency_rea_id : null;
-  const newReaId  = typeof newVal === "object"  ? newVal?.agency_rea_id  : null;
-
   return (
     <div className="mt-2 text-xs bg-muted/30 rounded-lg p-2.5 space-y-1">
       {prevName && (
         <div className="flex items-center gap-2">
           <span className="text-muted-foreground">From:</span>
           <span className="font-medium line-through text-muted-foreground">{prevName}</span>
-          {prevReaId && <span className="text-[9px] text-muted-foreground/50">REA: {prevReaId}</span>}
         </div>
       )}
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground">To:</span>
         <span className="font-medium text-foreground">{newName || "Unknown"}</span>
-        {newReaId && <span className="text-[9px] text-muted-foreground/50">REA: {newReaId}</span>}
       </div>
     </div>
   );
@@ -186,15 +134,13 @@ function PriceChangeDetail({ prevVal, newVal }) {
   const oldPrice = typeof prevVal === "object" ? prevVal?.price : prevVal;
   const newPrice = typeof newVal === "object"  ? newVal?.price  : newVal;
   if (!oldPrice && !newPrice) return null;
-
   const oldNum = parseFloat(String(oldPrice).replace(/[^0-9.]/g, "")) || 0;
   const newNum = parseFloat(String(newPrice).replace(/[^0-9.]/g, "")) || 0;
   const diff = newNum - oldNum;
   const pctChange = oldNum > 0 ? ((diff / oldNum) * 100).toFixed(1) : null;
-
   return (
-    <div className="mt-2 text-xs bg-amber-50/50 dark:bg-amber-900/10 rounded-lg p-2.5 space-y-1">
-      <div className="flex items-center gap-3">
+    <div className="mt-2 text-xs bg-amber-50/50 dark:bg-amber-900/10 rounded-lg p-2.5">
+      <div className="flex items-center gap-3 flex-wrap">
         <span className="text-muted-foreground line-through">{formatPrice(oldPrice)}</span>
         <ArrowRight className="h-3 w-3 text-muted-foreground" />
         <span className="font-semibold text-foreground">{formatPrice(newPrice)}</span>
@@ -215,10 +161,9 @@ function StatusChangeDetail({ prevVal, newVal }) {
   const oldStatus = typeof prevVal === "object" ? prevVal?.status : prevVal;
   const newStatus = typeof newVal === "object"  ? newVal?.status  : newVal;
   if (!oldStatus && !newStatus) return null;
-
   return (
     <div className="mt-2 text-xs bg-blue-50/50 dark:bg-blue-900/10 rounded-lg p-2.5">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         {oldStatus && (
           <Badge className={cn("text-[9px] px-1.5 py-0 font-medium", statusBadgeClass(oldStatus))}>
             {humanizeStatus(oldStatus)}
@@ -238,7 +183,6 @@ function FirstSeenDetail({ newVal }) {
   const agencyName = typeof newVal === "object" ? newVal?.agency_name : null;
   const suburb     = typeof newVal === "object" ? newVal?.suburb : null;
   if (!agencyName && !suburb) return null;
-
   return (
     <div className="mt-1.5 flex gap-1.5 flex-wrap">
       {agencyName && <Badge variant="outline" className="text-[9px] px-1.5 py-0">{agencyName}</Badge>}
@@ -247,34 +191,16 @@ function FirstSeenDetail({ newVal }) {
   );
 }
 
-/* ── TL05: detail renderers for contact / enrichment / media / movement ──── */
-
-// Helper — tolerate both shapes: either the value is already the string
-// (e.g. `new_value: "jo@example.com"`) or an object carrying the field.
-function pickField(val, ...fields) {
-  if (val == null) return null;
-  if (typeof val !== "object") return val;
-  for (const f of fields) {
-    if (val[f] != null && val[f] !== "") return val[f];
-  }
-  return null;
-}
-
 function ContactDiscoveredDetail({ newVal, kind, source }) {
   const value = pickField(newVal, kind === "email" ? "email" : "mobile", "value");
   if (!value) return null;
   const srcChip = source || pickField(newVal, "source", "origin");
+  const Icon = kind === "email" ? AtSign : Phone;
   return (
     <div className="mt-2 text-xs bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
-      {kind === "email"
-        ? <AtSign className="h-3 w-3 text-emerald-600" />
-        : <Phone className="h-3 w-3 text-emerald-600" />}
+      <Icon className="h-3 w-3 text-emerald-600" />
       <span className="font-mono text-[11px] font-medium text-foreground break-all">{value}</span>
-      {srcChip && (
-        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
-          via {srcChip}
-        </Badge>
-      )}
+      {srcChip && <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">via {srcChip}</Badge>}
     </div>
   );
 }
@@ -288,9 +214,7 @@ function ContactChangedDetail({ prevVal, newVal, kind }) {
     <div className="mt-2 text-xs bg-amber-50/50 dark:bg-amber-900/10 rounded-lg p-2.5">
       <div className="flex items-center gap-2 flex-wrap">
         <Icon className="h-3 w-3 text-amber-600" />
-        {prev && (
-          <span className="font-mono text-[11px] line-through text-muted-foreground break-all">{prev}</span>
-        )}
+        {prev && <span className="font-mono text-[11px] line-through text-muted-foreground break-all">{prev}</span>}
         <ArrowRight className="h-3 w-3 text-muted-foreground" />
         <span className="font-mono text-[11px] font-semibold text-foreground break-all">{next || "—"}</span>
       </div>
@@ -305,19 +229,13 @@ function AuctionScheduledDetail({ newVal }) {
   let when = dt;
   if (dt) {
     const d = new Date(dt);
-    if (!isNaN(d.getTime())) {
-      when = d.toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
-    }
+    if (!isNaN(d.getTime())) when = d.toLocaleString("en-AU", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   }
   return (
     <div className="mt-2 text-xs bg-amber-50/50 dark:bg-amber-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
       <Gavel className="h-3 w-3 text-amber-600" />
       {when && <span className="font-medium text-foreground">{when}</span>}
-      {venue && (
-        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
-          {venue}
-        </Badge>
-      )}
+      {venue && <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">{venue}</Badge>}
     </div>
   );
 }
@@ -329,56 +247,32 @@ function SoldDateCapturedDetail({ newVal }) {
   let when = dt;
   if (dt) {
     const d = new Date(dt);
-    if (!isNaN(d.getTime())) {
-      when = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
-    }
+    if (!isNaN(d.getTime())) when = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
   }
   return (
     <div className="mt-2 text-xs bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
       <CheckCircle2 className="h-3 w-3 text-emerald-600" />
       {when && <span className="font-medium text-foreground">Sold {when}</span>}
-      {price && (
-        <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-emerald-300 text-emerald-700">
-          {formatPrice(price)}
-        </Badge>
-      )}
+      {price && <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-emerald-300 text-emerald-700">{formatPrice(price)}</Badge>}
     </div>
   );
 }
 
 function MediaAddedDetail({ newVal, kind }) {
-  // Accept either a URL string or an object with url/thumbnail_url/poster_url.
-  const url = typeof newVal === "string"
-    ? newVal
-    : pickField(newVal, "url", "thumbnail_url", "floorplan_url", "video_url");
-  const thumb = typeof newVal === "object"
-    ? pickField(newVal, "thumbnail_url", "poster_url", "preview_url") || url
-    : url;
+  const url = typeof newVal === "string" ? newVal : pickField(newVal, "url", "thumbnail_url", "floorplan_url", "video_url");
+  const thumb = typeof newVal === "object" ? pickField(newVal, "thumbnail_url", "poster_url", "preview_url") || url : url;
   if (!url && !thumb) return null;
   const Icon = kind === "video" ? Video : FileImage;
   const isImage = thumb && !/\.(mp4|webm|mov)(\?|$)/i.test(thumb);
   return (
     <div className="mt-2 text-xs bg-blue-50/50 dark:bg-blue-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
       {isImage && thumb ? (
-        <img
-          src={thumb}
-          alt={kind === "video" ? "Video thumbnail" : "Floorplan"}
-          className="h-12 w-16 object-cover rounded border border-border/40"
-          loading="lazy"
-          onError={(e) => { e.currentTarget.style.display = "none"; }}
-        />
+        <img src={thumb} alt={kind === "video" ? "Video thumbnail" : "Floorplan"} className="h-12 w-16 object-cover rounded border border-border/40" loading="lazy" onError={(e) => { e.currentTarget.style.display = "none"; }} />
       ) : (
         <Icon className="h-3 w-3 text-blue-600" />
       )}
       {url && (
-        <a
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-          onClick={(e) => e.stopPropagation()}
-          className="text-[11px] text-blue-600 hover:underline truncate max-w-[220px]"
-          title={url}
-        >
+        <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] text-blue-600 hover:underline truncate max-w-[220px]" title={url}>
           {kind === "video" ? "Open video" : "Open floorplan"}
         </a>
       )}
@@ -393,9 +287,7 @@ function WithdrawnDetail({ newVal }) {
   let when = withdrawnAt;
   if (withdrawnAt) {
     const d = new Date(withdrawnAt);
-    if (!isNaN(d.getTime())) {
-      when = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
-    }
+    if (!isNaN(d.getTime())) when = d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
   }
   return (
     <div className="mt-2 text-xs bg-red-50/50 dark:bg-red-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
@@ -428,7 +320,6 @@ function RelistedDetail({ prevVal, newVal }) {
 }
 
 function AgencyContactDiscoveredDetail({ newVal }) {
-  // Shape varies: { field: 'email', value: 'a@b.com' } OR { email: '...' } OR { phone: '...' }
   let field = pickField(newVal, "field", "type");
   let value = pickField(newVal, "value");
   if (!value) {
@@ -443,83 +334,57 @@ function AgencyContactDiscoveredDetail({ newVal }) {
   return (
     <div className="mt-2 text-xs bg-emerald-50/50 dark:bg-emerald-900/10 rounded-lg p-2.5 flex items-center gap-2 flex-wrap">
       <Icon className="h-3 w-3 text-emerald-600" />
-      {field && (
-        <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">
-          {field}
-        </Badge>
-      )}
+      {field && <Badge variant="outline" className="text-[9px] px-1.5 py-0 text-muted-foreground">{field}</Badge>}
       <span className="font-mono text-[11px] font-medium text-foreground break-all">{value}</span>
     </div>
   );
 }
 
-/* Generic fallback — renders a 2-column "previous → new" grid for any event
-   with structured previous_value / new_value that doesn't have a bespoke
-   renderer above. Skips render when both sides are empty scalars. */
 function GenericPrevNewDetail({ prevVal, newVal }) {
   const hasPrev = prevVal != null && !(typeof prevVal === "object" && Object.keys(prevVal || {}).length === 0);
   const hasNew  = newVal  != null && !(typeof newVal  === "object" && Object.keys(newVal  || {}).length === 0);
   if (!hasPrev && !hasNew) return null;
-
-  // Collect keys we want to display. For objects, show a flat list of scalar
-  // fields. For scalars, show a single "value" row.
   const rowsForSide = (v) => {
     if (v == null) return [];
     if (typeof v !== "object") return [{ k: "value", v: String(v) }];
     const out = [];
     for (const [k, val] of Object.entries(v)) {
       if (val == null) continue;
-      if (typeof val === "object") continue; // skip nested — keeps panel tight
+      if (typeof val === "object") continue;
       const s = String(val);
       if (s === "") continue;
       out.push({ k, v: s });
     }
-    return out.slice(0, 6); // safety cap
+    return out.slice(0, 6);
   };
-
   const prevRows = rowsForSide(prevVal);
   const newRows  = rowsForSide(newVal);
   if (prevRows.length === 0 && newRows.length === 0) return null;
-
   return (
     <div className="mt-2 text-xs bg-muted/30 rounded-lg p-2.5">
       <div className="grid grid-cols-2 gap-3">
-        <div className="min-w-0">
-          <p className="text-[9px] uppercase tracking-wide text-muted-foreground mb-1">Previous</p>
-          {prevRows.length === 0 ? (
-            <p className="text-muted-foreground/60 italic">—</p>
-          ) : (
-            <dl className="space-y-0.5">
-              {prevRows.map((r) => (
-                <div key={r.k} className="flex gap-1.5 min-w-0">
-                  <dt className="text-muted-foreground shrink-0">{r.k}:</dt>
-                  <dd className="font-medium text-foreground truncate" title={r.v}>{r.v}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </div>
-        <div className="min-w-0">
-          <p className="text-[9px] uppercase tracking-wide text-muted-foreground mb-1">New</p>
-          {newRows.length === 0 ? (
-            <p className="text-muted-foreground/60 italic">—</p>
-          ) : (
-            <dl className="space-y-0.5">
-              {newRows.map((r) => (
-                <div key={r.k} className="flex gap-1.5 min-w-0">
-                  <dt className="text-muted-foreground shrink-0">{r.k}:</dt>
-                  <dd className="font-medium text-foreground truncate" title={r.v}>{r.v}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </div>
+        {[{ label: "Previous", rows: prevRows }, { label: "New", rows: newRows }].map(({ label, rows }) => (
+          <div key={label} className="min-w-0">
+            <p className="text-[9px] uppercase tracking-wide text-muted-foreground mb-1">{label}</p>
+            {rows.length === 0 ? (
+              <p className="text-muted-foreground/60 italic">—</p>
+            ) : (
+              <dl className="space-y-0.5">
+                {rows.map((r) => (
+                  <div key={r.k} className="flex gap-1.5 min-w-0">
+                    <dt className="text-muted-foreground shrink-0">{r.k}:</dt>
+                    <dd className="font-medium text-foreground truncate" title={r.v}>{r.v}</dd>
+                  </div>
+                ))}
+              </dl>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-// Event types that have a bespoke renderer — skip the generic fallback for these.
 const BESPOKE_RENDERED_TYPES = new Set([
   "agency_change", "price_change", "status_change", "first_seen",
   "agent_email_discovered", "agent_mobile_discovered",
@@ -530,205 +395,289 @@ const BESPOKE_RENDERED_TYPES = new Set([
   "agency_contact_discovered",
 ]);
 
+function renderEntryDetail(entry) {
+  const prevVal = entry.previous_value;
+  const newVal = entry.new_value;
+  switch (entry.event_type) {
+    case "agency_change":             return <AgencyChangeDetail prevVal={prevVal} newVal={newVal} />;
+    case "price_change":              return <PriceChangeDetail prevVal={prevVal} newVal={newVal} />;
+    case "status_change":             return <StatusChangeDetail prevVal={prevVal} newVal={newVal} />;
+    case "first_seen":                return <FirstSeenDetail newVal={newVal} />;
+    case "agent_email_discovered":    return <ContactDiscoveredDetail newVal={newVal} kind="email" source={entry.source} />;
+    case "agent_mobile_discovered":   return <ContactDiscoveredDetail newVal={newVal} kind="mobile" source={entry.source} />;
+    case "agent_email_changed":       return <ContactChangedDetail prevVal={prevVal} newVal={newVal} kind="email" />;
+    case "agent_mobile_changed":      return <ContactChangedDetail prevVal={prevVal} newVal={newVal} kind="mobile" />;
+    case "listing_auction_scheduled": return <AuctionScheduledDetail newVal={newVal} />;
+    case "sold_date_captured":        return <SoldDateCapturedDetail newVal={newVal} />;
+    case "listing_floorplan_added":   return <MediaAddedDetail newVal={newVal} kind="floorplan" />;
+    case "listing_video_added":       return <MediaAddedDetail newVal={newVal} kind="video" />;
+    case "listing_withdrawn":         return <WithdrawnDetail newVal={newVal} />;
+    case "listing_relisted":          return <RelistedDetail prevVal={prevVal} newVal={newVal} />;
+    case "agency_contact_discovered": return <AgencyContactDiscoveredDetail newVal={newVal} />;
+    default:
+      if (BESPOKE_RENDERED_TYPES.has(entry.event_type)) return null;
+      return <GenericPrevNewDetail prevVal={prevVal} newVal={newVal} />;
+  }
+}
+
 /* ── Main component ──────────────────────────────────────────────────────── */
 
 export default function PulseTimeline({
   entries = [],
+  // legacy prop — kept for API stability; name resolution now prefers entityNameMap
+  // eslint-disable-next-line no-unused-vars
   showEntityName = false,
   maxHeight = "max-h-[600px]",
   emptyMessage = "No timeline events yet",
   compact = false,
   onOpenEntity,
+  showFilters,            // default depends on compact
+  showSourceDrill = true,
+  virtualize,             // undefined → auto
+  entityNameMap = {},
+  defaultCategory = "all",
 }) {
-  // In compact mode, filter out system events
-  const filteredEntries = useMemo(() => {
+  // Filter/search toolbar only rendered when not compact (unless caller overrides)
+  const filtersVisible = showFilters == null ? !compact : showFilters;
+
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState(defaultCategory);
+
+  // Compact-mode system filter (same as legacy behavior)
+  const compactFiltered = useMemo(() => {
     if (!compact) return entries;
     return entries.filter(e => !SYSTEM_EVENT_TYPES.has(e.event_type));
   }, [entries, compact]);
 
-  const grouped = useMemo(() => groupByMonth(filteredEntries), [filteredEntries]);
+  // Auto-resolve entity names unless caller supplied their own map.
+  // Skip the fetch entirely when callers pass entityNameMap — avoids duplicate
+  // network work on surfaces that already have names in scope (dossier).
+  const autoNames = useEntityNameMap(
+    Object.keys(entityNameMap).length > 0 ? [] : compactFiltered,
+  );
+  const effectiveNameMap = useMemo(
+    () => (Object.keys(entityNameMap).length > 0 ? entityNameMap : autoNames),
+    [entityNameMap, autoNames],
+  );
 
-  if (filteredEntries.length === 0) {
+  // Toolbar filters (only when toolbar is shown)
+  const visibleEntries = useMemo(() => {
+    let rows = compactFiltered;
+    if (filtersVisible) {
+      if (category !== "all") {
+        rows = rows.filter(r => (configFor(r.event_type).category || "other") === category);
+      }
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        rows = rows.filter(r =>
+          (r.title || "").toLowerCase().includes(q) ||
+          (r.description || "").toLowerCase().includes(q) ||
+          (r.source || "").toLowerCase().includes(q) ||
+          (r.event_type || "").toLowerCase().includes(q),
+        );
+      }
+    }
+    return rows;
+  }, [compactFiltered, filtersVisible, category, search]);
+
+  // Source-drill drawer state (shared across all rows)
+  const [drillSource, setDrillSource] = useState(null);   // {source, createdAt} | null
+  const handleOpenSourceDrill = showSourceDrill
+    ? (source, createdAt) => setDrillSource({ source, createdAt })
+    : undefined;
+
+  // Virtualization — auto-enable when >100 rows, unless overridden. Because
+  // our rows have variable heights, we use a ref-measured estimate.
+  const shouldVirtualize = virtualize != null ? virtualize : visibleEntries.length > 100;
+  const scrollRef = useRef(null);
+  const rowVirtualizer = useVirtualizer({
+    count: visibleEntries.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => (compact ? 52 : 140),
+    overscan: 10,
+    enabled: shouldVirtualize,
+  });
+
+  // Helper to build entity pill name from the resolved map (or fall back)
+  const lookupName = (entry) => {
+    if (!entry.entity_type || !entry.pulse_entity_id) return null;
+    return effectiveNameMap[`${entry.entity_type}:${entry.pulse_entity_id}`] || null;
+  };
+
+  /* ── Empty state ─────────────────────────────────────────────────────── */
+  if (visibleEntries.length === 0) {
     return (
-      <div className={cn("text-center", compact ? "py-4" : "py-8")}>
-        <Clock className={cn("text-muted-foreground/30 mx-auto mb-2", compact ? "h-5 w-5" : "h-8 w-8")} />
-        <p className={cn("text-muted-foreground/50", compact ? "text-[10px]" : "text-sm")}>{emptyMessage}</p>
+      <div className="space-y-2">
+        {filtersVisible && (
+          <TimelineToolbar
+            search={search} setSearch={setSearch}
+            category={category} setCategory={setCategory}
+            total={compactFiltered.length}
+          />
+        )}
+        <div className={cn("text-center", compact ? "py-4" : "py-8")}>
+          <Clock className={cn("text-muted-foreground/30 mx-auto mb-2", compact ? "h-5 w-5" : "h-8 w-8")} />
+          <p className={cn("text-muted-foreground/50", compact ? "text-[10px]" : "text-sm")}>
+            {compactFiltered.length === 0
+              ? emptyMessage
+              : (search || category !== "all")
+                  ? "No events match the current filter"
+                  : emptyMessage}
+          </p>
+          {filtersVisible && (search || category !== "all") && (
+            <Button
+              variant="ghost" size="sm" className="mt-2 h-6 text-[10px]"
+              onClick={() => { setSearch(""); setCategory("all"); }}
+            >
+              Clear filters
+            </Button>
+          )}
+        </div>
       </div>
     );
   }
 
-  return (
-    <div className={cn("overflow-y-auto", maxHeight)}>
-      {grouped.map(([key, group]) => (
-        <div key={key} className={compact ? "mb-2" : "mb-4"}>
-          {/* Month header */}
-          <div className={cn(
-            "sticky top-0 z-10 bg-background/95 backdrop-blur-sm px-1 mb-1",
-            compact ? "py-0.5" : "py-1.5 mb-2"
-          )}>
-            <p className={cn(
-              "font-semibold text-muted-foreground uppercase tracking-wider",
-              compact ? "text-[8px]" : "text-[10px]"
-            )}>{group.label}</p>
-          </div>
-
-          {/* Entries */}
-          <div className="space-y-0">
-            {group.entries.map((entry, i) => {
-              const config = EVENT_CONFIG[entry.event_type] || FALLBACK_CONFIG;
-              const Icon = config.icon;
-              const prevVal = entry.previous_value;
-              const newVal = entry.new_value;
-
-              const canDrill = !!(onOpenEntity && entry.pulse_entity_id && entry.entity_type);
-              const handleEntryClick = canDrill
-                ? () => onOpenEntity({ type: entry.entity_type, id: entry.pulse_entity_id })
-                : undefined;
+  /* ── Virtualized render ───────────────────────────────────────────────── */
+  if (shouldVirtualize) {
+    return (
+      <div className="space-y-2">
+        {filtersVisible && (
+          <TimelineToolbar
+            search={search} setSearch={setSearch}
+            category={category} setCategory={setCategory}
+            total={compactFiltered.length} filtered={visibleEntries.length}
+          />
+        )}
+        <div ref={scrollRef} className={cn("overflow-y-auto relative", maxHeight)}>
+          <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative" }}>
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const entry = visibleEntries[virtualRow.index];
+              if (!entry) return null;
               return (
-                <div key={entry.id || i} className={cn("flex group relative", compact ? "gap-2" : "gap-3")}>
-                  {/* Timeline line + dot */}
-                  <div className="flex flex-col items-center shrink-0 pt-0.5">
-                    <div className={cn(
-                      "rounded-full flex items-center justify-center shrink-0",
-                      config.color,
-                      compact ? "w-4 h-4" : "w-6 h-6"
-                    )}>
-                      <Icon className={cn("text-white", compact ? "h-2 w-2" : "h-3 w-3")} />
-                    </div>
-                    {i < group.entries.length - 1 && (
-                      <div className={cn("w-px flex-1 bg-border", compact ? "mt-0.5" : "mt-1")} />
-                    )}
-                  </div>
-
-                  {/* Content — clickable when entry carries pulse_entity_id + entity_type */}
-                  <div
-                    className={cn(
-                      "flex-1 min-w-0",
-                      compact ? "pb-2" : "pb-4",
-                      canDrill && "cursor-pointer rounded-md hover:bg-muted/40 transition-colors -mx-1 px-1"
-                    )}
-                    onClick={handleEntryClick}
-                    role={canDrill ? "button" : undefined}
-                    tabIndex={canDrill ? 0 : undefined}
-                    onKeyDown={canDrill ? (e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handleEntryClick();
-                      }
-                    } : undefined}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className={cn(
-                          "font-medium leading-tight",
-                          compact ? "text-[11px]" : "text-sm"
-                        )}>{entry.title}</p>
-
-                        {/* Description — hidden in compact mode */}
-                        {!compact && entry.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{entry.description}</p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        <span className={cn(
-                          "text-muted-foreground/60 tabular-nums",
-                          compact ? "text-[8px]" : "text-[10px]"
-                        )}>{formatDate(entry.created_at, compact)}</span>
-                        {/* Tier 3: link to the source run DrillDialog when the
-                            entry carries a sync_log_id. Will light up fully
-                            when URL-driven DrillDialog is wired (planned Tier 4). */}
-                        {entry.sync_log_id && (
-                          <Link
-                            to={`/IndustryPulse?tab=sources&sync_log_id=${entry.sync_log_id}`}
-                            replace={false}
-                            onClick={(e) => e.stopPropagation()}
-                            className="text-muted-foreground/40 hover:text-primary transition-colors"
-                            title="Open source run details"
-                          >
-                            <Info className={cn(compact ? "h-2.5 w-2.5" : "h-3 w-3")} />
-                          </Link>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Event-specific detail panels — hidden in compact mode */}
-                    {!compact && (
-                      <>
-                        {entry.event_type === "agency_change" && (
-                          <AgencyChangeDetail prevVal={prevVal} newVal={newVal} />
-                        )}
-                        {entry.event_type === "price_change" && (
-                          <PriceChangeDetail prevVal={prevVal} newVal={newVal} />
-                        )}
-                        {entry.event_type === "status_change" && (
-                          <StatusChangeDetail prevVal={prevVal} newVal={newVal} />
-                        )}
-                        {entry.event_type === "first_seen" && (
-                          <FirstSeenDetail newVal={newVal} />
-                        )}
-                        {entry.event_type === "agent_email_discovered" && (
-                          <ContactDiscoveredDetail newVal={newVal} kind="email" source={entry.source} />
-                        )}
-                        {entry.event_type === "agent_mobile_discovered" && (
-                          <ContactDiscoveredDetail newVal={newVal} kind="mobile" source={entry.source} />
-                        )}
-                        {entry.event_type === "agent_email_changed" && (
-                          <ContactChangedDetail prevVal={prevVal} newVal={newVal} kind="email" />
-                        )}
-                        {entry.event_type === "agent_mobile_changed" && (
-                          <ContactChangedDetail prevVal={prevVal} newVal={newVal} kind="mobile" />
-                        )}
-                        {entry.event_type === "listing_auction_scheduled" && (
-                          <AuctionScheduledDetail newVal={newVal} />
-                        )}
-                        {entry.event_type === "sold_date_captured" && (
-                          <SoldDateCapturedDetail newVal={newVal} />
-                        )}
-                        {entry.event_type === "listing_floorplan_added" && (
-                          <MediaAddedDetail newVal={newVal} kind="floorplan" />
-                        )}
-                        {entry.event_type === "listing_video_added" && (
-                          <MediaAddedDetail newVal={newVal} kind="video" />
-                        )}
-                        {entry.event_type === "listing_withdrawn" && (
-                          <WithdrawnDetail newVal={newVal} />
-                        )}
-                        {entry.event_type === "listing_relisted" && (
-                          <RelistedDetail prevVal={prevVal} newVal={newVal} />
-                        )}
-                        {entry.event_type === "agency_contact_discovered" && (
-                          <AgencyContactDiscoveredDetail newVal={newVal} />
-                        )}
-                        {/* Generic fallback for any other event with structured
-                            values — e.g. rating_change, title_change, etc. */}
-                        {!BESPOKE_RENDERED_TYPES.has(entry.event_type) && (
-                          <GenericPrevNewDetail prevVal={prevVal} newVal={newVal} />
-                        )}
-                      </>
-                    )}
-
-                    {/* Metadata badges */}
-                    {!compact && (
-                      <div className="flex items-center gap-1.5 mt-1.5">
-                        <Badge variant="outline" className={cn("text-[8px] px-1 py-0", config.category_color)}>{config.label}</Badge>
-                        {entry.source && <Badge variant="outline" className="text-[8px] px-1 py-0 text-muted-foreground">{entry.source}</Badge>}
-                        {entry.rea_id && <span className="text-[9px] text-muted-foreground/40">REA: {entry.rea_id}</span>}
-                      </div>
-                    )}
-
-                    {/* Compact mode: inline category badge only */}
-                    {compact && (
-                      <Badge variant="outline" className={cn("text-[7px] px-1 py-0 mt-0.5", config.category_color)}>{config.label}</Badge>
-                    )}
-                  </div>
+                <div
+                  key={entry.id || virtualRow.index}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <TimelineRow
+                    entry={entry}
+                    entityName={lookupName(entry)}
+                    onOpenEntity={onOpenEntity}
+                    onOpenSourceDrill={handleOpenSourceDrill}
+                    compact={compact}
+                    renderDetail={renderEntryDetail}
+                    isLast={virtualRow.index === visibleEntries.length - 1}
+                  />
                 </div>
               );
             })}
           </div>
         </div>
-      ))}
+        <SourceDrillDrawer
+          source={drillSource?.source}
+          createdAt={drillSource?.createdAt}
+          open={!!drillSource}
+          onClose={() => setDrillSource(null)}
+        />
+      </div>
+    );
+  }
+
+  /* ── Non-virtualized (grouped by month) render ─────────────────────────── */
+  const grouped = groupByMonth(visibleEntries);
+
+  return (
+    <div className="space-y-2">
+      {filtersVisible && (
+        <TimelineToolbar
+          search={search} setSearch={setSearch}
+          category={category} setCategory={setCategory}
+          total={compactFiltered.length} filtered={visibleEntries.length}
+        />
+      )}
+      <div className={cn("overflow-y-auto", maxHeight)}>
+        {grouped.map(([key, group]) => (
+          <div key={key} className={compact ? "mb-2" : "mb-4"}>
+            <div className={cn(
+              "sticky top-0 z-10 bg-background/95 backdrop-blur-sm px-1 mb-1",
+              compact ? "py-0.5" : "py-1.5 mb-2"
+            )}>
+              <p className={cn(
+                "font-semibold text-muted-foreground uppercase tracking-wider",
+                compact ? "text-[8px]" : "text-[10px]"
+              )}>{group.label}</p>
+            </div>
+            <div className="space-y-0">
+              {group.entries.map((entry, i) => (
+                <TimelineRow
+                  key={entry.id || i}
+                  entry={entry}
+                  entityName={lookupName(entry)}
+                  onOpenEntity={onOpenEntity}
+                  onOpenSourceDrill={handleOpenSourceDrill}
+                  compact={compact}
+                  renderDetail={renderEntryDetail}
+                  isLast={i === group.entries.length - 1}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <SourceDrillDrawer
+        source={drillSource?.source}
+        createdAt={drillSource?.createdAt}
+        open={!!drillSource}
+        onClose={() => setDrillSource(null)}
+      />
     </div>
   );
 }
 
-export { EVENT_CONFIG };
+/* ── Filter + search toolbar (only rendered when showFilters is true) ───── */
+function TimelineToolbar({ search, setSearch, category, setCategory, total, filtered }) {
+  const showResultCount = filtered != null && filtered !== total;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="relative flex-1 min-w-[160px] max-w-sm">
+        <Search className="h-3.5 w-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60 pointer-events-none" />
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search title, description, source…"
+          className="h-7 text-xs pl-7 pr-7"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground"
+            aria-label="Clear search"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+      <Select value={category} onValueChange={setCategory}>
+        <SelectTrigger className="h-7 text-xs w-36">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {CATEGORY_FILTER_OPTIONS.map(opt => (
+            <SelectItem key={opt.value} value={opt.value} className="text-xs">{opt.label}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <span className="text-[10px] text-muted-foreground tabular-nums ml-auto">
+        {showResultCount ? `${filtered} of ${total}` : `${total} events`}
+      </span>
+    </div>
+  );
+}

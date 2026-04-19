@@ -465,6 +465,7 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
           metadata: { signal_id: signalId, kind, level: row.level },
           source: GENERATOR,
           idempotency_key: `signal_mirror:${signalId}:${t.entity_type}:${t.entity_id}`,
+          sync_log_id: ctx.syncLogId,
         });
       }
     }
@@ -508,6 +509,7 @@ serveWithAudit('pulseSignalGenerator', async (req: Request) => {
       new_value: { ...results, sync_log_id: ctx.syncLogId },
       source: GENERATOR,
       idempotency_key: `${GENERATOR}:run:${runId}`,
+      sync_log_id: ctx.syncLogId,
     });
   } catch { /* non-fatal */ }
 

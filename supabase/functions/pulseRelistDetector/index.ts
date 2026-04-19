@@ -162,6 +162,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       new_value: { lookback_days: lookbackDays, since, sync_log_id: ctx.syncLogId },
       source: GENERATOR,
       idempotency_key: `${GENERATOR}:run:${runId}`,
+      sync_log_id: ctx.syncLogId,
     }).then(() => {}, () => {});
     await endRun(ctx, {
       status: 'completed',
@@ -279,6 +280,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         },
         source: GENERATOR,
         idempotency_key: tlKey,
+        sync_log_id: ctx.syncLogId,
       });
     } else {
       result.timeline_skipped_dup++;
@@ -322,6 +324,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         },
         source: GENERATOR,
         idempotency_key: mirrorKey,
+        sync_log_id: ctx.syncLogId,
       });
     }
   }
@@ -392,6 +395,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       },
       source: GENERATOR,
       idempotency_key: `${GENERATOR}:run:${runId}`,
+      sync_log_id: ctx.syncLogId,
     });
   } catch { /* non-fatal */ }
 
