@@ -1,6 +1,7 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 import { MS_PER_DAY, MS_PER_MINUTE, GMAIL_DEFAULT_LOOKBACK_DAYS, GMAIL_HISTORY_FALLBACK_LOOKBACK_DAYS, GMAIL_LOOKBACK_MINUTES, MAX_MESSAGES_PER_SYNC } from '../_shared/constants.ts';
-import { AgentLookup } from '../_shared/emailLinking.ts';
+import { AgentLookup, extractEmailAddress } from '../_shared/emailLinking.ts';
+import { recordFieldObservation } from '../_shared/fieldSources.ts';
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
@@ -182,6 +183,42 @@ async function fetchAndSaveMessage(
         cc: ccList,
       })
     : { agent_id: null, agent_name: null, agency_id: null, agency_name: null, matched_via: null };
+
+  // ── SAFR: observe new email addresses for known contacts ────────────
+  // If this email matched an existing agent, record the From: (or To:/Cc:)
+  // address as an observation for that agent. The resolver's multi_value
+  // policy will keep it as an alternate if the domain differs from the
+  // current primary. source='email_sync'.
+  // Only fires on inbound mail from matched contacts (matched_via !== null
+  // and !isSent) — we don't observe our own outbound SMTP From:.
+  if (linkResult.agent_id && linkResult.matched_via && !isSent) {
+    try {
+      let observedEmail: string | null = null;
+      if (linkResult.matched_via === 'from' && headers['From']) {
+        observedEmail = extractEmailAddress(headers['From']);
+      } else if (linkResult.matched_via === 'domain' && headers['From']) {
+        // domain-only match: still record the From: as an observation
+        // (the resolver sees source=email_sync + the raw address; no
+        // promotion will happen below rea_scrape confidence — but the
+        // observation is preserved for audit).
+        observedEmail = extractEmailAddress(headers['From']);
+      }
+      if (observedEmail && observedEmail.includes('@')) {
+        await recordFieldObservation(admin, {
+          entity_type: 'agent',
+          entity_id: linkResult.agent_id,
+          field_name: 'email',
+          value: observedEmail,
+          source: 'email_sync',
+          source_ref_type: 'gmail_message',
+          source_ref_id: gmailMessageId,
+          observed_at: new Date().toISOString(),
+        });
+      }
+    } catch (safrErr: any) {
+      console.warn(`[safr] email_sync observation failed: ${safrErr?.message?.substring(0, 200)}`);
+    }
+  }
 
   // Truncate oversized bodies to prevent DB insert failures
   const MAX_BODY_SIZE = 10000;

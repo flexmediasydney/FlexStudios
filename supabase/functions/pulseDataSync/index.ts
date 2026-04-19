@@ -8,6 +8,10 @@ import {
 } from '../_shared/emailCleanup.ts';
 import { startRun, endRun, recordError } from '../_shared/observability.ts';
 import { emitTimeline, makeIdempotencyKey } from '../_shared/timeline.ts';
+import {
+  recordPulseAgentObservations,
+  recordPulseAgencyObservations,
+} from '../_shared/fieldSourcesHelpers.ts';
 
 /**
  * Pulse Data Sync — REA-Only 2-Actor Merge Engine (v3 DB-driven config)
@@ -1263,6 +1267,79 @@ serveWithAudit('pulseDataSync', async (req) => {
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
     }
 
+    // ── SAFR: record agent observations from websift scrape ──────────────
+    // After the main agent upsert above, emit observations to the Source-
+    // Aware Field Resolution ledger for every SAFR-managed field we just
+    // observed. We look up pulse_agents.id by rea_agent_id in chunks so we
+    // can attach observations to the canonical entity id.
+    //
+    // Source = 'rea_scrape' (websift agent profile), confidence defaults on
+    // the RPC side. Multi-value fields (email via all_emails,
+    // alternate_mobiles, alternate_business_phones) emit one observation
+    // per entry — the resolver's multi_value policy keeps up to N.
+    //
+    // Silent-fail on RPC absence (migration 178 may not be applied yet).
+    try {
+      const safrAgentReaIds = uniqueAgents
+        .map(a => a.rea_agent_id)
+        .filter((v: any): v is string => typeof v === 'string' && v.length > 0);
+      const safrAgentIdMap = new Map<string, string>();
+      if (safrAgentReaIds.length > 0) {
+        const CHUNK = 500;
+        for (let i = 0; i < safrAgentReaIds.length; i += CHUNK) {
+          const slice = safrAgentReaIds.slice(i, i + CHUNK);
+          const { data: rows = [] } = await admin.from('pulse_agents')
+            .select('id, rea_agent_id')
+            .in('rea_agent_id', slice);
+          for (const r of rows as any[]) {
+            if (r.rea_agent_id && r.id) safrAgentIdMap.set(r.rea_agent_id, r.id);
+          }
+        }
+      }
+      let safrAgentObsOk = 0;
+      let safrAgentObsFail = 0;
+      for (const a of uniqueAgents) {
+        if (!a.rea_agent_id) continue;
+        const pulseAgentId = safrAgentIdMap.get(a.rea_agent_id);
+        if (!pulseAgentId) continue;
+
+        // Parse JSONB-ish fields back to arrays when the upsert stringified them.
+        const allEmails: string[] = Array.isArray(a.all_emails)
+          ? a.all_emails
+          : (typeof a.all_emails === 'string' ? (() => { try { return JSON.parse(a.all_emails); } catch { return []; } })() : []);
+        const altMobiles: string[] = Array.isArray(a.alternate_mobiles)
+          ? a.alternate_mobiles.map((m: any) => m?.value || m).filter(Boolean)
+          : [];
+        const altBizPhones: string[] = Array.isArray(a.alternate_business_phones)
+          ? a.alternate_business_phones.map((m: any) => m?.value || m).filter(Boolean)
+          : [];
+
+        const out = await recordPulseAgentObservations(admin, {
+          entity_id: pulseAgentId,
+          source: 'rea_scrape',
+          source_ref_type: 'sync_log',
+          source_ref_id: syncLogId ?? undefined,
+          observed_at: now,
+          full_name: a.full_name ?? null,
+          mobile: a.mobile ?? null,
+          email: a.email ?? null,
+          all_emails: allEmails.length > 0 ? allEmails : null,
+          business_phone: a.business_phone ?? null,
+          alternate_mobiles: altMobiles.length > 0 ? altMobiles : null,
+          alternate_business_phones: altBizPhones.length > 0 ? altBizPhones : null,
+          job_title: a.job_title ?? null,
+          profile_image: a.profile_image ?? null,
+        });
+        safrAgentObsOk += out.ok;
+        safrAgentObsFail += out.failed;
+      }
+      if (safrAgentObsOk + safrAgentObsFail > 0) {
+        console.log(`[safr] agent observations: ${safrAgentObsOk} ok, ${safrAgentObsFail} failed`);
+      }
+    } catch (e: any) {
+      console.warn(`[safr] agent observation fan-out failed: ${e?.message?.substring(0, 200)}`);
+    }
+
     // Upsert agencies — pre-load existing for batch lookup (replaces N+1 pattern)
     //
     // BUG FIX (2026-04-19): previously loaded ALL agencies via
@@ -1328,6 +1405,70 @@ serveWithAudit('pulseDataSync', async (req) => {
         if (!insErr) agenciesInserted++;
         else if (agenciesInserted < 3) console.error(`Agency insert error for ${agency.name}:`, insErr.message?.substring(0, 200));
       }
+    }
+
+    // ── SAFR: record agency observations from websift/azzouzana scrape ───
+    // Same pattern as the agent fan-out above — after the main agency
+    // upsert loop, look up pulse_agencies.id by name (already-normalised
+    // via existingAgencyMap) and emit observations for every SAFR-managed
+    // field. Source = 'rea_scrape'.
+    try {
+      const safrAgencyNames = Array.from(new Set(
+        mergedAgencies.map(a => (a?.name || '').trim()).filter(Boolean),
+      ));
+      const safrAgencyIdMap = new Map<string, string>();
+      if (safrAgencyNames.length > 0) {
+        const CHUNK = 500;
+        for (let i = 0; i < safrAgencyNames.length; i += CHUNK) {
+          const slice = safrAgencyNames.slice(i, i + CHUNK);
+          const { data: rows = [] } = await admin.from('pulse_agencies')
+            .select('id, name')
+            .in('name', slice);
+          for (const r of rows as any[]) {
+            const k = (r.name || '').trim().toLowerCase();
+            if (k && r.id) safrAgencyIdMap.set(k, r.id);
+          }
+        }
+      }
+      let safrAgencyObsOk = 0;
+      let safrAgencyObsFail = 0;
+      for (const agency of mergedAgencies) {
+        const key = (agency?.name || '').trim().toLowerCase();
+        if (!key) continue;
+        const pulseAgencyId = safrAgencyIdMap.get(key);
+        if (!pulseAgencyId) continue;
+
+        // agency.address may be object or string — SAFR stores a scalar,
+        // so stringify objects with a predictable shape.
+        let addressValue: string | null = null;
+        const rawAddr = (agency as any).address;
+        if (typeof rawAddr === 'string' && rawAddr.trim()) addressValue = rawAddr.trim();
+        else if (rawAddr && typeof rawAddr === 'object') {
+          const parts = [rawAddr.streetAddress, rawAddr.suburb, rawAddr.state, rawAddr.postcode].filter(Boolean);
+          if (parts.length > 0) addressValue = parts.join(', ');
+        }
+
+        const out = await recordPulseAgencyObservations(admin, {
+          entity_id: pulseAgencyId,
+          source: 'rea_scrape',
+          source_ref_type: 'sync_log',
+          source_ref_id: syncLogId ?? undefined,
+          observed_at: now,
+          name: agency.name ?? null,
+          email: (agency as any).email ?? null,
+          phone: (agency as any).phone ?? null,
+          website: (agency as any).website ?? null,
+          address: addressValue,
+          logo_url: (agency as any).logo_url ?? null,
+        });
+        safrAgencyObsOk += out.ok;
+        safrAgencyObsFail += out.failed;
+      }
+      if (safrAgencyObsOk + safrAgencyObsFail > 0) {
+        console.log(`[safr] agency observations: ${safrAgencyObsOk} ok, ${safrAgencyObsFail} failed`);
+      }
+    } catch (e: any) {
+      console.warn(`[safr] agency observation fan-out failed: ${e?.message?.substring(0, 200)}`);
     }
 
     // Upsert listings + detect new listings + parse status from price text
@@ -1835,6 +1976,41 @@ serveWithAudit('pulseDataSync', async (req) => {
                   });
                   if (tlErr) console.error(`[pulseDataSync] bridge-agent timeline upsert failed: ${tlErr.message?.substring(0, 200)}`);
                 }
+
+                // ── SAFR: emit observations for bridge-created agents ──
+                // These agents came from listing payloads (source='rea_listings_bridge').
+                // We emit observations for every SAFR-managed field captured
+                // in the bridge row. Each listing-agent email array becomes
+                // N observations (multi_value policy keeps up to N).
+                try {
+                  const bridgeRowById = new Map<string, any>(
+                    listingOnlyAgentRows.map((r: any) => [r.rea_agent_id, r]),
+                  );
+                  for (const pa of bridgeInserted as any[]) {
+                    const src = bridgeRowById.get(pa.rea_agent_id);
+                    if (!src) continue;
+                    let allEmails: string[] = [];
+                    if (Array.isArray(src.all_emails)) allEmails = src.all_emails;
+                    else if (typeof src.all_emails === 'string') {
+                      try { allEmails = JSON.parse(src.all_emails); } catch { allEmails = []; }
+                    }
+                    await recordPulseAgentObservations(admin, {
+                      entity_id: pa.id,
+                      source: 'rea_listings_bridge',
+                      source_ref_type: 'sync_log',
+                      source_ref_id: syncLogId ?? undefined,
+                      observed_at: now,
+                      full_name: src.full_name ?? null,
+                      mobile: src.mobile ?? null,
+                      email: src.email ?? null,
+                      all_emails: allEmails.length > 0 ? allEmails : null,
+                      job_title: src.job_title ?? null,
+                      profile_image: src.profile_image ?? null,
+                    });
+                  }
+                } catch (safrErr: any) {
+                  console.warn(`[safr] bridge-agent observation emit failed: ${safrErr?.message?.substring(0, 200)}`);
+                }
               }
             } catch (e) {
               console.warn(`bridge-agent first_seen emit failed: ${(e as Error)?.message?.substring(0, 300)}`);
@@ -1914,6 +2090,28 @@ serveWithAudit('pulseDataSync', async (req) => {
                     ignoreDuplicates: true,
                   });
                   if (tlAgErr) console.error(`[pulseDataSync] bridge-agency timeline upsert failed: ${tlAgErr.message?.substring(0, 200)}`);
+                }
+
+                // ── SAFR: emit observations for bridge-created agencies ──
+                try {
+                  const bridgeRowById = new Map<string, any>(
+                    listingOnlyAgencyRows.map((r: any) => [r.rea_agency_id, r]),
+                  );
+                  for (const ag of bridgeInserted as any[]) {
+                    const src = bridgeRowById.get(ag.rea_agency_id);
+                    if (!src) continue;
+                    await recordPulseAgencyObservations(admin, {
+                      entity_id: ag.id,
+                      source: 'rea_listings_bridge',
+                      source_ref_type: 'sync_log',
+                      source_ref_id: syncLogId ?? undefined,
+                      observed_at: now,
+                      name: src.name ?? null,
+                      logo_url: src.logo_url ?? null,
+                    });
+                  }
+                } catch (safrErr: any) {
+                  console.warn(`[safr] bridge-agency observation emit failed: ${safrErr?.message?.substring(0, 200)}`);
                 }
               }
             } catch (e) {
@@ -2111,6 +2309,44 @@ serveWithAudit('pulseDataSync', async (req) => {
           }
         }
         console.log(`Cross-enriched ${enriched} agents from listing data${enrichErrors > 0 ? ` (${enrichErrors} failed)` : ''}`);
+
+        // ── SAFR: cross-enrich observations ─────────────────────────────
+        // Listings carry emails/photos/phones/job-titles for agents. Each
+        // enrichUpdates entry bundles the SAFR-managed fields we just merged
+        // into pulse_agents. Emit observations with source='rea_listing_detail'
+        // so the resolver can prefer listing-sourced values over plain
+        // websift when the multi_source/confidence policy applies.
+        try {
+          let safrEnrichOk = 0;
+          let safrEnrichFail = 0;
+          for (const u of enrichUpdates) {
+            if (!u?.id) continue;
+            let allEmails: string[] = [];
+            if (Array.isArray(u.all_emails)) allEmails = u.all_emails;
+            else if (typeof u.all_emails === 'string') {
+              try { allEmails = JSON.parse(u.all_emails); } catch { allEmails = []; }
+            }
+            const out = await recordPulseAgentObservations(admin, {
+              entity_id: u.id,
+              source: 'rea_listing_detail',
+              source_ref_type: 'sync_log',
+              source_ref_id: syncLogId ?? undefined,
+              observed_at: now,
+              email: u.email ?? null,
+              all_emails: allEmails.length > 0 ? allEmails : null,
+              mobile: u.mobile ?? null,
+              job_title: u.job_title ?? null,
+              profile_image: u.profile_image ?? null,
+            });
+            safrEnrichOk += out.ok;
+            safrEnrichFail += out.failed;
+          }
+          if (safrEnrichOk + safrEnrichFail > 0) {
+            console.log(`[safr] cross-enrich observations: ${safrEnrichOk} ok, ${safrEnrichFail} failed`);
+          }
+        } catch (safrErr: any) {
+          console.warn(`[safr] cross-enrich observation fan-out failed: ${safrErr?.message?.substring(0, 200)}`);
+        }
       }
     }
 

@@ -46,6 +46,11 @@ import {
   breakerRecordSuccess,
   breakerRecordFailure,
 } from '../_shared/observability.ts';
+import { recordFieldObservation } from '../_shared/fieldSources.ts';
+import {
+  recordPulseAgentObservations,
+  recordPulseAgencyObservations,
+} from '../_shared/fieldSourcesHelpers.ts';
 
 const APIFY_TOKEN = Deno.env.get('APIFY_TOKEN') || '';
 const APIFY_BASE = 'https://api.apify.com/v2';
@@ -883,6 +888,34 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
                 description: `Agent discovered through listing detail page (no prior websift sync)`,
                 source: SOURCE_ID, idempotency_key: `first_seen:${reaAgentId}`,
               });
+
+              // ── SAFR: emit observations for bridge-created agent ──
+              // Detail-enrich is the strongest source for contact fields
+              // (confidence 95 — see pulse_source_confidence). One obs per
+              // field. The lister.emails / agents[].emails multi-value
+              // arrays from the payload are emitted further below in the
+              // pulse_merge_contact block — this only captures the scalars
+              // we know at bridge-create time.
+              try {
+                const listerEmails: string[] = Array.isArray(topAgent?.emails)
+                  ? topAgent.emails.filter((e: any) => typeof e === 'string' && e.length > 0)
+                  : [];
+                await recordPulseAgentObservations(admin, {
+                  entity_id: created.id,
+                  source: 'rea_listing_detail',
+                  source_ref_type: 'listing',
+                  source_ref_id: cand.id,
+                  observed_at: now.toISOString(),
+                  full_name: listerName,
+                  mobile: agentMobile,
+                  email: agentEmail,
+                  all_emails: listerEmails.length > 0 ? listerEmails : null,
+                  job_title: listerTitle,
+                  profile_image: listerPhoto,
+                });
+              } catch (safrErr: any) {
+                console.warn(`[safr] bridge-agent observation failed: ${safrErr?.message?.substring(0, 200)}`);
+              }
             }
           }
 
@@ -899,6 +932,36 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             let bumped = false;
             // Email merge
             if (agentEmail && !isMiddlemanEmail(agentEmail)) {
+              // ── SAFR: every observation of this email goes to the ledger ──
+              // (independent of whether pulse_merge_contact promotes it —
+              // the resolver will decide based on source-weighted confidence.)
+              await recordFieldObservation(admin, {
+                entity_type: 'agent',
+                entity_id: agentRow.id,
+                field_name: 'email',
+                value: agentEmail,
+                source: 'rea_listing_detail',
+                source_ref_type: 'listing',
+                source_ref_id: cand.id,
+                observed_at: now.toISOString(),
+              });
+              // Also emit an observation for every additional email array entry
+              // (listing.agents[].emails[] can carry 2-3 emails per lister).
+              const extraEmails = Array.isArray(topAgent?.emails) ? topAgent.emails : [];
+              for (const e of extraEmails) {
+                if (typeof e !== 'string' || !e || isMiddlemanEmail(e) || e === agentEmail) continue;
+                await recordFieldObservation(admin, {
+                  entity_type: 'agent',
+                  entity_id: agentRow.id,
+                  field_name: 'email',
+                  value: e,
+                  source: 'rea_listing_detail',
+                  source_ref_type: 'listing',
+                  source_ref_id: cand.id,
+                  observed_at: now.toISOString(),
+                });
+              }
+
               const r = await admin.rpc('pulse_merge_contact', {
                 p_table: 'pulse_agents', p_row_id: agentRow.id,
                 p_field: 'email', p_value: agentEmail, p_source: SRC_LISTER,
@@ -929,6 +992,49 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             }
             // Mobile merge
             if (agentMobile) {
+              // ── SAFR: record mobile observation ──
+              await recordFieldObservation(admin, {
+                entity_type: 'agent',
+                entity_id: agentRow.id,
+                field_name: 'mobile',
+                value: agentMobile,
+                source: 'rea_listing_detail',
+                source_ref_type: 'listing',
+                source_ref_id: cand.id,
+                observed_at: now.toISOString(),
+              });
+
+              // Also capture profile_image / job_title observations when
+              // they appear in the same payload — cheap additional signal.
+              const listerPhotoForObs = lister?.mainPhoto
+                ? `${lister.mainPhoto.server}${lister.mainPhoto.uri}`
+                : (topAgent?.image || null);
+              if (listerPhotoForObs) {
+                await recordFieldObservation(admin, {
+                  entity_type: 'agent',
+                  entity_id: agentRow.id,
+                  field_name: 'profile_image',
+                  value: listerPhotoForObs,
+                  source: 'rea_listing_detail',
+                  source_ref_type: 'listing',
+                  source_ref_id: cand.id,
+                  observed_at: now.toISOString(),
+                });
+              }
+              const listerTitleForObs = lister?.jobTitle || topAgent?.jobTitle || null;
+              if (listerTitleForObs) {
+                await recordFieldObservation(admin, {
+                  entity_type: 'agent',
+                  entity_id: agentRow.id,
+                  field_name: 'job_title',
+                  value: listerTitleForObs,
+                  source: 'rea_listing_detail',
+                  source_ref_type: 'listing',
+                  source_ref_id: cand.id,
+                  observed_at: now.toISOString(),
+                });
+              }
+
               const r = await admin.rpc('pulse_merge_contact', {
                 p_table: 'pulse_agents', p_row_id: agentRow.id,
                 p_field: 'mobile', p_value: agentMobile, p_source: SRC_LISTER,
@@ -962,6 +1068,50 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
               stats.integrity_scores_bumped++;
             }
           }
+        }
+
+        // ── SAFR: secondary agents in listing.agents[] ─────────────────────
+        // The block above handles agents[0] (primary lister). Listings with
+        // co-listing agents (agents[1], agents[2]) are a rich signal: their
+        // emails/phones/photos are observations about OTHER agents that
+        // happen to be attached to this listing. Only emit if we can match
+        // the agentId to an existing pulse_agents.rea_agent_id — we don't
+        // bridge-create secondary agents here (that's pulseDataSync's job).
+        try {
+          const secondaryAgents: any[] = Array.isArray(item.agents) ? item.agents.slice(1) : [];
+          for (const sa of secondaryAgents) {
+            const saReaId = sa?.agentId && String(sa.agentId);
+            if (!saReaId) continue;
+            // Lookup; skip if not found (bridge-create is not our job here).
+            const { data: saRow } = await admin.from('pulse_agents')
+              .select('id')
+              .eq('rea_agent_id', saReaId)
+              .maybeSingle();
+            if (!saRow?.id) continue;
+
+            const saEmails: string[] = Array.isArray(sa.emails)
+              ? sa.emails.filter((e: any) => typeof e === 'string' && e.length > 0 && !isMiddlemanEmail(e))
+              : [];
+            const saPhone = sanitisePhone(sa.phoneNumber || sa.phone || null);
+            const saPhoto = sa.image || null;
+            const saJobTitle = sa.jobTitle || null;
+            const saName = sa.name || null;
+
+            await recordPulseAgentObservations(admin, {
+              entity_id: saRow.id,
+              source: 'rea_listing_detail',
+              source_ref_type: 'listing',
+              source_ref_id: cand.id,
+              observed_at: now.toISOString(),
+              full_name: saName,
+              mobile: saPhone,
+              all_emails: saEmails.length > 0 ? saEmails : null,
+              job_title: saJobTitle,
+              profile_image: saPhoto,
+            });
+          }
+        } catch (safrErr: any) {
+          console.warn(`[safr] secondary-agents observation failed: ${safrErr?.message?.substring(0, 200)}`);
         }
 
         // ── Agency contact merge (listing.agency + item.agencyEmail etc.) ──
@@ -1009,6 +1159,26 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
                   description: `Agency discovered through listing detail page`,
                   source: SOURCE_ID, idempotency_key: `first_seen:agency:${agencyReaId}`,
                 });
+
+                // ── SAFR: emit observations for bridge-created agency ──
+                try {
+                  const logoUrlForObs = listing.agency?.logo?.images?.[0]
+                    ? `${listing.agency.logo.images[0].server}${listing.agency.logo.images[0].uri}`
+                    : null;
+                  await recordPulseAgencyObservations(admin, {
+                    entity_id: created.id,
+                    source: 'rea_listing_detail',
+                    source_ref_type: 'listing',
+                    source_ref_id: cand.id,
+                    observed_at: now.toISOString(),
+                    name: agencyName,
+                    website: listing.agency?.website ?? null,
+                    address: (addr?.streetAddress ?? null),
+                    logo_url: logoUrlForObs,
+                  });
+                } catch (safrErr: any) {
+                  console.warn(`[safr] bridge-agency observation failed: ${safrErr?.message?.substring(0, 200)}`);
+                }
               }
             }
           }
@@ -1029,6 +1199,18 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             // Email
             const agencyEmail = agency._links?.email || item.agencyEmail || null;
             if (agencyEmail && !isMiddlemanEmail(agencyEmail)) {
+              // ── SAFR: record agency email observation ──
+              await recordFieldObservation(admin, {
+                entity_type: 'agency',
+                entity_id: agencyRow.id,
+                field_name: 'email',
+                value: agencyEmail,
+                source: 'rea_listing_detail',
+                source_ref_type: 'listing',
+                source_ref_id: cand.id,
+                observed_at: now.toISOString(),
+              });
+
               const r = await admin.rpc('pulse_merge_contact', {
                 p_table: 'pulse_agencies', p_row_id: agencyRow.id,
                 p_field: 'email', p_value: agencyEmail, p_source: SRC_AGENCY,
@@ -1049,6 +1231,18 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             // Phone
             const agencyPhone = agency.phoneNumber || item.agencyPhone || null;
             if (agencyPhone) {
+              // ── SAFR: record agency phone observation ──
+              await recordFieldObservation(admin, {
+                entity_type: 'agency',
+                entity_id: agencyRow.id,
+                field_name: 'phone',
+                value: agencyPhone,
+                source: 'rea_listing_detail',
+                source_ref_type: 'listing',
+                source_ref_id: cand.id,
+                observed_at: now.toISOString(),
+              });
+
               const r = await admin.rpc('pulse_merge_contact', {
                 p_table: 'pulse_agencies', p_row_id: agencyRow.id,
                 p_field: 'phone', p_value: agencyPhone, p_source: SRC_AGENCY,
@@ -1095,6 +1289,54 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
               // P1 #8 (2026-04-19): surface DB errors.
               const { error: agUpdErr } = await admin.from('pulse_agencies').update(aUpdates).eq('id', agencyRow.id);
               if (agUpdErr) console.error(`[pulseDetailEnrich] agency brand update failed for ${agencyRow.id}: ${agUpdErr.message?.substring(0, 200)}`);
+            }
+
+            // ── SAFR: record agency plain-field observations ─────────────
+            // Emits whenever the listing payload has a website/address value
+            // (regardless of whether aUpdates actually wrote — the resolver
+            // decides). brand_color_* are not SAFR-managed so we don't emit.
+            try {
+              if (agency.website) {
+                await recordFieldObservation(admin, {
+                  entity_type: 'agency',
+                  entity_id: agencyRow.id,
+                  field_name: 'website',
+                  value: agency.website,
+                  source: 'rea_listing_detail',
+                  source_ref_type: 'listing',
+                  source_ref_id: cand.id,
+                  observed_at: now.toISOString(),
+                });
+              }
+              if (addrStreet) {
+                await recordFieldObservation(admin, {
+                  entity_type: 'agency',
+                  entity_id: agencyRow.id,
+                  field_name: 'address',
+                  value: addrStreet,
+                  source: 'rea_listing_detail',
+                  source_ref_type: 'listing',
+                  source_ref_id: cand.id,
+                  observed_at: now.toISOString(),
+                });
+              }
+              const agencyLogoUrl = listing.agency?.logo?.images?.[0]
+                ? `${listing.agency.logo.images[0].server}${listing.agency.logo.images[0].uri}`
+                : null;
+              if (agencyLogoUrl) {
+                await recordFieldObservation(admin, {
+                  entity_type: 'agency',
+                  entity_id: agencyRow.id,
+                  field_name: 'logo_url',
+                  value: agencyLogoUrl,
+                  source: 'rea_listing_detail',
+                  source_ref_type: 'listing',
+                  source_ref_id: cand.id,
+                  observed_at: now.toISOString(),
+                });
+              }
+            } catch (safrErr: any) {
+              console.warn(`[safr] agency plain-field observation failed: ${safrErr?.message?.substring(0, 200)}`);
             }
           }
         }
