@@ -112,6 +112,7 @@ const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMa
 // SettingsStaffDefaults removed — now a subtab in SettingsTeamsUsers
 const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
+const SettingsLegacyImport = React.lazy(() => import('./pages/SettingsLegacyImport'));
 const SettingsTonomoWebhooks = React.lazy(() => import('./pages/SettingsTonomoWebhooks'));
 const AIAuditLog = React.lazy(() => import('./pages/AIAuditLog'));
 const TeamDetails = React.lazy(() => import('./pages/TeamDetails'));
@@ -170,6 +171,7 @@ export const PAGES = {
     "Tasks": Tasks,
     "SettingsClients": SettingsClients,
     "SettingsDataConsistency": SettingsDataConsistency,
+    "SettingsLegacyImport": SettingsLegacyImport,
     "SettingsIntegrations": SettingsIntegrations,
     "SettingsNotifications": SettingsNotifications,
     "SettingsOrganisation": SettingsOrganisation,
