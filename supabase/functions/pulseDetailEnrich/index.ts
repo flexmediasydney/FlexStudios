@@ -455,30 +455,44 @@ async function emitTimeline(
     }
   };
 
-  // Best-effort insert; duplicate idempotency_keys are caught by unique constraint.
-  // We try bulk first, then fall back to per-row inserts so one bad row doesn't
-  // drop the whole batch (which was the silent failure in the initial ship).
-  const { error, count } = await admin.from('pulse_timeline').insert(stamped, { count: 'exact' });
-  if (!error) {
-    for (const e of stamped) tallyRow(e);
-    await flushIncrements();
-    return { inserted: count || stamped.length, errors: [] };
-  }
-  // Dedup-only errors — expected, not a real problem
-  if (String(error.message || '').includes('duplicate')) return { inserted: 0, errors: [] };
-  // Otherwise try per-row for partial success, and group error strings by prefix.
+  // Use upsert with ignoreDuplicates so a single duplicate idempotency_key
+  // doesn't nuke the whole batch. Before 2026-04-19 this used plain insert()
+  // and early-returned on "duplicate" errors — side effect: 44/153 enrich
+  // runs silently dropped ALL their timeline events because ONE row in the
+  // batch had been seen before on the same day. Sources > Changes tab showed
+  // "No changes" for those runs even though media/prices had changed.
+  // See _shared/timeline.ts for the canonical pattern.
   const errorGroups = new Map<string, number>();
   const bump = (raw: string) => {
     const key = String(raw || '').substring(0, 80);
     errorGroups.set(key, (errorGroups.get(key) || 0) + 1);
   };
-  // The bulk attempt's error applies to the whole first pass — count once.
-  bump(error.message || '');
+
   let inserted = 0;
-  for (const e of stamped) {
-    const { error: e2 } = await admin.from('pulse_timeline').insert(e);
-    if (!e2) { inserted++; tallyRow(e); }
-    else if (!String(e2.message || '').includes('duplicate')) bump(e2.message || '');
+  const CHUNK = 500;
+  for (let i = 0; i < stamped.length; i += CHUNK) {
+    const batch = stamped.slice(i, i + CHUNK);
+    const { error } = await admin
+      .from('pulse_timeline')
+      .upsert(batch, { onConflict: 'idempotency_key', ignoreDuplicates: true });
+    if (error) {
+      bump(error.message || '');
+      // Fall back to per-row so rows that *would* succeed still land.
+      for (const e of batch) {
+        const { error: e2 } = await admin
+          .from('pulse_timeline')
+          .upsert(e, { onConflict: 'idempotency_key', ignoreDuplicates: true });
+        if (!e2) { inserted++; tallyRow(e); }
+        else bump(e2.message || '');
+      }
+    } else {
+      // ignoreDuplicates silently skips conflicts without reporting count.
+      // Report batch size as the optimistic "inserted" figure — the counter
+      // is a UX hint, not a billing number. Slight over-count on re-runs is
+      // acceptable and matches _shared/timeline.ts.
+      inserted += batch.length;
+      for (const e of batch) tallyRow(e);
+    }
   }
   await flushIncrements();
   const errors = Array.from(errorGroups.entries()).map(([msg, count]) => ({ msg, count }));
