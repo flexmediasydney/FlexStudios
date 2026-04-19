@@ -33,6 +33,8 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import AttachmentLightbox from "@/components/common/AttachmentLightbox";
+import PropertyGallery from "@/components/property/PropertyGallery";
+import PropertyTimelineEventDrawer from "@/components/property/PropertyTimelineEventDrawer";
 import { toast } from "sonner";
 import {
   Home, MapPin, ArrowLeft, Share2, Star, Images, Video, Camera, Calendar,
@@ -567,6 +569,11 @@ export default function PropertyDetails() {
                 projects={projects}
                 onDotClick={handleChartDotClick}
               />
+            </ErrorBoundary>
+
+            {/* ── GALLERY — full thumbnail grid above the tab rail ── */}
+            <ErrorBoundary compact fallbackLabel="Gallery">
+              <PropertyGallery listings={listings} />
             </ErrorBoundary>
 
             {/* ── TABS ── */}
@@ -1844,6 +1851,9 @@ function IntelligenceStrip({ property, listings, projects, onTileClick }) {
 
 function TimelineTab({ events, listings, projects, flashedEventId }) {
   const [filter, setFilter] = useState("all"); // all | shoots | rea | sales
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // Normalize events — rpc returns pulse_timeline rows, but fall back to
   // synthesizing from listings + projects when the RPC shape is empty.
@@ -1922,6 +1932,42 @@ function TimelineTab({ events, listings, projects, flashedEventId }) {
     return Array.from(map.entries());
   }, [filtered]);
 
+  // Deep-link support — `?event_id=<uuid>` auto-opens the drawer on mount.
+  // We only fire once per navigation to avoid trapping the user in the drawer
+  // after they close it.
+  const deeplinkHandledRef = useRef(false);
+  useEffect(() => {
+    if (deeplinkHandledRef.current) return;
+    const params = new URLSearchParams(location.search);
+    const targetId = params.get("event_id");
+    if (!targetId || allItems.length === 0) return;
+    const match = allItems.find(
+      (e) => String(e.id || "") === targetId || String(e._id || "") === targetId,
+    );
+    if (match) {
+      setSelectedEvent(match);
+      deeplinkHandledRef.current = true;
+    }
+  }, [allItems, location.search]);
+
+  const handleOpenEvent = useCallback((ev) => {
+    if (!ev) return;
+    setSelectedEvent(ev);
+  }, []);
+
+  const handleCloseEvent = useCallback(() => {
+    setSelectedEvent(null);
+    // Strip `?event_id=` from the URL if it's there so back/forward feel sane.
+    const params = new URLSearchParams(location.search);
+    if (params.has("event_id")) {
+      params.delete("event_id");
+      navigate(
+        { pathname: location.pathname, search: params.toString() ? `?${params}` : "" },
+        { replace: true },
+      );
+    }
+  }, [location.pathname, location.search, navigate]);
+
   return (
     <Card className="rounded-xl">
       <CardHeader className="pb-2">
@@ -1979,12 +2025,18 @@ function TimelineTab({ events, listings, projects, flashedEventId }) {
                   key={e._id || e.id || `${month}-${i}`}
                   event={e}
                   flashed={flashedEventId && flashedEventId === e._id}
+                  onOpen={handleOpenEvent}
                 />
               ))}
             </div>
           </div>
         ))}
       </CardContent>
+      <PropertyTimelineEventDrawer
+        event={selectedEvent}
+        open={!!selectedEvent}
+        onClose={handleCloseEvent}
+      />
     </Card>
   );
 }
@@ -1997,19 +2049,45 @@ function classifyEventKind(e) {
   return "rea";
 }
 
-function TimelineCard({ event, flashed }) {
+function TimelineCard({ event, flashed, onOpen }) {
   const kind = event._kind;
   // Flash ring appears briefly when the Price Timeline Chart targets this card.
   const flashCls = flashed
     ? "ring-2 ring-primary ring-offset-2 ring-offset-background transition-shadow"
     : "transition-shadow";
+  // Every row is now clickable → fires the drawer via the parent-owned handler.
+  const clickableCls = onOpen
+    ? "cursor-pointer hover:shadow-sm hover:ring-1 hover:ring-border focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+    : "";
+  const handleActivate = (ev) => {
+    if (!onOpen) return;
+    // Allow nested <a>/<button> clicks (external source link) to propagate
+    // their own default without triggering a drawer open.
+    if (ev?.target?.closest?.("a, button")) return;
+    onOpen(event);
+  };
+  const handleKey = (ev) => {
+    if (!onOpen) return;
+    if (ev.key === "Enter" || ev.key === " ") {
+      ev.preventDefault();
+      onOpen(event);
+    }
+  };
 
   if (kind === "shoot") {
-    const content = (
-      <div className={cn(
-        "bg-violet-50/40 dark:bg-violet-950/20 border border-violet-200/60 dark:border-violet-800/40 rounded p-2",
-        flashCls,
-      )}>
+    return (
+      <div
+        role={onOpen ? "button" : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+        aria-label={onOpen ? `Open event: ${event.title || "FlexStudios shoot"}` : undefined}
+        onClick={handleActivate}
+        onKeyDown={handleKey}
+        className={cn(
+          "bg-violet-50/40 dark:bg-violet-950/20 border border-violet-200/60 dark:border-violet-800/40 rounded p-2",
+          flashCls,
+          clickableCls,
+        )}
+      >
         <div className="flex items-start gap-2">
           <Camera className="h-3.5 w-3.5 text-violet-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
@@ -2022,22 +2100,22 @@ function TimelineCard({ event, flashed }) {
         </div>
       </div>
     );
-    if (event.project_id) {
-      return (
-        <Link to={createPageUrl(`ProjectDetails?id=${event.project_id}`)} className="block hover:opacity-90">
-          {content}
-        </Link>
-      );
-    }
-    return content;
   }
 
   if (kind === "sale") {
     return (
-      <div className={cn(
-        "bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded p-2",
-        flashCls,
-      )}>
+      <div
+        role={onOpen ? "button" : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+        aria-label={onOpen ? `Open event: ${event.title || "Sold"}` : undefined}
+        onClick={handleActivate}
+        onKeyDown={handleKey}
+        className={cn(
+          "bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-200/60 dark:border-emerald-800/40 rounded p-2",
+          flashCls,
+          clickableCls,
+        )}
+      >
         <div className="flex items-start gap-2">
           <DollarSign className="h-3.5 w-3.5 text-emerald-600 mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
@@ -2052,6 +2130,7 @@ function TimelineCard({ event, flashed }) {
               href={event.source_url}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
               className="text-emerald-600 hover:text-emerald-700"
               title="Open on REA"
             >
@@ -2065,7 +2144,14 @@ function TimelineCard({ event, flashed }) {
 
   // Default REA event
   return (
-    <div className={cn("bg-muted/40 border border-border/60 rounded p-2", flashCls)}>
+    <div
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      aria-label={onOpen ? `Open event: ${event.title || event.event_type || "Listing"}` : undefined}
+      onClick={handleActivate}
+      onKeyDown={handleKey}
+      className={cn("bg-muted/40 border border-border/60 rounded p-2", flashCls, clickableCls)}
+    >
       <div className="flex items-start gap-2">
         <Building2 className="h-3.5 w-3.5 text-blue-600 mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
@@ -2080,6 +2166,7 @@ function TimelineCard({ event, flashed }) {
             href={event.source_url}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
             className="text-blue-600 hover:text-blue-700"
             title="Open on REA"
           >
