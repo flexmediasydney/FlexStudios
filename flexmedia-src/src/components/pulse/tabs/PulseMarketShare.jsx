@@ -101,11 +101,17 @@ export default function PulseMarketShare({ onOpenEntity, onNavigateTab }) {
     staleTime: 60_000,
   });
 
+  // Dimension toggle: Current (for_sale) vs Sold. Mirrors Retention tab's
+  // dual-dimension model. The RPC's top-level fields still reflect "current"
+  // for back-compat, but the UI now lets users flip into the Sold dimension
+  // via `ms.current` / `ms.sold` sub-objects + the p_dimension arg on the
+  // top-missed RPC.
+  const [dimension, setDimension] = useState("current"); // "current" | "sold"
   const { data: topMissed = [], isLoading: topLoading } = useQuery({
-    queryKey: ["pulse_missed_top", fromIso, toIso],
+    queryKey: ["pulse_missed_top", fromIso, toIso, dimension],
     queryFn: async () => {
       const { data, error } = await api._supabase.rpc("pulse_get_missed_top_n", {
-        p_from: fromIso, p_to: toIso, p_limit: 50,
+        p_from: fromIso, p_to: toIso, p_limit: 50, p_dimension: dimension,
       });
       if (error) throw error;
       return data || [];
@@ -208,6 +214,8 @@ export default function PulseMarketShare({ onOpenEntity, onNavigateTab }) {
           captureVisibility={captureVisibility}
           setCaptureVisibility={setCaptureVisibility}
           onSuburbDrill={setSuburbFilter}
+          dimension={dimension}
+          setDimension={setDimension}
         />
       ) : (
         <LegendView sourceMix={sourceMix} mixLoading={mixLoading} ms={ms} />
@@ -226,17 +234,34 @@ function DashboardView({
   statusFilter, setStatusFilter,
   captureVisibility, setCaptureVisibility,
   onSuburbDrill,
+  dimension, setDimension,
 }) {
   const qq = ms?.quote_quality || {};
   const hasPending = (qq.pending_enrichment || 0) > 0;
 
-  // Legacy capture breakdown — defensive: these fields are populated by
-  // agent 3's migration 187 extension to pulse_get_market_share. Until then
-  // they read as undefined and the UI degrades to "active only" numbers.
-  const capturedActive  = Number(ms?.captured_listings_active  ?? ms?.captured_listings ?? 0);
-  const capturedLegacy  = Number(ms?.captured_listings_legacy  ?? 0);
-  const capturedTotal   = Number(ms?.captured_listings_total   ?? ms?.captured_listings ?? 0);
+  // Dual-dimension data from migration 190. Back-compat fields at top level
+  // still mirror "current" so older callers keep working.
+  const cur  = ms?.current || {};
+  const sold = ms?.sold || {};
+  const isCurrent = dimension === "current";
+
+  // Select the active dimension's numbers for the headline row.
+  const dim = isCurrent ? cur : sold;
+  const capturedActive  = Number(dim?.captured_active ?? ms?.captured_listings_active ?? 0);
+  const capturedLegacy  = Number(dim?.captured_legacy ?? ms?.captured_listings_legacy ?? 0);
+  const capturedTotal   = Number(dim?.captured_listings ?? ms?.captured_listings_total ?? ms?.captured_listings ?? 0);
   const legacyOnly      = Math.max(0, capturedTotal - capturedActive);
+  const totalListings   = Number(dim?.total_listings ?? ms?.total_listings ?? 0);
+  const captureRatePct  = Number(dim?.capture_rate_pct ?? ms?.capture_rate_pct ?? 0);
+  const missedVal       = Number(isCurrent
+    ? (dim?.missed_opportunity_value ?? ms?.missed_opportunity_value ?? 0)
+    : (sold?.missed_sold_value ?? 0));
+  const totalMarketVal  = isCurrent
+    ? Number(dim?.total_market_value ?? ms?.total_market_value ?? 0)
+    : Number(sold?.total_sold_value ?? 0);
+  const capturedMarketVal = isCurrent
+    ? Number(dim?.captured_market_value ?? ms?.captured_market_value ?? 0)
+    : Number(sold?.captured_sold_value ?? 0);
 
   // Client-side filter the top-missed table by selected package/tier/status.
   // When captureVisibility === 'uncaptured' (default) we still show the RPC's
@@ -264,17 +289,77 @@ function DashboardView({
 
   return (
     <div className="space-y-4">
-      {/* ── Headline stat cards (clickable) ──────────────────────────── */}
+      {/* ── Dimension toggle: Current (for sale) vs Sold ─────────────── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 rounded-md border bg-card p-0.5">
+          <button
+            onClick={() => setDimension("current")}
+            className={cn(
+              "text-xs px-2.5 py-1 rounded transition-colors flex items-center gap-1",
+              isCurrent ? "bg-blue-600 text-white font-medium" : "text-muted-foreground hover:bg-muted"
+            )}
+            title="For-sale listings, first_seen_at in window"
+          >
+            <ArrowUpRight className="h-3 w-3" />Current (for sale)
+          </button>
+          <button
+            onClick={() => setDimension("sold")}
+            className={cn(
+              "text-xs px-2.5 py-1 rounded transition-colors flex items-center gap-1",
+              !isCurrent ? "bg-purple-600 text-white font-medium" : "text-muted-foreground hover:bg-muted"
+            )}
+            title="Sold listings, sold_date in window"
+          >
+            <CheckCircle2 className="h-3 w-3" />Sold
+          </button>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          {isCurrent ? "Active buy-side market — what we're capturing in real time" : "Transacted market — what we shot vs what sold"}
+        </span>
+      </div>
+
+      {/* ── Dimension comparison strip — shows both at once so users can see the split ── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <DimensionCard
+          active={isCurrent}
+          color="blue"
+          onClick={() => setDimension("current")}
+          label="Current (for sale)"
+          listings={Number(cur.total_listings || 0)}
+          captured={Number(cur.captured_listings || 0)}
+          capturedActive={Number(cur.captured_active || 0)}
+          capturedLegacy={Number(cur.captured_legacy || 0)}
+          rate={Number(cur.capture_rate_pct || 0)}
+          missedValue={Number(cur.missed_opportunity_value || 0)}
+          loading={msLoading}
+        />
+        <DimensionCard
+          active={!isCurrent}
+          color="purple"
+          onClick={() => setDimension("sold")}
+          label="Sold"
+          listings={Number(sold.total_listings || 0)}
+          captured={Number(sold.captured_listings || 0)}
+          capturedActive={Number(sold.captured_active || 0)}
+          capturedLegacy={Number(sold.captured_legacy || 0)}
+          rate={Number(sold.capture_rate_pct || 0)}
+          missedValue={Number(sold.missed_sold_value || 0)}
+          loading={msLoading}
+          valueLabel="Sold value missed"
+        />
+      </div>
+
+      {/* ── Focused KPIs for the active dimension ───────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           icon={Target}
           color="text-emerald-600"
           bg="bg-emerald-50"
-          label="Capture rate"
-          value={fmtPct(ms?.capture_rate_pct)}
+          label={`Capture rate · ${isCurrent ? "Current" : "Sold"}`}
+          value={fmtPct(captureRatePct)}
           sub={capturedLegacy > 0
-            ? `${fmtInt(capturedActive)} active · ${fmtInt(capturedLegacy)} legacy of ${fmtInt(ms?.total_listings)}`
-            : `${fmtInt(capturedTotal || ms?.captured_listings)} of ${fmtInt(ms?.total_listings)} listings`}
+            ? `${fmtInt(capturedActive)} active · ${fmtInt(capturedLegacy)} legacy of ${fmtInt(totalListings)}`
+            : `${fmtInt(capturedTotal)} of ${fmtInt(totalListings)} listings`}
           loading={msLoading}
           onClick={onNavigateTab ? (() => onNavigateTab("listings")) : null}
           drillHint="View all listings →"
@@ -294,9 +379,11 @@ function DashboardView({
           icon={DollarSign}
           color="text-amber-600"
           bg="bg-amber-50"
-          label="Missed opportunity"
-          value={fmtMoney(ms?.missed_opportunity_value)}
-          sub={hasPending ? `+${fmtMoney((ms?.missed_opportunity_including_pending || 0) - (ms?.missed_opportunity_value || 0))} pending enrichment` : null}
+          label={isCurrent ? "Missed opportunity" : "Sold value missed"}
+          value={fmtMoney(missedVal)}
+          sub={isCurrent && hasPending
+            ? `+${fmtMoney((ms?.missed_opportunity_including_pending || 0) - (ms?.missed_opportunity_value || 0))} pending enrichment`
+            : (!isCurrent ? "Sum of sold_price for listings we didn't shoot" : null)}
           loading={msLoading}
           onClick={scrollToTable}
           drillHint="See top missed ↓"
@@ -305,9 +392,9 @@ function DashboardView({
           icon={TrendingUp}
           color="text-blue-600"
           bg="bg-blue-50"
-          label="Total market value"
-          value={fmtMoney(ms?.total_market_value)}
-          sub={`Captured ${fmtMoney(ms?.captured_market_value)}`}
+          label={isCurrent ? "Total market value" : "Total sold value"}
+          value={fmtMoney(totalMarketVal)}
+          sub={`Captured ${fmtMoney(capturedMarketVal)}`}
           loading={msLoading}
         />
       </div>
@@ -369,7 +456,15 @@ function DashboardView({
       <Card className="p-3" id="pulse-market-share-top-missed">
         <div className="flex items-center gap-2 mb-2 flex-wrap">
           <ArrowUpRight className="h-4 w-4 text-amber-600" />
-          <h3 className="text-sm font-semibold">Top missed opportunities</h3>
+          <h3 className="text-sm font-semibold">
+            Top missed opportunities
+            <Badge className={cn(
+              "ml-2 text-[10px] h-4 px-1",
+              isCurrent ? "bg-blue-100 text-blue-800 border-blue-200" : "bg-purple-100 text-purple-800 border-purple-200"
+            )}>
+              {isCurrent ? "Current" : "Sold"}
+            </Badge>
+          </h3>
           <div className="flex items-center gap-0.5 rounded-md border bg-card p-0.5 text-[10px]"
                title="Top missed shows uncaptured-only by default. Flip to include rows now captured by legacy imports for audit.">
             <button
@@ -467,7 +562,12 @@ function DashboardView({
                       ><TierBadge tier={row.resolved_tier} /></button>
                     </td>
                     <td className="py-1.5 text-right tabular-nums">{row.photo_count ?? "—"}</td>
-                    <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">{fmtMoney(row.quoted_price)}</td>
+                    {/* In "current" dimension: quoted_price; in "sold": sold_price (actual transacted amount we missed). */}
+                    <td className="py-1.5 text-right tabular-nums font-medium text-amber-700">
+                      {isCurrent
+                        ? fmtMoney(row.quoted_price)
+                        : (row.sold_price != null ? fmtMoney(row.sold_price) : "—")}
+                    </td>
                     <td className="py-1.5 truncate max-w-[220px]">
                       {row.agent_pulse_id && onOpenEntity ? (
                         <button
@@ -511,6 +611,66 @@ function DashboardView({
 }
 
 // ── Supporting subcomponents ────────────────────────────────────────────────
+
+// ── Dimension card — compact side-by-side comparison (Current vs Sold) ─
+// Click to swap the active dimension. Shows the 4 key numbers per side so
+// users can contrast them at a glance without toggling.
+function DimensionCard({ active, color, label, listings, captured, capturedActive, capturedLegacy, rate, missedValue, loading, onClick, valueLabel }) {
+  const palette = {
+    blue:   { bar: "bg-blue-500",   ring: "ring-blue-500",   text: "text-blue-700",   bg: "bg-blue-50" },
+    purple: { bar: "bg-purple-500", ring: "ring-purple-500", text: "text-purple-700", bg: "bg-purple-50" },
+  }[color] || { bar: "bg-slate-500", ring: "ring-slate-400", text: "text-slate-700", bg: "bg-slate-50" };
+  const missedListings = Math.max(0, listings - captured);
+  const capturedPct = listings > 0 ? (100 * captured / listings) : 0;
+  return (
+    <Card
+      className={cn(
+        "p-3 cursor-pointer transition-all",
+        active ? `ring-2 ${palette.ring} shadow-sm` : "hover:shadow-md",
+      )}
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } }}
+    >
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className={cn("text-xs font-semibold", palette.text)}>{label}</span>
+        {active && <Badge variant="secondary" className="text-[9px] h-4 ml-auto">Active</Badge>}
+      </div>
+      <div className="grid grid-cols-4 gap-2 mb-2">
+        <MiniStat label="Listings" value={loading ? "…" : fmtInt(listings)} />
+        <MiniStat label="Captured" value={loading ? "…" : fmtInt(captured)} color="text-emerald-700" />
+        <MiniStat label="Rate" value={loading ? "…" : `${rate.toFixed(2)}%`} />
+        <MiniStat label={valueLabel || "Missed $"} value={loading ? "…" : fmtMoney(missedValue)} color="text-amber-700" />
+      </div>
+      {/* Captured split bar (active vs legacy) */}
+      {listings > 0 && (
+        <div>
+          <div className="h-1.5 rounded bg-muted overflow-hidden flex">
+            <div className="bg-emerald-500" style={{ width: `${(100 * capturedActive / listings).toFixed(2)}%` }} title={`Active ${capturedActive}`} />
+            <div className="bg-slate-400"   style={{ width: `${(100 * capturedLegacy / listings).toFixed(2)}%` }} title={`Legacy ${capturedLegacy}`} />
+            <div className="bg-amber-400"   style={{ width: `${(100 * missedListings / listings).toFixed(2)}%` }} title={`Missed ${missedListings}`} />
+          </div>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+            <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />active {capturedActive}</span>
+            <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-slate-400" />legacy {capturedLegacy}</span>
+            <span className="inline-flex items-center gap-0.5"><span className="w-1.5 h-1.5 rounded-full bg-amber-400" />missed {missedListings}</span>
+            <span className="ml-auto tabular-nums">{capturedPct.toFixed(2)}% captured</span>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function MiniStat({ label, value, color }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] text-muted-foreground truncate">{label}</div>
+      <div className={cn("text-sm font-semibold tabular-nums truncate", color)}>{value}</div>
+    </div>
+  );
+}
 
 function StatCard({ icon: Icon, color, bg, label, value, sub, loading, onClick, drillHint }) {
   const clickable = !!onClick;
