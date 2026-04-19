@@ -46,7 +46,16 @@ const APIFY_BASE = 'https://api.apify.com/v2';
 // can't blow past the wall. When the budget runs out we finalize the sync log
 // as 'timed_out' and return 200 with partial results, instead of letting the
 // edge runtime issue a 504 Gateway Timeout we have no way to handle.
-const WALL_BUDGET_MS = 130_000;
+//
+// 2026-04-19: bumped 130→145s. Agent G (timeline overhaul session) observed
+// that heavy BB suburbs (Strathfield/Burwood/Homebush, 743-943 listings,
+// 88-132s apify duration) were hitting the short-circuit at ~line 677 and
+// skipping Step 3+ entirely — no listings persisted, no timeline rows. The
+// bump gives 15s more headroom for post-processing while still leaving 5s
+// safety before Supabase's hard kill. The `new_listings_detected` rollup
+// emit was also moved earlier (right after the Step 6 listings upsert)
+// so the critical event lands even if later steps get killed by Supabase.
+const WALL_BUDGET_MS = 145_000;
 let invocationStart = 0;
 function wallRemainingMs(): number {
   return Math.max(0, WALL_BUDGET_MS - (Date.now() - invocationStart));
