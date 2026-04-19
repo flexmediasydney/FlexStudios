@@ -21,10 +21,11 @@
  *   CSV export fetches the ENTIRE filtered set server-side (separate query,
  *   limit 10000 safety cap), not just the current page.
  */
-import React, { useState, useMemo, useCallback, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useSearchParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { createPageUrl } from "@/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -279,12 +280,50 @@ function SortIcon({ col, sort }) {
 
 // ── Listing slideout ──────────────────────────────────────────────────────────
 
-export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onClose, onOpenEntity, hasHistory = false, onBack }) {
+export function ListingSlideout({
+  listing,
+  pulseAgents,
+  pulseAgencies = [],
+  onClose,
+  onOpenEntity,
+  hasHistory = false,
+  onBack,
+  // Φ3 P0 #3: `?slideout_tab=<name>` deep-linking. Parity with Agent/Agency
+  // slideouts — IndustryPulse threads slideoutTabParam for all 3 entity types.
+  // Valid names map to on-screen sections we scroll into view.
+  initialTab,
+}) {
   const [heroErr, setHeroErr] = useState(false);
   // Tier 4: source-history drill
   const [syncHistoryOpen, setSyncHistoryOpen] = useState(false);
   // LS09: lightbox index for gallery click-through
   const [lightboxIndex, setLightboxIndex] = useState(null);
+  // Φ3 P0 #3: tab state. Seeded from initialTab, updated if the prop changes
+  // (e.g. user navigates to a different section while the slideout is open).
+  const [tab, setTab] = useState(initialTab ?? "overview");
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
+  // Refs used to scroll the requested section into view when `tab` changes.
+  const galleryRef = useRef(null);
+  const floorplansRef = useRef(null);
+  const historyRef = useRef(null);
+  useEffect(() => {
+    // Map tab names → section refs. Overview = no scroll (top of dialog).
+    const target = {
+      gallery: galleryRef.current,
+      photos: galleryRef.current,
+      floorplans: floorplansRef.current,
+      history: historyRef.current,
+      timeline: historyRef.current,
+    }[tab];
+    if (target) {
+      // Defer one frame so the dialog finishes mounting first.
+      requestAnimationFrame(() => {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }, [tab]);
 
   if (!listing) return null;
 
@@ -637,7 +676,7 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
               file_type: "image/jpeg",
             }));
             return (
-              <div className="border-t border-border/60 pt-3">
+              <div ref={galleryRef} className="border-t border-border/60 pt-3">
                 <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide">
                   Gallery
                 </p>
@@ -677,7 +716,7 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
             return (
               <>
                 {media.floorplans.length > 0 && (
-                  <div className="border-t border-border/60 pt-3">
+                  <div ref={floorplansRef} className="border-t border-border/60 pt-3">
                     <p className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide flex items-center gap-1">
                       <FileImage className="h-3 w-3" /> Floorplans
                     </p>
@@ -785,11 +824,15 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
 
           {/* LS13 — Property History: sibling campaigns for the same property_key.
               Surfaces re-listings / off-the-plan unit clusters / withdrawn-then-
-              relisted rhythm. Hidden when property_key is NULL. */}
-          <PropertyHistoryCard
-            listing={listing}
-            onOpenListing={(id) => onOpenEntity?.({ type: "listing", id })}
-          />
+              relisted rhythm. Hidden when property_key is NULL.
+              Φ3 P0 #3: historyRef is the scroll target for
+              `?slideout_tab=history` / `?slideout_tab=timeline`. */}
+          <div ref={historyRef}>
+            <PropertyHistoryCard
+              listing={listing}
+              onOpenListing={(id) => onOpenEntity?.({ type: "listing", id })}
+            />
+          </div>
 
           {/* Price/Status History */}
           {(listing.previous_asking_price || listing.previous_listing_type) && (
@@ -916,6 +959,13 @@ const AUTO_REFRESH_INTERVAL_MS = 60_000;
 // listings should still be visible even if later withdrawn.
 const WITHDRAWN_DEFAULT_ON_TYPES = new Set(["for_sale", "for_rent", "all"]);
 
+// Φ2: accepted values for the `?type=` deep-link param. IndustryPulse's stat
+// cards and any external caller must match one of these or the param is
+// dropped silently on mount.
+const VALID_LISTING_TYPE_PARAMS = new Set([
+  "for_sale", "for_rent", "sold", "under_contract", "withdrawn",
+]);
+
 /** Read a numeric setting from localStorage, falling back to a default. */
 function readStoredPageSize() {
   if (typeof window === "undefined") return 50;
@@ -960,8 +1010,15 @@ export default function PulseListingsTab({
   const [searchParams, setSearchParams] = useSearchParams();
   const suburbParam = searchParams.get("suburb");
   const agencyReaIdParam = searchParams.get("agency_rea_id");
+  // Φ2: IndustryPulse's stat cards write `?type=for_sale` (etc.) to deep-link
+  // the Listings tab with a type pre-filter. Previously ignored — the tab
+  // switched but the filter stayed on "all". Now consumed on mount AND on
+  // subsequent navigation (user clicks another card after opening the tab).
+  const typeParam = searchParams.get("type");
 
-  const [listingFilter, setListingFilter] = useState("all");
+  const [listingFilter, setListingFilter] = useState(() =>
+    typeParam && VALID_LISTING_TYPE_PARAMS.has(typeParam) ? typeParam : "all"
+  );
   const [listingSort, setListingSort] = useState({ col: "listed_date", dir: "desc" });
   const [listingColFilter, setListingColFilter] = useState(suburbParam || "");
   // #24 — kept until the user clears the chip; seeded once from the URL.
@@ -1001,6 +1058,21 @@ export default function PulseListingsTab({
     }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agencyReaIdParam]);
+  // Φ2: seed the listing_type filter from `?type=` then strip the param so
+  // refresh/back doesn't re-apply it. Runs on mount AND whenever the param
+  // reappears (user clicks a different stat card while tab is already open).
+  useEffect(() => {
+    if (!typeParam) return;
+    if (VALID_LISTING_TYPE_PARAMS.has(typeParam)) {
+      setListingFilter(typeParam);
+    }
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("type");
+      return np;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typeParam]);
   // Page size persists in localStorage so the user's choice survives reloads
   // and tab switches. Default 50 matches the previous hardcoded value.
   const [pageSize, setPageSize] = useState(readStoredPageSize);
@@ -1738,18 +1810,30 @@ export default function PulseListingsTab({
                     if (addr) params.set("address", addr);
                     if (crmAgent?.id) params.set("agent_id", crmAgent.id);
                     if (l.property_key) params.set("property_key", l.property_key);
-                    return `/ProjectDetails?${params.toString()}`;
+                    // C4 (P3): use createPageUrl helper for consistency with
+                    // Tasks / Projects / People — all route via the helper.
+                    return createPageUrl(`ProjectDetails?${params.toString()}`);
                   })();
 
+                  // C6 (P2): rows are now keyboard-activatable. Enter/Space
+                  // trigger the same drill-through the mouse click runs.
+                  const openRow = () =>
+                    onOpenEntity
+                      ? onOpenEntity({ type: "listing", id: l.id })
+                      : setSelectedListing(l);
                   return (
                     <tr
                       key={l.id}
-                      className="group relative hover:bg-muted/30 cursor-pointer transition-colors"
-                      onClick={() =>
-                        onOpenEntity
-                          ? onOpenEntity({ type: "listing", id: l.id })
-                          : setSelectedListing(l)
-                      }
+                      className="group relative hover:bg-muted/30 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-[-2px]"
+                      role="button"
+                      tabIndex={0}
+                      onClick={openRow}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openRow();
+                        }
+                      }}
                     >
                       {/* QoL #37: row checkbox */}
                       <td className="px-2 py-1.5 w-8" onClick={(e) => e.stopPropagation()}>
@@ -1851,17 +1935,63 @@ export default function PulseListingsTab({
                         </td>
                       )}
 
-                      {/* Agent */}
+                      {/* Agent — C2 (P1): drill to agent slideout when we can
+                          resolve a pulse_agents.id. Falls back to plain text
+                          when the agent isn't in our DB (stopPropagation so
+                          clicking the agent name doesn't also open the listing
+                          slideout via the row handler). */}
                       {visibleCols.agent && (
                         <td className="px-2 py-1.5 max-w-[120px] hidden lg:table-cell">
-                          <p className="truncate">{l.agent_name || "—"}</p>
+                          {(() => {
+                            const resolvedAgentId = l.agent_pulse_id
+                              || pulseAgents.find((a) => a.rea_agent_id === l.agent_rea_id)?.id
+                              || null;
+                            if (resolvedAgentId && onOpenEntity) {
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onOpenEntity({ type: "agent", id: resolvedAgentId });
+                                  }}
+                                  title="Open agent profile"
+                                  className="block w-full text-left truncate cursor-pointer hover:underline hover:text-primary transition-colors"
+                                >
+                                  {l.agent_name || "—"}
+                                </button>
+                              );
+                            }
+                            return <p className="truncate">{l.agent_name || "—"}</p>;
+                          })()}
                         </td>
                       )}
 
-                      {/* Agency */}
+                      {/* Agency — C3 (P1): drill to agency slideout when we can
+                          resolve a pulse_agencies.id. Same fallback / stop-
+                          propagation pattern as the Agent cell above. */}
                       {visibleCols.agency && (
                         <td className="px-2 py-1.5 max-w-[120px]">
-                          <p className="truncate text-muted-foreground">{l.agency_name || "—"}</p>
+                          {(() => {
+                            const resolvedAgencyId = l.agency_pulse_id
+                              || pulseAgencies.find((a) => a.rea_agency_id === l.agency_rea_id)?.id
+                              || null;
+                            if (resolvedAgencyId && onOpenEntity) {
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onOpenEntity({ type: "agency", id: resolvedAgencyId });
+                                  }}
+                                  title="Open agency profile"
+                                  className="block w-full text-left truncate text-muted-foreground cursor-pointer hover:underline hover:text-primary transition-colors"
+                                >
+                                  {l.agency_name || "—"}
+                                </button>
+                              );
+                            }
+                            return <p className="truncate text-muted-foreground">{l.agency_name || "—"}</p>;
+                          })()}
                         </td>
                       )}
 
@@ -1933,17 +2063,20 @@ export default function PulseListingsTab({
 
                       {/* Tier 3: property drill-through — only when
                           property_key is set. Stops row-click propagation so
-                          the listing slideout doesn't also open. */}
+                          the listing slideout doesn't also open.
+                          C5 (P2): <Link> instead of <a href> so we navigate via
+                          the SPA router — no full-page reload, Pulse search
+                          state stays intact. */}
                       <td className="px-2 py-1.5 w-8">
                         {l.property_key ? (
-                          <a
-                            href={`/PropertyDetails?key=${encodeURIComponent(l.property_key)}`}
+                          <Link
+                            to={`/PropertyDetails?key=${encodeURIComponent(l.property_key)}`}
                             onClick={(e) => e.stopPropagation()}
                             title="Open property history"
                             className="inline-flex items-center text-emerald-600 hover:text-emerald-700 transition-colors"
                           >
                             <Home className="h-3.5 w-3.5" />
-                          </a>
+                          </Link>
                         ) : null}
                       </td>
 
