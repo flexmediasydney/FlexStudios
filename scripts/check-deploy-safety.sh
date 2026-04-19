@@ -2,7 +2,7 @@
 # scripts/check-deploy-safety.sh
 #
 # Pre-push safety net for FlexStudios. Prevents the classes of bug that
-# have silently broken Vercel deploys in the past:
+# have silently broken Vercel deploys or edge-function runs in the past:
 #
 #   1. JSDoc comment containing "*/" as a non-terminator — esbuild reads it
 #      as the end of the block comment and chokes (cost: 6+ failed deploys,
@@ -13,6 +13,11 @@
 #      auto-deploys, commit d6de503 had to fix this retroactively).
 #   3. A local Vite build smoke-test — catches everything the above two
 #      don't, at the cost of ~30s per push.
+#   4. Supabase null-destructuring: `const { data: rows = [] }` on a
+#      supabase query result does NOT catch data:null (only undefined), so
+#      downstream .forEach/.map crashes the whole edge function. Root cause
+#      of pulseDataSync's 46% failure rate (a3554c6 had to fix 32 sites
+#      retroactively). Ban the pattern outright — require .data ?? [].
 #
 # Wired in as a git hook via `.githooks/pre-push` — see that file for the
 # invocation. Can be run manually: `./scripts/check-deploy-safety.sh`.
@@ -61,8 +66,37 @@ else
   echo "│     ✓ no JSDoc hazards"
 fi
 
-# ── 3. Local Vite build smoke-test ────────────────────────────────────────
-echo "├── 3. Running local Vite build (≈30s)…"
+# ── 3. Supabase null-destructuring anti-pattern ──────────────────────────
+# The pattern `const { data: X = [] } = await admin.from(...)...` is UNSAFE.
+# The destructuring default fires only on `undefined` — when Supabase returns
+# { data: null, error: someError } (common on RLS deny, network blip, CF
+# challenge, column typo, timeout), X is null and the next .map/.forEach
+# crashes the function. Require `.data ?? []` instead, which coalesces both
+# null AND undefined.
+#
+# Safe:
+#   const result = await admin.from('t').select('*');
+#   const rows = result.data ?? [];
+# Unsafe (banned):
+#   const { data: rows = [] } = await admin.from('t').select('*');
+echo "├── 3. Scanning edge functions for null-unsafe destructuring…"
+UNSAFE=$(grep -rnE '\{\s*data:\s*\w+\s*=\s*\[\s*\]' supabase/functions 2>/dev/null \
+  --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' \
+  --include='*.jsx' --include='*.cjs' || true)
+if [ -n "$UNSAFE" ]; then
+  echo "│     ❌ Null-unsafe Supabase destructuring found (banned):"
+  echo "$UNSAFE" | sed 's/^/│         /'
+  echo "│     → rewrite as:"
+  echo "│         const r = await admin.from(...).select(...);"
+  echo "│         const rows = r.data ?? [];"
+  echo "│       The \`= []\` default fires only on undefined, not null."
+  FAILED=1
+else
+  echo "│     ✓ no null-unsafe destructuring"
+fi
+
+# ── 4. Local Vite build smoke-test ────────────────────────────────────────
+echo "├── 4. Running local Vite build (≈30s)…"
 if [ ! -d "flexmedia-src/node_modules" ]; then
   echo "│     ⚠ skipping — flexmedia-src/node_modules missing"
 else
