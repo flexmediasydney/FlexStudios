@@ -81,6 +81,7 @@ import {
 import { cn } from "@/lib/utils";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
 import AttachmentLightbox from "@/components/common/AttachmentLightbox";
+import PropertyHistoryCard from "@/components/pulse/PropertyHistoryCard";
 import {
   displayPrice as sharedDisplayPrice,
   stalenessInfo,
@@ -782,6 +783,14 @@ export function ListingSlideout({ listing, pulseAgents, pulseAgencies = [], onCl
             </button>
           </div>
 
+          {/* LS13 — Property History: sibling campaigns for the same property_key.
+              Surfaces re-listings / off-the-plan unit clusters / withdrawn-then-
+              relisted rhythm. Hidden when property_key is NULL. */}
+          <PropertyHistoryCard
+            listing={listing}
+            onOpenListing={(id) => onOpenEntity?.({ type: "listing", id })}
+          />
+
           {/* Price/Status History */}
           {(listing.previous_asking_price || listing.previous_listing_type) && (
             <div className="mt-4 border-t pt-3">
@@ -1166,10 +1175,27 @@ export default function PulseListingsTab({
     // property_type + listing_type, lowercased) backed by a GIN trigram
     // index. Single ilike call — same pattern as PulseAgentIntel /
     // PulseAgencyIntel. See migration 124_performance_indexes.sql.
+    //
+    // LS13: ALSO match on `property_key` (normalized address — "2-8 Wilson St"
+    // → "2 wilson st chatswood") so users searching "2 wilson st chatswood"
+    // hit Chatswood Grand Residences even though raw address is "2-8 Wilson
+    // Street". search_text holds the RAW address ("2-8 wilson street chatswood")
+    // so it can't resolve the normalized form on its own.
     const globalQ = (search || "").trim();
     if (globalQ) {
       const s = globalQ.toLowerCase().replace(/[%_]/g, "\\$&");
-      q = q.ilike("search_text", `%${s}%`);
+      // Normalize the user's query to property_key shape: lowercase, hyphens
+      // and commas → spaces, collapse whitespace. We don't reproduce the full
+      // address-canonicaliser (street-type abbreviations etc.) here — just the
+      // cheap wins. Raw ilike on search_text still covers the rest.
+      const normalized = globalQ
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .replace(/[-,]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/[%_]/g, "\\$&");
+      q = q.or(`search_text.ilike.%${s}%,property_key.ilike.%${normalized}%`);
     }
 
     // LS04: price range. Apply defensively — only when a positive number is
