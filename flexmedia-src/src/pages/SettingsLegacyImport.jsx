@@ -607,9 +607,20 @@ function BatchHistoryTab() {
   const [rollbackTarget, setRollbackTarget] = useState(null);
   const [rolling, setRolling] = useState(false);
 
+  // Read from the progress view (migration 199) so geocoded/mapped counts
+  // reflect ground-truth live aggregates instead of the stored columns,
+  // which drift because the cron workers update legacy_projects rows but
+  // don't roll counts back up to legacy_import_batches.
   const { data: batches = [], isLoading, refetch } = useQuery({
     queryKey: ["legacy_import_batches_list"],
-    queryFn: () => api.entities.LegacyImportBatch.list("-created_date", 100),
+    queryFn: async () => {
+      const r = await api._supabase
+        .from("legacy_import_batches_with_progress")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      return r.data ?? [];
+    },
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
@@ -694,14 +705,15 @@ function BatchHistoryTab() {
               </TableRow>
             )}
             {batches.map((b) => {
-              // DB columns are imported_count / error_count / geocoded_count / mapped_count
-              // (the earlier-designed rows_imported / rows_errored / rows_geocoded / rows_package_mapped
-              // aliases were dropped during the agent 1 schema finalization — always read the real names).
-              const imported = Number(b.imported_count ?? b.rows_imported ?? 0);
+              // Live counts come from the legacy_import_batches_with_progress
+              // view (migration 199). The view exposes live_* fields that
+              // reflect ground-truth aggregates over legacy_projects rows,
+              // not the stored columns which drift as crons tick.
+              const imported = Number(b.live_imported_count ?? b.imported_count ?? 0);
               const total = Number(b.row_count ?? 0);
-              const errors = Number(b.error_count ?? b.rows_errored ?? 0);
-              const geocoded = Number(b.geocoded_count ?? b.rows_geocoded ?? 0);
-              const mapped = Number(b.mapped_count ?? b.rows_package_mapped ?? 0);
+              const errors = Number(b.error_count ?? 0);
+              const geocoded = Number(b.live_geocoded_count ?? b.geocoded_count ?? 0);
+              const mapped = Number(b.live_mapped_count ?? b.mapped_count ?? 0);
               return (
                 <TableRow key={b.id} className="cursor-pointer hover:bg-muted/40" onClick={() => setSelectedBatch(b)}>
                   <TableCell className="font-mono text-xs">{String(b.id).slice(0, 8)}…</TableCell>
@@ -748,10 +760,10 @@ function BatchHistoryTab() {
               <div className="grid gap-3 sm:grid-cols-2 text-sm">
                 <div><span className="text-muted-foreground">Filename:</span> {selectedBatch.filename || "—"}</div>
                 <div><span className="text-muted-foreground">Status:</span> {statusBadge(selectedBatch.status)}</div>
-                <div><span className="text-muted-foreground">Rows imported:</span> {Number(selectedBatch.imported_count ?? selectedBatch.rows_imported ?? 0).toLocaleString()} / {Number(selectedBatch.row_count ?? 0).toLocaleString()}</div>
-                <div><span className="text-muted-foreground">Rows errored:</span> {Number(selectedBatch.error_count ?? selectedBatch.rows_errored ?? 0).toLocaleString()}</div>
-                <div><span className="text-muted-foreground">Geocoded:</span> {pct(selectedBatch.geocoded_count ?? selectedBatch.rows_geocoded, selectedBatch.imported_count ?? selectedBatch.row_count)}</div>
-                <div><span className="text-muted-foreground">Package mapped:</span> {pct(selectedBatch.mapped_count ?? selectedBatch.rows_package_mapped, selectedBatch.imported_count ?? selectedBatch.row_count)}</div>
+                <div><span className="text-muted-foreground">Rows imported:</span> {Number(selectedBatch.live_imported_count ?? selectedBatch.imported_count ?? 0).toLocaleString()} / {Number(selectedBatch.row_count ?? 0).toLocaleString()}</div>
+                <div><span className="text-muted-foreground">Rows errored:</span> {Number(selectedBatch.error_count ?? 0).toLocaleString()}</div>
+                <div><span className="text-muted-foreground">Geocoded:</span> {pct(selectedBatch.live_geocoded_count ?? selectedBatch.geocoded_count, selectedBatch.live_imported_count ?? selectedBatch.imported_count)}</div>
+                <div><span className="text-muted-foreground">Package mapped:</span> {pct(selectedBatch.live_mapped_count ?? selectedBatch.mapped_count, selectedBatch.live_imported_count ?? selectedBatch.imported_count)}</div>
                 <div className="sm:col-span-2">
                   <span className="text-muted-foreground">Column mapping:</span>
                   <pre className="text-[11px] bg-muted rounded p-2 mt-1 overflow-auto max-h-48">

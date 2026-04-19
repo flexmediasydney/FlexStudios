@@ -5,7 +5,8 @@ import { Input } from "@/components/ui/input";
 import {
   BookOpen, Building, User, Percent, GitBranch, ShieldAlert,
   Clock, Layers, ToggleLeft, Info, ChevronDown, ChevronRight,
-  Search, Zap, CheckCircle2, AlertTriangle, Lock, ArrowRight, TrendingUp, AlertCircle, RefreshCw, DollarSign
+  Search, Zap, CheckCircle2, AlertTriangle, Lock, ArrowRight, TrendingUp, AlertCircle, RefreshCw, DollarSign,
+  Crown, Sparkles,
 } from "lucide-react";
 
 const sections = [
