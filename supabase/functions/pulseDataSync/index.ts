@@ -7,6 +7,7 @@ import {
   isMiddlemanEmail,
 } from '../_shared/emailCleanup.ts';
 import { startRun, endRun, recordError } from '../_shared/observability.ts';
+import { emitTimeline, makeIdempotencyKey } from '../_shared/timeline.ts';
 
 /**
  * Pulse Data Sync — REA-Only 2-Actor Merge Engine (v3 DB-driven config)
@@ -1409,54 +1410,105 @@ serveWithAudit('pulseDataSync', async (req) => {
     // We join all non-null ids the same way pulse_sync_logs.apify_run_id does.
     const timelineApifyRunId = Object.values(apifyRunIds).filter(Boolean).join(',') || null;
 
-    // Log new listings to timeline
-    if (newListingsDetected > 0) {
+    // ── Timeline context applied to every emitTimeline(...) in this run ────
+    // emitTimeline fills in sync_log_id / apify_run_id / source from here
+    // when a row doesn't set them explicitly. Per-row overrides still win.
+    const timelineCtx = {
+      sync_log_id: syncLogId,
+      apify_run_id: timelineApifyRunId,
+      source: source_id || 'rea_sync',
+    };
+
+    // Log new listings to timeline (rollup row — one per sync run).
+    // Keyed by sync_log_id so repeat invocations of the same run are a no-op.
+    // (Agent D audit: pre-fix this emitted ~2,167 spurious rows without key.)
+    if (newListingsDetected > 0 && syncLogId) {
       const sampleNew = listingRecords.filter(l => l._isNew).slice(0, 5);
-      try {
-        await admin.from('pulse_timeline').insert({
-          entity_type: 'listing',
-          event_type: 'new_listings_detected',
-          event_category: 'market',
-          title: `${newListingsDetected} new listing${newListingsDetected !== 1 ? 's' : ''} detected`,
-          description: sampleNew.map(l => `${l.address || l.suburb || '?'} - ${l.agency_name || '?'}`).join('; '),
-          new_value: { count: newListingsDetected, sample: sampleNew.map(l => ({ address: l.address, suburb: l.suburb, price: l.asking_price, agency: l.agency_name, agent: l.agent_name })) },
-          source: source_id || 'rea_sync',
-          sync_log_id: syncLogId,
-          apify_run_id: timelineApifyRunId,
-        });
-      } catch { /* non-fatal */ }
+      await emitTimeline(admin, {
+        entity_type: 'listing',
+        event_type: 'new_listings_detected',
+        event_category: 'market',
+        title: `${newListingsDetected} new listing${newListingsDetected !== 1 ? 's' : ''} detected`,
+        description: sampleNew.map(l => `${l.address || l.suburb || '?'} - ${l.agency_name || '?'}`).join('; '),
+        new_value: { count: newListingsDetected, sample: sampleNew.map(l => ({ address: l.address, suburb: l.suburb, price: l.asking_price, agency: l.agency_name, agent: l.agent_name })) },
+        idempotency_key: makeIdempotencyKey('new_listings_detected', 'sync_log', syncLogId),
+      }, timelineCtx);
     }
 
-    // Timeline events for price changes
+    // ── Per-listing price_change + status_change emits ────────────────────
+    // We need pulse_listings.id (not source_listing_id) so the timeline FK
+    // resolves to a real entity for drill-through. Fetch the ids in one shot
+    // AFTER the listings upsert has landed.
     const priceChangedListings = filteredListingRecords.filter(l => l.previous_asking_price !== undefined);
-    if (priceChangedListings.length > 0) {
-      try {
-        await admin.from('pulse_timeline').insert({
-          entity_type: 'listing', event_type: 'price_change', event_category: 'market',
-          title: `${priceChangedListings.length} listing price change${priceChangedListings.length !== 1 ? 's' : ''} detected`,
-          description: priceChangedListings.slice(0, 5).map(l => `${l.address || l.suburb}: ${fmtPriceShort(l.previous_asking_price)} → ${fmtPriceShort(l.asking_price)}`).join('; '),
-          new_value: { count: priceChangedListings.length, sample: priceChangedListings.slice(0, 5).map(l => ({ address: l.address, old: l.previous_asking_price, new: l.asking_price })) },
-          source: source_id || 'rea_sync',
-          sync_log_id: syncLogId,
-          apify_run_id: timelineApifyRunId,
-        });
-      } catch { /* non-fatal */ }
-    }
-
-    // Timeline events for status changes (e.g., for_sale → sold)
     const statusChangedListings = filteredListingRecords.filter(l => l.previous_listing_type !== undefined);
-    if (statusChangedListings.length > 0) {
-      try {
-        await admin.from('pulse_timeline').insert({
-          entity_type: 'listing', event_type: 'status_change', event_category: 'market',
-          title: `${statusChangedListings.length} listing status change${statusChangedListings.length !== 1 ? 's' : ''} detected`,
-          description: statusChangedListings.slice(0, 5).map(l => `${l.address || l.suburb}: ${l.previous_listing_type} → ${l.listing_type}`).join('; '),
-          new_value: { count: statusChangedListings.length, sample: statusChangedListings.slice(0, 5).map(l => ({ address: l.address, old: l.previous_listing_type, new: l.listing_type })) },
-          source: source_id || 'rea_sync',
-          sync_log_id: syncLogId,
-          apify_run_id: timelineApifyRunId,
-        });
-      } catch { /* non-fatal */ }
+    if (priceChangedListings.length > 0 || statusChangedListings.length > 0) {
+      const changedSourceIds = Array.from(new Set([
+        ...priceChangedListings.map(l => l.source_listing_id).filter(Boolean),
+        ...statusChangedListings.map(l => l.source_listing_id).filter(Boolean),
+      ])) as string[];
+
+      // Build source_listing_id → pulse_listings.id lookup (chunked to stay
+      // under URL length limits; same pattern as Agent E's bridge pre-check).
+      const sourceIdToPulseId = new Map<string, string>();
+      if (changedSourceIds.length > 0) {
+        const CHUNK = 500;
+        for (let i = 0; i < changedSourceIds.length; i += CHUNK) {
+          const slice = changedSourceIds.slice(i, i + CHUNK);
+          const { data: rows = [] } = await admin.from('pulse_listings')
+            .select('id, source_listing_id')
+            .in('source_listing_id', slice);
+          for (const r of rows as any[]) {
+            if (r.source_listing_id && r.id) sourceIdToPulseId.set(r.source_listing_id, r.id);
+          }
+        }
+      }
+
+      // Today's date stamp for status_change discriminator (keeps same-day
+      // flapping idempotent but allows next-day re-changes to emit again).
+      const ymd = new Date().toISOString().slice(0, 10);
+
+      const priceRows = priceChangedListings
+        .map(l => {
+          const pid = l.source_listing_id ? sourceIdToPulseId.get(l.source_listing_id) : null;
+          if (!pid) return null; // skip listings we failed to resolve
+          const newPrice = l.asking_price ?? l.sold_price ?? null;
+          const oldPrice = l.previous_asking_price ?? null;
+          return {
+            entity_type: 'listing' as const,
+            pulse_entity_id: pid,
+            event_type: 'price_change',
+            event_category: 'market',
+            title: `${l.address || l.suburb || 'Listing'}: ${fmtPriceShort(oldPrice)} → ${fmtPriceShort(newPrice)}`,
+            description: `Price changed from ${fmtPriceShort(oldPrice)} to ${fmtPriceShort(newPrice)}`,
+            previous_value: { price: oldPrice },
+            new_value: { price: newPrice },
+            idempotency_key: makeIdempotencyKey('price_change', pid, String(newPrice ?? 'null')),
+          };
+        })
+        .filter(Boolean) as any[];
+
+      const statusRows = statusChangedListings
+        .map(l => {
+          const pid = l.source_listing_id ? sourceIdToPulseId.get(l.source_listing_id) : null;
+          if (!pid) return null;
+          const newStatus = l.listing_type || 'unknown';
+          const oldStatus = l.previous_listing_type || 'unknown';
+          return {
+            entity_type: 'listing' as const,
+            pulse_entity_id: pid,
+            event_type: 'status_change',
+            event_category: 'market',
+            title: `${l.address || l.suburb || 'Listing'}: ${oldStatus} → ${newStatus}`,
+            description: `Status changed from ${oldStatus} to ${newStatus}`,
+            previous_value: { status: oldStatus },
+            new_value: { status: newStatus },
+            idempotency_key: makeIdempotencyKey('status_change', pid, `${newStatus}:${ymd}`),
+          };
+        })
+        .filter(Boolean) as any[];
+
+      if (priceRows.length > 0) await emitTimeline(admin, priceRows, timelineCtx);
+      if (statusRows.length > 0) await emitTimeline(admin, statusRows, timelineCtx);
     }
 
     // ── Step 7: Cross-enrich agents from listing data (EMAIL BRIDGE) ────
@@ -1847,18 +1899,18 @@ serveWithAudit('pulseDataSync', async (req) => {
             } catch { /* dedup key handles repeats */ }
           }
         }
-        try {
-          await admin.from('pulse_timeline').insert({
+        // Rollup — one row per sync run (low volume, safe to keep rolled up).
+        // Keyed by sync_log_id so repeats during a single run can't duplicate.
+        if (syncLogId) {
+          await emitTimeline(admin, {
             entity_type: 'listing',
             event_type: 'client_new_listing',
             event_category: 'market',
             title: `${newListingsFromCrmAgents.length} new listing${newListingsFromCrmAgents.length !== 1 ? 's' : ''} from CRM clients`,
             description: newListingsFromCrmAgents.slice(0, 3).map(l => `${l.agent_name}: ${l.address || l.suburb}`).join('; '),
-            source: source_id || 'rea_sync',
-            sync_log_id: syncLogId,
-            apify_run_id: timelineApifyRunId,
-          });
-        } catch { /* non-fatal */ }
+            idempotency_key: makeIdempotencyKey('client_new_listing', 'sync_log', syncLogId),
+          }, timelineCtx);
+        }
       }
     }
 
@@ -1870,6 +1922,10 @@ serveWithAudit('pulseDataSync', async (req) => {
     let timelineEntries = 0;
     let mappingsCreated = 0;
 
+    // Batch-collect emits from Step 9 for a single upsert call (emitTimeline
+    // chunks internally). first_seen uses rea_id as the entity ref since we
+    // don't yet have pulse_entity_id for brand-new websift-direct agents.
+    const step9Rows: any[] = [];
     for (const agent of processedAgents) {
       const reaId = agent.rea_agent_id;
       if (!reaId) continue;
@@ -1877,48 +1933,45 @@ serveWithAudit('pulseDataSync', async (req) => {
       const existing = existingByReaIdSnapshot.get(reaId);
 
       if (!existing) {
-        // New agent — first seen
-        try {
-          await admin.from('pulse_timeline').insert({
-            entity_type: 'agent',
-            rea_id: reaId,
-            event_type: 'first_seen',
-            event_category: 'system',
-            title: `${agent.full_name} first detected`,
-            description: `Agent first seen in ${agent.agency_name || 'unknown agency'}, ${agent.agency_suburb || ''}`,
-            new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id, suburb: agent.agency_suburb },
-            source: 'rea_sync',
-            sync_log_id: syncLogId,
-            apify_run_id: timelineApifyRunId,
-          });
-          timelineEntries++;
-        } catch { /* non-fatal */ }
+        // New agent — first seen (websift-direct path). Bridge-created agents
+        // get their own first_seen emit (lines ~1630, ~1707) keyed on pulse id.
+        step9Rows.push({
+          entity_type: 'agent',
+          rea_id: reaId,
+          event_type: 'first_seen',
+          event_category: 'system',
+          title: `${agent.full_name} first detected`,
+          description: `Agent first seen in ${agent.agency_name || 'unknown agency'}, ${agent.agency_suburb || ''}`,
+          new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id, suburb: agent.agency_suburb },
+          idempotency_key: makeIdempotencyKey('first_seen', 'rea_agent', reaId),
+        });
+        timelineEntries++;
       } else if (existing.agency_rea_id && agent.agency_rea_id && existing.agency_rea_id !== agent.agency_rea_id) {
-        // Agency change detected
+        // Agency change detected — key includes destination agency id so a
+        // future back-hop still emits. Same-run duplicates are absorbed.
         movementsDetected++;
-        try {
-          await admin.from('pulse_timeline').insert({
-            entity_type: 'agent',
-            pulse_entity_id: existing.id,
-            rea_id: reaId,
-            event_type: 'agency_change',
-            event_category: 'movement',
-            title: `${agent.full_name} moved agencies`,
-            description: `${existing.agency_name} -> ${agent.agency_name}`,
-            previous_value: { agency_name: existing.agency_name, agency_rea_id: existing.agency_rea_id },
-            new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id },
-            source: 'rea_sync',
-            sync_log_id: syncLogId,
-            apify_run_id: timelineApifyRunId,
-          });
-          timelineEntries++;
-        } catch { /* non-fatal */ }
+        step9Rows.push({
+          entity_type: 'agent',
+          pulse_entity_id: existing.id,
+          rea_id: reaId,
+          event_type: 'agency_change',
+          event_category: 'movement',
+          title: `${agent.full_name} moved agencies`,
+          description: `${existing.agency_name} -> ${agent.agency_name}`,
+          previous_value: { agency_name: existing.agency_name, agency_rea_id: existing.agency_rea_id },
+          new_value: { agency_name: agent.agency_name, agency_rea_id: agent.agency_rea_id },
+          idempotency_key: makeIdempotencyKey('agency_change', existing.id, agent.agency_rea_id),
+        });
+        timelineEntries++;
 
         await admin.from('pulse_agents').update({
           previous_agency_name: existing.agency_name,
           agency_changed_at: now,
         }).eq('id', existing.id);
       }
+    }
+    if (step9Rows.length > 0) {
+      await emitTimeline(admin, step9Rows, timelineCtx);
     }
 
     // ── Step 10: Auto-Mapping (REA ID + Phone + Name) ───────────────────
