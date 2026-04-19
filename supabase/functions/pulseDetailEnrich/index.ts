@@ -647,20 +647,30 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       const timelineEvents: any[] = [];
       const historyRows: any[] = [];
       const now = new Date();
+      // P1 #9 (2026-04-19): batch the per-row atomic increment RPC. Previously
+      // we invoked `pulse_inc_listing_detail_count` once per listing inside
+      // this loop — an N+1. Now we collect the listing IDs here and fire a
+      // single `pulse_inc_listing_detail_count_bulk` RPC at end of batch.
+      // Dedup via Set so the same listing never gets double-counted in a run.
+      const incrementIds = new Set<string>();
 
       for (const cand of batch) {
         const item = itemsById.get(String(cand.source_listing_id));
         if (!item) {
           // Withdrawn: was in our DB as active, memo23 returned no item for its URL
           if (['for_sale', 'for_rent', 'under_contract'].includes(cand.listing_type)) {
-            await admin.from('pulse_listings').update({
+            // P1 #8 (2026-04-19): check error before counter increment.
+            const { error: withdrawErr } = await admin.from('pulse_listings').update({
               listing_withdrawn_at: now.toISOString(),
               listing_withdrawn_reason: 'absent_from_rea',
               detail_enriched_at: now.toISOString(),
               last_sync_log_id: syncLogId,
             }).eq('id', cand.id);
-            // B02-race-fix: atomic increment
-            await admin.rpc('pulse_inc_listing_detail_count', { p_listing_id: cand.id });
+            if (withdrawErr) {
+              console.error(`[pulseDetailEnrich] withdraw update failed for ${cand.id}: ${withdrawErr.message?.substring(0, 200)}`);
+              continue;
+            }
+            incrementIds.add(cand.id);
             stats.items_withdrawn++;
             timelineEvents.push({
               entity_type: 'listing',
@@ -717,9 +727,13 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
         }
 
         // DO NOT overwrite address/suburb/postcode/source_url (property_key is generated from address).
-        await admin.from('pulse_listings').update(listingUpdates).eq('id', cand.id);
-        // B02-race-fix: atomic increment
-        await admin.rpc('pulse_inc_listing_detail_count', { p_listing_id: cand.id });
+        // P1 #8 (2026-04-19): surface DB errors + gate counter on success.
+        const { error: enrichErr } = await admin.from('pulse_listings').update(listingUpdates).eq('id', cand.id);
+        if (enrichErr) {
+          console.error(`[pulseDetailEnrich] enrich update failed for ${cand.id}: ${enrichErr.message?.substring(0, 200)}`);
+          continue;
+        }
+        incrementIds.add(cand.id);
         stats.items_processed++;
 
         // Base detail_enriched event (one per listing per day)
@@ -1042,13 +1056,30 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             if (bcText && !agencyRow.brand_color_text) aUpdates.brand_color_text = bcText;
             if (Object.keys(aUpdates).length > 0) {
               aUpdates.last_sync_log_id = syncLogId;
-              await admin.from('pulse_agencies').update(aUpdates).eq('id', agencyRow.id);
+              // P1 #8 (2026-04-19): surface DB errors.
+              const { error: agUpdErr } = await admin.from('pulse_agencies').update(aUpdates).eq('id', agencyRow.id);
+              if (agUpdErr) console.error(`[pulseDetailEnrich] agency brand update failed for ${agencyRow.id}: ${agUpdErr.message?.substring(0, 200)}`);
             }
           }
         }
       }
 
       // Bulk inserts
+      // P1 #9 (2026-04-19): single bulk RPC replaces the per-row N+1 loop.
+      // Uses the deduped `incrementIds` Set so a listing can't get double-
+      // counted within a batch. If the bulk RPC is unavailable (not yet
+      // deployed), fall back to per-row as a safety net.
+      if (incrementIds.size > 0) {
+        const ids = Array.from(incrementIds);
+        const { error: bulkIncErr } = await admin.rpc('pulse_inc_listing_detail_count_bulk', { p_ids: ids });
+        if (bulkIncErr) {
+          console.error(`[pulseDetailEnrich] bulk detail-count RPC failed: ${bulkIncErr.message?.substring(0, 200)} — falling back to per-row`);
+          for (const id of ids) {
+            await admin.rpc('pulse_inc_listing_detail_count', { p_listing_id: id });
+          }
+        }
+      }
+
       if (timelineEvents.length > 0) {
         // Migration 141: stamp the per-batch Apify run id + the outer
         // syncLogId so the Timeline drill-through has an explicit FK to the

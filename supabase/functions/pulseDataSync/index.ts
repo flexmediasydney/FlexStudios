@@ -214,10 +214,26 @@ function parsePrice(raw: string | null): number | null {
   if (!raw) return null;
   const s = String(raw).toLowerCase().replace(/,/g, '');
   if (s.includes('contact') || s.includes('request') || s.includes('enquire') || s.includes('auction')) return null;
-  const mMatch = s.match(/\$?([\d.]+)\s*m/i);
+  // ── Off-the-plan / size-keyword guard (P1 #1, 2026-04-19) ───────────
+  // Off-the-plan listings have `price_text` like "Up to 114 Internal!"
+  // or "83 Internal from 1.63m" where the leading number is internal
+  // area (m²), NOT price. Previously naive first-number parse stored
+  // bogus asking_prices like $114. If the string references size/room
+  // counts and we can't disambiguate, return null (safer than wrong).
+  //
+  // Important: we STILL try to extract a trailing "1.63m" (M-suffix)
+  // before the guard — those are legit full prices mixed with size
+  // chatter. Only after we've failed to find an M/K-suffixed price
+  // do we fall through to the guard.
+  const mMatch = s.match(/\$?([\d.]+)\s*m\b/i);
   if (mMatch) return Math.round(parseFloat(mMatch[1]) * 1000000);
-  const kMatch = s.match(/\$?([\d.]+)\s*k/i);
+  const kMatch = s.match(/\$?([\d.]+)\s*k\b/i);
   if (kMatch) return Math.round(parseFloat(kMatch[1]) * 1000);
+  // Guard kicks in when no $/K/M suffix is present AND string looks
+  // like a size description.
+  if (/\binternal\b|\bsqm\b|m²|\bm2\b|\bstudy\b|\bbed\b|\bbath\b|\bcar\b|\bparking\b/i.test(s)) {
+    return null;
+  }
   const numMatch = s.match(/\$?([\d]+(?:\.[\d]+)?)/);
   if (numMatch) {
     const val = parseFloat(numMatch[1]);
@@ -1181,11 +1197,17 @@ serveWithAudit('pulseDataSync', async (req) => {
         const { data: existing } = await admin.from('pulse_agents')
           .select('id').ilike('full_name', agent.full_name?.trim() || '').limit(1);
         if (existing && existing.length > 0) {
-          await admin.from('pulse_agents').update(agent).eq('id', existing[0].id);
-          agentsUpdated++;
+          // P1 #8 (2026-04-19): check error before counter increment.
+          const { error: updErr } = await admin.from('pulse_agents').update(agent).eq('id', existing[0].id);
+          if (updErr) {
+            console.error(`[pulseDataSync] pulse_agents name-update failed: ${updErr.message?.substring(0, 200)}`);
+          } else {
+            agentsUpdated++;
+          }
         } else {
           const { error: insertErr } = await admin.from('pulse_agents').insert(agent);
           if (!insertErr) agentsInserted++;
+          else console.error(`[pulseDataSync] pulse_agents name-insert failed: ${insertErr.message?.substring(0, 200)}`);
         }
       }
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
@@ -1340,8 +1362,14 @@ serveWithAudit('pulseDataSync', async (req) => {
       // For sold listings with DOM but no listed_date, derive listed_date from first_seen_at - DOM
       // (done in post-processing when first_seen_at is known; here we just capture DOM)
 
+      // ── Address whitespace normalization (P1 #2, 2026-04-19) ──────────
+      // Collapses double-spaces and trims. Fixes cases like
+      // "2 - 8  Wilson Street" vs "2-8 Wilson Street" causing address
+      // match duplicates across runs.
+      const rawAddress = l.address ? String(l.address).replace(/\s+/g, ' ').trim() : null;
+
       return {
-        address: l.address || null,
+        address: rawAddress,
         suburb: l.suburb || l._suburb || null,
         postcode: l.postcode || null,
         property_type: l.propertyType || null,
@@ -1750,10 +1778,12 @@ serveWithAudit('pulseDataSync', async (req) => {
                 if (timelineRows.length > 0) {
                   // upsert with ignoreDuplicates so the UNIQUE index on
                   // idempotency_key silently absorbs any accidental re-runs.
-                  await admin.from('pulse_timeline').upsert(timelineRows, {
+                  // P1 #8 (2026-04-19): surface DB errors in logs.
+                  const { error: tlErr } = await admin.from('pulse_timeline').upsert(timelineRows, {
                     onConflict: 'idempotency_key',
                     ignoreDuplicates: true,
                   });
+                  if (tlErr) console.error(`[pulseDataSync] bridge-agent timeline upsert failed: ${tlErr.message?.substring(0, 200)}`);
                 }
               }
             } catch (e) {
@@ -1828,10 +1858,12 @@ serveWithAudit('pulseDataSync', async (req) => {
                   idempotency_key: `first_seen:agency:${ag.id}`,
                 }));
                 if (timelineRows.length > 0) {
-                  await admin.from('pulse_timeline').upsert(timelineRows, {
+                  // P1 #8 (2026-04-19): surface DB errors in logs.
+                  const { error: tlAgErr } = await admin.from('pulse_timeline').upsert(timelineRows, {
                     onConflict: 'idempotency_key',
                     ignoreDuplicates: true,
                   });
+                  if (tlAgErr) console.error(`[pulseDataSync] bridge-agency timeline upsert failed: ${tlAgErr.message?.substring(0, 200)}`);
                 }
               }
             } catch (e) {
@@ -2123,10 +2155,13 @@ serveWithAudit('pulseDataSync', async (req) => {
         });
         timelineEntries++;
 
-        await admin.from('pulse_agents').update({
+        // P1 #8 (2026-04-19): surface DB errors in logs so step9 movement
+        // updates can't silently fail.
+        const { error: step9Err } = await admin.from('pulse_agents').update({
           previous_agency_name: existing.agency_name,
           agency_changed_at: now,
         }).eq('id', existing.id);
+        if (step9Err) console.error(`[pulseDataSync] step9 agency-change update failed for ${existing.id}: ${step9Err.message?.substring(0, 200)}`);
       }
     }
     if (step9Rows.length > 0) {
@@ -2311,32 +2346,40 @@ serveWithAudit('pulseDataSync', async (req) => {
         const pulseAgentId: string | null = reaId ? (pulseAgentIdMap.get(reaId) || null) : null;
 
         if (existMap.length === 0) {
-          await admin.from('pulse_crm_mappings').insert({
+          // P1 #20 (2026-04-19): upsert with onConflict target (new unique
+          // index idx_pulse_crm_map_entity_crm from migration 151) so any
+          // rerun with the same (entity_type, crm_entity_id) tuple updates
+          // in place instead of duplicating.
+          const { error: mapInsErr } = await admin.from('pulse_crm_mappings').upsert({
             entity_type: 'agent',
             pulse_entity_id: pulseAgentId,
             rea_id: reaId || null,
             crm_entity_id: matchedCrm.id,
             match_type: hasNameOverlap ? `${matchType}+name` : matchType,
             confidence,
-          });
-          mappingsCreated++;
+          }, { onConflict: 'entity_type,crm_entity_id', ignoreDuplicates: false });
+          if (mapInsErr) console.error(`[pulseDataSync] pulse_crm_mappings agent upsert failed: ${mapInsErr.message?.substring(0, 200)}`);
+          else mappingsCreated++;
         } else if (existMap[0].confidence === 'suggested' && confidence === 'confirmed') {
           const updates: Record<string, any> = { confidence: 'confirmed' };
           if (reaId && !existMap[0].rea_id) updates.rea_id = reaId;
           if (pulseAgentId) updates.pulse_entity_id = pulseAgentId;
-          await admin.from('pulse_crm_mappings').update(updates).eq('id', existMap[0].id);
+          const { error: mapUpdErr } = await admin.from('pulse_crm_mappings').update(updates).eq('id', existMap[0].id);
+          if (mapUpdErr) console.error(`[pulseDataSync] pulse_crm_mappings agent update failed: ${mapUpdErr.message?.substring(0, 200)}`);
         }
 
         // Write REA ID back to CRM record
         const crmUpdates: Record<string, any> = {};
         if (reaId && !matchedCrm.rea_agent_id) crmUpdates.rea_agent_id = reaId;
         if (Object.keys(crmUpdates).length > 0) {
-          await admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id);
+          const { error: crmUpdErr } = await admin.from('agents').update(crmUpdates).eq('id', matchedCrm.id);
+          if (crmUpdErr) console.error(`[pulseDataSync] agents crm-back-fill update failed: ${crmUpdErr.message?.substring(0, 200)}`);
         }
 
         // Set is_in_crm on pulse_agent
         if (confidence === 'confirmed' && pulseAgentId) {
-          await admin.from('pulse_agents').update({ is_in_crm: true, linked_agent_id: matchedCrm.id }).eq('id', pulseAgentId);
+          const { error: pInCrmErr } = await admin.from('pulse_agents').update({ is_in_crm: true, linked_agent_id: matchedCrm.id }).eq('id', pulseAgentId);
+          if (pInCrmErr) console.error(`[pulseDataSync] pulse_agents is_in_crm update failed: ${pInCrmErr.message?.substring(0, 200)}`);
         }
       }
     }
@@ -2370,32 +2413,39 @@ serveWithAudit('pulseDataSync', async (req) => {
         const pulseAgencyId: string | null = pulseAgencyIdMap.get(agency.name.trim().toLowerCase()) || null;
 
         if (existAgencyMap.length === 0) {
-          await admin.from('pulse_crm_mappings').insert({
+          // P1 #20 (2026-04-19): upsert on (entity_type, crm_entity_id)
+          // conflict target (new unique index from migration 151).
+          const { error: agMapInsErr } = await admin.from('pulse_crm_mappings').upsert({
             entity_type: 'agency',
             pulse_entity_id: pulseAgencyId,
             rea_id: reaAgencyId || null,
             crm_entity_id: matchedCrmAgency.id,
             match_type: agencyMatchType,
             confidence: 'confirmed',
-          });
-          mappingsCreated++;
+          }, { onConflict: 'entity_type,crm_entity_id', ignoreDuplicates: false });
+          if (agMapInsErr) console.error(`[pulseDataSync] pulse_crm_mappings agency upsert failed: ${agMapInsErr.message?.substring(0, 200)}`);
+          else mappingsCreated++;
         } else if (existAgencyMap[0].confidence === 'suggested') {
           const updates: Record<string, any> = { confidence: 'confirmed' };
           if (reaAgencyId && !existAgencyMap[0].rea_id) updates.rea_id = reaAgencyId;
           if (pulseAgencyId) updates.pulse_entity_id = pulseAgencyId;
-          await admin.from('pulse_crm_mappings').update(updates).eq('id', existAgencyMap[0].id);
+          const { error: agMapUpdErr } = await admin.from('pulse_crm_mappings').update(updates).eq('id', existAgencyMap[0].id);
+          if (agMapUpdErr) console.error(`[pulseDataSync] pulse_crm_mappings agency update failed: ${agMapUpdErr.message?.substring(0, 200)}`);
         }
 
         // Write REA ID back to CRM agency
         if (reaAgencyId && !matchedCrmAgency.rea_agency_id) {
-          await admin.from('agencies').update({ rea_agency_id: reaAgencyId }).eq('id', matchedCrmAgency.id);
+          const { error: agCrmBackErr } = await admin.from('agencies').update({ rea_agency_id: reaAgencyId }).eq('id', matchedCrmAgency.id);
+          if (agCrmBackErr) console.error(`[pulseDataSync] agencies crm-back-fill update failed: ${agCrmBackErr.message?.substring(0, 200)}`);
         }
 
         // Set is_in_crm on pulse_agency
         if (reaAgencyId) {
-          await admin.from('pulse_agencies').update({ is_in_crm: true }).eq('rea_agency_id', reaAgencyId);
+          const { error: agInCrmErr } = await admin.from('pulse_agencies').update({ is_in_crm: true }).eq('rea_agency_id', reaAgencyId);
+          if (agInCrmErr) console.error(`[pulseDataSync] pulse_agencies is_in_crm (rea_id) update failed: ${agInCrmErr.message?.substring(0, 200)}`);
         } else {
-          await admin.from('pulse_agencies').update({ is_in_crm: true }).ilike('name', agency.name.trim());
+          const { error: agInCrmNameErr } = await admin.from('pulse_agencies').update({ is_in_crm: true }).ilike('name', agency.name.trim());
+          if (agInCrmNameErr) console.error(`[pulseDataSync] pulse_agencies is_in_crm (name) update failed: ${agInCrmNameErr.message?.substring(0, 200)}`);
         }
       }
     }
