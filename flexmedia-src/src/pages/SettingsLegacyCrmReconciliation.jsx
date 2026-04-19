@@ -47,6 +47,7 @@ import {
 import {
   Database, CheckCircle2, AlertTriangle, RefreshCw, Zap,
   Loader2, Search, Link2, UserCheck, Building2, X, Crown,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 
 // Helpers
@@ -187,7 +188,10 @@ function InCrmChip({ inCrm }) {
   );
 }
 
-function CandidateList({ candidates, onPick }) {
+function CandidateList({ candidates, loading, onPick }) {
+  if (loading) {
+    return <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />;
+  }
   if (!candidates || candidates.length === 0) {
     return <span className="text-xs text-muted-foreground">No pulse matches</span>;
   }
@@ -214,7 +218,68 @@ function CandidateList({ candidates, onPick }) {
   );
 }
 
-function ReviewTable({ rows, loading, onApply, onReject }) {
+// Per-row lazy candidate fetch. Only mounts when a row is expanded so we
+// don't run 50 trigram-similarity scans up-front.
+function LazyCandidateRow({ row, expanded, onApply, onReject }) {
+  const candQ = useQuery({
+    enabled: expanded,
+    queryKey: ["legacy-pulse-candidates", row.id],
+    queryFn: () => api.rpc("legacy_reconciliation_candidates_for", { p_legacy_id: row.id }),
+    staleTime: 60_000,
+  });
+
+  const agents   = candQ.data?.candidate_agents   || [];
+  const agencies = candQ.data?.candidate_agencies || [];
+
+  if (!expanded) return null;
+
+  return (
+    <TableRow className="bg-muted/20">
+      <TableCell colSpan={4} className="py-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 px-2">
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">
+              Suggested pulse agents {candQ.isLoading && <Loader2 className="h-3 w-3 inline animate-spin" />}
+            </div>
+            <CandidateList
+              candidates={agents}
+              loading={candQ.isLoading}
+              onPick={(c) => onApply(row, { pulse_agent_id: c.id })}
+            />
+          </div>
+          <div>
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-2">
+              Suggested pulse agencies {candQ.isLoading && <Loader2 className="h-3 w-3 inline animate-spin" />}
+            </div>
+            <CandidateList
+              candidates={agencies}
+              loading={candQ.isLoading}
+              onPick={(c) => onApply(row, { pulse_agency_id: c.id })}
+            />
+          </div>
+        </div>
+        {(agents[0] || agencies[0]) && (
+          <div className="flex justify-end gap-1 mt-3 px-2">
+            <Button
+              variant="default" size="sm" className="h-7 px-2 text-xs"
+              onClick={() => onApply(row, {
+                pulse_agent_id:  agents[0]?.id || null,
+                pulse_agency_id: agencies[0]?.id || null,
+              })}
+            >
+              Confirm top
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onReject(row)}>
+              Reject
+            </Button>
+          </div>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function ReviewTable({ rows, loading, expanded, toggleExpanded, onApply, onReject }) {
   if (loading) {
     return (
       <div className="space-y-2 p-4">
@@ -230,92 +295,93 @@ function ReviewTable({ rows, loading, onApply, onReject }) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead className="w-[240px]">Legacy row</TableHead>
-          <TableHead className="w-[260px]">Suggested pulse agents</TableHead>
-          <TableHead className="w-[260px]">Suggested pulse agencies</TableHead>
+          <TableHead className="w-[32px]"></TableHead>
+          <TableHead className="w-[300px]">Legacy row</TableHead>
           <TableHead>Current linkage</TableHead>
-          <TableHead className="text-right">Actions</TableHead>
+          <TableHead className="text-right w-[180px]">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((r) => (
-          <TableRow key={r.id}>
-            <TableCell className="align-top">
-              <div className="text-xs font-mono truncate max-w-[240px]" title={r.raw_address}>
-                {r.raw_address || <span className="italic">(no address)</span>}
-              </div>
-              <div className="text-xs text-muted-foreground mt-1 truncate max-w-[240px]" title={r.agent_name}>
-                Agent: <span className="font-medium text-foreground">{r.agent_name || "—"}</span>
-              </div>
-              <div className="text-xs text-muted-foreground truncate max-w-[240px]" title={r.agency_name}>
-                Agency: <span className="font-medium text-foreground">{r.agency_name || "—"}</span>
-              </div>
-              {r.client_email && (
-                <div className="text-[10px] text-muted-foreground truncate max-w-[240px]" title={r.client_email}>
-                  {r.client_email}
-                </div>
-              )}
-            </TableCell>
-            <TableCell className="align-top">
-              <CandidateList
-                candidates={r.candidate_agents}
-                onPick={(c) => onApply(r, { pulse_agent_id: c.id })}
-              />
-            </TableCell>
-            <TableCell className="align-top">
-              <CandidateList
-                candidates={r.candidate_agencies}
-                onPick={(c) => onApply(r, { pulse_agency_id: c.id })}
-              />
-            </TableCell>
-            <TableCell className="align-top">
-              <div className="flex flex-col gap-1 text-xs">
-                {r.linked_pulse_agent_id ? (
-                  <div className="flex items-center gap-2">
-                    <Link2 className="h-3 w-3 text-emerald-600" />
-                    <span className="truncate max-w-[160px]" title={r.linked_pulse_agent_name}>
-                      {r.linked_pulse_agent_name || "pulse agent"}
-                    </span>
-                    <ConfidencePct value={r.pulse_agent_linkage_confidence} />
-                    <Badge variant="outline" className="text-[10px]">{r.pulse_agent_linkage_source || "—"}</Badge>
-                    <InCrmChip inCrm={r.agent_in_crm} />
+        {rows.map((r) => {
+          const isOpen = !!expanded[r.id];
+          return (
+            <React.Fragment key={r.id}>
+              <TableRow
+                className="cursor-pointer hover:bg-muted/30"
+                onClick={() => toggleExpanded(r.id)}
+              >
+                <TableCell className="align-top pt-3">
+                  {isOpen
+                    ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                </TableCell>
+                <TableCell className="align-top">
+                  <div className="text-xs font-mono truncate max-w-[300px]" title={r.raw_address}>
+                    {r.raw_address || <span className="italic">(no address)</span>}
                   </div>
-                ) : (
-                  <span className="text-muted-foreground">agent: unlinked</span>
-                )}
-                {r.linked_pulse_agency_id ? (
-                  <div className="flex items-center gap-2">
-                    <Link2 className="h-3 w-3 text-emerald-600" />
-                    <span className="truncate max-w-[160px]" title={r.linked_pulse_agency_name}>
-                      {r.linked_pulse_agency_name || "pulse agency"}
-                    </span>
-                    <ConfidencePct value={r.pulse_agency_linkage_confidence} />
-                    <Badge variant="outline" className="text-[10px]">{r.pulse_agency_linkage_source || "—"}</Badge>
-                    <InCrmChip inCrm={r.agency_in_crm} />
+                  <div className="text-xs text-muted-foreground mt-1 truncate max-w-[300px]" title={r.agent_name}>
+                    Agent: <span className="font-medium text-foreground">{r.agent_name || "—"}</span>
                   </div>
-                ) : (
-                  <span className="text-muted-foreground">agency: unlinked</span>
-                )}
-              </div>
-            </TableCell>
-            <TableCell className="align-top text-right space-x-1 whitespace-nowrap">
-              {(r.candidate_agents?.[0] || r.candidate_agencies?.[0]) && (
-                <Button
-                  variant="default" size="sm" className="h-7 px-2 text-xs"
-                  onClick={() => onApply(r, {
-                    pulse_agent_id:  r.candidate_agents?.[0]?.id || null,
-                    pulse_agency_id: r.candidate_agencies?.[0]?.id || null,
-                  })}
-                >
-                  Confirm top
-                </Button>
-              )}
-              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onReject(r)}>
-                Reject
-              </Button>
-            </TableCell>
-          </TableRow>
-        ))}
+                  <div className="text-xs text-muted-foreground truncate max-w-[300px]" title={r.agency_name}>
+                    Agency: <span className="font-medium text-foreground">{r.agency_name || "—"}</span>
+                  </div>
+                  {r.client_email && (
+                    <div className="text-[10px] text-muted-foreground truncate max-w-[300px]" title={r.client_email}>
+                      {r.client_email}
+                    </div>
+                  )}
+                </TableCell>
+                <TableCell className="align-top">
+                  <div className="flex flex-col gap-1 text-xs">
+                    {r.linked_pulse_agent_id ? (
+                      <div className="flex items-center gap-2">
+                        <Link2 className="h-3 w-3 text-emerald-600" />
+                        <span className="truncate max-w-[200px]" title={r.linked_pulse_agent_name}>
+                          {r.linked_pulse_agent_name || "pulse agent"}
+                        </span>
+                        <ConfidencePct value={r.pulse_agent_linkage_confidence} />
+                        <Badge variant="outline" className="text-[10px]">{r.pulse_agent_linkage_source || "—"}</Badge>
+                        <InCrmChip inCrm={r.agent_in_crm} />
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">agent: unlinked</span>
+                    )}
+                    {r.linked_pulse_agency_id ? (
+                      <div className="flex items-center gap-2">
+                        <Link2 className="h-3 w-3 text-emerald-600" />
+                        <span className="truncate max-w-[200px]" title={r.linked_pulse_agency_name}>
+                          {r.linked_pulse_agency_name || "pulse agency"}
+                        </span>
+                        <ConfidencePct value={r.pulse_agency_linkage_confidence} />
+                        <Badge variant="outline" className="text-[10px]">{r.pulse_agency_linkage_source || "—"}</Badge>
+                        <InCrmChip inCrm={r.agency_in_crm} />
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">agency: unlinked</span>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell className="align-top text-right space-x-1 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    variant="outline" size="sm" className="h-7 px-2 text-xs"
+                    onClick={() => toggleExpanded(r.id)}
+                  >
+                    {isOpen ? "Hide" : "Suggest matches"}
+                  </Button>
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onReject(r)}>
+                    Reject
+                  </Button>
+                </TableCell>
+              </TableRow>
+              <LazyCandidateRow
+                row={r}
+                expanded={isOpen}
+                onApply={onApply}
+                onReject={onReject}
+              />
+            </React.Fragment>
+          );
+        })}
       </TableBody>
     </Table>
   );
@@ -330,16 +396,23 @@ export default function SettingsLegacyCrmReconciliation() {
   const [search, setSearch]   = useState("");
   const [page, setPage]       = useState(0);
   const [bulkThreshold, setBulkThreshold] = useState("0.85");
+  const [expanded, setExpanded] = useState({}); // { [rowId]: true } — tracks open candidate sections
   const limit = 50;
+
+  const toggleExpanded = (id) =>
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
 
   const statsQ = useQuery({
     queryKey: ["legacy-pulse-stats"],
     queryFn: () => api.rpc("legacy_reconciliation_stats"),
   });
 
+  // Fast list query — rows only, no candidate computation (~200ms).
+  // Candidates are fetched lazily per row via legacy_reconciliation_candidates_for
+  // when the user expands a row. See migration 201.
   const reviewQ = useQuery({
     queryKey: ["legacy-pulse-review", filter, search, page],
-    queryFn: () => api.rpc("legacy_reconciliation_review", {
+    queryFn: () => api.rpc("legacy_reconciliation_review_fast", {
       p_filter: filter,
       p_search: search || null,
       p_limit:  limit,
@@ -417,6 +490,7 @@ export default function SettingsLegacyCrmReconciliation() {
             via property-chain (near-deterministic, confidence 0.95) then
             falls back to fuzzy name matching with a runner-up gap guard.
             Anything below the auto-confirm threshold surfaces here.
+            Click a row to see suggested pulse matches for that legacy project.
           </p>
         </div>
 
@@ -441,6 +515,8 @@ export default function SettingsLegacyCrmReconciliation() {
           <ReviewTable
             rows={rows}
             loading={reviewQ.isLoading}
+            expanded={expanded}
+            toggleExpanded={toggleExpanded}
             onApply={(row, picks) => applyMut.mutate({
               legacyId:       row.id,
               pulseAgentId:   picks.pulse_agent_id,
