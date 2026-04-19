@@ -19,6 +19,13 @@
  *   entityHref           — optional URL used by the entity pill (clickable)
  *   onOpenEntity         — optional callback; preferred over entityHref (uses app slideouts)
  *   onOpenSourceDrill    — (source, createdAt) => void — opens SourceDrillDrawer
+ *   onOpenSyncLog        — optional (syncLogId) => void — when provided, the
+ *                          sync-log external-link icon invokes this instead of
+ *                          <Link>-navigating to the Data Sources tab. Lets
+ *                          slideout-embedded timelines open a nested drawer
+ *                          without collapsing the slideout stack. Omit to keep
+ *                          the legacy full-navigate behaviour (e.g. inside the
+ *                          PulseTimelineTab which IS the destination).
  *   sourceStatus         — optional sync-log status for chip coloring (green/amber/red)
  *   compact              — dense, no description, smaller type (CommandCenter tile)
  *   showRelativeTime     — default true; set false to always show absolute
@@ -150,6 +157,7 @@ export default function TimelineRow({
   entityHref,
   onOpenEntity,
   onOpenSourceDrill,
+  onOpenSyncLog,
   sourceStatus,
   compact = false,
   showRelativeTime = true,
@@ -228,14 +236,25 @@ export default function TimelineRow({
               {timeLabel}
             </span>
             {entry.sync_log_id && (
-              <Link
-                to={`/IndustryPulse?tab=sources&sync_log_id=${entry.sync_log_id}`}
-                onClick={(e) => e.stopPropagation()}
-                className="text-muted-foreground/40 hover:text-primary transition-colors"
-                title="Open source run details (Data Sources tab)"
-              >
-                <ExternalLink className={cn(compact ? "h-2.5 w-2.5" : "h-3 w-3")} />
-              </Link>
+              typeof onOpenSyncLog === "function" ? (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onOpenSyncLog(entry.sync_log_id); }}
+                  className="text-muted-foreground/40 hover:text-primary transition-colors"
+                  title="Open source run details"
+                >
+                  <ExternalLink className={cn(compact ? "h-2.5 w-2.5" : "h-3 w-3")} />
+                </button>
+              ) : (
+                <Link
+                  to={`/IndustryPulse?tab=sources&sync_log_id=${entry.sync_log_id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-muted-foreground/40 hover:text-primary transition-colors"
+                  title="Open source run details (Data Sources tab)"
+                >
+                  <ExternalLink className={cn(compact ? "h-2.5 w-2.5" : "h-3 w-3")} />
+                </Link>
+              )
             )}
           </div>
         </div>

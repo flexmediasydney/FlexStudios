@@ -10,6 +10,11 @@
  *   entityId / crmEntityId: UUID of the CRM record
  *   entityName: CRM record display name (informational only)
  *   crmEntity: full CRM entity record (optional, used for rea_agent_id fallback)
+ *   onOpenEntity: optional ({type, id}) => void — when the panel is rendered
+ *     inside a slideout stack (IndustryPulse page), the parent passes its
+ *     openEntity handler so timeline/roster clicks push onto the stack
+ *     instead of full-navigating. Omitted from PersonDetails/OrgDetails so
+ *     those surfaces fall back to navigate().
  */
 import React, { useMemo, useState, useCallback, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
@@ -38,6 +43,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import EntitySyncHistoryDialog from "@/components/pulse/EntitySyncHistoryDialog";
+import SourceDrillDrawer from "@/components/pulse/timeline/SourceDrillDrawer";
 import {
   displayPrice as sharedDisplayPrice,
   LISTING_TYPE_LABEL,
@@ -558,6 +564,7 @@ export default function PulseIntelligencePanel({
   crmEntityId,
   entityName,
   crmEntity,
+  onOpenEntity,
 }) {
   // Accept both prop shapes (new: entityId, old: crmEntityId)
   const entityId = propEntityId || crmEntityId;
@@ -585,6 +592,10 @@ export default function PulseIntelligencePanel({
   const [breakdownTypeFilter, setBreakdownTypeFilter] = useState(null);
   // Flash-target section ring animation (used when jumping from another view).
   const [flashSection, setFlashSection] = useState(null);
+  // In-place sync-log drill drawer — triggered from TimelineRow / Section 11 /
+  // Section 12 when the panel is embedded in a slideout stack. Looks up the
+  // sync_log by id to resolve (source_id, started_at) and feed SourceDrillDrawer.
+  const [syncLogDrill, setSyncLogDrill] = useState(null);
   const navigate = useNavigate();
 
   // Tab change + optional flash-target section highlight. Wrapped in useCallback
@@ -595,6 +606,30 @@ export default function PulseIntelligencePanel({
       setFlashSection(targetSection);
       setTimeout(() => setFlashSection(null), 1400);
     }
+  }, []);
+
+  // P0 #1: Timeline / roster / agency-name click handler — prefers the
+  // parent-supplied onOpenEntity (so slideout stacks push a new level) and
+  // falls back to navigate() when the panel is rendered outside a stack
+  // (PersonDetails / OrgDetails).
+  const handleTimelineOpenEntity = useCallback((entity) => {
+    if (!entity?.type || !entity?.id) return;
+    if (onOpenEntity) {
+      onOpenEntity(entity);
+      return;
+    }
+    const tabSlug = entity.type === "listing"
+      ? "listings"
+      : entity.type === "agency" ? "agencies" : "agents";
+    navigate(`/IndustryPulse?tab=${tabSlug}&entity_type=${entity.type}&pulse_id=${encodeURIComponent(entity.id)}`);
+  }, [onOpenEntity, navigate]);
+
+  // P0 #2 / #3: Sync-log drill handler. When passed to TimelineRow /
+  // Section 11 sync-run link, clicking the external-link icon opens the
+  // SourceDrillDrawer in-place instead of collapsing the slideout stack.
+  const handleOpenSyncLog = useCallback((syncLogId) => {
+    if (!syncLogId) return;
+    setSyncLogDrill({ syncLogId });
   }, []);
 
   // Roster column-header click: same column toggles direction, new column
@@ -1242,12 +1277,12 @@ export default function PulseIntelligencePanel({
         </span>
       </div>
 
-      {/* Tab switcher — Overview / Listings (agent only). Gated on having
-          listings so the bar doesn't appear for empty dossiers. Agency
-          dossiers have all content in the single overview panel + an
-          external deep-link, so the switcher is suppressed there. Minimal
-          chip style matches the timeline filter chips below. */}
-      {a && entityType === "agent" && (activeListings.length > 0 || soldListings.length > 0) && (
+      {/* Tab switcher — Overview / Listings. Gated on having listings so the
+          bar doesn't appear for empty dossiers. Φ5 #7: agency dossiers now
+          also render a Listings tab that mirrors the agent variant (filtered
+          by agency_rea_id server-side by the dossier RPC). Minimal chip style
+          matches the timeline filter chips below. */}
+      {a && (activeListings.length > 0 || soldListings.length > 0) && (
         <div className="flex items-center gap-1.5 mt-2 mb-1" role="tablist" aria-label="Dossier sections">
           {[
             { key: "overview", label: "Overview" },
@@ -1577,9 +1612,26 @@ export default function PulseIntelligencePanel({
             <CardContent className="p-4">
               <SectionHeader icon={Briefcase} count={entityProjects.length}>CRM Cross-Reference</SectionHeader>
               {mapping ? (
-                <Badge variant="outline" className="text-[9px] text-green-600 border-green-200 mb-2">
-                  <CheckCircle2 className="h-3 w-3 mr-1" /> Mapped to CRM
-                </Badge>
+                // P1 #6: match AgentSlideout — the badge becomes a Link to
+                // PersonDetails / OrgDetails when the mapping points at a CRM
+                // record. Agent entities route to PersonDetails, agency ones
+                // to OrgDetails.
+                mapping.crm_entity_id ? (
+                  <Link
+                    to={createPageUrl(entityType === "agent" ? "PersonDetails" : "OrgDetails") + `?id=${mapping.crm_entity_id}`}
+                    className="inline-block mb-2"
+                    title={`Open CRM ${entityType} record`}
+                  >
+                    <Badge variant="outline" className="text-[9px] text-green-600 border-green-200 hover:bg-green-50 dark:hover:bg-green-950/20 transition-colors cursor-pointer">
+                      <CheckCircle2 className="h-3 w-3 mr-1" /> Mapped to CRM
+                      <ExternalLink className="h-2.5 w-2.5 ml-1" />
+                    </Badge>
+                  </Link>
+                ) : (
+                  <Badge variant="outline" className="text-[9px] text-green-600 border-green-200 mb-2">
+                    <CheckCircle2 className="h-3 w-3 mr-1" /> Mapped to CRM
+                  </Badge>
+                )
               ) : (
                 <p className="text-xs text-muted-foreground/60 mb-2">Not in CRM</p>
               )}
@@ -1649,17 +1701,20 @@ export default function PulseIntelligencePanel({
                   <span>Last synced: {fmtDate(a?.last_synced_at)}</span>
                 </div>
                 {/* Tier 4: last_sync_log_id drill + full source history */}
+                {/* P0 #3: open the SourceDrillDrawer in-place instead of
+                    navigating away (which would drop the slideout stack). */}
                 {a?.last_sync_log_id && (
                   <p>
                     Last sync run:{" "}
-                    <a
-                      href={`/IndustryPulse?tab=sources&sync_log_id=${a.last_sync_log_id}`}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenSyncLog(a.last_sync_log_id)}
                       className="font-mono text-primary hover:underline inline-flex items-center gap-0.5"
                       title="Open payload for this run"
                     >
                       {String(a.last_sync_log_id).slice(0, 8)}
                       <ExternalLink className="h-2.5 w-2.5" />
-                    </a>
+                    </button>
                   </p>
                 )}
                 {a?.rea_agent_id && <p>REA Agent ID: <span className="font-mono">{a.rea_agent_id}</span></p>}
@@ -2055,9 +2110,12 @@ export default function PulseIntelligencePanel({
                       // #23: every row drills through on click.
                       //   In CRM  -> PersonDetails (legacy)
                       //   Not CRM -> IndustryPulse dossier via ?pulse_id
+                      // P1 #5: when a parent onOpenEntity is provided (slideout
+                      // stack), prefer pushing a new dossier level onto the
+                      // stack instead of navigating away.
                       const onRowClick = hasCrm
                         ? () => navigate(createPageUrl("PersonDetails") + `?id=${agMapping.crm_entity_id}`)
-                        : () => navigate(`/IndustryPulse?entity_type=agent&pulse_id=${encodeURIComponent(ag.id)}`);
+                        : () => handleTimelineOpenEntity({ type: "agent", id: ag.id });
                       return (
                         <tr
                           key={ag.id}
@@ -2293,17 +2351,20 @@ export default function PulseIntelligencePanel({
                   <span>Last synced: {fmtDate(a?.last_synced_at)}</span>
                 </div>
                 {/* Tier 4: last_sync_log_id drill + full source history */}
+                {/* P0 #3: open the SourceDrillDrawer in-place instead of
+                    navigating away (which would drop the slideout stack). */}
                 {a?.last_sync_log_id && (
                   <p>
                     Last sync run:{" "}
-                    <a
-                      href={`/IndustryPulse?tab=sources&sync_log_id=${a.last_sync_log_id}`}
+                    <button
+                      type="button"
+                      onClick={() => handleOpenSyncLog(a.last_sync_log_id)}
                       className="font-mono text-primary hover:underline inline-flex items-center gap-0.5"
                       title="Open payload for this run"
                     >
                       {String(a.last_sync_log_id).slice(0, 8)}
                       <ExternalLink className="h-2.5 w-2.5" />
-                    </a>
+                    </button>
                   </p>
                 )}
                 {a?.rea_agency_id && <p>REA Agency ID: <span className="font-mono">{a.rea_agency_id}</span></p>}
@@ -2323,6 +2384,78 @@ export default function PulseIntelligencePanel({
             )}
           </CardContent>
         </Card>
+        </div>
+
+        {/* ── Listings tab (agency): Φ5 #7 — mirrors the agent listings tab
+            but uses the dossier RPC's listings (already filtered by
+            agency_rea_id server-side). Re-uses the same ListingRow +
+            breakdown filter chip machinery. */}
+        <div data-dossier-tab="listings" className="space-y-4 mt-2" hidden={dossierTab !== "listings"}>
+          <Card id="dossier-active-agency" className={cn("print-section-break transition-shadow", flashSection === "active" && "ring-2 ring-primary/60 ring-offset-2")}>
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between gap-2 mb-1">
+                <SectionHeader icon={Home} count={activeListings.length}>Active Listings</SectionHeader>
+                {breakdownTypeFilter && (
+                  <span className="inline-flex items-center gap-1 text-[9px] text-muted-foreground">
+                    <Filter className="h-2.5 w-2.5" />
+                    filter: <span className="capitalize font-medium text-foreground">{breakdownTypeFilter}</span>
+                    <button type="button" onClick={() => setBreakdownTypeFilter(null)} className="text-[9px] hover:text-foreground inline-flex items-center">
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                )}
+              </div>
+              {(() => {
+                const rows = breakdownTypeFilter
+                  ? activeListings.filter(l => (l.property_type || "").toLowerCase() === breakdownTypeFilter.toLowerCase())
+                  : activeListings;
+                return rows.length > 0 ? (
+                  <div className="space-y-1 max-h-72 overflow-y-auto print-expand">
+                    {rows.slice(0, 20).map(l => (<ListingRow key={l.id} l={l} />))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/60">
+                    {breakdownTypeFilter ? `No active ${breakdownTypeFilter} listings` : "No active listings found"}
+                  </p>
+                );
+              })()}
+            </CardContent>
+          </Card>
+
+          <Card id="dossier-sold-agency" className={cn("print-section-break transition-shadow", flashSection === "sold" && "ring-2 ring-primary/60 ring-offset-2")}>
+            <CardContent className="p-4">
+              <SectionHeader icon={DollarSign} count={soldListings.length}>Recently Sold</SectionHeader>
+              {(() => {
+                const rows = breakdownTypeFilter
+                  ? soldListings.filter(l => (l.property_type || "").toLowerCase() === breakdownTypeFilter.toLowerCase())
+                  : soldListings;
+                return rows.length > 0 ? (
+                  <div className="space-y-1 max-h-64 overflow-y-auto print-expand">
+                    {rows.slice(0, 20).map(l => (<ListingRow key={l.id} l={l} showSoldInfo />))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/60">No sold listings found</p>
+                );
+              })()}
+            </CardContent>
+          </Card>
+
+          {/* Keep the "View all N listings" deep-link handy at the bottom of
+              the listings tab too — the agency dossier's RPC may slice at
+              ~100 rows, and this gives the user a full-list escape hatch. */}
+          {(pulseData?.rea_agency_id || crmEntity?.rea_agency_id) && entityListings.length > 0 && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={handleViewAllAgencyListings}
+                className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline font-medium"
+                title="Open the Listings tab filtered to this agency"
+              >
+                View all {entityListings.length} listings
+                <ChevronRight className="h-3 w-3" />
+              </button>
+            </div>
+          )}
         </div>
       </>)}
 
@@ -2402,11 +2535,8 @@ export default function PulseIntelligencePanel({
                 : `No events in this bucket. Try the "All" tab.`
             }
             showFilters
-            onOpenEntity={({ type, id }) => {
-              if (!type || !id) return;
-              const tabSlug = type === "listing" ? "listings" : type === "agency" ? "agencies" : "agents";
-              navigate(`/IndustryPulse?tab=${tabSlug}&entity_type=${type}&pulse_id=${encodeURIComponent(id)}`);
-            }}
+            onOpenEntity={handleTimelineOpenEntity}
+            onOpenSyncLog={handleOpenSyncLog}
           />
         </CardContent>
       </Card>
@@ -2433,7 +2563,56 @@ export default function PulseIntelligencePanel({
           }}
         />
       )}
+
+      {/* P0 #2 / #3: in-place sync-log drill drawer. Opened by sync-log
+          external-link clicks on the timeline / Section 11 so the slideout
+          stack stays intact. Resolves (source_id, started_at) via a scoped
+          query, then feeds SourceDrillDrawer. */}
+      {syncLogDrill && (
+        <SyncLogDrillByIdDrawer
+          syncLogId={syncLogDrill.syncLogId}
+          onClose={() => setSyncLogDrill(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════ */
+/* ═══ SYNC-LOG DRILL DRAWER (by id) ═══════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════════════ */
+/**
+ * Resolves a pulse_sync_logs row by id → (source_id, started_at), then hands
+ * off to the shared SourceDrillDrawer. Keeps callers (TimelineRow / Section 11
+ * "Last sync run" link) decoupled from the drawer's (source, createdAt)
+ * contract. Lightweight — a single maybeSingle query against the logs table.
+ */
+function SyncLogDrillByIdDrawer({ syncLogId, onClose }) {
+  const { data } = useQuery({
+    queryKey: ["sync-log-by-id", syncLogId],
+    queryFn: async () => {
+      if (!syncLogId) return null;
+      const { data, error } = await supabase
+        .from("pulse_sync_logs")
+        .select("id, source_id, started_at")
+        .eq("id", syncLogId)
+        .maybeSingle();
+      if (error) throw error;
+      return data || null;
+    },
+    enabled: !!syncLogId,
+    staleTime: 60_000,
+  });
+  // SourceDrillDrawer expects open boolean + (source, createdAt). Render it
+  // immediately (open) and let it show its own loading state until we resolve
+  // the sync-log metadata. Close propagates up so the caller can clear state.
+  return (
+    <SourceDrillDrawer
+      open
+      source={data?.source_id || null}
+      createdAt={data?.started_at || null}
+      onClose={onClose}
+    />
   );
 }
 

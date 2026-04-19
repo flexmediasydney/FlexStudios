@@ -21,6 +21,10 @@
  *   virtualize        — force virtualization on/off; auto-enables >100 rows
  *   entityNameMap     — {[`${type}:${id}`]: displayName} for pill labels (avoids UUIDs)
  *   defaultCategory   — initial category filter value
+ *   onOpenSyncLog     — optional (syncLogId) => void — threaded to TimelineRow
+ *                       so slideout-embedded timelines (dossier) open a nested
+ *                       drawer instead of full-navigating. Omit to keep the
+ *                       legacy <Link> behaviour on tab surfaces.
  *
  * Data shape expected per entry:
  *   { id, entity_type, pulse_entity_id, crm_entity_id, rea_id, event_type,
@@ -436,6 +440,7 @@ export default function PulseTimeline({
   virtualize,             // undefined → auto
   entityNameMap = {},
   defaultCategory = "all",
+  onOpenSyncLog,
 }) {
   // Filter/search toolbar only rendered when not compact (unless caller overrides)
   const filtersVisible = showFilters == null ? !compact : showFilters;
@@ -571,6 +576,7 @@ export default function PulseTimeline({
                     entityName={lookupName(entry)}
                     onOpenEntity={onOpenEntity}
                     onOpenSourceDrill={handleOpenSourceDrill}
+                    onOpenSyncLog={onOpenSyncLog}
                     compact={compact}
                     renderDetail={renderEntryDetail}
                     isLast={virtualRow.index === visibleEntries.length - 1}
@@ -622,6 +628,7 @@ export default function PulseTimeline({
                   entityName={lookupName(entry)}
                   onOpenEntity={onOpenEntity}
                   onOpenSourceDrill={handleOpenSourceDrill}
+                  onOpenSyncLog={onOpenSyncLog}
                   compact={compact}
                   renderDetail={renderEntryDetail}
                   isLast={i === group.entries.length - 1}
