@@ -134,6 +134,11 @@ serveWithAudit('pulseFireScrapes', async (req) => {
           description: 'No eligible suburbs matched filters',
           new_value: { source_id, dispatched: 0, min_priority, max_items: maxItems, enqueued: 0 },
           source: 'cron',
+          // Run-level audit: no sync_log ties in by design. Explicit
+          // NULL keeps the Q4 audit RPCs happy; idempotency_key is
+          // minute-bucketed to match migration 148's rollup dedupe.
+          sync_log_id: null,
+          idempotency_key: `cron_dispatched:${source_id}:${new Date().toISOString().slice(0, 16)}`,
         });
       } catch { /* non-fatal */ }
       return jsonResponse({ success: true, source_id, enqueued: 0, message: 'No eligible suburbs' });
@@ -161,6 +166,8 @@ serveWithAudit('pulseFireScrapes', async (req) => {
           description: `All ${suburbs.length} suburbs skipped (missing postcode)`,
           new_value: { source_id, dispatched: 0, enqueued: 0, skipped },
           source: 'cron',
+          sync_log_id: null,
+          idempotency_key: `cron_dispatched:${source_id}:${new Date().toISOString().slice(0, 16)}`,
         });
       } catch { /* non-fatal */ }
       return jsonResponse({ success: true, source_id, enqueued: 0, skipped: skipped.length });
@@ -272,6 +279,11 @@ serveWithAudit('pulseFireScrapes', async (req) => {
           actor_input: actorInput,
         },
         source: 'cron',
+        // Run-level event: sync_log lives on each suburb's queue dispatch.
+        // Explicit NULL + per-minute idempotency_key aligns with the
+        // rollup-filter in migration 148 / RPC 147.
+        sync_log_id: null,
+        idempotency_key: `cron_dispatched:${source_id}:${new Date().toISOString().slice(0, 16)}`,
       });
     } catch { /* non-fatal */ }
 

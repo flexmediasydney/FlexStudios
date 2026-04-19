@@ -229,6 +229,13 @@ serveWithAudit('pulseCircuitReset', async (req) => {
           actor_email: user?.email ?? null,
           sync_log_id: ctx?.syncLogId ?? null,
         },
+        // Run-level event: the sync_log is a separate row written by
+        // startRun() above; setting sync_log_id here keeps the timeline
+        // row linked to it (or explicit null if startRun failed).
+        // Per-day idempotency_key — matching the convention used by the
+        // cron_dispatched inserts in pulseFireScrapes.
+        sync_log_id: ctx?.syncLogId ?? null,
+        idempotency_key: `circuit_reset:${source_id}:${new Date().toISOString().slice(0, 10)}`,
       });
       if (tlErr) {
         if (ctx) recordError(ctx, tlErr, 'warn');

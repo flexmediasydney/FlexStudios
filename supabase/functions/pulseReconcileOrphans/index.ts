@@ -127,7 +127,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // to seed the row with; the nightly scraper will refresh when it has one).
   // Returns the inserted row count (xmax=0 ⇒ fresh insert).
   await safeStep('bridge_agents_from_listings', async () => {
-    const { data, error } = await admin.rpc('pulse_reconcile_bridge_agents_from_listings');
+    // Migration 152: pass sync_log_id so companion pulse_timeline rows
+    // are linked back to this reconciler run (was emitting NULL and
+    // tripping the audit RPCs — ~5,311 NULL rows/day).
+    const { data, error } = await admin.rpc('pulse_reconcile_bridge_agents_from_listings', {
+      p_sync_log_id: syncLogId,
+    });
     if (error) throw new Error(error.message);
     fixes.bridge_created_agents = Number(data) || 0;
   });
@@ -138,7 +143,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Mirror of migration 122 Part A.2. The RPC handles both sources (listings
   // and agents) in one pass, deduping by lower(trim(name)).
   await safeStep('bridge_agencies_from_refs', async () => {
-    const { data, error } = await admin.rpc('pulse_reconcile_bridge_agencies_from_refs');
+    // Migration 152: same sync_log_id plumbing as agents bridge above.
+    const { data, error } = await admin.rpc('pulse_reconcile_bridge_agencies_from_refs', {
+      p_sync_log_id: syncLogId,
+    });
     if (error) throw new Error(error.message);
     fixes.bridge_created_agencies = Number(data) || 0;
   });
