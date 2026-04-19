@@ -273,6 +273,23 @@ async function runMemo23Batch(urls: string[], label: string): Promise<{
 
 // ── Timeline emission (idempotent via idempotency_key) ──────────────────
 
+// Migration 148: run-level rollup event types that are NOT entity-level
+// changes. These are excluded from the pulse_sync_logs.timeline_events_emitted
+// counter so the Sync History "Changes" column reflects true entity changes.
+// Keep in sync with supabase/functions/_shared/timeline.ts and migrations 147/148.
+const ROLLUP_EVENT_TYPES = new Set<string>([
+  'new_listings_detected',
+  'client_new_listing',
+  'cron_dispatched',
+  'cron_dispatch_batch',
+  'cron_dispatch_started',
+  'cron_dispatch_completed',
+  'coverage_report',
+  'data_sync',
+  'data_cleanup',
+  'circuit_reset',
+]);
+
 async function emitTimeline(
   admin: any,
   events: any[],
@@ -298,11 +315,42 @@ async function emitTimeline(
       }))
     : events;
 
+  // Migration 148: tally non-rollup, non-system rows per sync_log_id so we
+  // can bump pulse_sync_logs.timeline_events_emitted after a successful insert.
+  const incBySyncLog = new Map<string, number>();
+  const tallyRow = (e: any) => {
+    if (
+      e?.sync_log_id &&
+      !ROLLUP_EVENT_TYPES.has(e.event_type) &&
+      e.entity_type !== 'system'
+    ) {
+      incBySyncLog.set(e.sync_log_id, (incBySyncLog.get(e.sync_log_id) ?? 0) + 1);
+    }
+  };
+  const flushIncrements = async () => {
+    for (const [sid, delta] of incBySyncLog) {
+      try {
+        const { error: rpcErr } = await admin.rpc('pulse_sync_log_increment_events', {
+          p_id: sid, p_delta: delta,
+        });
+        if (rpcErr) {
+          console.warn(`emitTimeline: increment_events rpc failed for ${sid}: ${rpcErr.message?.substring(0, 150)}`);
+        }
+      } catch (e) {
+        console.warn(`emitTimeline: increment_events threw for ${sid}: ${(e as Error)?.message?.substring(0, 150)}`);
+      }
+    }
+  };
+
   // Best-effort insert; duplicate idempotency_keys are caught by unique constraint.
   // We try bulk first, then fall back to per-row inserts so one bad row doesn't
   // drop the whole batch (which was the silent failure in the initial ship).
   const { error, count } = await admin.from('pulse_timeline').insert(stamped, { count: 'exact' });
-  if (!error) return { inserted: count || stamped.length, errors: [] };
+  if (!error) {
+    for (const e of stamped) tallyRow(e);
+    await flushIncrements();
+    return { inserted: count || stamped.length, errors: [] };
+  }
   // Dedup-only errors — expected, not a real problem
   if (String(error.message || '').includes('duplicate')) return { inserted: 0, errors: [] };
   // Otherwise try per-row for partial success, and group error strings by prefix.
@@ -316,9 +364,10 @@ async function emitTimeline(
   let inserted = 0;
   for (const e of stamped) {
     const { error: e2 } = await admin.from('pulse_timeline').insert(e);
-    if (!e2) inserted++;
+    if (!e2) { inserted++; tallyRow(e); }
     else if (!String(e2.message || '').includes('duplicate')) bump(e2.message || '');
   }
+  await flushIncrements();
   const errors = Array.from(errorGroups.entries()).map(([msg, count]) => ({ msg, count }));
   return { inserted, errors };
 }

@@ -2958,6 +2958,8 @@ function downloadCsv(rows) {
     // Slim-row counters (migration 095) — surfaced in the table as dedicated
     // Fetched/New/Updated columns, so include them in the CSV too.
     "records_fetched", "records_new", "records_updated",
+    // Migration 148 — Changes counter surfaced as its own column.
+    "timeline_events_emitted",
     "agents_processed", "listings_stored", "records_saved",
     "triggered_by", "triggered_by_name", "apify_run_id", "error_message",
   ];
@@ -2983,6 +2985,7 @@ function downloadCsv(rows) {
       log.records_fetched ?? "",
       log.records_new ?? "",
       log.records_updated ?? "",
+      log.timeline_events_emitted ?? "",
       sums.agents,
       sums.listings,
       sums.records,
@@ -3049,6 +3052,11 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
           // Fetched / New / Updated columns below, matching the per-source
           // card's DispatchTable row layout.
           "records_fetched, records_new, records_updated, " +
+          // Migration 148: timeline-event counter rendered in the "Changes"
+          // column. Captures entity-level change events emitted during the
+          // run (price/status/agent moves/etc), complementing records_updated
+          // which only counts row-level DB updates.
+          "timeline_events_emitted, " +
           // Batch attribution (migration 088) — rendered as "3/10" chip below.
           "batch_id, batch_number, total_batches",
           { count: "exact" }
@@ -3285,6 +3293,12 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                   <th className="text-right pb-2 font-medium text-muted-foreground" title="Rows returned by the scrape / API call">Fetched</th>
                   <th className="text-right pb-2 font-medium text-muted-foreground" title="Rows inserted on this run (not previously seen)">New</th>
                   <th className="text-right pb-2 font-medium text-muted-foreground" title="Existing rows whose payload changed on this run">Updated</th>
+                  {/* Migration 148 — count of entity-level timeline events emitted
+                      during the run (price/status changes, agent moves, etc).
+                      Complements "Updated": a detail-enrich run can fire dozens
+                      of change events without necessarily touching pulse_listings
+                      rows, so "Updated" alone hides those runs as no-ops. */}
+                  <th className="text-right pb-2 font-medium text-muted-foreground" title="Entity-level timeline events emitted on this run (price changes, status changes, agent moves, etc — excludes rollup/system events)">Changes</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground" title="Chunked dispatch batch (N of M). Blank for ad-hoc/manual syncs.">Batch</th>
                   <th className="text-left pb-2 font-medium text-muted-foreground">Triggered by</th>
                   <th className="pb-2" />
@@ -3360,6 +3374,36 @@ function SyncHistory({ sourceConfigs = [], onDrill, filterSourceId, onChangeFilt
                         </button>
                       ) : (
                         syncRecordsCellText(log, "records_updated")
+                      )}
+                    </td>
+                    {/* Migration 148 — Changes (timeline_events_emitted).
+                        Clickable when > 0: opens the drill dialog on the
+                        "Changes" tab so the user immediately sees which
+                        entities fired events. Uses indigo accent to
+                        distinguish it from the emerald "New" cell. */}
+                    <td className={cn(
+                      "py-2 pr-3 text-right tabular-nums",
+                      log.status === "running" && "text-muted-foreground/40",
+                      (log.timeline_events_emitted ?? 0) > 0 && "text-indigo-700 dark:text-indigo-400 font-medium",
+                    )}
+                      title="Entity-level timeline events emitted on this run (price/status/agent moves, etc — excludes rollup/system events)"
+                    >
+                      {log.status === "running" ? (
+                        "—"
+                      ) : (log.timeline_events_emitted ?? 0) > 0 ? (
+                        <button
+                          type="button"
+                          className="underline decoration-dotted underline-offset-2 hover:text-indigo-800 dark:hover:text-indigo-300"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDrill?.(log, "changes");
+                          }}
+                          title="Show the entity-level change events emitted on this run"
+                        >
+                          {Number(log.timeline_events_emitted ?? 0).toLocaleString()}
+                        </button>
+                      ) : (
+                        Number(log.timeline_events_emitted ?? 0).toLocaleString()
                       )}
                     </td>
                     <td className="py-2 pr-3">

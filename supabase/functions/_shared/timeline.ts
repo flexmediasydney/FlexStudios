@@ -59,6 +59,28 @@ export interface TimelineContext {
 }
 
 /**
+ * Run-level rollup event types that are NOT entity-level changes. These are
+ * excluded from the `timeline_events_emitted` counter so the Sync History UI
+ * reflects true "entity changes", not summary noise.
+ *
+ * Keep in sync with:
+ *   · migration 147 (change_events CTE in pulse_get_sync_log_records)
+ *   · migration 148 (backfill filter)
+ */
+const ROLLUP_EVENT_TYPES = new Set<string>([
+  'new_listings_detected',
+  'client_new_listing',
+  'cron_dispatched',
+  'cron_dispatch_batch',
+  'cron_dispatch_started',
+  'cron_dispatch_completed',
+  'coverage_report',
+  'data_sync',
+  'data_cleanup',
+  'circuit_reset',
+]);
+
+/**
  * Build a canonical idempotency key.
  *
  * Examples:
@@ -145,6 +167,13 @@ export async function emitTimeline(
 
   let inserted = 0;
   const CHUNK = 500;
+  // Count non-rollup rows per sync_log_id so we can bump the
+  // pulse_sync_logs.timeline_events_emitted counter after successful batches.
+  // Migration 148 added an atomic-increment RPC because Supabase's JS client
+  // can't do `col = col + n` via upsert. Slight over-count on re-runs (when
+  // ignoreDuplicates silently skips conflicting rows) is acceptable — the
+  // counter is a UX hint, not a billing figure.
+  const incBySyncLog = new Map<string, number>();
   for (let i = 0; i < valid.length; i += CHUNK) {
     const batch = valid.slice(i, i + CHUNK);
     const { error } = await admin
@@ -157,6 +186,34 @@ export async function emitTimeline(
       // an explicit .select(), and asking for .select() would re-fail on
       // the UNIQUE conflict. We report batch size as the optimistic count.
       inserted += batch.length;
+      // Tally non-rollup, non-system rows by sync_log_id for the counter bump.
+      for (const r of batch) {
+        if (
+          r.sync_log_id &&
+          !ROLLUP_EVENT_TYPES.has(r.event_type) &&
+          r.entity_type !== 'system'
+        ) {
+          incBySyncLog.set(r.sync_log_id, (incBySyncLog.get(r.sync_log_id) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  // Bump pulse_sync_logs.timeline_events_emitted for each sync_log_id that
+  // received at least one non-rollup row. Best-effort: a failure here doesn't
+  // block the timeline emission — worst case the Sync History "Changes"
+  // counter is under-counted for this run.
+  for (const [syncLogId, delta] of incBySyncLog) {
+    try {
+      const { error: rpcErr } = await admin.rpc('pulse_sync_log_increment_events', {
+        p_id: syncLogId,
+        p_delta: delta,
+      });
+      if (rpcErr) {
+        console.warn(`emitTimeline: increment_events rpc failed for ${syncLogId}: ${rpcErr.message?.substring(0, 150)}`);
+      }
+    } catch (e) {
+      console.warn(`emitTimeline: increment_events threw for ${syncLogId}: ${(e as Error)?.message?.substring(0, 150)}`);
     }
   }
 
