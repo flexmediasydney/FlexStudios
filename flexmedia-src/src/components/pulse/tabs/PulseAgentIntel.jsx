@@ -105,6 +105,8 @@ import {
   addSavedView,
   deleteSavedView,
 } from "@/components/pulse/utils/retentionBulk";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
+import BackfillEntityButton from "@/components/fieldSources/BackfillEntityButton";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -1111,129 +1113,69 @@ export function AgentSlideout({
         </div>
 
         <div className="px-5 py-4 space-y-5">
-          {/* ── Contact ── */}
+          {/* ── Contact — SAFR-aware (source chip + lock + alternates + history) ── */}
           <section className="space-y-2">
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Contact
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-              {agent.mobile && (
-                <div className="flex flex-col">
-                  <a
-                    href={`tel:${agent.mobile}`}
-                    className="flex items-center gap-2 text-foreground hover:text-primary transition-colors"
-                  >
-                    <Phone className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                    <span className="truncate">{agent.mobile}</span>
-                  </a>
-                  {(() => {
-                    const alts = alternateContacts(agent, "mobile");
-                    if (alts.length === 0) return null;
-                    return (
-                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
-                        <summary className="cursor-pointer hover:text-foreground">
-                          +{alts.length} other mobile{alts.length > 1 ? "s" : ""}
-                        </summary>
-                        <ul className="ml-3 mt-1 space-y-0.5">
-                          {alts.map((a, i) => (
-                            <li key={i}>
-                              <a href={`tel:${a.value}`} className="hover:underline">
-                                {a.value}
-                              </a>
-                              {a.sources && a.sources.length > 0 && (
-                                <span className="ml-1 text-[10px] opacity-60">
-                                  · {a.sources.join(", ")}
-                                </span>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    );
-                  })()}
-                </div>
-              )}
-              {agent.business_phone && agent.business_phone !== agent.mobile && (
-                <a
-                  href={`tel:${agent.business_phone}`}
-                  className="flex items-center gap-2 text-foreground hover:text-primary transition-colors"
-                >
-                  <Briefcase className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="truncate">{agent.business_phone}</span>
-                </a>
-              )}
-              {agent.email && (
-                <div className="flex flex-col sm:col-span-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <a
-                      href={`mailto:${agent.email}`}
-                      className="flex items-center gap-2 text-foreground hover:text-primary transition-colors min-w-0"
-                    >
-                      <Mail className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                      <span className="truncate">{agent.email}</span>
-                    </a>
-                    {(() => {
-                      // Provenance chip: show current email source + confidence if present.
-                      const src = agent.email_source;
-                      const conf = agent.email_confidence;
-                      if (!src) return null;
-                      const altCount = alternateContacts(agent, "email").length;
-                      const sourceLabel =
-                        src === "detail_page_lister" ? "REA listing"
-                        : src === "websift_profile" ? "REA profile"
-                        : src === "list_enrich" ? "REA list"
-                        : src === "legacy" ? "legacy"
-                        : src;
-                      const verifiedCopy =
-                        altCount > 0
-                          ? `verified ${altCount + 1} sources`
-                          : `via ${sourceLabel}`;
-                      return (
-                        <Badge
-                          variant="outline"
-                          className="text-[9px] px-1.5 py-0 font-normal text-muted-foreground"
-                          title={`Source: ${src}${conf != null ? ` · confidence ${conf}` : ""}`}
-                        >
-                          {verifiedCopy}
-                          {conf != null && <span className="opacity-60 ml-1">{conf}%</span>}
-                        </Badge>
-                      );
-                    })()}
-                  </div>
-                  {(() => {
-                    const alts = alternateContacts(agent, "email");
-                    if (alts.length === 0) return null;
-                    return (
-                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
-                        <summary className="cursor-pointer hover:text-foreground">
-                          +{alts.length} other email{alts.length > 1 ? "s" : ""}
-                        </summary>
-                        <ul className="ml-3 mt-1 space-y-0.5">
-                          {alts.map((a, i) => (
-                            <li key={i}>
-                              <a href={`mailto:${a.value}`} className="hover:underline">
-                                {a.value}
-                              </a>
-                              {a.sources && a.sources.length > 0 && (
-                                <span className="ml-1 text-[10px] opacity-60">
-                                  · {a.sources.join(", ")}
-                                </span>
-                              )}
-                              {a.confidence != null && (
-                                <span className="ml-1 text-[10px] opacity-60">
-                                  · {a.confidence}%
-                                </span>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    );
-                  })()}
-                </div>
-              )}
+            <div className="flex items-center justify-between">
+              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Contact
+              </h3>
+              <BackfillEntityButton entityType="agent" entityId={agent.id} entity={agent} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5 flex items-center gap-1">
+                  <Phone className="h-3 w-3" /> Mobile
+                </span>
+                <FieldWithSource
+                  entityType="agent"
+                  entityId={agent.id}
+                  fieldName="mobile"
+                  fallbackValue={agent.mobile}
+                  size="sm"
+                  inline
+                />
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5 flex items-center gap-1">
+                  <Briefcase className="h-3 w-3" /> Job title
+                </span>
+                <FieldWithSource
+                  entityType="agent"
+                  entityId={agent.id}
+                  fieldName="job_title"
+                  fallbackValue={agent.job_title}
+                  size="sm"
+                  inline
+                />
+              </div>
+              <div className="flex flex-col min-w-0 sm:col-span-2">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5 flex items-center gap-1">
+                  <Mail className="h-3 w-3" /> Email
+                </span>
+                <FieldWithSource
+                  entityType="agent"
+                  entityId={agent.id}
+                  fieldName="email"
+                  fallbackValue={agent.email}
+                  size="sm"
+                  inline
+                />
+              </div>
+              <div className="flex flex-col min-w-0 sm:col-span-2">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5 flex items-center gap-1">
+                  <Hash className="h-3 w-3" /> Full name
+                </span>
+                <FieldWithSource
+                  entityType="agent"
+                  entityId={agent.id}
+                  fieldName="full_name"
+                  fallbackValue={agent.full_name}
+                  size="sm"
+                  inline
+                />
+              </div>
               {!agent.mobile && !agent.email && (
-                <p className="text-xs text-muted-foreground">No contact info enriched yet</p>
+                <p className="text-xs text-muted-foreground sm:col-span-2">No contact info enriched yet</p>
               )}
             </div>
           </section>

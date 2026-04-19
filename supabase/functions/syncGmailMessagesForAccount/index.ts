@@ -1,6 +1,53 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 import { MS_PER_DAY, MS_PER_MINUTE, GMAIL_DEFAULT_LOOKBACK_DAYS, GMAIL_HISTORY_FALLBACK_LOOKBACK_DAYS, GMAIL_LOOKBACK_MINUTES, MAX_MESSAGES_PER_SYNC } from '../_shared/constants.ts';
 import { AgentLookup } from '../_shared/emailLinking.ts';
+import { recordFieldObservation } from '../_shared/fieldSources.ts';
+
+// ── SAFR ingestion helper (silent-fails) ─────────────────────────────────────
+async function safrObserve(
+  admin: any,
+  entity_type: 'contact' | 'organization',
+  entity_id: string | null | undefined,
+  field_name: string,
+  value: string | null | undefined,
+  source: string,
+  opts?: { source_ref_type?: string | null; source_ref_id?: string | null; confidence?: number | null },
+): Promise<void> {
+  if (!entity_id) return;
+  if (value == null) return;
+  const trimmed = typeof value === 'string' ? value.trim() : String(value).trim();
+  if (!trimmed) return;
+  try {
+    await recordFieldObservation(admin, {
+      entity_type,
+      entity_id,
+      field_name: field_name as any,
+      value: trimmed,
+      source,
+      source_ref_type: opts?.source_ref_type ?? null,
+      source_ref_id: opts?.source_ref_id ?? null,
+      confidence: opts?.confidence ?? null,
+    });
+  } catch (e) {
+    console.warn(`[safrObserve] ${entity_type}.${field_name} failed: ${(e as Error)?.message?.substring(0, 160)}`);
+  }
+}
+
+// Rough phone extractor — scans the last ~500 chars of a body for an AU-format
+// phone in a signature block. Best-effort, nullable. Keeps the extraction light
+// so Gmail sync throughput isn't affected.
+function extractSignaturePhone(body: string | null | undefined): string | null {
+  if (!body || typeof body !== 'string') return null;
+  const tail = body.slice(-800);
+  // Match +61 / 04 / (02) / 02 formats with optional spacing. Require ≥8 digits
+  // to avoid matching addresses or prices.
+  const re = /(\+?61\s?[23478][\s\-]?\d{2,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4}|0[234578][\s\-]?\d{2,4}[\s\-]?\d{3,4}[\s\-]?\d{3,4}|\(0[23478]\)\s?\d{2,4}[\s\-]?\d{3,4})/;
+  const m = tail.match(re);
+  if (!m) return null;
+  const digits = m[1].replace(/[^0-9+]/g, '');
+  if (digits.replace(/\D/g, '').length < 9) return null;
+  return m[1].trim();
+}
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
@@ -192,6 +239,68 @@ async function fetchAndSaveMessage(
       '<strong>Email Truncated</strong><br/>' +
       'This message exceeded 10KB and was shortened. View in Gmail for the complete email.' +
       '</div>';
+  }
+
+  // ── SAFR observation: record email (+ optional signature phone) for the
+  // matched agent. Only fires when AgentLookup matched a specific agent id —
+  // domain-only matches skip (we have no field target). The matched email
+  // is the external counterparty's address (lowercase, extracted upstream).
+  if (linkResult.agent_id && linkResult.matched_via && linkResult.matched_via !== 'domain') {
+    try {
+      const fromRawSafr = headers['From'] || '';
+      const toListSafr = toList;
+      const ccListSafr = ccList;
+      // Pick the counterparty address: if 'from' match, it's From:. If 'to'/'cc'
+      // match, it's the first matching recipient. We recompute against the
+      // agent's email by scanning the envelope for the first external address.
+      const OWN = new Set<string>(['flexmedia.sydney', 'flexstudios.app']);
+      const firstExternal = (addr: string): string | null => {
+        const m = addr.match(/<([^>]+)>/);
+        const e = (m ? m[1] : addr).trim().toLowerCase();
+        if (!e.includes('@')) return null;
+        const d = e.split('@')[1] || '';
+        if (OWN.has(d)) return null;
+        return e;
+      };
+      let counterparty: string | null = null;
+      if (linkResult.matched_via === 'from') {
+        counterparty = firstExternal(fromRawSafr);
+      } else if (linkResult.matched_via === 'to' || linkResult.matched_via === 'cc') {
+        const pool = linkResult.matched_via === 'to' ? toListSafr : ccListSafr;
+        for (const a of pool) {
+          const e = firstExternal(a);
+          if (e) { counterparty = e; break; }
+        }
+      }
+      if (counterparty) {
+        await safrObserve(
+          admin,
+          'contact',
+          linkResult.agent_id,
+          'email',
+          counterparty,
+          'email_sync',
+          { source_ref_type: 'email_message', source_ref_id: fullMsg.id },
+        );
+      }
+      // Best-effort signature phone extraction (only on inbound messages)
+      if (!isSent) {
+        const sigPhone = extractSignaturePhone(rawBody);
+        if (sigPhone) {
+          await safrObserve(
+            admin,
+            'contact',
+            linkResult.agent_id,
+            'mobile',
+            sigPhone,
+            'email_sync',
+            { source_ref_type: 'email_message', source_ref_id: fullMsg.id, confidence: 0.45 },
+          );
+        }
+      }
+    } catch (e) {
+      console.warn(`[SAFR] email_sync observation failed: ${(e as Error)?.message?.substring(0, 160)}`);
+    }
   }
 
   // Save message with proper visibility field

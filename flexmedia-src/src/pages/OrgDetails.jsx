@@ -34,6 +34,7 @@ import { Input } from "@/components/ui/input";
 import { api, supabase } from "@/api/supabaseClient";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import BackfillEntityButton from "@/components/fieldSources/BackfillEntityButton";
 
 const STATE_BADGE = {
   Active:           "bg-green-100 text-green-800 border-green-200",
@@ -443,6 +444,7 @@ export default function OrgDetails() {
         {canView && !canEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          <BackfillEntityButton entityType="organization" entityId={agency.id} entity={agency} />
           {/* Stat pills */}
           <div className="flex items-center gap-1.5 px-1">
             <span className="inline-flex items-center gap-1 bg-muted text-muted-foreground text-[11px] font-medium px-2.5 py-1 rounded-full transition-all duration-200 hover:bg-muted/80">

@@ -46,6 +46,37 @@ import {
   breakerRecordSuccess,
   breakerRecordFailure,
 } from '../_shared/observability.ts';
+import { recordFieldObservation } from '../_shared/fieldSources.ts';
+
+// ── SAFR ingestion helper (silent-fails) ─────────────────────────────────────
+async function safrObserve(
+  admin: any,
+  entity_type: 'agent' | 'agency',
+  entity_id: string | null | undefined,
+  field_name: string,
+  value: string | null | undefined,
+  source: string,
+  opts?: { source_ref_type?: string | null; source_ref_id?: string | null; confidence?: number | null },
+): Promise<void> {
+  if (!entity_id) return;
+  if (value == null) return;
+  const trimmed = typeof value === 'string' ? value.trim() : String(value).trim();
+  if (!trimmed) return;
+  try {
+    await recordFieldObservation(admin, {
+      entity_type,
+      entity_id,
+      field_name: field_name as any,
+      value: trimmed,
+      source,
+      source_ref_type: opts?.source_ref_type ?? null,
+      source_ref_id: opts?.source_ref_id ?? null,
+      confidence: opts?.confidence ?? null,
+    });
+  } catch (e) {
+    console.warn(`[safrObserve] ${entity_type}.${field_name} failed: ${(e as Error)?.message?.substring(0, 160)}`);
+  }
+}
 
 const APIFY_TOKEN = Deno.env.get('APIFY_TOKEN') || '';
 const APIFY_BASE = 'https://api.apify.com/v2';
@@ -942,6 +973,31 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
           };
 
           if (agentRow) {
+            // ── SAFR observations for this detail enrich ──
+            // Emit observations for each field we saw on this listing detail.
+            // Multi-value fields (email array) emit one per value. Source is
+            // 'rea_listing_detail' — higher confidence than list-layer scrape.
+            const listerName = lister?.name || topAgent?.name || null;
+            const listerTitle = lister?.jobTitle || topAgent?.jobTitle || null;
+            const listerPhoto = lister?.mainPhoto ? `${lister.mainPhoto.server}${lister.mainPhoto.uri}` : (topAgent?.image || null);
+            const srcRefId = listing?.listingId ? String(listing.listingId) : (item?.listingId ? String(item.listingId) : null);
+            if (listerName) await safrObserve(admin, 'agent', agentRow.id, 'full_name', listerName, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
+            if (listerTitle) await safrObserve(admin, 'agent', agentRow.id, 'job_title', listerTitle, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
+            if (listerPhoto) await safrObserve(admin, 'agent', agentRow.id, 'profile_image', listerPhoto, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
+            if (agentEmail && !isMiddlemanEmail(agentEmail)) {
+              await safrObserve(admin, 'agent', agentRow.id, 'email', agentEmail, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
+            }
+            // all_emails from topAgent.emails[] — emit one per value
+            const topEmails = Array.isArray(topAgent?.emails) ? topAgent.emails : [];
+            for (const e of topEmails) {
+              if (typeof e === 'string' && e && !isMiddlemanEmail(e)) {
+                await safrObserve(admin, 'agent', agentRow.id, 'email', e, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
+              }
+            }
+            if (agentMobile) {
+              await safrObserve(admin, 'agent', agentRow.id, 'mobile', agentMobile, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
+            }
+
             let bumped = false;
             // Email merge
             if (agentEmail && !isMiddlemanEmail(agentEmail)) {
@@ -1060,6 +1116,36 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
           }
 
           if (agencyRow) {
+            // ── SAFR observations for agency detail enrich ──
+            const agencyName = listing.agency?.name || item.agencyName || null;
+            const agencyEmailObs = agency._links?.email || item.agencyEmail || null;
+            const agencyPhoneObs = agency.phoneNumber || item.agencyPhone || null;
+            const agencyWebsiteObs = agency.website || null;
+            const agencyLogoObs = listing.agency?.logo?.images?.[0]
+              ? `${listing.agency.logo.images[0].server}${listing.agency.logo.images[0].uri}`
+              : null;
+            let agencyAddrObs: string | null = null;
+            const rawAddrObs = agency.address;
+            if (rawAddrObs && typeof rawAddrObs === 'object') {
+              agencyAddrObs = rawAddrObs.streetAddress || null;
+            } else if (typeof rawAddrObs === 'string') {
+              const s = rawAddrObs.trim();
+              if (/\d/.test(s) && s.includes(',')) {
+                agencyAddrObs = s.split(',')[0].trim() || null;
+              } else {
+                agencyAddrObs = s || null;
+              }
+            }
+            const srcRefIdAg = listing?.listingId ? String(listing.listingId) : (item?.listingId ? String(item.listingId) : null);
+            if (agencyName) await safrObserve(admin, 'agency', agencyRow.id, 'name', agencyName, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });
+            if (agencyEmailObs && !isMiddlemanEmail(agencyEmailObs)) {
+              await safrObserve(admin, 'agency', agencyRow.id, 'email', agencyEmailObs, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });
+            }
+            if (agencyPhoneObs) await safrObserve(admin, 'agency', agencyRow.id, 'phone', agencyPhoneObs, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });
+            if (agencyWebsiteObs) await safrObserve(admin, 'agency', agencyRow.id, 'website', agencyWebsiteObs, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });
+            if (agencyAddrObs) await safrObserve(admin, 'agency', agencyRow.id, 'address', agencyAddrObs, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });
+            if (agencyLogoObs) await safrObserve(admin, 'agency', agencyRow.id, 'logo_url', agencyLogoObs, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });
+
             // Helper to extract action from rpc result (handles both jsonb-direct and wrapped responses)
             const extractAction = (r: any): string | null => {
               const d = r?.data;

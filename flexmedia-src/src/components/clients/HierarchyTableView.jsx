@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
 
 // ─── Column definitions ───
 const COLUMNS = [
@@ -422,27 +423,29 @@ const ContactRow = React.memo(function ContactRow({
       }
 
       case "email":
-        return agent.email ? (
-          <InlineEditCell
-            value={agent.email}
-            onSave={val => onInlineSave(agent.id, "email", val)}
-            type="email"
-            className="text-xs"
+        // SAFR-aware cell (source chip + lock). Falls back to legacy `agent.email`.
+        return (
+          <FieldWithSource
+            entityType="contact"
+            entityId={agent.id}
+            fieldName="email"
+            fallbackValue={agent.email}
+            size="sm"
+            inline
           />
-        ) : (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Missing email</span>
         );
 
       case "phone":
-        return agent.phone ? (
-          <InlineEditCell
-            value={agent.phone}
-            onSave={val => onInlineSave(agent.id, "phone", val)}
-            type="tel"
-            className="text-xs tabular-nums"
+        // SAFR-aware cell (source chip + lock). Falls back to legacy `agent.phone`.
+        return (
+          <FieldWithSource
+            entityType="contact"
+            entityId={agent.id}
+            fieldName="phone"
+            fallbackValue={agent.phone}
+            size="sm"
+            inline
           />
-        ) : (
-          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Missing phone</span>
         );
 
       case "last_activity":

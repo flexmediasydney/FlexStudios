@@ -12,6 +12,8 @@ import ProspectEditPanel from '@/components/prospecting/ProspectEditPanel';
 import InteractionLogPanel from '@/components/prospecting/InteractionLogPanel';
 import ProspectTimeline from '@/components/prospecting/ProspectTimeline';
 import ProspectStatusManager from '@/components/prospecting/ProspectStatusManager';
+import FieldWithSource from '@/components/fieldSources/FieldWithSource';
+import BackfillEntityButton from '@/components/fieldSources/BackfillEntityButton';
 
 export default function ProspectDetails() {
   const navigate = useNavigate();
@@ -120,29 +122,44 @@ export default function ProspectDetails() {
               <h1 className="text-3xl font-bold">{agent.name}</h1>
               <p className="text-muted-foreground mt-1">{agent.title}</p>
             </div>
-            <ProspectStatusManager prospect={agent} />
+            <div className="flex items-center gap-2">
+              <BackfillEntityButton entityType="prospect" entityId={agent.id} entity={agent} />
+              <ProspectStatusManager prospect={agent} />
+            </div>
           </div>
 
-          {/* Contact Info */}
+          {/* Contact Info — SAFR-aware (source chip + lock + history) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {agent.email && (
-              <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">Email</p>
-                  <p className="text-sm font-medium truncate">{agent.email}</p>
-                </div>
+            <div className="flex items-start gap-3 p-3 bg-muted/50 rounded-lg">
+              <Mail className="h-4 w-4 text-muted-foreground mt-1" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-muted-foreground mb-0.5">Email</p>
+                <FieldWithSource
+                  entityType="prospect"
+                  entityId={agent.id}
+                  fieldName="email"
+                  fallbackValue={agent.email}
+                  editable={canManageContacts}
+                  size="sm"
+                  inline
+                />
               </div>
-            )}
-            {agent.phone && (
-              <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                <Phone className="h-4 w-4 text-muted-foreground" />
-                <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">Phone</p>
-                  <p className="text-sm font-medium">{agent.phone}</p>
-                </div>
+            </div>
+            <div className="flex items-start gap-3 p-3 bg-muted/50 rounded-lg">
+              <Phone className="h-4 w-4 text-muted-foreground mt-1" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-muted-foreground mb-0.5">Phone</p>
+                <FieldWithSource
+                  entityType="prospect"
+                  entityId={agent.id}
+                  fieldName="phone"
+                  fallbackValue={agent.phone}
+                  editable={canManageContacts}
+                  size="sm"
+                  inline
+                />
               </div>
-            )}
+            </div>
             <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
               <Building className="h-4 w-4 text-muted-foreground" />
               <div className="min-w-0">

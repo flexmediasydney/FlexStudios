@@ -95,6 +95,8 @@ import {
   addSavedView,
   deleteSavedView,
 } from "@/components/pulse/utils/retentionBulk";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
+import BackfillEntityButton from "@/components/fieldSources/BackfillEntityButton";
 
 /* ── Helpers ──────────────────────────────────────────────────────────────── */
 
@@ -1437,91 +1439,80 @@ export function AgencySlideout({
         </div>
 
         <div className="px-5 py-4 space-y-5">
-          {/* ── Contact ── */}
+          {/* ── Contact — SAFR-aware (source chip + lock + history) ── */}
           <section>
-            <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide mb-2">
-              Contact
-            </h3>
-            <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
-              {agency.phone && (
-                <div className="flex flex-col">
-                  <a
-                    href={`tel:${agency.phone}`}
-                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Phone className="h-3.5 w-3.5 text-primary" />
-                    {agency.phone}
-                  </a>
-                  {(() => {
-                    const alts = alternateContacts(agency, "phone");
-                    if (alts.length === 0) return null;
-                    return (
-                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
-                        <summary className="cursor-pointer hover:text-foreground">
-                          +{alts.length} other phone{alts.length > 1 ? "s" : ""}
-                        </summary>
-                        <ul className="ml-3 mt-1 space-y-0.5">
-                          {alts.map((a, i) => (
-                            <li key={i}>
-                              <a
-                                href={`tel:${a.value}`}
-                                className="hover:underline"
-                              >
-                                {a.value}
-                              </a>
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    );
-                  })()}
-                </div>
-              )}
-              {agency.email && (
-                <div className="flex flex-col">
-                  <a
-                    href={`mailto:${agency.email}`}
-                    className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    <Mail className="h-3.5 w-3.5 text-primary" />
-                    {agency.email}
-                  </a>
-                  {(() => {
-                    const alts = alternateContacts(agency, "email");
-                    if (alts.length === 0) return null;
-                    return (
-                      <details className="mt-1 text-[11px] text-muted-foreground ml-5">
-                        <summary className="cursor-pointer hover:text-foreground">
-                          +{alts.length} other email{alts.length > 1 ? "s" : ""}
-                        </summary>
-                        <ul className="ml-3 mt-1 space-y-0.5">
-                          {alts.map((a, i) => (
-                            <li key={i}>
-                              <a
-                                href={`mailto:${a.value}`}
-                                className="hover:underline"
-                              >
-                                {a.value}
-                              </a>
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    );
-                  })()}
-                </div>
-              )}
-              {agency.website && (
-                <a
-                  href={agency.website}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  <Globe className="h-3.5 w-3.5 text-primary" />
-                  {agency.website.replace(/^https?:\/\//, "").replace(/\/$/, "")}
-                </a>
-              )}
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-[10px] font-semibold uppercase text-muted-foreground tracking-wide">
+                Contact
+              </h3>
+              <BackfillEntityButton entityType="agency" entityId={agency.id} entity={agency} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2 text-xs">
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5 flex items-center gap-1">
+                  <Phone className="h-3 w-3" /> Phone
+                </span>
+                <FieldWithSource
+                  entityType="agency"
+                  entityId={agency.id}
+                  fieldName="phone"
+                  fallbackValue={agency.phone}
+                  size="sm"
+                  inline
+                />
+              </div>
+              <div className="flex flex-col min-w-0">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5 flex items-center gap-1">
+                  <Mail className="h-3 w-3" /> Email
+                </span>
+                <FieldWithSource
+                  entityType="agency"
+                  entityId={agency.id}
+                  fieldName="email"
+                  fallbackValue={agency.email}
+                  size="sm"
+                  inline
+                />
+              </div>
+              <div className="flex flex-col min-w-0 sm:col-span-2">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5 flex items-center gap-1">
+                  <Globe className="h-3 w-3" /> Website
+                </span>
+                <FieldWithSource
+                  entityType="agency"
+                  entityId={agency.id}
+                  fieldName="website"
+                  fallbackValue={agency.website}
+                  size="sm"
+                  inline
+                />
+              </div>
+              <div className="flex flex-col min-w-0 sm:col-span-2">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5">
+                  Name
+                </span>
+                <FieldWithSource
+                  entityType="agency"
+                  entityId={agency.id}
+                  fieldName="name"
+                  fallbackValue={agency.name}
+                  size="sm"
+                  inline
+                />
+              </div>
+              <div className="flex flex-col min-w-0 sm:col-span-2">
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70 mb-0.5">
+                  Logo URL
+                </span>
+                <FieldWithSource
+                  entityType="agency"
+                  entityId={agency.id}
+                  fieldName="logo_url"
+                  fallbackValue={agency.logo_url}
+                  size="sm"
+                  inline
+                />
+              </div>
               {(agency.address_street || agency.address) && (
                 <AddressCluster
                   address={agency.address_street || agency.address}

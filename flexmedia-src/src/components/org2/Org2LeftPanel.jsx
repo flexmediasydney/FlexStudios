@@ -12,6 +12,8 @@ import {
   Copy, Check, Trash2, Pencil
 } from "lucide-react";
 import { fmtDate, fmtTimestampCustom, isOverdue, parseDate, todaySydney } from "@/components/utils/dateUtils";
+import FieldWithSource from "@/components/fieldSources/FieldWithSource";
+import { useQueryClient } from "@tanstack/react-query";
 
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
 
@@ -252,6 +254,7 @@ export default function Org2LeftPanel({
   onFieldSave,
 }) {
    const navigate = useNavigate();
+   const queryClient = useQueryClient();
    const openProjects  = projects.filter(p => p.outcome === 'open');
    const wonProjects   = projects.filter(p => p.outcome === 'won');
    const lostProjects  = projects.filter(p => p.outcome === 'lost');
@@ -325,10 +328,63 @@ export default function Org2LeftPanel({
                options={RELATIONSHIP_STATES}
              />
 
-             {/* Contact info */}
-             <InlineField label="Email" value={agency.email} field="email" onSave={handleFieldSave} icon={Mail} placeholder="Add email..." />
-             <InlineField label="Phone" value={agency.phone} field="phone" onSave={handleFieldSave} icon={Phone} placeholder="Add phone..." />
-             <InlineField label="Address" value={agency.address} field="address" onSave={handleFieldSave} icon={MapPin} placeholder="Add address..." />
+             {/* Contact info — SAFR-aware (source chip + lock + history) */}
+             <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+               <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1"><Mail className="h-3 w-3" /> Email</label>
+               <div className="flex-1 min-w-0">
+                 <FieldWithSource
+                   entityType="organization"
+                   entityId={agency.id}
+                   fieldName="email"
+                   fallbackValue={agency.email}
+                   size="sm"
+                   inline
+                   onValueChange={() => queryClient.invalidateQueries({ queryKey: ['agency', agency.id] })}
+                 />
+               </div>
+             </div>
+             <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+               <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1"><Phone className="h-3 w-3" /> Phone</label>
+               <div className="flex-1 min-w-0">
+                 <FieldWithSource
+                   entityType="organization"
+                   entityId={agency.id}
+                   fieldName="phone"
+                   fallbackValue={agency.phone}
+                   size="sm"
+                   inline
+                   onValueChange={() => queryClient.invalidateQueries({ queryKey: ['agency', agency.id] })}
+                 />
+               </div>
+             </div>
+             <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+               <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1"><MapPin className="h-3 w-3" /> Address</label>
+               <div className="flex-1 min-w-0">
+                 <FieldWithSource
+                   entityType="organization"
+                   entityId={agency.id}
+                   fieldName="address"
+                   fallbackValue={agency.address}
+                   size="sm"
+                   inline
+                   onValueChange={() => queryClient.invalidateQueries({ queryKey: ['agency', agency.id] })}
+                 />
+               </div>
+             </div>
+             <div className="group flex items-start gap-2 py-1 px-3 hover:bg-muted/30">
+               <label className="text-[11px] text-muted-foreground text-right w-28 shrink-0 pt-0.5 uppercase tracking-wide flex items-center gap-1"><ExternalLink className="h-3 w-3" /> Website</label>
+               <div className="flex-1 min-w-0">
+                 <FieldWithSource
+                   entityType="organization"
+                   entityId={agency.id}
+                   fieldName="website"
+                   fallbackValue={agency.website}
+                   size="sm"
+                   inline
+                   onValueChange={() => queryClient.invalidateQueries({ queryKey: ['agency', agency.id] })}
+                 />
+               </div>
+             </div>
 
              {/* Dates */}
              <InlineField label="Onboarding Date" value={toInputDate(agency.onboarding_date)} field="onboarding_date" onSave={handleFieldSave} type="date" icon={Calendar} placeholder="Set date..." />
