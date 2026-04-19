@@ -1085,6 +1085,51 @@ function PropertyHero({ property, listings, currentListing, currentAgent, curren
         </div>
       </Card>
 
+      {/* ── Thumbnail strip ─────────────────────────────────────────────
+          2026-04-19: user feedback — removing PropertyGallery (commit 64c8aa5)
+          left the page with no visible thumbnails outside the buried Media
+          subtab. Most listings have 10-30 photos and users expect a quick-
+          scan strip next to the hero (REA/Domain pattern). This compact
+          strip shows up to 6 thumbs with "+N more" chip, clicks open the
+          same lightbox used by hero click. Works for enriched (media_items)
+          AND un-enriched (images fallback) listings via parseMediaItems. */}
+      {allPhotos.length > 1 && (
+        <div className="grid grid-cols-7 gap-1.5">
+          {allPhotos.slice(0, 6).map((p, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setLightboxIndex(i)}
+              className="aspect-[4/3] overflow-hidden rounded-md bg-muted group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              title={`Photo ${i + 1} of ${allPhotos.length}`}
+            >
+              <img
+                src={p.file_url}
+                alt={p.file_name}
+                loading="lazy"
+                className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
+                onError={(e) => { e.currentTarget.style.opacity = 0.3; }}
+              />
+            </button>
+          ))}
+          {allPhotos.length > 6 ? (
+            <button
+              type="button"
+              onClick={() => setLightboxIndex(6)}
+              className="aspect-[4/3] rounded-md bg-muted hover:bg-muted/80 flex items-center justify-center text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+              title={`${allPhotos.length - 6} more photos — click to open gallery`}
+            >
+              +{allPhotos.length - 6}
+            </button>
+          ) : (
+            // Keep the row at 7 cells for consistent layout; fill remainder with blanks
+            Array.from({ length: Math.max(0, 7 - allPhotos.length) }, (_, i) => (
+              <div key={`spacer-${i}`} className="aspect-[4/3]" />
+            ))
+          )}
+        </div>
+      )}
+
       {lightboxIndex !== null && allPhotos.length > 0 && (
         <AttachmentLightbox
           files={allPhotos}
