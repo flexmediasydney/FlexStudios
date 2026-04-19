@@ -28,6 +28,7 @@ supabase/.branches/
 
 # Test files
 test_conn.py
+supabase/functions/tmpTest*/
 
 # Claude config
 .claude/
