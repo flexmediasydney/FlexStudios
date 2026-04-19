@@ -5,7 +5,7 @@ import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityDa
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
-import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp, Crown, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -80,11 +80,17 @@ export default function PriceMatrixEditor({ priceMatrix }) {
       };
       // Enforce mutual exclusion: default mode disables blanket
       if (data.use_default_pricing) validatedBlanket.enabled = false;
+      // Validate default_tier — only 'standard' | 'premium' | null allowed (matches DB CHECK)
+      const validatedDefaultTier =
+        data.default_tier === "standard" || data.default_tier === "premium"
+          ? data.default_tier
+          : null;
       const payload = {
         ...data,
         product_pricing: validatedProductPricing,
         package_pricing: validatedPackagePricing,
         blanket_discount: validatedBlanket,
+        default_tier: validatedDefaultTier,
         last_modified_at: new Date().toISOString(),
         last_modified_by: currentUser?.email,
       };
@@ -284,6 +290,16 @@ export default function PriceMatrixEditor({ priceMatrix }) {
             ) : (
               <Badge className="text-xs h-5 bg-blue-100 text-blue-800 border-blue-200">Custom</Badge>
             )}
+            {localData.default_tier === "premium" && (
+              <Badge className="text-xs h-5 bg-purple-100 text-purple-800 border-purple-200" title="Default tier: Premium — matrix declares authoritative tier (engine skips proximity inheritance)">
+                <Crown className="h-3 w-3 mr-0.5" />Prm tier
+              </Badge>
+            )}
+            {localData.default_tier === "standard" && (
+              <Badge className="text-xs h-5 bg-slate-100 text-slate-700 border-slate-200" title="Default tier: Standard — matrix declares authoritative tier (engine skips proximity inheritance)">
+                Std tier
+              </Badge>
+            )}
             {hasChanges && <Badge variant="outline" className="text-xs h-5 text-orange-600 border-orange-300">Unsaved</Badge>}
             {hasCatalogueChanges && <Badge className="text-xs h-5 bg-orange-100 text-orange-700 border-orange-200"><AlertTriangle className="h-3 w-3 mr-0.5" />Catalogue update</Badge>}
           </div>
@@ -326,6 +342,59 @@ export default function PriceMatrixEditor({ priceMatrix }) {
       {/* Expanded body */}
       {isExpanded && (
         <div className="border-t">
+          {/* Default-tier selector — declares authoritative tier for this entity.
+             Used by Market Share missed-opportunity engine (T1/T2 of tier cascade).
+             "Auto-detect" = null = engine resolves via proximity to past projects. */}
+          <div className="flex items-center gap-3 px-4 py-2.5 bg-muted/10 border-b">
+            <div className="flex items-center gap-1.5">
+              <Sparkles className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-medium text-muted-foreground">Default tier:</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => canEdit && setField("default_tier", null)}
+                disabled={!canEdit}
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                  !localData.default_tier
+                    ? "bg-secondary border-border font-medium"
+                    : "bg-transparent border-transparent text-muted-foreground hover:bg-muted"
+                }`}
+                title="Engine infers tier from nearest past project with this agency/agent"
+              >
+                Auto-detect
+              </button>
+              <button
+                onClick={() => canEdit && setField("default_tier", "standard")}
+                disabled={!canEdit}
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                  localData.default_tier === "standard"
+                    ? "bg-slate-100 border-slate-200 text-slate-800 font-medium"
+                    : "bg-transparent border-transparent text-muted-foreground hover:bg-muted"
+                }`}
+                title="This entity is always billed at standard tier"
+              >
+                Standard
+              </button>
+              <button
+                onClick={() => canEdit && setField("default_tier", "premium")}
+                disabled={!canEdit}
+                className={`text-xs px-2 py-0.5 rounded border transition-colors flex items-center gap-0.5 ${
+                  localData.default_tier === "premium"
+                    ? "bg-purple-100 border-purple-200 text-purple-800 font-medium"
+                    : "bg-transparent border-transparent text-muted-foreground hover:bg-muted"
+                }`}
+                title="This entity is always billed at premium tier"
+              >
+                <Crown className="h-3 w-3" />Premium
+              </button>
+            </div>
+            <span className="text-[11px] text-muted-foreground ml-auto">
+              {localData.default_tier
+                ? `Engine will use ${localData.default_tier} tier directly`
+                : "Engine will infer tier from nearest past project"}
+            </span>
+          </div>
+
           {/* Mode bar */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-muted/30 border-b">
             <div className="flex items-center gap-2">
