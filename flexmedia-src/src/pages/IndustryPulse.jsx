@@ -9,17 +9,24 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { api } from "@/api/supabaseClient";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import {
-  Rss, Search, TrendingUp, Users, Home, Clock, Calendar, Zap,
-  ArrowRight, Target, RefreshCw,
+  Rss, Search, RefreshCw, Command as CmdIcon, Keyboard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import PulseHeaderStats, { getHomepageDefault } from "@/components/pulse/PulseHeaderStats";
+import PulseCommandPalette from "@/components/pulse/PulseCommandPalette";
+import PulseShortcutHelp from "@/components/pulse/PulseShortcutHelp";
+import {
+  useKeyboardShortcuts, useDensity, DensityToggle,
+  LoadingSkeleton as ShellLoadingSkeleton, densityWrapperCls,
+  PulseShellProvider,
+} from "@/components/pulse/pulseShell";
+import { useToast } from "@/components/ui/use-toast";
 
 // ── Tab components ────────────────────────────────────────────────────────────
 
@@ -118,112 +125,36 @@ function formatRelativeTime(then) {
   return `${d}d ago`;
 }
 
-// ── StatCard ──────────────────────────────────────────────────────────────────
-// QoL #1 + #2: clickable (navigates to the matching tab) + optional trend badge.
-function StatCard({ label, value, icon: Icon, color, subtitle, onClick, trend }) {
-  const clickable = typeof onClick === "function";
-  // trend: { pct: number, direction: 'up' | 'down' } | null
-  const renderTrend = () => {
-    if (!trend || trend.pct === null || trend.pct === undefined) return null;
-    const up = trend.direction === "up";
-    return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-0.5 text-[9px] font-semibold leading-none tabular-nums ml-1",
-          up ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"
-        )}
-        title={`${up ? "+" : "-"}${trend.pct}% vs 7 days ago`}
-      >
-        {up ? "▲" : "▼"} {up ? "+" : "−"}{Math.abs(trend.pct)}%
-      </span>
-    );
-  };
-  return (
-    <Card
-      className={cn(
-        "rounded-xl border-0 shadow-sm",
-        clickable && "cursor-pointer hover:shadow-md hover:bg-muted/40 transition-all focus-within:ring-2 focus-within:ring-primary/40"
-      )}
-      onClick={clickable ? onClick : undefined}
-      role={clickable ? "button" : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      aria-label={clickable ? `View ${label}` : undefined}
-      onKeyDown={clickable ? (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
-      } : undefined}
-    >
-      <CardContent className="p-3 flex items-center gap-3">
-        <div className="p-1.5 rounded-lg bg-muted/60">
-          <Icon className={cn("h-4 w-4", color || "text-muted-foreground")} />
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center">
-            <p className={cn("text-lg font-bold tabular-nums leading-none", color || "text-foreground")}>
-              {value}
-            </p>
-            {renderTrend()}
-          </div>
-          <p className="text-[10px] text-muted-foreground mt-0.5">{label}</p>
-          {subtitle && (
-            <p className="text-[9px] text-muted-foreground/60">{subtitle}</p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 // ── Loading skeleton ──────────────────────────────────────────────────────────
-
-function LoadingSkeleton() {
-  return (
-    <div className="px-4 pt-3 pb-4 lg:px-6 space-y-3 animate-pulse">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="h-5 w-5 rounded bg-muted" />
-          <div className="h-6 w-36 rounded bg-muted" />
-        </div>
-        <div className="h-8 w-56 rounded-lg bg-muted" />
-      </div>
-      {/* Stats strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className="rounded-xl h-16 bg-muted" />
-        ))}
-      </div>
-      {/* Tab bar */}
-      <div className="h-9 rounded-lg bg-muted w-full" />
-      {/* Content area */}
-      <div className="rounded-xl h-64 bg-muted" />
-    </div>
-  );
-}
+// Delegated to pulseShell.LoadingSkeleton so the skeleton shapes match the
+// real strip + KPI card dimensions exactly. Re-exported locally for back-compat
+// with any call-site that imported it from this module.
+const LoadingSkeleton = ShellLoadingSkeleton;
 
 // ── Tab definitions ───────────────────────────────────────────────────────────
 
 const TABS = [
-  { value: "command",  label: "Command",  badgeKey: null },
-  { value: "agents",   label: "Agents",   badgeKey: "notInCrm" },
-  { value: "agencies", label: "Agencies", badgeKey: "agenciesNotInCrm" },
-  { value: "listings", label: "Listings", badgeKey: "totalListings" },
-  { value: "events",   label: "Events",   badgeKey: "upcomingEvents" },
-  { value: "market",   label: "Market",   badgeKey: null },
-  { value: "market_share", label: "Market Share", badgeKey: null },
-  { value: "retention", label: "Retention", badgeKey: null },
-  { value: "sources",  label: "Sources",  badgeKey: null },
-  { value: "suburbs",  label: "Suburbs",  badgeKey: null },
-  { value: "mappings", label: "Mappings", badgeKey: "suggestedMappings" },
-  { value: "signals",  label: "Signals",  badgeKey: "newSignals" },
-  { value: "timeline", label: "Timeline", badgeKey: null },
+  { value: "command",  label: "Command",  badgeKey: null,               letter: "c" },
+  { value: "agents",   label: "Agents",   badgeKey: "notInCrm",         letter: "a" },
+  { value: "agencies", label: "Agencies", badgeKey: "agenciesNotInCrm", letter: "y" },
+  { value: "listings", label: "Listings", badgeKey: "totalListings",    letter: "l" },
+  { value: "events",   label: "Events",   badgeKey: "upcomingEvents",   letter: "e" },
+  { value: "market",   label: "Market",   badgeKey: null,               letter: "m" },
+  { value: "market_share", label: "Market Share", badgeKey: null,       letter: "s" },
+  { value: "retention", label: "Retention", badgeKey: null,             letter: "r" },
+  { value: "sources",  label: "Sources",  badgeKey: null,               letter: "d" },
+  { value: "suburbs",  label: "Suburbs",  badgeKey: null,               letter: "u" },
+  { value: "mappings", label: "Mappings", badgeKey: "suggestedMappings",letter: "i" },
+  { value: "signals",  label: "Signals",  badgeKey: "newSignals",       letter: "x" },
+  { value: "timeline", label: "Timeline", badgeKey: null,               letter: "t" },
 ];
 
 // Tabs that the URL `?tab=` query param is allowed to deep-link into.
 // Limits surface area for typos/links from old emails; defaults to "command".
 const VALID_TAB_VALUES = new Set(TABS.map(t => t.value));
+
+// Letter → tab value map consumed by the g-chord keyboard shortcut.
+const TAB_LETTER_MAP = Object.fromEntries(TABS.map((t) => [t.letter, t.value]));
 
 // ── Main component ────────────────────────────────────────────────────────────
 
@@ -285,9 +216,21 @@ export default function IndustryPulse() {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialTab = (() => {
     const t = searchParams.get("tab");
-    return t && VALID_TAB_VALUES.has(t) ? t : "command";
+    if (t && VALID_TAB_VALUES.has(t)) return t;
+    // No URL tab override → honour the user's persisted homepage default
+    // (set from the stat-card right-click context menu). Falls back to
+    // Command Center for brand-new users.
+    const homepage = getHomepageDefault();
+    if (homepage?.tab && VALID_TAB_VALUES.has(homepage.tab)) return homepage.tab;
+    return "command";
   })();
   const [tab, setTabState] = useState(initialTab);
+
+  // Toast + density + palette/help state
+  const { toast } = useToast();
+  const { density, setDensity, className: densityClass } = useDensity();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Wrapper that updates both local state and the URL (replaceState — no history spam)
   const setTab = useCallback((next) => {
@@ -588,21 +531,6 @@ export default function IndustryPulse() {
     };
   }, []);
 
-  // ── Trend baseline (for ▲/▼ delta badges) ───────────────────────────────
-  // Surfaced directly by the dashboard stats RPC (trend_7d_ago) rather than
-  // five extra HEAD requests from the browser.
-  const trendSnapshot = useMemo(() => {
-    const t = dashboardStats?.trend_7d_ago;
-    if (!t) return null;
-    return {
-      agents:         t.agents         ?? 0,
-      agencies:       t.agencies       ?? 0,
-      activeListings: t.for_sale       ?? 0,
-      rentals:        t.for_rent       ?? 0,
-      sold:           t.sold           ?? 0,
-    };
-  }, [dashboardStats]);
-
   // ── Computed stats ───────────────────────────────────────────────────────
   // All totals come straight from the stats RPC. We still expose the same
   // keys the tabs reference (totalAgents, notInCrm, activeListings, etc.) so
@@ -655,26 +583,10 @@ export default function IndustryPulse() {
     setTab("timeline");
   }, [setTab]);
 
-  // QoL #1: compute trend % from (current - baseline) / baseline for each
-  // tracked stat. Returns `{ pct, direction }` or null when baseline is
-  // missing (first week of data, or query failed).
-  const computeTrend = useCallback((current, baseline) => {
-    if (baseline === null || baseline === undefined) return null;
-    if (baseline <= 0) return null;
-    const delta = current - baseline;
-    const pct = Math.round((delta / baseline) * 100);
-    if (pct === 0) return null;
-    return { pct: Math.abs(pct), direction: pct > 0 ? "up" : "down" };
-  }, []);
-  const trends = useMemo(() => {
-    if (!trendSnapshot) return {};
-    return {
-      agents: computeTrend(stats.totalAgents, trendSnapshot.agents),
-      agencies: computeTrend(stats.totalAgencies, trendSnapshot.agencies),
-      activeListings: computeTrend(stats.activeListings, trendSnapshot.activeListings),
-      rentals: computeTrend(stats.rentals, trendSnapshot.rentals),
-    };
-  }, [stats, trendSnapshot, computeTrend]);
+  // Trend % computation + 7-day baselines are now owned by PulseHeaderStats
+  // (which pulls its own payload from pulse_get_header_stats_with_trends).
+  // The shell keeps `stats` as the authoritative "current value" source so
+  // the strip's numbers match the tab chip counts exactly.
 
   // ── Shared props spread into every tab ──────────────────────────────────────
   const sharedProps = {
@@ -796,69 +708,83 @@ export default function IndustryPulse() {
 
   const hasEntityHistory = entityStack.length > 1;
 
-  // ── QoL #2: stat card click-through ──────────────────────────────────────
-  // Navigates to the matching tab + optionally sets a `?type=` listing filter
-  // so "For Sale" jumps to Listings scoped to listing_type=for_sale etc.
-  const navigateToTab = useCallback((nextTab, listingType = null) => {
+  // ── Stat-card click-through → tab + optional URL preset ─────────────────
+  // Accepts either a legacy string (`"for_sale"`) or a preset object
+  // (`{ listingType, crm, window }`). Each key lands in the right URL
+  // param so downstream tabs pick them up on mount without extra plumbing.
+  const navigateToTab = useCallback((nextTab, presetOrType = null) => {
     setTab(nextTab);
-    if (listingType) {
-      setSearchParams((prev) => {
-        const np = new URLSearchParams(prev);
-        np.set("type", listingType);
-        return np;
-      }, { replace: true });
-    }
+    const preset = typeof presetOrType === "string"
+      ? { listingType: presetOrType }
+      : (presetOrType || {});
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (preset.listingType) np.set("type", preset.listingType); else np.delete("type");
+      // "not_in_crm" → PulseAgentIntel reads ?agents_view=not_in_crm etc.
+      if (preset.crm === "not_in_crm" && nextTab === "agents")   np.set("agents_view",   "not_in_crm");
+      if (preset.crm === "not_in_crm" && nextTab === "agencies") np.set("agencies_view", "not_in_crm");
+      if (preset.window) np.set("market_window", preset.window);
+      return np;
+    }, { replace: true });
   }, [setTab, setSearchParams]);
 
-  // ── QoL #5: `Cmd+K` / `/` focus the search input ──────────────────────────
-  // ── QoL #6: `1`–`9` / `0` / `-` switch tabs when focus is free ────────────
+  // ── Keyboard shortcut layer (⌘K, /, ?, g-chord, n/p, 1-9/0/-) ──────────
   const searchInputRef = useRef(null);
-  useEffect(() => {
-    const isEditable = () => {
-      const el = document.activeElement;
-      if (!el) return false;
-      const tag = el.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
-      if (el.isContentEditable) return true;
-      return false;
-    };
-    const onKey = (e) => {
-      // Cmd+K / Ctrl+K / "/" → focus search. Cmd+K works even inside inputs.
-      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
-      if (e.key === "/" && !isEditable()) {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
-      // Digits 1–9 + 0 (tab 10) + "-" (tab 11). Skip when a modifier is held
-      // so we don't hijack Cmd+1 (browser tab switching on macOS).
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (isEditable()) return;
-      let idx = -1;
-      if (e.key >= "1" && e.key <= "9") idx = parseInt(e.key, 10) - 1;
-      else if (e.key === "0") idx = 9;
-      else if (e.key === "-") idx = 10;
-      if (idx >= 0 && idx < TABS.length) {
-        e.preventDefault();
-        setTab(TABS[idx].value);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [setTab]);
+  const focusSearch = useCallback(() => {
+    const el = searchInputRef.current;
+    if (!el) return false;
+    el.focus();
+    el.select?.();
+    return true;
+  }, []);
+  const closeOverlays = useCallback(() => {
+    if (paletteOpen) { setPaletteOpen(false); return; }
+    if (helpOpen)    { setHelpOpen(false);    return; }
+    if (entityStack.length > 0) closeAllEntities();
+  }, [paletteOpen, helpOpen, entityStack.length, closeAllEntities]);
+  useKeyboardShortcuts({
+    tabs: TABS,
+    tabLetterMap: TAB_LETTER_MAP,
+    currentTab: tab,
+    onChangeTab: setTab,
+    onOpenPalette: () => setPaletteOpen(true),
+    onFocusSearch: focusSearch,
+    onShowHelp: () => setHelpOpen(true),
+    onCloseOverlays: closeOverlays,
+  });
+
+  // ── Palette: local commands ────────────────────────────────────────────
+  // These are the actions that appear under the "Commands" group. Each
+  // entry is closed over the shell state so the palette component stays
+  // stateless.
+  const paletteCommands = useMemo(() => ([
+    { id: "refresh",  label: "Refresh all data",           sub: "Action",    keywords: "reload",        onRun: () => handleRefreshAll() },
+    { id: "help",     label: "Show keyboard shortcuts",    sub: "Help",      keywords: "keys",          onRun: () => setHelpOpen(true) },
+    { id: "den-c",    label: "Density: Comfortable",       sub: "Density",   keywords: "spacing",       onRun: () => setDensity("comfortable") },
+    { id: "den-m",    label: "Density: Compact",           sub: "Density",   keywords: "spacing tight", onRun: () => setDensity("compact") },
+    { id: "den-d",    label: "Density: Dense",             sub: "Density",   keywords: "spacing tight", onRun: () => setDensity("dense") },
+    { id: "hp-cur",   label: "Set current tab as homepage default",
+      sub: "Homepage", keywords: "default start",
+      onRun: () => {
+        try { localStorage.setItem("industryPulse.homepageDefault", JSON.stringify({ tab, listingType: null })); } catch { /* noop */ }
+        toast?.({ title: "Homepage default set", description: `Industry Pulse will open on "${tab}" next time.` });
+      },
+    },
+    { id: "hp-clr",   label: "Clear homepage default",     sub: "Homepage",  keywords: "reset",
+      onRun: () => {
+        try { localStorage.removeItem("industryPulse.homepageDefault"); } catch { /* noop */ }
+        toast?.({ title: "Homepage default cleared" });
+      },
+    },
+  ]), [tab, setDensity, toast, handleRefreshAll]);
 
   // ── Early return: loading skeleton ───────────────────────────────────────────
   if (isLoading) return <LoadingSkeleton />;
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="px-4 pt-3 pb-4 lg:px-6 space-y-3">
+    <PulseShellProvider value={{ density, setDensity, openPalette: () => setPaletteOpen(true) }}>
+    <div className={cn("px-4 pt-3 pb-4 lg:px-6 space-y-3", densityClass, densityWrapperCls(density))} data-pulse-density={density}>
 
       {/* ── Header ── */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -874,14 +800,41 @@ export default function IndustryPulse() {
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <Input
               ref={searchInputRef}
-              placeholder="Search agents, agencies… (Cmd+K)"
+              placeholder="Search agents, agencies… (/)"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 h-8 text-xs"
               aria-label="Search Industry Pulse"
             />
           </div>
-          {/* QoL #4: relative time since last refresh — updates every 30s */}
+          {/* Quick launcher button for the ⌘K palette — keyboard-first users
+              have the shortcut; mouse-first users click this chip. */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2 text-xs gap-1.5"
+            onClick={() => setPaletteOpen(true)}
+            title="Open command palette (⌘K)"
+            aria-label="Open command palette"
+          >
+            <CmdIcon className="h-3.5 w-3.5" />
+            <span className="hidden lg:inline">Palette</span>
+            <kbd className="hidden lg:inline-flex ml-1 items-center gap-0.5 px-1 py-0 rounded border bg-muted/60 text-[9px] text-muted-foreground">⌘K</kbd>
+          </Button>
+          {/* Density toggle */}
+          <DensityToggle density={density} onChange={setDensity} />
+          {/* Help sheet launcher */}
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={() => setHelpOpen(true)}
+            title="Keyboard shortcuts (?)"
+            aria-label="Show keyboard shortcuts"
+          >
+            <Keyboard className="h-3.5 w-3.5" />
+          </Button>
+          {/* Relative time since last refresh — updates every 30s */}
           {lastFetched && (
             <span
               className="hidden md:inline text-[10px] text-muted-foreground tabular-nums whitespace-nowrap"
@@ -905,75 +858,8 @@ export default function IndustryPulse() {
         </div>
       </div>
 
-      {/* ── Stats strip (QoL #1 + #2) ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
-        <StatCard
-          label="Agents"
-          value={stats.totalAgents.toLocaleString()}
-          icon={Users}
-          color="text-blue-500"
-          subtitle={`${stats.notInCrm} not in CRM`}
-          trend={trends.agents}
-          onClick={() => navigateToTab("agents")}
-        />
-        <StatCard
-          label="Agencies"
-          value={stats.totalAgencies.toLocaleString()}
-          icon={Target}
-          color="text-violet-500"
-          subtitle={`${stats.agenciesNotInCrm} not in CRM`}
-          trend={trends.agencies}
-          onClick={() => navigateToTab("agencies")}
-        />
-        <StatCard
-          label="For Sale"
-          value={stats.activeListings.toLocaleString()}
-          icon={Home}
-          color="text-emerald-500"
-          subtitle={`${stats.sold} sold`}
-          trend={trends.activeListings}
-          onClick={() => navigateToTab("listings", "for_sale")}
-        />
-        <StatCard
-          label="Rentals"
-          value={stats.rentals.toLocaleString()}
-          icon={ArrowRight}
-          color="text-cyan-500"
-          trend={trends.rentals}
-          onClick={() => navigateToTab("listings", "for_rent")}
-        />
-        <StatCard
-          label="Avg DOM"
-          value={stats.avgDom > 0 ? `${stats.avgDom}d` : "—"}
-          icon={Clock}
-          color="text-amber-500"
-          onClick={() => navigateToTab("listings")}
-        />
-        <StatCard
-          label="Events"
-          value={stats.upcomingEvents}
-          icon={Calendar}
-          color="text-rose-500"
-          subtitle="upcoming"
-          onClick={() => navigateToTab("events")}
-        />
-        <StatCard
-          label="Signals"
-          value={stats.newSignals}
-          icon={Zap}
-          color="text-orange-500"
-          subtitle="new"
-          onClick={() => navigateToTab("signals")}
-        />
-        <StatCard
-          label="Market Share"
-          value={stats.marketShare > 0 ? `${stats.marketShare}%` : "—"}
-          icon={TrendingUp}
-          color="text-green-500"
-          subtitle="30-day"
-          onClick={() => navigateToTab("market")}
-        />
-      </div>
+      {/* ── Stats strip — trend-aware, sparkline-backed, right-click menu ── */}
+      <PulseHeaderStats stats={stats} onNavigate={navigateToTab} toast={toast} />
 
       {/* ── Tab bar + content ── */}
       {/* QoL #89: on mobile (<md) render as horizontal-scroll strip with */}
@@ -1021,7 +907,7 @@ export default function IndustryPulse() {
         {/* tabs clears any caught error; switching back remounts the tab. */}
         <TabsContent value="command" className="mt-2">
           <ErrorBoundary resetKey={tab} fallbackLabel="Command">
-            <PulseCommandCenter {...sharedProps} />
+            <PulseCommandCenter {...sharedProps} onNavigateTab={navigateToTab} />
           </ErrorBoundary>
         </TabsContent>
 
@@ -1182,6 +1068,20 @@ export default function IndustryPulse() {
           )}
         </ErrorBoundary>
       )}
+
+      {/* ── Global ⌘K command palette ── */}
+      <PulseCommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onOpenEntity={openEntity}
+        onNavigateTab={(v) => navigateToTab(v)}
+        tabs={TABS}
+        commands={paletteCommands}
+      />
+
+      {/* ── Keyboard shortcut help sheet ── */}
+      <PulseShortcutHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
+    </PulseShellProvider>
   );
 }
