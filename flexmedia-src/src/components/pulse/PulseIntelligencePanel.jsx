@@ -11,7 +11,7 @@
  *   entityName: CRM record display name (informational only)
  *   crmEntity: full CRM entity record (optional, used for rea_agent_id fallback)
  */
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { useQuery } from "@tanstack/react-query";
@@ -26,7 +26,8 @@ import { Star, MapPin, Building2, Phone, Mail, Globe, ExternalLink, Award,
   TrendingUp, Users, Home, Clock, AlertTriangle, CheckCircle2, DollarSign,
   Briefcase, Hash, Facebook, Instagram, Linkedin, ChevronDown, Shield,
   BarChart3, User, Loader2, BookOpen, Database, History, Sparkles, Palette,
-  UserPlus, X, Copy, Check, Map as MapIcon, ChevronRight, Download
+  UserPlus, X, Copy, Check, Map as MapIcon, ChevronRight, Download,
+  Filter, ArrowUp, ArrowDown
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -206,15 +207,29 @@ const ROSTER_SORT_OPTIONS = [
 ];
 const ROSTER_SORT_DEFAULT = "active";
 
-function sortRoster(list, sortKey) {
+function sortRoster(list, sortKey, sortDir = "desc") {
   if (!Array.isArray(list)) return [];
   const arr = list.slice();
+  // Numeric columns treat bigger-is-better as "desc" (default). "name" treats
+  // A-Z as "asc".
   switch (sortKey) {
     case "sold":
       arr.sort((a, b) => (b.sales_as_lead || b.total_sold_12m || 0) - (a.sales_as_lead || a.total_sold_12m || 0));
       break;
     case "rating":
       arr.sort((a, b) => (b.rea_rating || b.reviews_avg || 0) - (a.rea_rating || a.reviews_avg || 0));
+      break;
+    case "position":
+      // Partners first, then Senior, Associate, Junior. Falls back to name.
+      {
+        const rank = { Partner: 0, Senior: 1, Associate: 2, Junior: 3 };
+        arr.sort((a, b) => {
+          const ra = rank[mapPosition(a.job_title)] ?? 9;
+          const rb = rank[mapPosition(b.job_title)] ?? 9;
+          if (ra !== rb) return ra - rb;
+          return (a.full_name || "").localeCompare(b.full_name || "");
+        });
+      }
       break;
     case "name":
       arr.sort((a, b) => (a.full_name || "").localeCompare(b.full_name || ""));
@@ -224,6 +239,7 @@ function sortRoster(list, sortKey) {
       arr.sort((a, b) => (b.total_listings_active || 0) - (a.total_listings_active || 0));
       break;
   }
+  if (sortDir === "asc") arr.reverse();
   return arr;
 }
 
@@ -499,6 +515,39 @@ const ListingRow = ({ l, showSoldInfo }) => {
   );
 };
 
+/* ── Inline copy-to-clipboard button used next to contact fields. ───────────
+   Keeps the UI non-invasive (h-5 w-5 icon button) and gives a short toast +
+   Check flash on success. Returns null for empty values so the surrounding
+   layout collapses cleanly. */
+function CopyInlineButton({ value, label }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback((e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    if (!value) return;
+    try {
+      navigator.clipboard.writeText(value);
+      setCopied(true);
+      toast.success(`${label || "Copied"}!`);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      toast.error("Copy failed");
+    }
+  }, [value, label]);
+  if (!value) return null;
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="inline-flex items-center justify-center h-5 w-5 rounded hover:bg-muted"
+      title={label || "Copy"}
+      aria-label={label || "Copy"}
+    >
+      {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+    </button>
+  );
+}
+
 /* ═════════════════════════════════════════════════════════════════════════════ */
 /* ═══ MAIN COMPONENT ═══════════════════════════════════════════════════════ */
 /* ═════════════════════════════════════════════════════════════════════════════ */
@@ -526,7 +575,38 @@ export default function PulseIntelligencePanel({
   // #28: bulk-select set of pulse_agent ids (uncrm'd only).
   const [selectedAgentIds, setSelectedAgentIds] = useState(() => new Set());
   const [bulkAddingToCrm, setBulkAddingToCrm] = useState(false);
+  // Dossier tab state — controls which of the overview/listings sections is
+  // visible (via `hidden={dossierTab !== X}` on the wrapping divs).
+  // Default "overview" matches historical landing.
+  const [dossierTab, setDossierTab] = useState("overview");
+  // AG05/#75 — roster column sort direction (asc/desc). Paired with rosterSort.
+  const [rosterSortDir, setRosterSortDir] = useState("desc");
+  // #74 — clicking a property-type bar filters the Listings tab. null = unfiltered.
+  const [breakdownTypeFilter, setBreakdownTypeFilter] = useState(null);
+  // Flash-target section ring animation (used when jumping from another view).
+  const [flashSection, setFlashSection] = useState(null);
   const navigate = useNavigate();
+
+  // Tab change + optional flash-target section highlight. Wrapped in useCallback
+  // so the clickable breakdown bars / nav buttons keep stable refs.
+  const handleDossierTabChange = useCallback((tabValue, targetSection = null) => {
+    setDossierTab(tabValue);
+    if (targetSection) {
+      setFlashSection(targetSection);
+      setTimeout(() => setFlashSection(null), 1400);
+    }
+  }, []);
+
+  // Roster column-header click: same column toggles direction, new column
+  // resets to desc (higher-is-better default for numeric columns).
+  const handleRosterSortClick = useCallback((key) => {
+    if (rosterSort === key) {
+      setRosterSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setRosterSort(key);
+      setRosterSortDir("desc");
+    }
+  }, [rosterSort]);
 
   /* ── IP01: Single-RPC dossier fetch ──────────────────────────────────────
      Replaces the six useEntityList calls that were pulling >10k rows
@@ -1162,11 +1242,56 @@ export default function PulseIntelligencePanel({
         </span>
       </div>
 
+      {/* Tab switcher — Overview / Listings (agent only). Gated on having
+          listings so the bar doesn't appear for empty dossiers. Agency
+          dossiers have all content in the single overview panel + an
+          external deep-link, so the switcher is suppressed there. Minimal
+          chip style matches the timeline filter chips below. */}
+      {a && entityType === "agent" && (activeListings.length > 0 || soldListings.length > 0) && (
+        <div className="flex items-center gap-1.5 mt-2 mb-1" role="tablist" aria-label="Dossier sections">
+          {[
+            { key: "overview", label: "Overview" },
+            {
+              key: "listings",
+              label: "Listings",
+              count: activeListings.length + soldListings.length,
+            },
+          ].map(tab => {
+            const isActive = dossierTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => handleDossierTabChange(tab.key)}
+                className={cn(
+                  "text-[11px] px-2.5 py-1 rounded-full border transition-colors",
+                  isActive
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-muted/30 border-border/60 hover:bg-muted/60 text-foreground"
+                )}
+              >
+                {tab.label}
+                {typeof tab.count === "number" && (
+                  <span className={cn(
+                    "ml-1.5 text-[10px] opacity-80",
+                    isActive ? "text-primary-foreground" : "text-muted-foreground"
+                  )}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* ═══ AGENT DOSSIER ═══════════════════════════════════════════════ */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {entityType === "agent" && a && (<>
-        <UITabsContent value="overview" className="space-y-4 mt-2" hidden={dossierTab !== "overview"}>
+        <div data-dossier-tab="overview" className="space-y-4 mt-2" hidden={dossierTab !== "overview"}>
 
         {/* ── 2. Profile Card ──────────────────────────────────────────── */}
         <Card>
@@ -1555,10 +1680,10 @@ export default function PulseIntelligencePanel({
             )}
           </CardContent>
         </Card>
-        </UITabsContent>
+        </div>
 
         {/* ── Listings tab (agent): Active + Sold, filtered by breakdown click */}
-        <UITabsContent value="listings" className="space-y-4 mt-2" forceMount={dossierTab === "listings" ? undefined : undefined} hidden={dossierTab !== "listings"}>
+        <div data-dossier-tab="listings" className="space-y-4 mt-2" hidden={dossierTab !== "listings"}>
           <Card id="dossier-active" className={cn("print-section-break transition-shadow", flashSection === "active" && "ring-2 ring-primary/60 ring-offset-2")}>
             <CardContent className="p-4">
               <div className="flex items-center justify-between gap-2 mb-1">
@@ -1607,14 +1732,14 @@ export default function PulseIntelligencePanel({
               })()}
             </CardContent>
           </Card>
-        </UITabsContent>
+        </div>
       </>)}
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* ═══ AGENCY DOSSIER ══════════════════════════════════════════════ */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {entityType === "agency" && a && (<>
-        <UITabsContent value="overview" className="space-y-4 mt-2" hidden={dossierTab !== "overview"}>
+        <div data-dossier-tab="overview" className="space-y-4 mt-2" hidden={dossierTab !== "overview"}>
 
         {/* ── 2. Agency Profile Card ─────────────────────────────────────
             AG07: brand color accent — 3px top-border in brand_color_primary +
@@ -2198,7 +2323,7 @@ export default function PulseIntelligencePanel({
             )}
           </CardContent>
         </Card>
-        </UITabsContent>
+        </div>
       </>)}
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
