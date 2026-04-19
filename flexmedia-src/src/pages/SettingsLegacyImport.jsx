@@ -694,21 +694,28 @@ function BatchHistoryTab() {
               </TableRow>
             )}
             {batches.map((b) => {
-              const rows = b.rows_imported || 0;
-              const errors = b.rows_errored || 0;
+              // DB columns are imported_count / error_count / geocoded_count / mapped_count
+              // (the earlier-designed rows_imported / rows_errored / rows_geocoded / rows_package_mapped
+              // aliases were dropped during the agent 1 schema finalization — always read the real names).
+              const imported = Number(b.imported_count ?? b.rows_imported ?? 0);
+              const total = Number(b.row_count ?? 0);
+              const errors = Number(b.error_count ?? b.rows_errored ?? 0);
+              const geocoded = Number(b.geocoded_count ?? b.rows_geocoded ?? 0);
+              const mapped = Number(b.mapped_count ?? b.rows_package_mapped ?? 0);
               return (
                 <TableRow key={b.id} className="cursor-pointer hover:bg-muted/40" onClick={() => setSelectedBatch(b)}>
                   <TableCell className="font-mono text-xs">{String(b.id).slice(0, 8)}…</TableCell>
                   <TableCell className="text-xs truncate max-w-[220px]" title={b.filename}>{b.filename || "—"}</TableCell>
                   <TableCell className="text-xs"><code className="text-[11px]">{b.source || "—"}</code></TableCell>
-                  <TableCell className="text-xs" title={fmtAbs(b.created_date)}>{fmtRel(b.created_date)}</TableCell>
+                  <TableCell className="text-xs" title={fmtAbs(b.created_date || b.created_at)}>{fmtRel(b.created_date || b.created_at)}</TableCell>
                   <TableCell className="text-xs tabular-nums">
-                    {rows.toLocaleString()}
+                    {imported.toLocaleString()}
+                    {total > imported && <span className="text-muted-foreground ml-1">/ {total.toLocaleString()}</span>}
                     {errors > 0 && <span className="text-red-600 ml-1">({errors} err)</span>}
                   </TableCell>
                   <TableCell>{statusBadge(b.status)}</TableCell>
-                  <TableCell className="text-xs tabular-nums">{pct(b.rows_geocoded, rows)}</TableCell>
-                  <TableCell className="text-xs tabular-nums">{pct(b.rows_package_mapped, rows)}</TableCell>
+                  <TableCell className="text-xs tabular-nums">{pct(geocoded, imported || total)}</TableCell>
+                  <TableCell className="text-xs tabular-nums">{pct(mapped, imported || total)}</TableCell>
                   <TableCell className="text-xs truncate max-w-[140px]">{b.created_by_email || b.created_by || "—"}</TableCell>
                   <TableCell className="text-right">
                     <Button
@@ -735,16 +742,16 @@ function BatchHistoryTab() {
               <DialogHeader>
                 <DialogTitle>Batch {String(selectedBatch.id).slice(0, 8)}…</DialogTitle>
                 <DialogDescription>
-                  Imported {fmtRel(selectedBatch.created_date)} · source <code>{selectedBatch.source}</code>
+                  Imported {fmtRel(selectedBatch.created_date || selectedBatch.created_at)} · source <code>{selectedBatch.source}</code>
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-3 sm:grid-cols-2 text-sm">
                 <div><span className="text-muted-foreground">Filename:</span> {selectedBatch.filename || "—"}</div>
                 <div><span className="text-muted-foreground">Status:</span> {statusBadge(selectedBatch.status)}</div>
-                <div><span className="text-muted-foreground">Rows imported:</span> {selectedBatch.rows_imported || 0}</div>
-                <div><span className="text-muted-foreground">Rows errored:</span> {selectedBatch.rows_errored || 0}</div>
-                <div><span className="text-muted-foreground">Geocoded:</span> {pct(selectedBatch.rows_geocoded, selectedBatch.rows_imported)}</div>
-                <div><span className="text-muted-foreground">Package mapped:</span> {pct(selectedBatch.rows_package_mapped, selectedBatch.rows_imported)}</div>
+                <div><span className="text-muted-foreground">Rows imported:</span> {Number(selectedBatch.imported_count ?? selectedBatch.rows_imported ?? 0).toLocaleString()} / {Number(selectedBatch.row_count ?? 0).toLocaleString()}</div>
+                <div><span className="text-muted-foreground">Rows errored:</span> {Number(selectedBatch.error_count ?? selectedBatch.rows_errored ?? 0).toLocaleString()}</div>
+                <div><span className="text-muted-foreground">Geocoded:</span> {pct(selectedBatch.geocoded_count ?? selectedBatch.rows_geocoded, selectedBatch.imported_count ?? selectedBatch.row_count)}</div>
+                <div><span className="text-muted-foreground">Package mapped:</span> {pct(selectedBatch.mapped_count ?? selectedBatch.rows_package_mapped, selectedBatch.imported_count ?? selectedBatch.row_count)}</div>
                 <div className="sm:col-span-2">
                   <span className="text-muted-foreground">Column mapping:</span>
                   <pre className="text-[11px] bg-muted rounded p-2 mt-1 overflow-auto max-h-48">
@@ -779,7 +786,7 @@ function BatchHistoryTab() {
             <AlertDialogDescription>
               {rollbackTarget && (
                 <>
-                  This deletes all <strong>{rollbackTarget.rows_imported || 0} legacy_projects rows</strong>
+                  This deletes all <strong>{Number(rollbackTarget.imported_count ?? rollbackTarget.rows_imported ?? 0).toLocaleString()} legacy_projects rows</strong>
                   created by batch <code>{String(rollbackTarget.id).slice(0, 8)}…</code> and marks the
                   batch status as <code>rolled_back</code>. The source file and mapping are preserved so
                   you can re-import. This cannot be undone.
