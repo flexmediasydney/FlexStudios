@@ -4,7 +4,8 @@
  * suburb pool, and raw payload drill-through.
  */
 import React, { useState, useMemo, useCallback, useEffect } from "react";
-import { api } from "@/api/supabaseClient";
+import { useQuery } from "@tanstack/react-query";
+import { api, supabase } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1946,8 +1947,32 @@ function SourceCard({ sourceConfig, lastLog, pulseTimeline, activeSuburbCount, c
   const historyRuns = syncRuns.slice(1);
   const isBoundingBox = sourceConfig.approach === "bounding_box";
   const approachLabel = isBoundingBox ? "Bounding box" : "Per-suburb iteration";
-  const cronStr = sourceConfig.schedule_cron || null;
+
+  // ── Schedule read: LIVE from cron.job via RPC, not from the cached
+  // `schedule_cron` column (which drifts). See migration 149 for rationale.
+  // Shared queryKey across all SourceCard instances means react-query
+  // dedupes — only one RPC call regardless of how many cards mount.
+  // Falls back to the cached column while the RPC is loading, so first-render
+  // isn't blank.
+  const { data: liveCronStatuses } = useQuery({
+    queryKey: ["pulse-source-cron-statuses"],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("pulse_get_source_cron_statuses");
+      if (error) throw error;
+      return data || [];
+    },
+    staleTime: 60_000, // 1 min — cron schedules change rarely
+    refetchOnWindowFocus: false,
+  });
+  const liveStatus = useMemo(() => {
+    if (!Array.isArray(liveCronStatuses)) return null;
+    return liveCronStatuses.find(s => s.source_id === sourceConfig.source_id) || null;
+  }, [liveCronStatuses, sourceConfig.source_id]);
+  // Prefer the live cron.job.schedule; fall back to the cached column while
+  // the RPC is in-flight or if the source has no cron_job_name mapping.
+  const cronStr = liveStatus?.cron_schedule || sourceConfig.schedule_cron || null;
   const scheduleDisplay = cronLabel(cronStr);
+  const cronDrifted = !!liveStatus?.schedule_drifted; // for dev tooltip / debug
   const perSuburbMax = sourceConfig.max_results_per_suburb || 0;
   const actorInput = sourceConfig.actor_input || {};
   const actorInputJson = useMemo(() => JSON.stringify(actorInput, null, 2), [actorInput]);

@@ -51,6 +51,46 @@ type SignalInsert = {
   idempotency_key: string;
 };
 
+// ── Pagination helper ────────────────────────────────────────────────────
+
+/**
+ * PostgREST `.select()` silently caps at 1000 rows by default. These signal
+ * generators scan pulse_timeline which has 7k+ rows in a 7-day window, so
+ * each `.gte('created_at', since)` query was producing heavily truncated
+ * candidate sets. We paginate with explicit `.range()` windows up to a
+ * 50k hard-stop safety cap.
+ *
+ * `label` is for the console breadcrumb; `buildQuery(offset, limit)` must
+ * return a PostgREST query promise that resolves to `{ data, error }`.
+ */
+const PAGE_SIZE = 1000;
+const MAX_PAGINATED_ROWS = 50_000;
+
+async function paginateTimeline<T = any>(
+  label: string,
+  buildQuery: (offset: number, limit: number) => PromiseLike<{ data: any; error: any }>,
+): Promise<T[]> {
+  const allRows: T[] = [];
+  let offset = 0;
+  while (true) {
+    const { data, error } = await buildQuery(offset, PAGE_SIZE);
+    if (error) {
+      console.error(`[${label}] page error at offset=${offset}:`, error.message);
+      break;
+    }
+    const rows: T[] = (data || []) as T[];
+    allRows.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+    if (allRows.length >= MAX_PAGINATED_ROWS) {
+      console.warn(`[${label}] truncating at ${MAX_PAGINATED_ROWS} rows (safety cap)`);
+      break;
+    }
+  }
+  console.log(`[${label}] scanned ${allRows.length} rows`);
+  return allRows;
+}
+
 // ── Generator classes ────────────────────────────────────────────────────
 
 /**
@@ -62,13 +102,16 @@ async function generateAgentMovement(
   since: string,
   runId: string,
 ): Promise<SignalInsert[]> {
-  const { data, error } = await admin
-    .from('pulse_timeline')
-    .select('id, entity_type, pulse_entity_id, rea_id, title, description, new_value, previous_value, metadata, created_at')
-    .eq('event_type', 'agency_change')
-    .gte('created_at', since);
-  if (error) throw new Error(`agent_movement query failed: ${error.message}`);
-  if (!data?.length) return [];
+  const data = await paginateTimeline<any>('agent_movement', (offset, limit) =>
+    admin
+      .from('pulse_timeline')
+      .select('id, entity_type, pulse_entity_id, rea_id, title, description, new_value, previous_value, metadata, created_at')
+      .eq('event_type', 'agency_change')
+      .gte('created_at', since)
+      .order('created_at', { ascending: true })
+      .range(offset, offset + limit - 1),
+  );
+  if (!data.length) return [];
 
   return data.map((row: any) => {
     // pulse_timeline.title is already human-readable ("Jane Doe moved to Ray White")
@@ -113,14 +156,17 @@ async function generateAgencyGrowth(
   since: string,
   runId: string,
 ): Promise<SignalInsert[]> {
-  const { data: events, error } = await admin
-    .from('pulse_timeline')
-    .select('id, pulse_entity_id, rea_id, created_at, metadata, new_value')
-    .eq('event_type', 'first_seen')
-    .eq('entity_type', 'agent')
-    .gte('created_at', since);
-  if (error) throw new Error(`agency_growth query failed: ${error.message}`);
-  if (!events?.length) return [];
+  const events = await paginateTimeline<any>('agency_growth', (offset, limit) =>
+    admin
+      .from('pulse_timeline')
+      .select('id, pulse_entity_id, rea_id, created_at, metadata, new_value')
+      .eq('event_type', 'first_seen')
+      .eq('entity_type', 'agent')
+      .gte('created_at', since)
+      .order('created_at', { ascending: true })
+      .range(offset, offset + limit - 1),
+  );
+  if (!events.length) return [];
 
   // Resolve each pulse_entity_id → pulse_agents row to find current agency_rea_id.
   // Prefer pulse_entity_id (uuid fk), fall back to rea_id if missing.
@@ -196,13 +242,16 @@ async function generatePriceDrops(
   since: string,
   runId: string,
 ): Promise<SignalInsert[]> {
-  const { data, error } = await admin
-    .from('pulse_timeline')
-    .select('id, title, description, new_value, created_at')
-    .eq('event_type', 'price_change')
-    .gte('created_at', since);
-  if (error) throw new Error(`price_drop query failed: ${error.message}`);
-  if (!data?.length) return [];
+  const data = await paginateTimeline<any>('price_drop', (offset, limit) =>
+    admin
+      .from('pulse_timeline')
+      .select('id, title, description, new_value, created_at')
+      .eq('event_type', 'price_change')
+      .gte('created_at', since)
+      .order('created_at', { ascending: true })
+      .range(offset, offset + limit - 1),
+  );
+  if (!data.length) return [];
 
   const signals: SignalInsert[] = [];
   for (const row of data) {

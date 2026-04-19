@@ -692,6 +692,29 @@ async function upsertConversations(admin: any, accountId: string) {
 
 serveWithAudit('syncGmailMessages', async (req) => {
   const cors = handleCors(req); if (cors) return cors;
+
+  // ── DISABLED — DATA-LOSS PATH ──────────────────────────────────────────
+  // This legacy function is superseded by `syncGmailMessagesForAccount`.
+  // All active callers (EmailInboxMain, EmailAccountSettingsTab,
+  // SettingsEmailSyncHealth, syncAllEmails) invoke `...ForAccount`; no cron
+  // job or frontend code invokes this slug as of 2026-04.
+  //
+  // The `upsertConversations` helper here (see lines ~614-619, ~673-676)
+  // silently caps `email_messages` selects at 1000 rows and then DELETES
+  // any email_conversations rows whose thread_id is missing from the
+  // truncated set. Any account with >1000 messages (prod has 4,132) would
+  // lose conversation rows every sync.
+  //
+  // Rather than patching a dead function, we hard-block invocation here.
+  // TODO: delete this entire edge function in a follow-up sweep once the
+  // confirmed-disabled period has elapsed. See bug audit #10.
+  return errorResponse(
+    'syncGmailMessages is disabled — use syncGmailMessagesForAccount instead. ' +
+    'This legacy path contained a data-loss bug (capped conversation rebuild). ' +
+    'Contact engineering if you need this revived.',
+    410, // HTTP 410 Gone — makes intent unambiguous to monitoring/alerts
+  );
+
   try {
     const admin = getAdminClient();
     const entities = createEntities(admin);

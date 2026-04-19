@@ -1071,11 +1071,34 @@ serveWithAudit('pulseDataSync', async (req) => {
 
     // ── Step 5b: Snapshot existing agents BEFORE upsert (for movement detection in Step 9) ──
     // Must load before Step 6 upsert — otherwise existing.agency_rea_id already equals the new value
-    const { data: preUpsertPulseAgents = [] } = await admin.from('pulse_agents')
-      .select('id, rea_agent_id, agency_name, agency_rea_id, full_name, alternate_mobiles, alternate_emails')
-      .not('rea_agent_id', 'is', null);
+    //
+    // BUG FIX (P0 #1, 2026-04-19): previously this was an unscoped
+    // .select().not('rea_agent_id','is',null) which PostgREST silently caps
+    // at 1000 rows. With 8,740 agents in prod, only 1000 loaded into the
+    // snapshot → Step 9 movement detection missed 7,740 agents → no
+    // `agency_change` events emitted for the vast majority of movements.
+    // Fix: scope to the EXACT candidate rea_agent_ids this run is about to
+    // upsert (bounded by this run's scrape), chunked 500 at a time. Same
+    // pattern as Agent E (18234a3), Agent I (1d57562), and earlier tonight
+    // (43d3b32).
+    const candidatePreUpsertReaIds = Array.from(new Set(
+      processedAgents
+        .map(a => a.rea_agent_id)
+        .filter((v: any): v is string => typeof v === 'string' && v.length > 0)
+    ));
+    const preUpsertPulseAgents: any[] = [];
+    if (candidatePreUpsertReaIds.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < candidatePreUpsertReaIds.length; i += CHUNK) {
+        const slice = candidatePreUpsertReaIds.slice(i, i + CHUNK);
+        const { data: rows = [] } = await admin.from('pulse_agents')
+          .select('id, rea_agent_id, agency_name, agency_rea_id, full_name, alternate_mobiles, alternate_emails')
+          .in('rea_agent_id', slice);
+        for (const r of rows as any[]) preUpsertPulseAgents.push(r);
+      }
+    }
     const existingByReaIdSnapshot = new Map(preUpsertPulseAgents.map((a: any) => [a.rea_agent_id, a]));
-    console.log(`Pre-upsert snapshot: ${preUpsertPulseAgents.length} existing agents with REA IDs`);
+    console.log(`Pre-upsert snapshot: ${preUpsertPulseAgents.length} existing agents with REA IDs (of ${candidatePreUpsertReaIds.length} candidates)`);
 
     // ── Step 6: Upsert to database ──────────────────────────────────────
 
@@ -1818,10 +1841,79 @@ serveWithAudit('pulseDataSync', async (req) => {
         }
 
         // ── Existing update path: enrich agents we already had ──────────
-        const { data: existingAgentsForEnrich = [] } = await admin.from('pulse_agents')
-          .select('id, full_name, email, mobile, profile_image, rea_agent_id, agency_name, job_title, total_listings_active, data_integrity_score');
+        //
+        // BUG FIX (P0 #5, 2026-04-19): two bugs in one.
+        //  1. The pre-load was an unscoped `.select()` which hit PostgREST's
+        //     1000-row default cap. With 8,740 agents in prod, ~7,740 were
+        //     never loaded for cross-enrichment → email/photo/phone from
+        //     listing payloads was silently dropped for the bulk of agents.
+        //  2. Even for the 1000 that were loaded, the loop did a serial
+        //     `admin.from(...).update(...).eq('id', pa.id)` per agent — 1,000
+        //     sequential round-trips per heavy run, and the update's error
+        //     return was never checked (failures silently absorbed into the
+        //     `enriched` counter).
+        //
+        // Fix:
+        //  - Scope the pre-load to only agents we actually have enrichment
+        //    data for: `enrichByReaId` keys (union with name lookups handled
+        //    via a second lightweight `.ilike` / in-memory name scan). We
+        //    chunk 500 at a time (same pattern as Agent E / I / 43d3b32).
+        //  - Build a single batch upsert payload keyed by `id` and send it in
+        //    chunks of 200 via `.upsert(..., { onConflict: 'id' })`. This
+        //    matches the agency pre-load + upsert pattern higher in the file.
+        //  - Check `.error` on every chunk write; increment `enriched` only
+        //    on `!error` — counter now reflects reality.
+        //
+        // Note: `pulse_compute_integrity_score` is still called per-agent
+        // (it's a cheap RPC and the input set is the same-order-of-magnitude
+        // as `enrichByReaId`). The savings come from eliminating the UPDATE
+        // round-trip per agent, not from batching the score RPC.
 
-        let enriched = 0;
+        // Scope the pre-load to rea_agent_ids we have enrich data for.
+        const candidateEnrichReaIds = Array.from(enrichByReaId.keys());
+        const existingAgentsForEnrich: any[] = [];
+        const selectCols = 'id, full_name, email, mobile, profile_image, rea_agent_id, rea_profile_url, agency_name, job_title, total_listings_active, data_integrity_score';
+        if (candidateEnrichReaIds.length > 0) {
+          const CHUNK = 500;
+          for (let i = 0; i < candidateEnrichReaIds.length; i += CHUNK) {
+            const slice = candidateEnrichReaIds.slice(i, i + CHUNK);
+            const { data: rows = [] } = await admin.from('pulse_agents')
+              .select(selectCols)
+              .in('rea_agent_id', slice);
+            for (const r of rows as any[]) existingAgentsForEnrich.push(r);
+          }
+        }
+        // Supplement with name-only matches: agents whose rea_agent_id isn't
+        // in enrichByReaId but whose name matches enrichByName. The name-key
+        // lookup on pulse_agents has no fast composite index, so we do a
+        // chunked .in() on full_name (exact match only — pre-normalised
+        // lowercase fallback is handled downstream).
+        if (enrichByName.size > 0) {
+          const loadedIds = new Set(existingAgentsForEnrich.map((r: any) => r.id));
+          const candidateNames = Array.from(enrichByName.keys()).filter(Boolean);
+          const CHUNK = 500;
+          for (let i = 0; i < candidateNames.length; i += CHUNK) {
+            const slice = candidateNames.slice(i, i + CHUNK);
+            // Use `.in('full_name', slice)` — exact match is sufficient for
+            // the 99% case; any agent whose stored full_name casing differs
+            // from what appeared in listings will be merged via the rea_id
+            // path on a subsequent run.
+            const { data: rows = [] } = await admin.from('pulse_agents')
+              .select(selectCols)
+              .in('full_name', slice);
+            for (const r of rows as any[]) {
+              if (!loadedIds.has(r.id)) {
+                existingAgentsForEnrich.push(r);
+                loadedIds.add(r.id);
+              }
+            }
+          }
+        }
+        console.log(`Cross-enrich candidates loaded: ${existingAgentsForEnrich.length} (of ${candidateEnrichReaIds.length} rea-id + ${enrichByName.size} name-key keys)`);
+
+        // Build batch upsert payload. Each entry includes only the columns
+        // we need to update, plus `id` for the conflict key.
+        const enrichUpdates: any[] = [];
         for (const pa of existingAgentsForEnrich) {
           let enrichData: any = null;
 
@@ -1912,11 +2004,31 @@ serveWithAudit('pulseDataSync', async (req) => {
             });
             updates.data_integrity_score = typeof scored === 'number' ? scored : 50;
 
-            await admin.from('pulse_agents').update(updates).eq('id', pa.id);
-            enriched++;
+            // Defer: batch-upsert at the end of the loop instead of per-row UPDATE.
+            enrichUpdates.push({ id: pa.id, ...updates });
           }
         }
-        console.log(`Cross-enriched ${enriched} agents from listing data`);
+
+        // Batch upsert in chunks — replaces the N+1 UPDATE loop.
+        let enriched = 0;
+        let enrichErrors = 0;
+        if (enrichUpdates.length > 0) {
+          const WRITE_CHUNK = 200;
+          for (let i = 0; i < enrichUpdates.length; i += WRITE_CHUNK) {
+            const slice = enrichUpdates.slice(i, i + WRITE_CHUNK);
+            const { error } = await admin.from('pulse_agents').upsert(slice, {
+              onConflict: 'id',
+              ignoreDuplicates: false,
+            });
+            if (!error) {
+              enriched += slice.length;
+            } else {
+              enrichErrors += slice.length;
+              if (enrichErrors < 3) console.error(`Cross-enrich batch upsert error:`, error.message?.substring(0, 300));
+            }
+          }
+        }
+        console.log(`Cross-enriched ${enriched} agents from listing data${enrichErrors > 0 ? ` (${enrichErrors} failed)` : ''}`);
       }
     }
 
@@ -2034,15 +2146,63 @@ serveWithAudit('pulseDataSync', async (req) => {
       if (m.crm_entity_id) mappingsByCrmId.set(`${m.entity_type}:${m.crm_entity_id}`, m);
     });
 
-    // Build complete pulse agent ID map (eliminates per-agent pulse_agents.select queries)
-    const { data: allPulseAgentIds = [] } = await admin.from('pulse_agents')
-      .select('id, rea_agent_id').not('rea_agent_id', 'is', null);
-    const pulseAgentIdMap = new Map(allPulseAgentIds.map((a: any) => [a.rea_agent_id, a.id]));
+    // Build pulse agent ID map (eliminates per-agent pulse_agents.select queries)
+    //
+    // BUG FIX (P0 #2, 2026-04-19): previously loaded all pulse_agents via
+    // .not('rea_agent_id','is',null) which hit PostgREST's 1000-row default
+    // cap. With 8,740 agents in prod, ~7,740 were missing from the map →
+    // any pulse_crm_mappings.insert for those agents wrote pulse_entity_id
+    // = null → UI drill-through + dedup broken. Fix: scope to the exact
+    // rea_agent_ids we might look up in 10a (which iterates processedAgents),
+    // chunked 500 at a time. Same pattern as Agents E/I and earlier tonight.
+    const step10AgentReaIds = Array.from(new Set(
+      processedAgents
+        .map(a => a.rea_agent_id)
+        .filter((v: any): v is string => typeof v === 'string' && v.length > 0)
+    ));
+    const pulseAgentIdMap = new Map<string, string>();
+    if (step10AgentReaIds.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < step10AgentReaIds.length; i += CHUNK) {
+        const slice = step10AgentReaIds.slice(i, i + CHUNK);
+        const { data: rows = [] } = await admin.from('pulse_agents')
+          .select('id, rea_agent_id')
+          .in('rea_agent_id', slice);
+        for (const r of rows as any[]) {
+          if (r.rea_agent_id && r.id) pulseAgentIdMap.set(r.rea_agent_id, r.id);
+        }
+      }
+    }
 
-    // Build complete pulse agency ID map (eliminates per-agency pulse_agencies.select queries)
-    const { data: allPulseAgencyIds = [] } = await admin.from('pulse_agencies')
-      .select('id, name').limit(2000);
-    const pulseAgencyIdMap = new Map(allPulseAgencyIds.map((a: any) => [(a.name || '').trim().toLowerCase(), a.id]));
+    // Build pulse agency ID map (eliminates per-agency pulse_agencies.select queries)
+    //
+    // BUG FIX (P0 #3, 2026-04-19): previously .limit(2000) which was a
+    // half-fix for the same class of bug. With 2,557 agencies in prod,
+    // 557 missed the map → any pulse_crm_mappings.insert for those agencies
+    // wrote pulse_entity_id = null → same UI/dedup breakage. Fix: scope to
+    // the exact candidate agency names (bounded by this run's mergedAgencies),
+    // chunked 500 at a time. Same pattern as agency-upsert pre-load above
+    // (43d3b32). Key: name.trim().toLowerCase() — matches lookup at line
+    // ~2210 (pulseAgencyIdMap.get(agency.name.trim().toLowerCase())).
+    const step10AgencyNames = Array.from(new Set(
+      mergedAgencies
+        .map(a => (a?.name || '').trim())
+        .filter(Boolean)
+    ));
+    const pulseAgencyIdMap = new Map<string, string>();
+    if (step10AgencyNames.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < step10AgencyNames.length; i += CHUNK) {
+        const slice = step10AgencyNames.slice(i, i + CHUNK);
+        const { data: rows = [] } = await admin.from('pulse_agencies')
+          .select('id, name')
+          .in('name', slice);
+        for (const r of rows as any[]) {
+          const k = (r.name || '').trim().toLowerCase();
+          if (k && r.id) pulseAgencyIdMap.set(k, r.id);
+        }
+      }
+    }
 
     // 10a: Agent mapping
     for (const agent of processedAgents) {
