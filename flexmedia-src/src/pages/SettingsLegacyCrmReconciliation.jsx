@@ -2,28 +2,32 @@
  * SettingsLegacyCrmReconciliation.jsx
  *
  * Admin page for reviewing how imported legacy_projects (currently 3,480
- * Pipedrive historicals) are attributed back to CRM agents + agencies.
+ * Pipedrive historicals) are attributed back to the PULSE LAYER
+ * (pulse_agents + pulse_agencies) — not directly to CRM. CRM membership
+ * flows through automatically when a pulse entity is promoted via the
+ * Mappings tab (see migration 198).
  *
- * Two-pass linkage (migration 195):
- *   - property_chain: legacy row's property_key matches a pulse_listings row
- *                     whose agent/agency resolves to a linked CRM entity.
- *                     Confidence 0.95. Near-deterministic.
- *   - fuzzy_name:     pg_trgm similarity on raw agent_name / agency_name
- *                     against agents.name / agencies.name. Auto-linked at
- *                     >= threshold (default 0.85). Lower scores surface
- *                     here for a human to confirm, pick, reject, or skip.
+ * Two-pass linkage (migration 198):
+ *   - property_chain_pulse: legacy row's property_key matches a
+ *                           pulse_listings row whose agent_pulse_id /
+ *                           agency_pulse_id resolve deterministically.
+ *                           Confidence 0.95.
+ *   - fuzzy_name_pulse:     pg_trgm similarity on raw agent_name / agency_name
+ *                           against pulse_agents.full_name / pulse_agencies.name
+ *                           (8,810 + 2,557 candidates — 280x broader than CRM).
+ *                           Auto-link above threshold + next-candidate gap.
  *
- * Data sources (all RPCs from migration 195):
+ * Data sources (all RPCs from migration 198):
  *   - legacy_reconciliation_stats()
  *   - legacy_reconciliation_review(filter, search, limit, offset)
- *   - legacy_reconciliation_apply_manual(legacy_id, contact_id, agency_id, reviewer)
+ *   - legacy_reconciliation_apply_manual(legacy_id, pulse_agent_id, pulse_agency_id, reviewer)
  *   - legacy_reconciliation_apply_threshold(min_confidence, reviewer)
- *   - legacy_reconcile_all(auto_threshold)  ← for "Re-run reconciliation"
+ *   - legacy_reconcile_all_pulse(auto_threshold)  for "Re-run reconciliation"
  *
- * Permission: admin and above (enforced via ROUTE_ACCESS + PermissionGuard).
+ * Permission: admin and above.
  */
 
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { toast } from "sonner";
@@ -41,13 +45,11 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Database, CheckCircle2, AlertTriangle, HelpCircle, RefreshCw, Zap,
-  Loader2, Search, Link2, UserCheck, Building2, X,
+  Database, CheckCircle2, AlertTriangle, RefreshCw, Zap,
+  Loader2, Search, Link2, UserCheck, Building2, X, Crown,
 } from "lucide-react";
 
-// ─────────────────────────────────────────────────────────────────────────
 // Helpers
-// ─────────────────────────────────────────────────────────────────────────
 
 const NUM = (n) => Number(n || 0).toLocaleString();
 
@@ -70,9 +72,7 @@ function ConfidencePct({ value }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Stat strip
-// ─────────────────────────────────────────────────────────────────────────
 
 function StatCard({ icon: Icon, label, value, loading, tone = "default" }) {
   const tones = {
@@ -98,20 +98,22 @@ function StatCard({ icon: Icon, label, value, loading, tone = "default" }) {
 }
 
 function StatsStrip({ stats, isLoading }) {
+  const total = stats?.total ?? 0;
+  const unlinked = stats?.unlinked ?? 0;
+  const linkedPct = total > 0 ? Math.round(100 * (total - unlinked) / total) : 0;
   return (
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
       <StatCard icon={Database}     label="Total legacy"   value={stats?.total}        loading={isLoading} />
       <StatCard icon={CheckCircle2} label="Fully linked"   value={stats?.fully_linked} loading={isLoading} tone="success" />
-      <StatCard icon={UserCheck}    label="Agent only"     value={stats?.agent_only}   loading={isLoading} tone="info" />
-      <StatCard icon={Building2}    label="Agency only"    value={stats?.agency_only}  loading={isLoading} tone="info" />
+      <StatCard icon={UserCheck}    label="Agent linked"   value={(stats?.fully_linked || 0) + (stats?.agent_only || 0)} loading={isLoading} tone="info" />
+      <StatCard icon={Building2}    label="Agency linked"  value={(stats?.fully_linked || 0) + (stats?.agency_only || 0)} loading={isLoading} tone="info" />
       <StatCard icon={AlertTriangle} label="Unlinked"      value={stats?.unlinked}     loading={isLoading} tone="warning" />
+      <StatCard icon={Zap}           label="Coverage %"    value={linkedPct}           loading={isLoading} tone="success" />
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Filters
-// ─────────────────────────────────────────────────────────────────────────
 
 const FILTER_OPTIONS = [
   { value: "unlinked",    label: "Unlinked" },
@@ -148,7 +150,7 @@ function FiltersBar({
 
       <div className="flex items-center gap-1 ml-auto">
         <label className="text-xs text-muted-foreground whitespace-nowrap">
-          Auto-confirm ≥
+          Apply ≥
         </label>
         <Input
           type="number" min="0.5" max="1" step="0.05"
@@ -159,7 +161,7 @@ function FiltersBar({
         <Button
           variant="secondary" size="sm" className="h-9"
           onClick={onBulkApply} disabled={bulkApplying}
-          title="Mark every row with confidence at or above this threshold as reviewed"
+          title="Mark every pulse-layer match at or above this confidence as reviewed"
         >
           {bulkApplying ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
           Bulk confirm
@@ -173,27 +175,36 @@ function FiltersBar({
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Review table
-// ─────────────────────────────────────────────────────────────────────────
 
-function CandidateList({ candidates, onPick, kind }) {
+function InCrmChip({ inCrm }) {
+  if (!inCrm) return null;
+  return (
+    <Badge variant="secondary" className="text-[10px] gap-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30">
+      <Crown className="h-2.5 w-2.5" />
+      in CRM
+    </Badge>
+  );
+}
+
+function CandidateList({ candidates, onPick }) {
   if (!candidates || candidates.length === 0) {
-    return <span className="text-xs text-muted-foreground">No matches</span>;
+    return <span className="text-xs text-muted-foreground">No pulse matches</span>;
   }
   return (
     <div className="flex flex-col gap-1">
       {candidates.slice(0, 3).map((c, i) => (
         <div key={c.id} className="flex items-center gap-2 text-xs">
           <ConfidencePct value={c.score} />
-          <span className={`truncate max-w-[200px] ${i === 0 ? "font-medium" : "text-muted-foreground"}`} title={c.name}>
+          <span className={`truncate max-w-[160px] ${i === 0 ? "font-medium" : "text-muted-foreground"}`} title={c.name}>
             {c.name}
           </span>
+          <InCrmChip inCrm={c.is_in_crm} />
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 px-1.5 text-xs"
-            onClick={() => onPick(c, kind)}
+            className="h-6 px-1.5 text-xs ml-auto"
+            onClick={() => onPick(c)}
           >
             Pick
           </Button>
@@ -203,7 +214,7 @@ function CandidateList({ candidates, onPick, kind }) {
   );
 }
 
-function ReviewTable({ rows, loading, onApply, onReject, onSkip }) {
+function ReviewTable({ rows, loading, onApply, onReject }) {
   if (loading) {
     return (
       <div className="space-y-2 p-4">
@@ -219,9 +230,9 @@ function ReviewTable({ rows, loading, onApply, onReject, onSkip }) {
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead className="w-[260px]">Legacy row</TableHead>
-          <TableHead className="w-[240px]">Suggested agents</TableHead>
-          <TableHead className="w-[240px]">Suggested agencies</TableHead>
+          <TableHead className="w-[240px]">Legacy row</TableHead>
+          <TableHead className="w-[260px]">Suggested pulse agents</TableHead>
+          <TableHead className="w-[260px]">Suggested pulse agencies</TableHead>
           <TableHead>Current linkage</TableHead>
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
@@ -248,35 +259,39 @@ function ReviewTable({ rows, loading, onApply, onReject, onSkip }) {
             <TableCell className="align-top">
               <CandidateList
                 candidates={r.candidate_agents}
-                onPick={(c) => onApply(r, { contact_id: c.id })}
-                kind="agent"
+                onPick={(c) => onApply(r, { pulse_agent_id: c.id })}
               />
             </TableCell>
             <TableCell className="align-top">
               <CandidateList
                 candidates={r.candidate_agencies}
-                onPick={(c) => onApply(r, { agency_id: c.id })}
-                kind="agency"
+                onPick={(c) => onApply(r, { pulse_agency_id: c.id })}
               />
             </TableCell>
             <TableCell className="align-top">
               <div className="flex flex-col gap-1 text-xs">
-                {r.linked_contact_id ? (
+                {r.linked_pulse_agent_id ? (
                   <div className="flex items-center gap-2">
                     <Link2 className="h-3 w-3 text-emerald-600" />
-                    <span className="truncate max-w-[180px]">contact linked</span>
-                    <ConfidencePct value={r.agent_linkage_confidence} />
-                    <Badge variant="outline" className="text-[10px]">{r.agent_linkage_source || "—"}</Badge>
+                    <span className="truncate max-w-[160px]" title={r.linked_pulse_agent_name}>
+                      {r.linked_pulse_agent_name || "pulse agent"}
+                    </span>
+                    <ConfidencePct value={r.pulse_agent_linkage_confidence} />
+                    <Badge variant="outline" className="text-[10px]">{r.pulse_agent_linkage_source || "—"}</Badge>
+                    <InCrmChip inCrm={r.agent_in_crm} />
                   </div>
                 ) : (
-                  <span className="text-muted-foreground">contact: unlinked</span>
+                  <span className="text-muted-foreground">agent: unlinked</span>
                 )}
-                {r.linked_agency_id ? (
+                {r.linked_pulse_agency_id ? (
                   <div className="flex items-center gap-2">
                     <Link2 className="h-3 w-3 text-emerald-600" />
-                    <span className="truncate max-w-[180px]">agency linked</span>
-                    <ConfidencePct value={r.agency_linkage_confidence} />
-                    <Badge variant="outline" className="text-[10px]">{r.agency_linkage_source || "—"}</Badge>
+                    <span className="truncate max-w-[160px]" title={r.linked_pulse_agency_name}>
+                      {r.linked_pulse_agency_name || "pulse agency"}
+                    </span>
+                    <ConfidencePct value={r.pulse_agency_linkage_confidence} />
+                    <Badge variant="outline" className="text-[10px]">{r.pulse_agency_linkage_source || "—"}</Badge>
+                    <InCrmChip inCrm={r.agency_in_crm} />
                   </div>
                 ) : (
                   <span className="text-muted-foreground">agency: unlinked</span>
@@ -288,8 +303,8 @@ function ReviewTable({ rows, loading, onApply, onReject, onSkip }) {
                 <Button
                   variant="default" size="sm" className="h-7 px-2 text-xs"
                   onClick={() => onApply(r, {
-                    contact_id: r.candidate_agents?.[0]?.id || null,
-                    agency_id:  r.candidate_agencies?.[0]?.id || null,
+                    pulse_agent_id:  r.candidate_agents?.[0]?.id || null,
+                    pulse_agency_id: r.candidate_agencies?.[0]?.id || null,
                   })}
                 >
                   Confirm top
@@ -297,9 +312,6 @@ function ReviewTable({ rows, loading, onApply, onReject, onSkip }) {
               )}
               <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onReject(r)}>
                 Reject
-              </Button>
-              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => onSkip(r)}>
-                <X className="h-3 w-3" />
               </Button>
             </TableCell>
           </TableRow>
@@ -309,9 +321,7 @@ function ReviewTable({ rows, loading, onApply, onReject, onSkip }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────
 // Main page
-// ─────────────────────────────────────────────────────────────────────────
 
 export default function SettingsLegacyCrmReconciliation() {
   const qc = useQueryClient();
@@ -323,12 +333,12 @@ export default function SettingsLegacyCrmReconciliation() {
   const limit = 50;
 
   const statsQ = useQuery({
-    queryKey: ["legacy-crm-stats"],
+    queryKey: ["legacy-pulse-stats"],
     queryFn: () => api.rpc("legacy_reconciliation_stats"),
   });
 
   const reviewQ = useQuery({
-    queryKey: ["legacy-crm-review", filter, search, page],
+    queryKey: ["legacy-pulse-review", filter, search, page],
     queryFn: () => api.rpc("legacy_reconciliation_review", {
       p_filter: filter,
       p_search: search || null,
@@ -338,12 +348,12 @@ export default function SettingsLegacyCrmReconciliation() {
   });
 
   const reconcileMut = useMutation({
-    mutationFn: () => api.rpc("legacy_reconcile_all", { p_auto_threshold: 0.85 }),
+    mutationFn: () => api.rpc("legacy_reconcile_all_pulse", { p_auto_threshold: 0.85 }),
     onSuccess: (res) => {
       const c = res?.combined || {};
-      toast.success(`Linked ${NUM(c.linked_agent_total)} agents + ${NUM(c.linked_agency_total)} agencies`);
-      qc.invalidateQueries({ queryKey: ["legacy-crm-stats"] });
-      qc.invalidateQueries({ queryKey: ["legacy-crm-review"] });
+      toast.success(`Linked ${NUM(c.linked_agent_total)} pulse agents + ${NUM(c.linked_agency_total)} pulse agencies`);
+      qc.invalidateQueries({ queryKey: ["legacy-pulse-stats"] });
+      qc.invalidateQueries({ queryKey: ["legacy-pulse-review"] });
     },
     onError: (err) => toast.error(err?.message || "Reconciliation failed"),
   });
@@ -355,37 +365,37 @@ export default function SettingsLegacyCrmReconciliation() {
     }),
     onSuccess: (res) => {
       toast.success(`Marked ${NUM(res?.marked_reviewed || 0)} rows as reviewed`);
-      qc.invalidateQueries({ queryKey: ["legacy-crm-stats"] });
-      qc.invalidateQueries({ queryKey: ["legacy-crm-review"] });
+      qc.invalidateQueries({ queryKey: ["legacy-pulse-stats"] });
+      qc.invalidateQueries({ queryKey: ["legacy-pulse-review"] });
     },
     onError: (err) => toast.error(err?.message || "Bulk apply failed"),
   });
 
   const applyMut = useMutation({
-    mutationFn: ({ legacyId, contactId, agencyId }) => api.rpc("legacy_reconciliation_apply_manual", {
+    mutationFn: ({ legacyId, pulseAgentId, pulseAgencyId }) => api.rpc("legacy_reconciliation_apply_manual", {
       p_legacy_id:  legacyId,
-      p_contact_id: contactId || null,
-      p_agency_id:  agencyId  || null,
-      p_reviewer:   user?.id  || null,
+      p_contact_id: pulseAgentId  || null,
+      p_agency_id:  pulseAgencyId || null,
+      p_reviewer:   user?.id || null,
     }),
     onSuccess: () => {
-      toast.success("Linkage applied");
-      qc.invalidateQueries({ queryKey: ["legacy-crm-stats"] });
-      qc.invalidateQueries({ queryKey: ["legacy-crm-review"] });
+      toast.success("Pulse-layer linkage applied");
+      qc.invalidateQueries({ queryKey: ["legacy-pulse-stats"] });
+      qc.invalidateQueries({ queryKey: ["legacy-pulse-review"] });
     },
     onError: (err) => toast.error(err?.message || "Apply failed"),
   });
 
   const rejectMut = useMutation({
     mutationFn: (legacyId) => api.rpc("legacy_reconciliation_apply_manual", {
-      p_legacy_id: legacyId,
+      p_legacy_id:  legacyId,
       p_contact_id: null,
       p_agency_id:  null,
       p_reviewer:   user?.id || null,
     }),
     onSuccess: () => {
       toast.success("Marked as reviewed (no change)");
-      qc.invalidateQueries({ queryKey: ["legacy-crm-review"] });
+      qc.invalidateQueries({ queryKey: ["legacy-pulse-review"] });
     },
   });
 
@@ -397,13 +407,16 @@ export default function SettingsLegacyCrmReconciliation() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
             <Link2 className="h-7 w-7 text-primary" />
-            Legacy CRM Reconciliation
+            Legacy Pulse Reconciliation
           </h1>
           <p className="text-muted-foreground mt-1 max-w-3xl">
-            Review how imported legacy projects attribute to CRM agents and agencies. The
-            engine auto-links via property-chain (near-deterministic) then falls back to
-            fuzzy name matching. Anything below the auto-confirm threshold surfaces here
-            for a human to verify.
+            Link imported historical projects to the REA-scraped pulse
+            agents/agencies (8,810 + 2,557 candidates). CRM membership flows
+            through automatically when a pulse entity is promoted via the
+            Mappings tab — no re-reconciliation needed. The engine auto-links
+            via property-chain (near-deterministic, confidence 0.95) then
+            falls back to fuzzy name matching with a runner-up gap guard.
+            Anything below the auto-confirm threshold surfaces here.
           </p>
         </div>
 
@@ -429,15 +442,11 @@ export default function SettingsLegacyCrmReconciliation() {
             rows={rows}
             loading={reviewQ.isLoading}
             onApply={(row, picks) => applyMut.mutate({
-              legacyId:  row.id,
-              contactId: picks.contact_id,
-              agencyId:  picks.agency_id,
+              legacyId:       row.id,
+              pulseAgentId:   picks.pulse_agent_id,
+              pulseAgencyId:  picks.pulse_agency_id,
             })}
             onReject={(row) => rejectMut.mutate(row.id)}
-            onSkip={(row) => {
-              // visual-only skip: remove from current view by shifting page
-              toast.message(`Skipped ${row.raw_address || row.id}`);
-            }}
           />
           {rows.length === limit && (
             <div className="flex justify-between items-center p-3 border-t">
