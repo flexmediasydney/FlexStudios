@@ -1245,6 +1245,62 @@ function TierBadge({ tier }) {
   );
 }
 
+// ── TierSourceStep ────────────────────────────────────────────────────────────
+// At-a-glance pill showing WHICH cascade step produced the tier. Pairs with
+// TierBadge — the tier tells you what, this tells you why. Clickable row-level
+// drill into QuoteInspector happens via the parent slideout; this pill is
+// purely informational (not interactive on its own).
+//
+// tier_source values (see QuoteInspector.TIER_SOURCE_META for full ladder):
+//   matrix_agency / matrix_agent → T2 (matrix)
+//   proximity_same_property      → T3a
+//   proximity_same_suburb        → T3b
+//   proximity_radial_{2,5,10,20,50}km → T3c + ring
+//   default_std                  → T4 (fallback)
+const TIER_STEP_MAP = {
+  matrix_agency:           { step: "T2", ring: "matrix",  color: "emerald" },
+  matrix_agent:            { step: "T2", ring: "matrix",  color: "emerald" },
+  proximity_same_property: { step: "T3a", ring: "same",   color: "blue" },
+  proximity_same_suburb:   { step: "T3b", ring: "suburb", color: "blue" },
+  proximity_radial_2km:    { step: "T3c", ring: "2km",    color: "blue" },
+  proximity_radial_5km:    { step: "T3c", ring: "5km",    color: "blue" },
+  proximity_radial_10km:   { step: "T3c", ring: "10km",   color: "sky"  },
+  proximity_radial_20km:   { step: "T3c", ring: "20km",   color: "sky"  },
+  proximity_radial_50km:   { step: "T3c", ring: "50km",   color: "amber"},
+  default_std:             { step: "T4", ring: "default", color: "amber" },
+};
+
+function TierSourceStep({ tierSource }) {
+  if (!tierSource) return null;
+  const meta = TIER_STEP_MAP[tierSource];
+  if (!meta) {
+    return (
+      <span className="text-[9px] font-mono text-muted-foreground/70 px-1 rounded bg-muted/60 border border-border/40">
+        {tierSource}
+      </span>
+    );
+  }
+  const colorClass = {
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-900/40",
+    blue:    "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/30 dark:text-blue-300 dark:border-blue-900/40",
+    sky:     "bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/30 dark:text-sky-300 dark:border-sky-900/40",
+    amber:   "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-900/40",
+  }[meta.color];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 text-[9px] font-medium px-1 rounded border",
+        colorClass
+      )}
+      title={`Tier cascade step: ${tierSource}. Open the listing to see which agency/project anchored this tier.`}
+    >
+      <span className="font-semibold">{meta.step}</span>
+      <span className="opacity-60">·</span>
+      <span>{meta.ring}</span>
+    </span>
+  );
+}
+
 // ── View pill group ───────────────────────────────────────────────────────────
 
 function ViewToggle({ view, onChange }) {
@@ -1362,6 +1418,7 @@ function ListingCard({ listing, moRow, captured, selected, onToggleSelect, onOpe
   const quote = moRow?.quoted_price;
   const pkg = moRow?.classified_package_name;
   const tier = moRow?.resolved_tier;
+  const tierSource = moRow?.tier_source;
 
   return (
     <div
@@ -1437,6 +1494,7 @@ function ListingCard({ listing, moRow, captured, selected, onToggleSelect, onOpe
             <span className="text-[10px] text-muted-foreground">No quote</span>
           )}
           {tier && <TierBadge tier={tier} />}
+          {tierSource && <TierSourceStep tierSource={tierSource} />}
           {quote ? (
             <QuoteAmount listingId={listing.id} amount={quote} className="text-xs ml-auto" />
           ) : null}
@@ -1921,7 +1979,7 @@ export default function PulseListingsTab({
       if (visibleIds.length === 0) return {};
       const { data: mo, error } = await api._supabase
         .from("pulse_listing_missed_opportunity")
-        .select("listing_id,classified_package_name,resolved_tier,quoted_price,quote_status")
+        .select("listing_id,classified_package_name,resolved_tier,quoted_price,quote_status,tier_source")
         .in("listing_id", visibleIds);
       if (error) throw error;
       const map = {};
@@ -2809,7 +2867,10 @@ function TableView({
 
                   {/* Tier */}
                   <td className="px-2 py-1.5 hidden md:table-cell">
-                    <TierBadge tier={mo?.resolved_tier} />
+                    <div className="flex flex-col gap-0.5 items-start">
+                      <TierBadge tier={mo?.resolved_tier} />
+                      <TierSourceStep tierSource={mo?.tier_source} />
+                    </div>
                   </td>
 
                   {/* Quote $ */}
@@ -3125,6 +3186,7 @@ function MapView({ rows, moByListingId, capturedSet, onOpen }) {
                           <PackageBadge listingId={l.id} name={mo.classified_package_name} />
                         )}
                         {mo?.resolved_tier && <TierBadge tier={mo.resolved_tier} />}
+                        {mo?.tier_source && <TierSourceStep tierSource={mo.tier_source} />}
                         {mo?.quoted_price && (
                           <QuoteAmount listingId={l.id} amount={mo.quoted_price} className="text-[11px]" />
                         )}

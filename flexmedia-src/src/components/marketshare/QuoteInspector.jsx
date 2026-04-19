@@ -521,12 +521,40 @@ function criterionPasses(key, threshold, actual) {
 
 // ── Card 3 — Tier resolution ─────────────────────────────────────────────
 
+// Tier-source enum values emitted by pulse_compute_listing_quote. The engine
+// cascades through these in order and writes the *first* that hits into
+// pulse_listing_missed_opportunity.tier_source. See migration 164 + the
+// compute function for the full ladder.
+//
+// The old keys (matrix_explicit / matrix_default / proximity / default) were
+// renamed in the engine but not here — that's why 8/158 Victoria Rd's
+// `proximity_radial_5km` was rendering as a muted "unknown" card before this
+// fix. Keep both old + new for safety.
 const TIER_SOURCE_META = {
-  matrix_explicit: { label: "T1 · Matrix explicit", color: "emerald", desc: "Agency/agent matrix set this tier outright" },
-  matrix_default: { label: "T2 · Matrix default", color: "emerald", desc: "Matrix configured to use its default tier" },
-  proximity: { label: "T3 · Nearest project", color: "blue", desc: "Inherited from a linked project within ring radius" },
-  proximity_suburb_any_pkg: { label: "T3 · Proximity (any pkg)", color: "blue", desc: "Nearest project regardless of package match" },
-  default: { label: "T4 · Standard default", color: "amber", desc: "No projects nearby — defaulted to standard tier" },
+  // T2 — Agency/agent matrix owns the tier
+  matrix_agency:            { label: "T2 · Agency matrix",        color: "emerald", desc: "Agency has a price_matrices row with default_tier set" },
+  matrix_agent:             { label: "T2 · Agent matrix",         color: "emerald", desc: "Agent has a price_matrices row with default_tier set" },
+  // Legacy names — kept so historical rows still render cleanly
+  matrix_explicit:          { label: "T1 · Matrix explicit",      color: "emerald", desc: "Agency/agent matrix set this tier outright" },
+  matrix_default:           { label: "T2 · Matrix default",       color: "emerald", desc: "Matrix configured to use its default tier" },
+
+  // T3a — Same property has a prior project
+  proximity_same_property:  { label: "T3a · Same property",       color: "blue",    desc: "We've done a project on this exact property before" },
+  // T3b — Same suburb has a prior project
+  proximity_same_suburb:    { label: "T3b · Same suburb",         color: "blue",    desc: "Most recent project in the same suburb" },
+  // T3c — Radial rings (2, 5, 10, 20, 50 km)
+  proximity_radial_2km:     { label: "T3c · ≤ 2km",               color: "blue",    desc: "Nearest CRM project within 2km ring" },
+  proximity_radial_5km:     { label: "T3c · ≤ 5km",               color: "blue",    desc: "Nearest CRM project within 5km ring" },
+  proximity_radial_10km:    { label: "T3c · ≤ 10km",              color: "blue",    desc: "Nearest CRM project within 10km ring" },
+  proximity_radial_20km:    { label: "T3c · ≤ 20km",              color: "blue",    desc: "Nearest CRM project within 20km ring" },
+  proximity_radial_50km:    { label: "T3c · ≤ 50km",              color: "blue",    desc: "Nearest CRM project within 50km ring" },
+  // Legacy names
+  proximity:                { label: "T3 · Nearest project",      color: "blue",    desc: "Inherited from a linked project within ring radius" },
+  proximity_suburb_any_pkg: { label: "T3 · Proximity (any pkg)",  color: "blue",    desc: "Nearest project regardless of package match" },
+
+  // T4 — Global fallback
+  default_std:              { label: "T4 · Standard default",     color: "amber",   desc: "No matrix, no nearby project — defaulted to standard" },
+  default:                  { label: "T4 · Standard default",     color: "amber",   desc: "No projects nearby — defaulted to standard tier" },
 };
 
 function TierResolutionCard({ tierResolution, onOpenEntity }) {
@@ -592,16 +620,20 @@ function TierResolutionCard({ tierResolution, onOpenEntity }) {
 }
 
 function TierEvidence({ tierSource, evidence, onOpenEntity }) {
-  if (tierSource === "matrix_explicit" || tierSource === "matrix_default") {
+  // Matrix branch — either T2 agency/agent matrix OR legacy matrix_* names.
+  // Evidence shape (from pulse_get_listing_quote_detail):
+  //   { matrix_id, entity_type, entity_id, entity_name, default_tier, use_default_pricing, snapshot_date }
+  if (tierSource && tierSource.startsWith("matrix_")) {
+    const entityType = evidence.entity_type || (tierSource === "matrix_agent" ? "agent" : "agency");
     return (
       <div className="space-y-1 mt-2">
-        {evidence.matrix_name && (
+        {evidence.entity_name && (
           <div className="flex items-center gap-1.5 text-xs">
             <Building2 className="h-3 w-3 text-muted-foreground" />
-            <span className="font-medium">{evidence.matrix_name}</span>
-            {evidence.matrix_id && onOpenEntity && (
+            <span className="font-medium">{evidence.entity_name}</span>
+            {evidence.entity_id && onOpenEntity && (
               <button
-                onClick={() => onOpenEntity({ type: "matrix", id: evidence.matrix_id })}
+                onClick={() => onOpenEntity({ type: entityType, id: evidence.entity_id })}
                 className="text-[10px] text-primary hover:underline inline-flex items-center gap-0.5"
               >
                 open <ExternalLink className="h-2.5 w-2.5" />
@@ -609,26 +641,28 @@ function TierEvidence({ tierSource, evidence, onOpenEntity }) {
             )}
           </div>
         )}
-        {evidence.entity_type && evidence.entity_name && (
+        {evidence.default_tier && (
           <div className="text-[11px] text-muted-foreground">
-            Linked to {evidence.entity_type}: <span className="font-medium text-foreground">{evidence.entity_name}</span>
+            default_tier = <span className="font-mono bg-background/60 px-1 rounded capitalize">{evidence.default_tier}</span>
           </div>
         )}
-        {evidence.default_tier_setting && (
+        {evidence.use_default_pricing != null && (
           <div className="text-[11px] text-muted-foreground">
-            default_tier = <span className="font-mono bg-background/60 px-1 rounded">{evidence.default_tier_setting}</span>
+            use_default_pricing = <span className="font-mono bg-background/60 px-1 rounded">{String(evidence.use_default_pricing)}</span>
           </div>
         )}
-        {evidence.set_by && (
+        {evidence.snapshot_date && (
           <div className="text-[10px] text-muted-foreground">
-            Set by {evidence.set_by}{evidence.set_at ? ` on ${fmtDate(evidence.set_at)}` : ""}
+            matrix snapshot {fmtDate(evidence.snapshot_date)}
           </div>
         )}
       </div>
     );
   }
 
-  if (tierSource === "proximity" || tierSource === "proximity_suburb_any_pkg") {
+  // Proximity branch — covers same_property, same_suburb, radial_Nkm.
+  // Evidence shape: { project_id, project_address, project_pricing_tier, distance_km, package_id_match }
+  if (tierSource && tierSource.startsWith("proximity_")) {
     return (
       <div className="space-y-1 mt-2">
         {evidence.project_address && (
@@ -645,26 +679,34 @@ function TierEvidence({ tierSource, evidence, onOpenEntity }) {
             )}
           </div>
         )}
-        {evidence.distance_km != null && (
+        {evidence.project_pricing_tier && (
           <div className="text-[11px] text-muted-foreground">
-            {Number(evidence.distance_km).toFixed(2)} km away · ring {evidence.ring_name || "—"}
+            anchor tier: <span className="font-medium text-foreground capitalize">{evidence.project_pricing_tier}</span>
           </div>
         )}
-        {evidence.linked_package && (
+        {evidence.distance_km != null && (
           <div className="text-[11px] text-muted-foreground">
-            Contributing package: <span className="font-medium text-foreground">{evidence.linked_package}</span>
+            {Number(evidence.distance_km).toFixed(2)} km away
+          </div>
+        )}
+        {evidence.package_id_match != null && (
+          <div className="text-[11px] text-muted-foreground">
+            same package classification:{" "}
+            <span className={cn("font-medium", evidence.package_id_match ? "text-emerald-600" : "text-muted-foreground")}>
+              {evidence.package_id_match ? "yes" : "no"}
+            </span>
           </div>
         )}
       </div>
     );
   }
 
-  if (tierSource === "default") {
+  if (tierSource === "default_std" || tierSource === "default") {
     return (
       <div className="flex items-start gap-2 mt-2 text-[11px] text-amber-800 dark:text-amber-300">
         <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
         <span>
-          No projects within {evidence.max_ring_km || 50}km of this listing — defaulted to standard tier. Wider regional expansion may be needed.
+          {evidence.reason || `No projects within ${evidence.max_ring_km || 50}km of this listing — defaulted to standard tier.`}
         </span>
       </div>
     );
