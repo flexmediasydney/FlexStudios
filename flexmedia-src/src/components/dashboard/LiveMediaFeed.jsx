@@ -287,7 +287,7 @@ function FeedSkeleton({ count = 12, gridSize = 'md', scanProgress = null }) {
 // =====================================================================
 // MediaLightbox: fullscreen viewer with zoom, animations, filmstrip
 // =====================================================================
-function MediaLightbox({ files, initialIndex, onClose }) {
+function MediaLightbox({ files, initialIndex, onClose, getFavorite, ensureFavoriteAndTag }) {
   const [index, setIndex] = useState(initialIndex);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
@@ -404,6 +404,43 @@ function MediaLightbox({ files, initialIndex, onClose }) {
             >
               {zoomed ? <ZoomOut className="h-4 w-4" /> : <ZoomIn className="h-4 w-4" />}
             </button>
+          )}
+          {/* Favorite + tag — previously missing from this lightbox; only the
+              thumbnail card had the wiring. File objects in LiveMediaFeed
+              carry their own project metadata (projectId, projectName, etc). */}
+          {proxyPath && file && (
+            <>
+              <FavoriteButton
+                filePath={proxyPath}
+                fileName={file.name}
+                fileType={file.type}
+                projectId={file.projectId}
+                projectTitle={file.projectName}
+                propertyAddress={file.projectName}
+                tonomoBasePath={file.tonomoBasePath}
+                size="md"
+                className="p-2 hover:bg-white/10 rounded-lg text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+              />
+              {ensureFavoriteAndTag && (
+                <div className="[&_button]:p-2 [&_button]:text-white [&_button]:hover:bg-white/10 [&_button]:rounded-lg [&_button]:transition-colors">
+                  <TagManager
+                    favoriteId={getFavorite?.(proxyPath)?.id}
+                    currentTags={getFavorite?.(proxyPath)?.tags || []}
+                    onTagsChanged={() => {}}
+                    onEnsureAndTag={(newTags) => ensureFavoriteAndTag({
+                      filePath: proxyPath,
+                      fileName: file.name,
+                      fileType: file.type,
+                      projectId: file.projectId,
+                      projectTitle: file.projectName,
+                      propertyAddress: file.projectName,
+                      tonomoBasePath: file.tonomoBasePath,
+                    }, newTags)}
+                    allowCreation={false}
+                  />
+                </div>
+              )}
+            </>
           )}
           {proxyPath && (
             <button onClick={() => downloadFile(proxyPath, file?.name)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title={`Download ${file?.name}`} aria-label={`Download ${file?.name}`}>
@@ -1391,6 +1428,8 @@ export default function LiveMediaFeed() {
           files={lightbox.files}
           initialIndex={lightbox.index}
           onClose={() => setLightbox(null)}
+          getFavorite={getFavorite}
+          ensureFavoriteAndTag={ensureFavoriteAndTag}
         />,
         document.body
       )}

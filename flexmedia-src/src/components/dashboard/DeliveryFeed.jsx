@@ -576,7 +576,7 @@ function LightboxThumb({ file, tonomoBase }) {
 }
 
 // ─── MiniLightbox (fullscreen image/video viewer) ───────────────────────────
-function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
+function MiniLightbox({ files, initialIndex, onClose, shareUrl, project, getFavorite, ensureFavoriteAndTag }) {
   const [index, setIndex] = useState(initialIndex);
   const file = files[index];
   const tonomoBase = project?.tonomo_deliverable_path;
@@ -625,6 +625,42 @@ function MiniLightbox({ files, initialIndex, onClose, shareUrl, project }) {
           <span className="text-xs text-white/40 tabular-nums">{index + 1} / {files.length}</span>
         </div>
         <div className="flex items-center gap-1">
+          {/* Favorite + tag — previously missing from the delivery lightbox.
+              Thumbnail overlay had them; full-screen viewer didn't. */}
+          {currentProxyPath && (
+            <>
+              <FavoriteButton
+                filePath={currentProxyPath}
+                fileName={file.name}
+                fileType={file.type}
+                projectId={project?.id}
+                projectTitle={project?.title || project?.property_address}
+                propertyAddress={project?.property_address || project?.title}
+                tonomoBasePath={tonomoBase}
+                size="md"
+                className="p-2 hover:bg-white/10 rounded-lg text-white transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+              />
+              {ensureFavoriteAndTag && (
+                <div className="[&_button]:p-2 [&_button]:text-white [&_button]:hover:bg-white/10 [&_button]:rounded-lg [&_button]:transition-colors">
+                  <TagManager
+                    favoriteId={getFavorite?.(currentProxyPath)?.id}
+                    currentTags={getFavorite?.(currentProxyPath)?.tags || []}
+                    onTagsChanged={() => {}}
+                    onEnsureAndTag={(newTags) => ensureFavoriteAndTag({
+                      filePath: currentProxyPath,
+                      fileName: file.name,
+                      fileType: file.type,
+                      projectId: project?.id,
+                      projectTitle: project?.title || project?.property_address,
+                      propertyAddress: project?.property_address || project?.title,
+                      tonomoBasePath: tonomoBase,
+                    }, newTags)}
+                    allowCreation={false}
+                  />
+                </div>
+              )}
+            </>
+          )}
           {currentProxyPath && (
             <button onClick={() => downloadFile(currentProxyPath, file.name)} className="p-2 hover:bg-white/10 rounded-lg transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40" title={`Download ${file.name}`} aria-label={`Download ${file.name}`}>
               <Download className="h-4 w-4" />
@@ -1534,7 +1570,7 @@ function DeliveryCard({ project, isNew, onFileCountKnown, getTagsForFile, getFav
       )}
         </div>
       </div>
-      {lightbox && createPortal(<MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} project={project} />, document.body)}
+      {lightbox && createPortal(<MiniLightbox files={lightbox.files} initialIndex={lightbox.index} shareUrl={deliverableLink} onClose={() => setLightbox(null)} project={project} getFavorite={getFavorite} ensureFavoriteAndTag={ensureFavoriteAndTag} />, document.body)}
     </div>
   );
 }

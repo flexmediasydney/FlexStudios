@@ -189,7 +189,7 @@ function LoadingProgress() {
 
 // ─── MediaLightbox -- fullscreen viewer with zoom + swipe ───────────
 
-function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, onClose }) {
+function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, onClose, project, getFavorite, ensureFavoriteAndTag }) {
   const [index, setIndex] = useState(initialIndex);
   const [videoUrl, setVideoUrl] = useState(null);
   const [videoLoading, setVideoLoading] = useState(false);
@@ -338,6 +338,44 @@ function MediaLightbox({ files, initialIndex, tonomoBasePath, deliverableLink, o
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {/* Favorite + tag controls — previously missing from the full-screen
+              viewer; only existed on the thumbnail hover overlay. Wired to the
+              same useFavorites hook via props so tags/favorites stay in sync
+              with the gallery below. */}
+          {proxyPath && file && (
+            <>
+              <FavoriteButton
+                filePath={proxyPath}
+                fileName={file.name}
+                fileType={file.type}
+                projectId={project?.id}
+                projectTitle={project?.title || project?.property_address}
+                propertyAddress={project?.property_address || project?.title}
+                tonomoBasePath={tonomoBasePath}
+                size="md"
+                className="p-2 hover:bg-white/10 rounded-lg text-white transition-colors focus:outline-none focus:ring-2 focus:ring-white/40"
+              />
+              {ensureFavoriteAndTag && (
+                <div className="[&_button]:p-2 [&_button]:text-white [&_button]:hover:bg-white/10 [&_button]:rounded-lg [&_button]:transition-colors">
+                  <TagManager
+                    favoriteId={getFavorite?.(proxyPath)?.id}
+                    currentTags={getFavorite?.(proxyPath)?.tags || []}
+                    onTagsChanged={() => {}}
+                    onEnsureAndTag={(newTags) => ensureFavoriteAndTag({
+                      filePath: proxyPath,
+                      fileName: file.name,
+                      fileType: file.type,
+                      projectId: project?.id,
+                      projectTitle: project?.title || project?.property_address,
+                      propertyAddress: project?.property_address || project?.title,
+                      tonomoBasePath,
+                    }, newTags)}
+                    allowCreation={false}
+                  />
+                </div>
+              )}
+            </>
+          )}
           {isImage && (
             <button
               onClick={toggleZoom}
@@ -1071,6 +1109,9 @@ export default function ProjectMediaGallery({ project }) {
           tonomoBasePath={tonomoBasePath}
           deliverableLink={deliverableLink}
           onClose={closeLightbox}
+          project={project}
+          getFavorite={getFavorite}
+          ensureFavoriteAndTag={ensureFavoriteAndTag}
         />,
         document.body
       )}
