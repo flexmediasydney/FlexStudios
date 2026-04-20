@@ -106,7 +106,14 @@ serveWithAudit('applyRevisionPricingImpact', async (req) => {
     // Normalize: remove standalone products that overlap with package contents
     currentProducts = deduplicateProjectItems(currentProducts, currentPackages);
 
-    // 4. Recalculate price via backend function
+    // 4. Recalculate price via backend function.
+    // 2026-04-20: now forwards discount_type/discount_value/discount_mode
+    // so manual per-project discounts/fees survive a revision apply.
+    // Previously these fields were silently dropped, causing any project
+    // with a manual 10% (or $X fixed) discount to have that discount
+    // erased from calculated_price the first time a revision was applied
+    // (the discount_value column stayed on the row but no longer reduced
+    // the stored total). Identified during the Phase 1 engine audit.
     let newCalculatedPrice = project.calculated_price;
     let priceMatrixSnapshot: any = null;
     try {
@@ -117,6 +124,9 @@ serveWithAudit('applyRevisionPricingImpact', async (req) => {
         packages: currentPackages,
         pricing_tier: project.pricing_tier || 'standard',
         project_type_id: project.project_type_id || null,
+        discount_type: project.discount_type || 'fixed',
+        discount_value: project.discount_value || 0,
+        discount_mode: project.discount_mode || 'discount',
       });
       if (res?.calculated_price != null) {
         newCalculatedPrice = res.calculated_price;

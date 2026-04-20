@@ -2,16 +2,19 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { DollarSign, Plus, Minus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag, Info } from "lucide-react";
+import { DollarSign, Plus, Minus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag, Info, Lock, Unlock } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import Price from '@/components/common/Price';
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { useQueryClient } from "@tanstack/react-query";
+import { format } from "date-fns";
 import { useProjectItemsManager } from "./hooks/useProjectItemsManager";
 import { useProjectPricingCalculator } from "./hooks/useProjectPricingCalculator";
+import { usePermissions } from "@/components/auth/PermissionGuard";
 import AddItemsDialog from "./AddItemsDialog";
 import { PricingTableBody } from "./PricingTableBody";
 import { api } from "@/api/supabaseClient";
@@ -140,15 +143,72 @@ function MatrixStateBadge({ pricingTier, blanketMeta, snapshot }) {
   );
 }
 
+/**
+ * Lock badge shown next to MatrixStateBadge when `project.pricing_locked_at`
+ * is set by the DB trigger (status=delivered + payment_status=paid). While
+ * locked, the pricing table's edit UI is disabled — admins can explicitly
+ * unlock via the adjacent "Unlock" button (see PricingUnlockDialog).
+ */
+function PricingLockBadge({ lockedAt }) {
+  if (!lockedAt) return null;
+  let lockedDate = "";
+  try {
+    lockedDate = format(new Date(lockedAt), "MMM d, yyyy");
+  } catch {
+    lockedDate = String(lockedAt).slice(0, 10);
+  }
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-medium cursor-help",
+              "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-900/40",
+            )}
+          >
+            <Lock className="h-3 w-3" />
+            <span className="font-semibold">Pricing Locked</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="end" className="max-w-sm">
+          <div className="space-y-1.5">
+            <div className="font-semibold">Pricing is locked</div>
+            <div className="text-xs">
+              Locked on <strong>{lockedDate}</strong> (delivered + paid).
+              Admin can unlock to make corrections.
+            </div>
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
 export default function ProjectPricingTable({
-  project, 
-  pricingTier = "standard", 
-  canSeePricing = false, 
-  canEdit = false, 
-  onTotalChange 
+  project,
+  pricingTier = "standard",
+  canSeePricing = false,
+  canEdit = false,
+  onTotalChange
 }) {
   const projectId = project?.id;
   const queryClient = useQueryClient();
+  const { isAdminOrAbove, user: currentUser } = usePermissions();
+
+  // Pricing lock: migrations 204+205 auto-set pricing_locked_at on transition
+  // into delivered+paid, and block UPDATEs to calculated_price/products/packages
+  // while non-null. Derive `effectiveCanEdit` to disable edit UI locally without
+  // touching the prop contract — parent keeps passing `canEdit` based on role,
+  // we AND it with the lock state.
+  const pricingLockedAt = project?.pricing_locked_at || null;
+  const isPricingLocked = !!pricingLockedAt;
+  const effectiveCanEdit = canEdit && !isPricingLocked;
+
+  const [showUnlockDialog, setShowUnlockDialog] = useState(false);
+  const [unlockReason, setUnlockReason] = useState("");
+  const [isUnlocking, setIsUnlocking] = useState(false);
+  const [unlockError, setUnlockError] = useState(null);
   const { products: allProducts, packages: allPackages, batchUpdate } = useProjectItemsManager(projectId);
   
   // formState tracks the user's pending edits (not yet saved to backend)
@@ -641,6 +701,63 @@ export default function ProjectPricingTable({
     ? breakdown.total
     : (project?.calculated_price ?? project?.price ?? 0);
 
+  // Pre-formatted lock date for dialog body copy
+  const lockedDateStr = useMemo(() => {
+    if (!pricingLockedAt) return "";
+    try { return format(new Date(pricingLockedAt), "MMM d, yyyy 'at' h:mm a"); }
+    catch { return String(pricingLockedAt).slice(0, 16); }
+  }, [pricingLockedAt]);
+
+  // Admin unlock: clears pricing_locked_at and writes a ProjectActivity audit row
+  // containing the operator-provided reason. The DB trigger permits NULLing the
+  // column (migration 205); any subsequent edit path immediately re-engages.
+  // Reason is required (10+ chars) so audit trail isn't empty.
+  const handleConfirmUnlock = async () => {
+    setUnlockError(null);
+    const reason = (unlockReason || "").trim();
+    if (reason.length < 10) {
+      setUnlockError("Please provide a reason (at least 10 characters).");
+      return;
+    }
+    setIsUnlocking(true);
+    try {
+      // Direct supabase update — the DB trigger explicitly allows setting
+      // pricing_locked_at = NULL (admin unlock path). The entity api would
+      // also work, but the task spec calls out api._supabase for this.
+      const { error: unlockErr } = await api._supabase
+        .from("projects")
+        .update({ pricing_locked_at: null })
+        .eq("id", projectId);
+      if (unlockErr) throw unlockErr;
+
+      // Audit trail — same shape as other pricing activity rows
+      const projectName = project?.title || project?.property_address || "Project";
+      api.entities.ProjectActivity.create({
+        project_id: projectId,
+        project_title: projectName,
+        action: "pricing_unlocked",
+        description: `Pricing lock cleared. Reason: ${reason}`,
+        user_name: currentUser?.full_name || currentUser?.email || "Unknown",
+        user_email: currentUser?.email || "",
+      }).catch(err => console.warn("[pricing_unlocked activity]", err?.message));
+
+      // Invalidate project queries so the badge disappears + edit UI re-enables
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["Project"] });
+      queryClient.invalidateQueries({ queryKey: ["projects"] });
+      refetchEntityList("Project");
+
+      toast.success("Pricing unlocked");
+      setShowUnlockDialog(false);
+      setUnlockReason("");
+    } catch (err) {
+      console.error("Pricing unlock failed:", err);
+      setUnlockError(err?.message || "Failed to unlock pricing. Please try again.");
+    } finally {
+      setIsUnlocking(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {error && (
@@ -675,7 +792,23 @@ export default function ProjectPricingTable({
               blanketMeta={breakdown.blanketMeta}
               snapshot={breakdown._engine?.price_matrix_snapshot}
             />
-            {canEdit && (
+            {/* Lock badge — shown when DB has auto-locked pricing via trigger.
+                Sits next to the matrix-state badge, not a replacement. */}
+            <PricingLockBadge lockedAt={pricingLockedAt} />
+            {/* Admin-only Unlock button — explicit action, writes audit log */}
+            {isPricingLocked && isAdminOrAbove && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setUnlockError(null); setUnlockReason(""); setShowUnlockDialog(true); }}
+                title="Unlock pricing for corrections"
+                aria-label="Unlock pricing"
+                className="h-7"
+              >
+                <Unlock className="h-3.5 w-3.5 mr-1" /> Unlock
+              </Button>
+            )}
+            {effectiveCanEdit && (
               <Button
                 variant="outline"
                 size="sm"
@@ -693,7 +826,7 @@ export default function ProjectPricingTable({
            {breakdown.packages.length === 0 && breakdown.products.length === 0 ? (
              <div className="flex flex-col items-center justify-center h-full py-12 gap-4">
                <p className="text-sm text-muted-foreground text-center">No products or packages added yet.</p>
-               {canEdit && (
+               {effectiveCanEdit && (
                  <Button
                    variant="outline"
                    size="sm"
@@ -724,13 +857,13 @@ export default function ProjectPricingTable({
                             <th className="text-center py-2 px-3 font-semibold text-muted-foreground w-28">Qty</th>
                             <th className="text-right py-2 px-3 font-semibold text-muted-foreground w-24">Unit Price</th>
                             <th className="text-right py-2 px-3 font-semibold text-muted-foreground w-28">Total</th>
-                            {canEdit && <th className="w-10" />}
+                            {effectiveCanEdit && <th className="w-10" />}
                           </tr>
                         </thead>
-                        <PricingTableBody 
+                        <PricingTableBody
                         paginatedItems={paginatedItems}
                         breakdown={breakdown}
-                        canEdit={canEdit}
+                        canEdit={effectiveCanEdit}
                         onRemoveItem={handleRemoveItem}
                         onUpdateQty={debouncedUpdateQty}
                         onUpdateNestedQty={debouncedUpdateNestedQty}
@@ -862,7 +995,7 @@ export default function ProjectPricingTable({
                       : <><Tag className="h-3.5 w-3.5 text-muted-foreground" /><span className="text-sm text-muted-foreground">Discount</span></>
                     }
                   </div>
-                  {canEdit ? (
+                  {effectiveCanEdit ? (
                     <div className="flex items-center gap-1.5">
                       {/* Discount ↔ Fee mode toggle */}
                       <button
@@ -944,7 +1077,7 @@ export default function ProjectPricingTable({
                 <div className="flex items-center justify-between bg-primary/5 rounded-lg p-4 border border-primary/20 mt-2">
                   <div>
                     <span className="font-semibold text-lg">Total Project Value</span>
-                    {canEdit && hasChanges && (
+                    {effectiveCanEdit && hasChanges && (
                       <p className="text-xs text-amber-600 mt-0.5 font-medium">⚠ Unsaved changes — save to lock in pricing</p>
                     )}
                   </div>
@@ -964,8 +1097,10 @@ export default function ProjectPricingTable({
         </CardContent>
       </Card>
 
-      {/* Save / Discard bar — only shown when there are pending changes */}
-      {canEdit && hasChanges && (
+      {/* Save / Discard bar — only shown when editing is active and there are
+          pending changes. Gated on effectiveCanEdit so it disappears entirely
+          when pricing is locked. */}
+      {effectiveCanEdit && hasChanges && (
         <div className="flex items-center gap-3 p-3 rounded-lg border border-amber-200 bg-amber-50">
           <AlertCircle className="h-4 w-4 text-amber-600 flex-shrink-0" />
           <p className="text-sm text-amber-800 flex-1">You have unsaved pricing changes. Save to lock in matrix-adjusted prices.</p>
@@ -977,6 +1112,78 @@ export default function ProjectPricingTable({
           </Button>
         </div>
       )}
+
+      {/* Muted "Unlock to edit" hint — shown in place of the save bar when the
+          project is locked AND the user would otherwise have edit rights.
+          Admins get an inline unlock shortcut; everyone else sees just the note. */}
+      {canEdit && isPricingLocked && (
+        <div className="flex items-center gap-3 p-3 rounded-lg border border-border bg-muted/40">
+          <Lock className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <p className="text-sm text-muted-foreground flex-1">
+            Pricing is locked — unlock to edit.
+          </p>
+          {isAdminOrAbove && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setUnlockError(null); setUnlockReason(""); setShowUnlockDialog(true); }}
+            >
+              <Unlock className="h-3.5 w-3.5 mr-1" /> Unlock
+            </Button>
+          )}
+        </div>
+      )}
+
+      {/* Admin unlock confirmation — writes pricing_locked_at = null and logs
+          a ProjectActivity row with the operator-provided reason. */}
+      <AlertDialog open={showUnlockDialog} onOpenChange={(o) => { if (!isUnlocking) setShowUnlockDialog(o); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlock project pricing?</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  This project was locked on <strong>{lockedDateStr || "—"}</strong> because
+                  it's delivered + paid. Unlocking allows pricing changes. Please add
+                  a reason (stored in audit log).
+                </p>
+                <div className="space-y-1">
+                  <label htmlFor="unlock-reason" className="text-xs font-medium text-foreground">
+                    Reason <span className="text-destructive">*</span>
+                  </label>
+                  <Textarea
+                    id="unlock-reason"
+                    value={unlockReason}
+                    onChange={e => setUnlockReason(e.target.value)}
+                    placeholder="e.g. Client requested extra retouch post-delivery; needs repricing."
+                    rows={3}
+                    className="text-sm"
+                    disabled={isUnlocking}
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Minimum 10 characters. This will be attached to the project activity log.
+                  </p>
+                </div>
+                {unlockError && (
+                  <div className="flex items-center gap-2 p-2 rounded bg-destructive/10 border border-destructive/30 text-xs text-destructive">
+                    <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                    <span>{unlockError}</span>
+                  </div>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isUnlocking}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => { e.preventDefault(); handleConfirmUnlock(); }}
+              disabled={isUnlocking}
+            >
+              {isUnlocking ? <><Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> Unlocking...</> : "Confirm Unlock"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Double-confirmation dialog — shows backend-verified total before committing */}
       <AlertDialog open={showConfirmSave} onOpenChange={setShowConfirmSave}>

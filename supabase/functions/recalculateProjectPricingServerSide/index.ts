@@ -85,12 +85,16 @@ serveWithAudit('recalculateProjectPricingServerSide', async (req) => {
     }).catch(() => {});
 
     // ── Price mismatch detection (Tonomo quoted vs matrix calculated) ──────
+    // Threshold: $5 (matches engine rounding granularity). Previously $1,
+    // which generated rounding-noise false positives for any project whose
+    // blanket discount fell on an odd number.
+    const MISMATCH_TOLERANCE = 5;
     const tonomoQuotedPrice = project.tonomo_quoted_price;
     if (tonomoQuotedPrice != null) {
       try {
         const tqp = Number(tonomoQuotedPrice);
         const mismatch = Math.round((tqp - newPrice) * 100) / 100;
-        if (Math.abs(mismatch) > 1) {
+        if (Math.abs(mismatch) > MISMATCH_TOLERANCE) {
           const mismatchUpdates: Record<string, any> = {
             has_pricing_mismatch: true,
             pricing_mismatch_amount: mismatch,
