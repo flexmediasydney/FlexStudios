@@ -321,50 +321,18 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     if (hoursUntilShoot <= 24 && hoursUntilShoot > 0) sharedData.urgent_review = true;
   }
 
-  // Local helper: when updating an existing project with a lock on
-  // products/packages, filterOverriddenFields strips those keys and we'd
-  // silently drop Tonomo's product update. The reconciler decides whether
-  // the delta can be auto-merged (add-only) or should be stashed for review.
+  // 2026-04-20: Tonomo is authoritative for products/packages — always wins.
+  // Migration 209 dropped manually_locked_product_ids / manually_locked_package_ids
+  // columns, and stripped 'products'/'packages' entries from
+  // manually_overridden_fields. The lock-aware gate this helper used to
+  // implement is unreachable: no writer puts 'products'/'packages' into
+  // overrides any more, and no reader consults per-line locks. Helper kept
+  // as an identity pass-through so call sites don't need restructuring.
   function applyLockAwareProductUpdate(
-    targetProject: any,
+    _targetProject: any,
     safeData: Record<string, any>,
-    extraReviewReasons: string[],
+    _extraReviewReasons: string[],
   ) {
-    if (!hasAutoProducts || !dedupedSched) return { safeData, stashActivity: null as string | null };
-    const overriddenFields = safeJsonParse(targetProject.manually_overridden_fields, [] as string[]);
-    const legacyLock = overriddenFields.includes('products') || overriddenFields.includes('packages');
-    const perLineLocks = safeJsonParse<string[]>(targetProject.manually_locked_product_ids, []);
-    const perLinePkgLocks = safeJsonParse<string[]>(targetProject.manually_locked_package_ids, []);
-    const hasAnyLock = legacyLock || (perLineLocks?.length || 0) > 0 || (perLinePkgLocks?.length || 0) > 0;
-    if (!hasAnyLock) return { safeData, stashActivity: null as string | null };
-
-    const reconciled = reconcileProductsPackagesAgainstLock(
-      targetProject, dedupedSched.products, dedupedSched.packages,
-      allProdsSchedCache || [], allPkgsSchedCache || [],
-      { queueRowId: ctx.queueRowId, webhookLogId: ctx.webhookLogId, eventType: ctx.eventType || originAction },
-    );
-
-    if (reconciled.decision === 'noop') {
-      return { safeData, stashActivity: null as string | null };
-    }
-
-    if (reconciled.decision === 'auto_merge') {
-      // Inject merged products/packages back into safeData (filterOverriddenFields
-      // had stripped them when legacy lock was on).
-      const merged: Record<string, any> = { ...safeData, ...reconciled.updates };
-      return { safeData: merged, stashActivity: reconciled.activityDescription || null };
-    }
-
-    if (reconciled.decision === 'stash_for_review') {
-      if (reconciled.reviewReason) extraReviewReasons.push(reconciled.reviewReason);
-      const merged: Record<string, any> = {
-        ...safeData,
-        ...reconciled.updates,
-      };
-      if (!merged.pending_review_type) merged.pending_review_type = 'tonomo_drift';
-      return { safeData: merged, stashActivity: reconciled.activityDescription || null };
-    }
-
     return { safeData, stashActivity: null as string | null };
   }
 

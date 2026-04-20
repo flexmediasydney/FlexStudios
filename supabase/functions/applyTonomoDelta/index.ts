@@ -1,6 +1,8 @@
 // applyTonomoDelta — Admin-gated handler for Tonomo product/package deltas
-// that were stashed because manually_overridden_fields (or per-line locks)
-// prevented a silent update.
+// stashed under the (now-retired) lock system. Kept for the stashed rows
+// that still exist in tonomo_pending_delta; future webhooks won't produce
+// new stashes because Tonomo wins unconditionally for products/packages
+// since 2026-04-20 (see migration 209).
 //
 // POST /applyTonomoDelta
 //   body: { project_id: string, action: 'apply' | 'dismiss' }

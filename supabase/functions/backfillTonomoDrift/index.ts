@@ -42,8 +42,8 @@ interface ProjectRow {
   tonomo_service_tiers?: string | null;
   tonomo_raw_services?: string | null;
   manually_overridden_fields?: string | null;
-  manually_locked_product_ids?: any;
-  manually_locked_package_ids?: any;
+  // 2026-04-21: manually_locked_product_ids / manually_locked_package_ids
+  // dropped in migration 209. Fields removed from this shape.
   products?: any[] | null;
   packages?: any[] | null;
   tonomo_pending_delta?: any;
@@ -80,16 +80,17 @@ Deno.serve(async (req) => {
   const singleProjectId: string | null = body.project_id || null;
 
   // Fetch candidate projects
+  // 2026-04-21: dropped manually_locked_product_ids / manually_locked_package_ids
+  // columns (migration 209). Candidate selection by lock flag is no longer
+  // meaningful (Tonomo-wins policy) — when this endpoint is called without
+  // a specific project_id it now sweeps every Tonomo-linked project.
   let query = admin
     .from('projects')
-    .select('id, title, property_address, tonomo_order_id, tonomo_service_tiers, tonomo_raw_services, manually_overridden_fields, manually_locked_product_ids, manually_locked_package_ids, products, packages, tonomo_pending_delta, pending_review_type, pending_review_reason, status')
+    .select('id, title, property_address, tonomo_order_id, tonomo_service_tiers, tonomo_raw_services, manually_overridden_fields, products, packages, tonomo_pending_delta, pending_review_type, pending_review_reason, status')
     .not('tonomo_service_tiers', 'is', null);
 
   if (singleProjectId) {
     query = query.eq('id', singleProjectId);
-  } else {
-    // Require some form of lock
-    query = query.or(`manually_overridden_fields.ilike.%products%,manually_overridden_fields.ilike.%packages%`);
   }
 
   const { data: projects, error: fetchErr } = await query;
