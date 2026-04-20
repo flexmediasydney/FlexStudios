@@ -27,6 +27,37 @@ const QtyControl = memo(({ qty, minQty, maxQty, onChange }) => {
 
 QtyControl.displayName = "QtyControl";
 
+// Shared renderer for a line's total cell — sticker price with strikethrough
+// + effective price + "matrix −X%" tag when a blanket rebate applies to this
+// line. Both packages and products use this so the rendering is consistent.
+const LineTotalCell = memo(({ lineTotal, lineTotalEffective, blanketPct }) => {
+  const hasBlanket = blanketPct > 0 && lineTotalEffective != null && lineTotalEffective < lineTotal;
+  if (!hasBlanket) {
+    return (
+      <span className="font-semibold font-mono">
+        <Price value={lineTotal || 0} />
+      </span>
+    );
+  }
+  return (
+    <div className="flex items-center justify-end gap-1.5">
+      <span
+        className="inline-flex items-center gap-0.5 text-[10px] font-semibold px-1 rounded border bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-300 dark:border-purple-900/40"
+        title={`Matrix blanket discount: ${blanketPct}% off`}
+      >
+        −{blanketPct}%
+      </span>
+      <span className="font-mono text-muted-foreground line-through text-[11px]">
+        <Price value={lineTotal || 0} />
+      </span>
+      <span className="font-semibold font-mono text-purple-700 dark:text-purple-400">
+        <Price value={lineTotalEffective || 0} />
+      </span>
+    </div>
+  );
+});
+LineTotalCell.displayName = "LineTotalCell";
+
 export const PackageRow = memo(({ pkg, canEdit, onRemove, rowBg }) => (
   <tr className={`border-b ${rowBg}`}>
     <td className="py-3 px-3">
@@ -46,8 +77,12 @@ export const PackageRow = memo(({ pkg, canEdit, onRemove, rowBg }) => (
     <td className="py-3 px-3 text-right font-mono text-muted-foreground text-xs">
       <Price value={pkg.basePrice || 0} />
     </td>
-    <td className="py-3 px-3 text-right font-semibold font-mono">
-      <Price value={pkg.lineTotal || 0} />
+    <td className="py-3 px-3 text-right">
+      <LineTotalCell
+        lineTotal={pkg.lineTotal}
+        lineTotalEffective={pkg.lineTotalEffective}
+        blanketPct={pkg.blanketPct}
+      />
     </td>
     {canEdit && (
       <td className="py-3 px-3">
@@ -153,8 +188,12 @@ export const ProductRow = memo(({ product, canEdit, onUpdateQty, onRemove, rowBg
             : <><Price value={product.basePrice || 0} />/unit</>
           : <Price value={product.basePrice || 0} />}
       </td>
-      <td className="py-3 px-3 text-right font-semibold font-mono">
-        <Price value={product.lineTotal || 0} />
+      <td className="py-3 px-3 text-right">
+        <LineTotalCell
+          lineTotal={product.lineTotal}
+          lineTotalEffective={product.lineTotalEffective}
+          blanketPct={product.blanketPct}
+        />
       </td>
       {canEdit && (
         <td className="py-3 px-3">

@@ -98,6 +98,24 @@ export function useProjectPricingCalculator(
     // The UI uses fields like `item.pkg`, `item.products[].product`,
     // `pricingType`, `minQuantity`, etc. Engine output is lean by design, so
     // we enrich it here using the already-loaded master catalog.
+    //
+    // Per-line effective pricing: the engine applies blanket discount at the
+    // SUBTOTAL level (one rounded amount on the package subtotal, one on the
+    // product subtotal). For the UI we want each line to show its logical
+    // share of that discount so users can see the strikethrough and the
+    // effective price per item. Compute `lineTotalEffective` per-line by
+    // applying the relevant blanket percent with the same rounding rule, and
+    // a `blanketPct` for the per-line tag badge.
+    //
+    // The sum of per-line effective prices may drift from subtotal-minus-
+    // discount by $5 due to rounding distribution — the authoritative number
+    // for the total is still engine.subtotal − engine.blanketDiscount. The
+    // per-line effective is a display approximation.
+    const blanketMatrix = engine.price_matrix_snapshot?.blanket_discount;
+    const packagePct = blanketMatrix?.enabled ? Number(blanketMatrix.package_percent) || 0 : 0;
+    const productPct = blanketMatrix?.enabled ? Number(blanketMatrix.product_percent) || 0 : 0;
+    const roundUp5 = (v) => Math.ceil(v / 5) * 5;
+
     const productItems = [];
     const packageItems = [];
 
@@ -114,6 +132,9 @@ export function useProjectPricingCalculator(
         const masterTier = product[tierKey] || product.standard_tier || {};
         const basePrice = Math.max(0, parseFloat(masterTier.base_price) || 0);
         const unitPrice = Math.max(0, parseFloat(masterTier.unit_price) || 0);
+        const productLineDiscount = productPct > 0
+          ? Math.min(line.final_price, roundUp5((line.final_price * productPct) / 100))
+          : 0;
         productItems.push({
           id: product.id,
           name: product.name,
@@ -128,8 +149,12 @@ export function useProjectPricingCalculator(
           basePrice,
           unitPrice,
           extraCost: unitPrice * extraQty,
-          // lineTotal is the engine's rounded, matrix-applied per-line price
+          // lineTotal is the engine's rounded, matrix-applied per-line price (sticker)
           lineTotal: line.final_price,
+          // Per-line effective price after blanket rebate. When product_percent is
+          // non-zero, this is strictly less than lineTotal.
+          lineTotalEffective: line.final_price - productLineDiscount,
+          blanketPct: productPct,  // >0 means this line is affected by a blanket rebate
           product,
           valid: true,
         });
@@ -178,6 +203,9 @@ export function useProjectPricingCalculator(
             };
           })
           .filter(Boolean);
+        const packageLineDiscount = packagePct > 0
+          ? Math.min(line.final_price, roundUp5((line.final_price * packagePct) / 100))
+          : 0;
         packageItems.push({
           id: pkg.id,
           name: pkg.name,
@@ -185,6 +213,9 @@ export function useProjectPricingCalculator(
           quantity: line.quantity,
           basePrice: line.base_price,
           lineTotal: line.final_price,
+          // Per-line effective price after blanket rebate.
+          lineTotalEffective: line.final_price - packageLineDiscount,
+          blanketPct: packagePct,
           products,
           pkg,
           valid: true,
@@ -198,6 +229,14 @@ export function useProjectPricingCalculator(
       // Engine-authoritative totals
       subtotal: engine.subtotal,
       blanketDiscount: engine.blanket_discount_applied,  // NEW: exposes matrix blanket discount
+      blanketMeta: blanketMatrix?.enabled
+        ? {
+            matrix_entity_type: engine.price_matrix_snapshot?.entity_type || null,
+            matrix_entity_name: engine.price_matrix_snapshot?.entity_name || null,
+            package_percent: packagePct,
+            product_percent: productPct,
+          }
+        : null,
       manualDiscount: engine.manual_discount_applied,
       manualFee: engine.manual_fee_applied,
       discountType: engine.discount_type,

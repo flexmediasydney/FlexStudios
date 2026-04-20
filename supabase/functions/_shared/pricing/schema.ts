@@ -74,6 +74,9 @@ export interface PriceMatrix {
   id: string;
   entity_type: 'agent' | 'agency';
   entity_id: string;
+  /** Denormalised entity name captured at matrix write time. Used by UI for
+      tooltips ("Belle Property Strathfield matrix") without extra lookups. */
+  entity_name?: string | null;
   project_type_id?: string | null;
   default_tier?: PricingTier | null;
   use_default_pricing?: boolean | null;
