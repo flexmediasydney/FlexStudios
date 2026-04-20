@@ -652,6 +652,26 @@ export default function ProjectPricingTable({
                   </span>
                 </div>
 
+                {/* Matrix blanket discount row — only shown when a blanket
+                    discount from the price matrix actually applied. Reveals
+                    where the pre-manual price drop comes from. Without this
+                    row, the subtotal → total delta would include an invisible
+                    blanket subtraction and users can't reconcile line items
+                    against the final total. */}
+                {breakdown.blanketDiscount > 0 && (
+                  <div className="flex items-center justify-between px-4 py-2">
+                    <div className="flex items-center gap-2">
+                      <Tag className="h-3.5 w-3.5 text-purple-500" />
+                      <span className="text-sm text-purple-700 dark:text-purple-400">
+                        Price Matrix Discount
+                      </span>
+                    </div>
+                    <span className="text-sm font-mono tabular-nums text-purple-600 dark:text-purple-400">
+                      −<Price value={breakdown.blanketDiscount} />
+                    </span>
+                  </div>
+                )}
+
                 {/* Manual discount / fee row */}
                 <div className="flex items-center justify-between px-4 py-2 gap-3">
                   <div className="flex items-center gap-2">
