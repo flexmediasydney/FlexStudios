@@ -135,10 +135,32 @@ export const NestedProductRow = memo(({ nestedProd, pkg, canEdit, onUpdateQty, r
         {isPerUnit ? <><Price value={nestedProd.unitPrice || 0} />/unit</> : "—"}
       </td>
       <td className="py-2 px-3 text-right font-mono text-muted-foreground">
-        {isPerUnit && actualExtraQty > 0
-          ? <span className="text-amber-700 font-semibold">+<Price value={extraCost} /></span>
-          : <span className="text-muted-foreground cursor-help" title="Included in package — no extra charge">incl.</span>
-        }
+        {isPerUnit && actualExtraQty > 0 ? (
+          (() => {
+            const blanketPct = nestedProd.blanketPct || 0;
+            const effective = nestedProd.lineTotalEffective ?? extraCost;
+            const hasBlanket = blanketPct > 0 && effective < extraCost;
+            if (!hasBlanket) {
+              return <span className="text-amber-700 font-semibold">+<Price value={extraCost} /></span>;
+            }
+            // Extras line with product-% blanket applied: strikethrough + effective + tag.
+            return (
+              <span className="inline-flex items-center justify-end gap-1">
+                <span className="text-[9px] font-semibold px-1 rounded border bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-300 dark:border-purple-900/40">
+                  −{blanketPct}%
+                </span>
+                <span className="font-mono text-muted-foreground line-through text-[10px]">
+                  +<Price value={extraCost} />
+                </span>
+                <span className="font-semibold text-purple-700 dark:text-purple-400">
+                  +<Price value={effective} />
+                </span>
+              </span>
+            );
+          })()
+        ) : (
+          <span className="text-muted-foreground cursor-help" title="Included in package — no extra charge">incl.</span>
+        )}
       </td>
       {canEdit && <td />}
     </tr>

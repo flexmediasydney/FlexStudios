@@ -186,6 +186,13 @@ export function useProjectPricingCalculator(
               const t = productData[tierKey] || productData.standard_tier || {};
               return Math.max(0, parseFloat(t.unit_price) || 0);
             })();
+            // Nested extras are treated as products for discount purposes
+            // (see discount.ts). Expose productPct per sub-row so the UI
+            // can show a strike/effective + tag on each extras line.
+            const nestedExtraCost = engineDetail?.extra_cost ?? 0;
+            const nestedDiscount = productPct > 0
+              ? Math.min(nestedExtraCost, roundUp5((nestedExtraCost * productPct) / 100))
+              : 0;
             return {
               id: productData.id,
               name: productData.name,
@@ -197,7 +204,9 @@ export function useProjectPricingCalculator(
               includedQty: masterIncludedQty,
               extraQty,
               unitPrice,
-              lineTotal: engineDetail?.extra_cost ?? 0,
+              lineTotal: nestedExtraCost,
+              lineTotalEffective: nestedExtraCost - nestedDiscount,
+              blanketPct: productPct,  // Rate that applies to extras (product%)
               product: productData,
               valid: true,
             };

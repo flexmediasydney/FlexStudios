@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { DollarSign, Plus, Minus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag } from "lucide-react";
+import { DollarSign, Plus, Minus, AlertCircle, Loader2, ChevronLeft, ChevronRight, Percent, Tag, Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import Price from '@/components/common/Price';
@@ -653,34 +654,71 @@ export default function ProjectPricingTable({
                 </div>
 
                 {/* Matrix blanket discount row — only shown when a blanket
-                    discount from the price matrix actually applied. Tooltip
-                    explains which matrix drove it. Per-line tags on each
-                    affected row show the same % for transparency. */}
+                    discount was actually applied. Proper shadcn Tooltip
+                    (not native `title`) so it shows quickly and explains the
+                    breakdown across all supported scenarios:
+                    - BLANKET_PKG_ONLY: "20% off packages (base price)"
+                    - BLANKET_PROD_ONLY: "10% off products + package extras"
+                    - BLANKET_BOTH: both explained on separate lines
+                    - Named matrix source (entity_name) always shown */}
                 {breakdown.blanketDiscount > 0 && (() => {
                   const meta = breakdown.blanketMeta;
                   const pctParts = [];
                   if (meta?.package_percent > 0) pctParts.push(`${meta.package_percent}% packages`);
                   if (meta?.product_percent > 0) pctParts.push(`${meta.product_percent}% products`);
-                  const tooltip = meta
-                    ? `${pctParts.join(' + ')} from the ${meta.matrix_entity_name || meta.matrix_entity_type || 'matrix'} price matrix`
-                    : 'Matrix blanket discount';
                   return (
-                    <div className="flex items-center justify-between px-4 py-2" title={tooltip}>
-                      <div className="flex items-center gap-2">
-                        <Tag className="h-3.5 w-3.5 text-purple-500" />
-                        <span className="text-sm text-purple-700 dark:text-purple-400 cursor-help">
-                          Price Matrix Discount
-                        </span>
-                        {meta && (
-                          <span className="text-[10px] text-muted-foreground">
-                            ({pctParts.join(' + ')})
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-sm font-mono tabular-nums text-purple-600 dark:text-purple-400">
-                        −<Price value={breakdown.blanketDiscount} />
-                      </span>
-                    </div>
+                    <TooltipProvider delayDuration={150}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center justify-between px-4 py-2 cursor-help hover:bg-purple-50/50 dark:hover:bg-purple-950/20 rounded-md transition-colors">
+                            <div className="flex items-center gap-2">
+                              <Tag className="h-3.5 w-3.5 text-purple-500" />
+                              <span className="text-sm text-purple-700 dark:text-purple-400">
+                                Price Matrix Discount
+                              </span>
+                              {meta && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  ({pctParts.join(' + ')})
+                                </span>
+                              )}
+                              <Info className="h-3 w-3 text-purple-400/60" />
+                            </div>
+                            <span className="text-sm font-mono tabular-nums text-purple-600 dark:text-purple-400">
+                              −<Price value={breakdown.blanketDiscount} />
+                            </span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-sm">
+                          <div className="space-y-1.5">
+                            <div className="font-semibold">
+                              Matrix rebate from{' '}
+                              <span className="text-purple-300">
+                                {meta?.matrix_entity_name || `${meta?.matrix_entity_type || 'agency'} matrix`}
+                              </span>
+                            </div>
+                            {meta?.package_percent > 0 && (
+                              <div className="text-xs">
+                                • <strong>{meta.package_percent}%</strong> off package base price
+                              </div>
+                            )}
+                            {meta?.product_percent > 0 && (
+                              <div className="text-xs">
+                                • <strong>{meta.product_percent}%</strong> off standalone products
+                                {' '}+ nested package extras
+                              </div>
+                            )}
+                            {meta?.package_percent > 0 && meta?.product_percent === 0 && (
+                              <div className="text-[10px] text-muted-foreground mt-1">
+                                Package base only — extras and standalone products not rebated
+                              </div>
+                            )}
+                            <div className="text-[10px] text-muted-foreground pt-1 border-t border-white/10">
+                              Manual per-project discounts/fees apply separately below.
+                            </div>
+                          </div>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   );
                 })()}
 
