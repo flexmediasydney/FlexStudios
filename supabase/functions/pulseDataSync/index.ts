@@ -1300,6 +1300,72 @@ const rows = __rows_raw.data ?? [];
       if ((i / BATCH) % 3 === 0) console.log(`  Agents: ${agentsInserted}/${uniqueAgents.length}...`);
     }
 
+    // ── Step 6b: Capture time-series snapshot (migration 211) ────────────
+    // Inserts one row per processed agent into pulse_agent_stats_history so
+    // v_pulse_agent_trajectory and v_pulse_agency_retention (migration 212)
+    // have the history they need. Fire-and-forget — a failure here must not
+    // abort the sync. Resolves pulse_agent_id + linked_agency_pulse_id by
+    // re-selecting just the columns we need in 500-row chunks.
+    try {
+      const snapshotReaIds = Array.from(new Set(
+        uniqueAgents
+          .map((a: any) => a.rea_agent_id)
+          .filter((v: any): v is string => typeof v === 'string' && v.length > 0)
+      ));
+      const idByReaId = new Map<string, { id: string; linked_agency_pulse_id: string | null }>();
+      if (snapshotReaIds.length > 0) {
+        const CHUNK = 500;
+        for (let i = 0; i < snapshotReaIds.length; i += CHUNK) {
+          const slice = snapshotReaIds.slice(i, i + CHUNK);
+          const { data: rows } = await admin.from('pulse_agents')
+            .select('id, rea_agent_id, linked_agency_pulse_id')
+            .in('rea_agent_id', slice);
+          for (const r of (rows as any[]) || []) {
+            idByReaId.set(r.rea_agent_id, { id: r.id, linked_agency_pulse_id: r.linked_agency_pulse_id });
+          }
+        }
+      }
+      const historyRows = uniqueAgents
+        .filter((a: any) => a.rea_agent_id && idByReaId.has(a.rea_agent_id))
+        .map((a: any) => {
+          const resolved = idByReaId.get(a.rea_agent_id)!;
+          // suburbs_active is JSON-stringified upstream; keep as-is (jsonb column accepts strings).
+          return {
+            agent_rea_id: a.rea_agent_id,
+            pulse_agent_id: resolved.id,
+            total_sold_12m: a.total_sold_12m ?? null,
+            rea_median_sold_price: a.rea_median_sold_price ?? null,
+            avg_days_on_market: a.avg_days_on_market ?? null,
+            rea_rating: a.rea_rating ?? null,
+            rea_review_count: a.rea_review_count ?? null,
+            reviews_count: a.reviews_count ?? null,
+            current_agency_id: resolved.linked_agency_pulse_id ?? null,
+            current_agency_name: a.agency_name ?? null,
+            current_agency_rea_id: a.agency_rea_id ?? null,
+            suburbs_active: typeof a.suburbs_active === 'string'
+              ? JSON.parse(a.suburbs_active)
+              : (a.suburbs_active ?? null),
+            sync_log_id: syncLogId ?? null,
+          };
+        });
+      if (historyRows.length > 0) {
+        const CHUNK = 500;
+        let historyInserted = 0;
+        for (let i = 0; i < historyRows.length; i += CHUNK) {
+          const batch = historyRows.slice(i, i + CHUNK);
+          const { error: histErr } = await admin.from('pulse_agent_stats_history').insert(batch);
+          if (histErr) {
+            console.warn(`[history] snapshot insert batch failed (non-fatal): ${histErr.message?.substring(0, 200)}`);
+          } else {
+            historyInserted += batch.length;
+          }
+        }
+        console.log(`[history] captured ${historyInserted}/${historyRows.length} agent stat snapshots`);
+      }
+    } catch (e: any) {
+      console.warn('[history] snapshot insert failed (non-fatal):', e?.message?.substring(0, 200));
+    }
+
     // Upsert agencies — pre-load existing for batch lookup (replaces N+1 pattern)
     //
     // BUG FIX (2026-04-19): previously loaded ALL agencies via
