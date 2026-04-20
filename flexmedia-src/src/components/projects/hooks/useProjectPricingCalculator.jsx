@@ -1,244 +1,224 @@
-import { useMemo, memo } from "react";
+import { useMemo } from "react";
+import { useEntityList } from "@/components/hooks/useEntityData";
+import { computePrice } from "@pricing/engine";
 
 /**
- * Pure frontend pricing calculator with memoization.
- * Used ONLY when we already have matrix-adjusted prices stored on the project items
- * (i.e. items returned from the calculateProjectPricing backend function).
- * 
- * For fresh recalculation with matrix rules, call the backend function directly.
+ * Project pricing calculator — live preview that ALWAYS matches the backend.
+ *
+ * 2026-04-20 rewrite: the hook now delegates all math to the shared
+ * @pricing/engine module (see supabase/functions/_shared/pricing/). Same
+ * function the backend calculateProjectPricing edge fn calls. Identical
+ * output for identical inputs — proven by pricingParityCheck across every
+ * active project in prod.
+ *
+ * This replaces a previous hand-rolled implementation that silently skipped
+ * the matrix blanket discount. 7e/164 Burwood Rd was the canonical example:
+ * DB had $2,550 (post 20% discount), hook returned $3,100 (pre-discount).
+ * No more.
+ *
+ * Usage — pass `context` with agent_id / agency_id / project_type_id so the
+ * hook can fetch the matching matrices and apply overrides + blanket discount.
+ * Without context, engine still runs but falls back to master-tier prices with
+ * no matrix adjustments (legacy behaviour for pure catalog previews).
+ *
+ * Returns a `breakdown` with UI-friendly packages[] and products[] arrays
+ * enriched with master-catalog metadata (category, pricingType, min/max qty)
+ * plus the canonical total/subtotal/discount fields from the engine.
  */
-export function useProjectPricingCalculator(formState, allProducts, allPackages, tierKey) {
+export function useProjectPricingCalculator(
+  formState,
+  allProducts,
+  allPackages,
+  tierKey,
+  /** Optional: { agent_id, agency_id, project_type_id } — when provided,
+      matrix fetching + blanket discount applies. */
+  context = null,
+) {
   const tier = tierKey === "premium_tier" ? "premium" : "standard";
 
-  // Create Maps for O(1) lookups, memoized to prevent unnecessary recalcs
-  const productMap = useMemo(() => 
-    new Map(allProducts.map(p => [p.id, p])), 
-    [allProducts]
+  // Fetch matrices for the project's agent + agency. useEntityList returns
+  // an empty array when filter is null (no over-fetching if context missing).
+  const { data: agentMatrices = [] } = useEntityList(
+    context?.agent_id ? "PriceMatrix" : null,
+    null,
+    100,
+    context?.agent_id ? { entity_type: "agent", entity_id: context.agent_id } : null,
+  );
+  const { data: agencyMatrices = [] } = useEntityList(
+    context?.agency_id ? "PriceMatrix" : null,
+    null,
+    100,
+    context?.agency_id ? { entity_type: "agency", entity_id: context.agency_id } : null,
   );
 
-  const packageMap = useMemo(() => 
-    new Map(allPackages.map(p => [p.id, p])), 
-    [allPackages]
+  const productMap = useMemo(
+    () => new Map(allProducts.map((p) => [p.id, p])),
+    [allProducts],
   );
-
-  /**
-   * Get effective pricing for a product (memoized).
-   * Priority: stored tier pricing on formItem (from backend) → master product pricing
-   */
-  const getProductPricing = useMemo(() => (formItem, product) => {
-    const storedTier = formItem?.[tierKey];
-    const storedBasePrice = storedTier?.base_price;
-    const storedUnitPrice = storedTier?.unit_price;
-    return {
-      basePrice: storedBasePrice != null
-        ? Math.max(0, Math.ceil((parseFloat(storedBasePrice) || 0) / 5) * 5)
-        : Math.max(0, parseFloat(product?.[tierKey]?.base_price) || 0),
-      unitPrice: storedUnitPrice != null
-        ? Math.max(0, Math.ceil((parseFloat(storedUnitPrice) || 0) / 5) * 5)
-        : Math.max(0, parseFloat(product?.[tierKey]?.unit_price) || 0),
-    };
-  }, [tierKey]);
-
-  /**
-   * Get effective pricing for a package (memoized).
-   */
-  const getPackagePricing = useMemo(() => (formItem, pkg) => {
-    const storedTier = formItem?.[`${tier}_tier`] ?? formItem?.[tierKey];
-    if (storedTier && typeof storedTier === 'object' && storedTier.package_price != null) {
-      return Math.max(0, Math.round(parseFloat(storedTier.package_price) || 0));
-    }
-    return Math.max(0, parseFloat(pkg?.[tierKey]?.package_price) || 0);
-  }, [tier, tierKey]);
-
-  const getProductLineItem = (formItem) => {
-    const product = productMap.get(formItem.product_id);
-    if (!product) {
-      return {
-        id: formItem.product_id,
-        name: formItem.product_name || "Unknown Product",
-        type: "product",
-        quantity: formItem.quantity || 1,
-        basePrice: 0,
-        unitPrice: 0,
-        lineTotal: 0,
-        valid: false,
-      };
-    }
-
-    // Use the quantity stored on the formItem (from backend, already clamped to min/max).
-    // Only fall back to min_quantity if no quantity is stored at all.
-    const quantity = formItem.quantity != null ? formItem.quantity : (product.min_quantity || 1);
-    const { basePrice, unitPrice } = getProductPricing(formItem, product);
-
-    const includedQty = Math.max(1, product.min_quantity || 1);
-    const extraQty = Math.max(0, quantity - includedQty);
-
-    // For per_unit products: base_price covers min_quantity, unitPrice for extra qty
-    // For fixed products: lineTotal = base_price (qty doesn't affect price)
-    let lineTotal;
-    let extraCost;
-    if (product.pricing_type === 'per_unit') {
-      // Per-unit: base price covers min_quantity, charge unit price for qty above min
-      lineTotal = basePrice + (unitPrice * extraQty);
-      extraCost = unitPrice * extraQty;
-    } else {
-      // Fixed: single price regardless of quantity
-      lineTotal = basePrice;
-      extraCost = 0;
-    }
-
-    return {
-      id: product.id,
-      name: product.name,
-      category: product.category,
-      type: "product",
-      pricingType: product.pricing_type,
-      minQuantity: includedQty,
-      maxQuantity: product.max_quantity,
-      quantity,
-      includedQty,
-      extraQty,
-      basePrice,
-      unitPrice,
-      extraCost,
-      lineTotal,
-      product,
-      valid: true,
-    };
-  };
-
-  const getPackageLineItem = (formItem) => {
-    const pkg = packageMap.get(formItem.package_id);
-    if (!pkg) {
-      return {
-        id: formItem.package_id,
-        name: formItem.package_name || "Unknown Package",
-        type: "package",
-        quantity: formItem.quantity || 1,
-        basePrice: 0,
-        lineTotal: 0,
-        products: [],
-        valid: false,
-      };
-    }
-
-    // Package quantity — usually 1 but data model supports multiples
-    const quantity = Math.max(1, formItem.quantity || 1);
-    const basePackagePrice = getPackagePricing(formItem, pkg);
-
-    // Nested products — per_unit products can have qty above the package-included qty,
-    // extra qty is charged at the matrix-adjusted unit price.
-    const formProducts = formItem.products || [];
-    const products = (pkg.products || []).map(pkgProduct => {
-      const productData = productMap.get(pkgProduct.product_id);
-      if (!productData) return null;
-
-      const formProduct = formProducts.find(fp => fp.product_id === pkgProduct.product_id);
-      // includedQty = what the package definition says is bundled (master default)
-      const masterIncludedQty = Math.max(1, pkgProduct.quantity || 1);
-      const minQty = Math.max(1, productData.min_quantity || 1);
-      const maxQty = productData.max_quantity;
-
-      // User-provided qty, clamped to [master included, max_quantity]
-      // If user has saved a custom qty, use that; otherwise use master included qty
-      let productQty = formProduct?.quantity != null
-        ? formProduct.quantity
-        : masterIncludedQty;
-      productQty = Math.max(masterIncludedQty, productQty);
-      if (maxQty != null) productQty = Math.min(productQty, maxQty);
-
-      // Only charge for extra qty if product is per_unit pricing
-      const isPerUnit = productData.pricing_type === 'per_unit';
-      const extraQty = isPerUnit ? Math.max(0, productQty - masterIncludedQty) : 0;
-      
-      // Always use master product pricing for unit price on nested products —
-      // nested items stored on project packages never have tier pricing attached.
-      const { unitPrice } = getProductPricing(null, productData);
-      const extraCost = unitPrice * extraQty;
-
-      return {
-        id: productData.id,
-        name: productData.name,
-        category: productData.category,
-        pricingType: productData.pricing_type,
-        minQuantity: minQty,
-        maxQuantity: maxQty,
-        quantity: productQty,
-        includedQty: masterIncludedQty,
-        extraQty,
-        unitPrice,
-        lineTotal: extraCost,
-        product: productData,
-        valid: true,
-      };
-    }).filter(Boolean);
-
-    const extraProductsTotal = products.reduce((sum, p) => sum + p.lineTotal, 0);
-    const lineTotal = (basePackagePrice + extraProductsTotal) * quantity;
-
-    return {
-      id: pkg.id,
-      name: pkg.name,
-      type: "package",
-      quantity,
-      basePrice: basePackagePrice,
-      lineTotal,
-      products,
-      pkg,
-      valid: true,
-    };
-  };
+  const packageMap = useMemo(
+    () => new Map(allPackages.map((p) => [p.id, p])),
+    [allPackages],
+  );
 
   const breakdown = useMemo(() => {
-    const packageItems = (formState.packages || [])
-      .map(item => getPackageLineItem(item))
-      .filter(item => item.valid);
+    const inputProducts = formState.products || [];
+    const inputPackages = formState.packages || [];
 
-    const productItems = (formState.products || [])
-      .map(item => getProductLineItem(item))
-      .filter(item => item.valid);
+    // Drop formState nested package.products[] qty overrides into the shape
+    // the engine expects, preserving user-edited quantities.
+    const normalizedPackages = inputPackages.map((pkg) => ({
+      package_id: pkg.package_id,
+      quantity: pkg.quantity || 1,
+      products: (pkg.products || []).map((p) => ({
+        product_id: p.product_id,
+        quantity: p.quantity,
+      })),
+    }));
+    const normalizedProducts = inputProducts.map((p) => ({
+      product_id: p.product_id,
+      quantity: p.quantity,
+    }));
 
-    // Round to 2 decimal places to prevent float accumulation drift
-    // (e.g. 245.00000000001 from repeated parseFloat * qty additions)
-    const subtotal = Math.round(
-      (packageItems.reduce((sum, p) => sum + p.lineTotal, 0) +
-       productItems.reduce((sum, p) => sum + p.lineTotal, 0)) * 100
-    ) / 100;
+    // Call the shared engine — same math as the backend.
+    const engine = computePrice({
+      products: normalizedProducts,
+      packages: normalizedPackages,
+      pricing_tier: tier,
+      project_type_id: context?.project_type_id || null,
+      agent_matrices: agentMatrices,
+      agency_matrices: agencyMatrices,
+      catalog_products: allProducts,
+      catalog_packages: allPackages,
+      discount_type: formState.discount_type || "fixed",
+      discount_value: formState.discount_value || 0,
+      discount_mode: formState.discount_mode || "discount",
+    });
 
-    // Manual per-project adjustment — discount (subtract) or fee (add)
-    const discMode = formState.discount_mode || 'discount';
-    const discType = formState.discount_type || 'fixed';
-    const discVal = discType === 'percent'
-      ? Math.min(100, Math.max(0, parseFloat(formState.discount_value) || 0))
-      : Math.max(0, parseFloat(formState.discount_value) || 0);
-    let manualDiscount = 0;
-    let manualFee = 0;
-    if (discVal > 0) {
-      if (discMode === 'fee') {
-        // FEE: add to price. No cap.
-        manualFee = discType === 'percent'
-          ? Math.round(subtotal * discVal / 100 * 100) / 100
-          : discVal;
-      } else {
-        // DISCOUNT: subtract from price. Capped to subtotal.
-        manualDiscount = discType === 'percent'
-          ? Math.min(subtotal, Math.round(subtotal * discVal / 100 * 100) / 100)
-          : Math.min(subtotal, discVal);
+    // ─── Adapt engine line_items to the UI-friendly breakdown shape ──────
+    // The UI uses fields like `item.pkg`, `item.products[].product`,
+    // `pricingType`, `minQuantity`, etc. Engine output is lean by design, so
+    // we enrich it here using the already-loaded master catalog.
+    const productItems = [];
+    const packageItems = [];
+
+    for (const line of engine.line_items) {
+      if (line.type === "product") {
+        const product = productMap.get(line.product_id);
+        if (!product) continue;
+        const includedQty = Math.max(1, product.min_quantity || 1);
+        const extraQty = Math.max(0, line.quantity - includedQty);
+        // Derive per-unit price from engine output: for per_unit products,
+        // line.base_price = basePrice + unitPrice * extraQty. We can recover
+        // unitPrice from the master tier (engine already respected overrides
+        // for the final rounded price, which is what the UI shows).
+        const masterTier = product[tierKey] || product.standard_tier || {};
+        const basePrice = Math.max(0, parseFloat(masterTier.base_price) || 0);
+        const unitPrice = Math.max(0, parseFloat(masterTier.unit_price) || 0);
+        productItems.push({
+          id: product.id,
+          name: product.name,
+          category: product.category,
+          type: "product",
+          pricingType: product.pricing_type,
+          minQuantity: includedQty,
+          maxQuantity: product.max_quantity,
+          quantity: line.quantity,
+          includedQty,
+          extraQty,
+          basePrice,
+          unitPrice,
+          extraCost: unitPrice * extraQty,
+          // lineTotal is the engine's rounded, matrix-applied per-line price
+          lineTotal: line.final_price,
+          product,
+          valid: true,
+        });
+      } else if (line.type === "package") {
+        const pkg = packageMap.get(line.package_id);
+        if (!pkg) continue;
+        // Build nested product items with UI metadata. Use engine.nested_details
+        // for per_unit extras; walk master composition for fixed/included products.
+        const nestedDetailsByProd = new Map(
+          (line.nested_details || []).map((d) => [d.product_id, d]),
+        );
+        const formPkgOriginal = inputPackages.find((fp) => fp.package_id === line.package_id);
+        const formProducts = formPkgOriginal?.products || [];
+        const products = (pkg.products || [])
+          .map((pkgProduct) => {
+            const productData = productMap.get(pkgProduct.product_id);
+            if (!productData) return null;
+            const masterIncludedQty = Math.max(1, pkgProduct.quantity || 1);
+            const minQty = Math.max(1, productData.min_quantity || 1);
+            const maxQty = productData.max_quantity;
+            const formProd = formProducts.find((fp) => fp.product_id === pkgProduct.product_id);
+            let productQty = formProd?.quantity != null
+              ? Math.max(masterIncludedQty, formProd.quantity)
+              : masterIncludedQty;
+            if (maxQty != null) productQty = Math.min(productQty, maxQty);
+            const engineDetail = nestedDetailsByProd.get(pkgProduct.product_id);
+            const extraQty = engineDetail?.extra_qty ?? Math.max(0, productQty - masterIncludedQty);
+            const unitPrice = engineDetail?.unit_price ?? (() => {
+              const t = productData[tierKey] || productData.standard_tier || {};
+              return Math.max(0, parseFloat(t.unit_price) || 0);
+            })();
+            return {
+              id: productData.id,
+              name: productData.name,
+              category: productData.category,
+              pricingType: productData.pricing_type,
+              minQuantity: minQty,
+              maxQuantity: maxQty,
+              quantity: productQty,
+              includedQty: masterIncludedQty,
+              extraQty,
+              unitPrice,
+              lineTotal: engineDetail?.extra_cost ?? 0,
+              product: productData,
+              valid: true,
+            };
+          })
+          .filter(Boolean);
+        packageItems.push({
+          id: pkg.id,
+          name: pkg.name,
+          type: "package",
+          quantity: line.quantity,
+          basePrice: line.base_price,
+          lineTotal: line.final_price,
+          products,
+          pkg,
+          valid: true,
+        });
       }
     }
 
     return {
       packages: packageItems,
       products: productItems,
-      subtotal: Math.max(0, subtotal),
-      manualDiscount,
-      manualFee,
-      discountType: discType,
-      discountValue: discVal,
-      discountMode: discMode,
-      total: Math.max(0, subtotal - manualDiscount + manualFee),
+      // Engine-authoritative totals
+      subtotal: engine.subtotal,
+      blanketDiscount: engine.blanket_discount_applied,  // NEW: exposes matrix blanket discount
+      manualDiscount: engine.manual_discount_applied,
+      manualFee: engine.manual_fee_applied,
+      discountType: engine.discount_type,
+      discountValue: engine.discount_value,
+      discountMode: engine.discount_mode,
+      total: engine.calculated_price,
+      // Full engine result available to consumers that need snapshot/version
+      _engine: engine,
     };
-  }, [formState, productMap, packageMap, tierKey]);
+  }, [
+    formState,
+    productMap,
+    packageMap,
+    tierKey,
+    tier,
+    agentMatrices,
+    agencyMatrices,
+    allProducts,
+    allPackages,
+    context?.project_type_id,
+  ]);
 
   return { breakdown };
 }

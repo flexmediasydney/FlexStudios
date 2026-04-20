@@ -80,8 +80,17 @@ export default function ProjectPricingTable({
     setError(null);
   }, [project?.id, projectProductsJson, projectPackagesJson, project?.pricing_tier]);
 
-  // Frontend calculator for live line-level display (uses stored matrix prices)
-  const { breakdown } = useProjectPricingCalculator(formState, allProducts, allPackages, tierKey);
+  // Frontend calculator — now uses shared @pricing/engine (same math as backend).
+  // Context carries the project's matrix-resolution keys so blanket discount +
+  // per-item overrides are reflected in the live preview. Matches what the
+  // backend would save, byte-for-byte. See useProjectPricingCalculator for
+  // the engine delegation.
+  const pricingContext = useMemo(() => ({
+    agent_id: project?.agent_id || null,
+    agency_id: project?.agency_id || null,
+    project_type_id: project?.project_type_id || null,
+  }), [project?.agent_id, project?.agency_id, project?.project_type_id]);
+  const { breakdown } = useProjectPricingCalculator(formState, allProducts, allPackages, tierKey, pricingContext);
 
   // Notify parent of total changes
   useEffect(() => {

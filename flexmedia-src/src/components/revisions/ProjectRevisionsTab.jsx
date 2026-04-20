@@ -50,7 +50,7 @@ const PRIORITY_COLORS = {
   urgent: "text-red-600 font-semibold",
 };
 
-function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], logActivity, currentUser }) {
+function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], allPackages = [], logActivity, currentUser }) {
    const [expanded, setExpanded] = useState(false);
    const [showCancelDialog, setShowCancelDialog] = useState(false);
    const [showStatusSelect, setShowStatusSelect] = useState(false);
@@ -531,7 +531,9 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], log
               onRevert={() => setShowRevertConfirm(true)}
               applied={pricingApplied}
               canEdit={canEdit && revision.status !== "delivered" && revision.status !== "cancelled"}
+              project={project}
               allProducts={allProducts}
+              allPackages={allPackages}
               pricingTier={project?.pricing_tier || 'standard'}
             />
           )}
@@ -896,6 +898,7 @@ export default function ProjectRevisionsTab({ projectId, project, canEdit }) {
     t => t.project_id === projectId
   );
   const { data: products = [] } = useEntityList("Product", null, 500);
+  const { data: packages = [] } = useEntityList("Package", null, 500);
 
   const filtered = useMemo(() => revisions.filter(r => {
     const kindMatch = filterKind === 'all' || r.request_kind === filterKind;
@@ -1000,6 +1003,7 @@ export default function ProjectRevisionsTab({ projectId, project, canEdit }) {
             canEdit={canEdit}
             tasks={tasks}
             allProducts={products}
+            allPackages={packages}
             logActivity={logActivity}
             currentUser={currentUser}
           />

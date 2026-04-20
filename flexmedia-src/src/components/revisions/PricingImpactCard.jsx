@@ -6,28 +6,59 @@ import { DollarSign, Plus, Trash2, ChevronDown, ChevronRight } from "lucide-reac
 import { cn } from "@/lib/utils";
 import { calculatePricingDelta } from "@/components/utils/pricingImpactCalculator";
 import { usePriceGate } from "@/components/auth/RoleGate";
+import { useEntityList } from "@/components/hooks/useEntityData";
 
 /**
  * Editable pricing impact card for RevisionCard.
  * Shows pricing changes and allows editing when not applied.
+ *
+ * Delta is computed via @pricing/engine (shared with backend) — runs
+ * computePrice() before + after applying the impact and diffs the totals, so
+ * the "+$X" preview includes matrix overrides, blanket discounts, rounding,
+ * and manual discount/fee — matching the backend calculation exactly.
  */
-export default function PricingImpactCard({ 
-  pricingImpact, 
-  onUpdate, 
-  onMarkApplied, 
-  onRevert, 
-  applied, 
+export default function PricingImpactCard({
+  pricingImpact,
+  onUpdate,
+  onMarkApplied,
+  onRevert,
+  applied,
   canEdit,
+  project,
   allProducts = [],
+  allPackages = [],
   pricingTier = 'standard'
 }) {
   const { visible: showPricing } = usePriceGate();
   const [expanded, setExpanded] = useState(false);
 
+  // Fetch matrices so the engine can apply agent/agency overrides + blanket
+  // discounts. Same fetching pattern as useProjectPricingCalculator — filter
+  // is null when the ID is missing, so no over-fetching.
+  const { data: agentMatrices = [] } = useEntityList(
+    project?.agent_id ? "PriceMatrix" : null,
+    null,
+    100,
+    project?.agent_id ? { entity_type: "agent", entity_id: project.agent_id } : null,
+  );
+  const { data: agencyMatrices = [] } = useEntityList(
+    project?.agency_id ? "PriceMatrix" : null,
+    null,
+    100,
+    project?.agency_id ? { entity_type: "agency", entity_id: project.agency_id } : null,
+  );
+
   // Calculate delta on-the-fly from current pricing impact
   const estimatedDelta = useMemo(() => {
-    return calculatePricingDelta(pricingImpact, allProducts, pricingTier);
-  }, [pricingImpact, allProducts, pricingTier]);
+    return calculatePricingDelta(pricingImpact, {
+      project,
+      allProducts,
+      allPackages,
+      agentMatrices,
+      agencyMatrices,
+      pricingTier,
+    });
+  }, [pricingImpact, project, allProducts, allPackages, agentMatrices, agencyMatrices, pricingTier]);
 
   if (!showPricing) return null;
 

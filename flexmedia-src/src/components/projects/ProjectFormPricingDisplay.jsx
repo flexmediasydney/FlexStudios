@@ -17,12 +17,29 @@ export default function ProjectFormPricingDisplay({
   isCalculating = false,
   products_data = [],
   packages_data = [],
+  // 2026-04-20: new props for matrix resolution in the live preview. When
+  // the parent ProjectForm has selected an agent/agency + project type, the
+  // preview fetches matrices and applies blanket discount + overrides so
+  // the on-screen number matches what the backend will save.
+  agentId = null,
+  agencyId = null,
+  projectTypeId = null,
+  discountType = "fixed",
+  discountValue = 0,
+  discountMode = "discount",
 }) {
   const tierKey = pricingTier === "premium" ? "premium_tier" : "standard_tier";
 
-  const formState = useMemo(() => ({ products, packages }), [products, packages]);
+  const formState = useMemo(
+    () => ({ products, packages, discount_type: discountType, discount_value: discountValue, discount_mode: discountMode }),
+    [products, packages, discountType, discountValue, discountMode],
+  );
+  const pricingContext = useMemo(
+    () => ({ agent_id: agentId, agency_id: agencyId, project_type_id: projectTypeId }),
+    [agentId, agencyId, projectTypeId],
+  );
 
-  const { breakdown } = useProjectPricingCalculator(formState, products_data, packages_data, tierKey);
+  const { breakdown } = useProjectPricingCalculator(formState, products_data, packages_data, tierKey, pricingContext);
 
   if (!products?.length && !packages?.length) return null;
 

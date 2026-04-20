@@ -1,12 +1,24 @@
 import { useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Separator } from "@/components/ui/separator";
 import Price from '@/components/common/Price';
+import {
+  resolveActiveMatrix,
+  resolveProductOverride,
+  resolvePackageOverride,
+  resolveBlanketDiscount,
+} from "@pricing/matrix";
+import { roundToNearestFive } from "@pricing/round";
 
-const roundToNearestFive = (value) => Math.ceil(value / 5) * 5;
-// Match backend: round the DISCOUNT amount to nearest 5, then subtract
-const applyDiscount = (price, pct) => Math.max(0, price - roundToNearestFive(price * pct / 100));
+// Canonical per-component blanket application: round the DISCOUNT amount (not
+// the post-discount price), matching the shared engine's rule in discount.ts.
+// The table intentionally shows per-component values (base, unit) so the
+// discount is mirrored onto each component — but rounding is done on the
+// discount amount, not the final value, to match the engine.
+const applyBlanketToComponent = (value, pct) => {
+  if (!pct || pct <= 0) return value;
+  return Math.max(0, value - roundToNearestFive((value * pct) / 100));
+};
 
 function PricingModeBadge({ mode }) {
   if (mode === "club_flex") return <Badge className="text-xs bg-purple-100 text-purple-700 border-purple-200">Club Flex</Badge>;
@@ -16,145 +28,104 @@ function PricingModeBadge({ mode }) {
 }
 
 export default function PriceMatrixSummaryTable({ priceMatrix, products, packages, isClubFlex = false, agencyPriceMatrix = null }) {
-  const useDefault = priceMatrix?.use_default_pricing ?? true;
-  const blanketEnabled = !useDefault && priceMatrix?.blanket_discount?.enabled;
-  const productDiscountPct = Math.min(100, Math.max(0, parseFloat(priceMatrix?.blanket_discount?.product_percent) || 0));
-  const packageDiscountPct = Math.min(100, Math.max(0, parseFloat(priceMatrix?.blanket_discount?.package_percent) || 0));
-
   const activeProducts = useMemo(() => products.filter(p => p.is_active !== false), [products]);
   const activePackages = useMemo(() => packages.filter(p => p.is_active !== false), [packages]);
 
+  // Resolve the two matrices through the shared use_default_pricing gate.
+  // Club flex agents inherit from the agency — we model that as "no agent
+  // matrix, agency matrix applies" so the shared resolver does the right thing.
+  const agentMatrix = useMemo(
+    () => (isClubFlex ? null : resolveActiveMatrix(priceMatrix || null)),
+    [priceMatrix, isClubFlex],
+  );
+  const agencyMatrix = useMemo(
+    () => resolveActiveMatrix(agencyPriceMatrix || null),
+    [agencyPriceMatrix],
+  );
+
+  const blanket = useMemo(
+    () => resolveBlanketDiscount(agentMatrix, agencyMatrix),
+    [agentMatrix, agencyMatrix],
+  );
+
+  // Derive the mode badge tag for a row, preserving the prior UX exactly:
+  //   - Agent matrix fired            → "blanket" or "override"
+  //   - Agency fired & isClubFlex     → "club_flex"
+  //   - Agency fired & !isClubFlex    → "master" (non-club-flex agent
+  //     inheriting from agency is treated as if using master pricing)
+  //   - Nothing fired                 → "master"
+  const modeFor = (sourceEntityType, kind) => {
+    if (sourceEntityType === "agent") return kind === "blanket" ? "blanket" : "override";
+    if (sourceEntityType === "agency") return isClubFlex ? "club_flex" : "master";
+    return "master";
+  };
+
   const resolvedProducts = useMemo(() => activeProducts.map(product => {
-    let stdBase = product.standard_tier?.base_price ?? 0;
-    let stdUnit = product.standard_tier?.unit_price ?? 0;
-    let preBase = product.premium_tier?.base_price ?? 0;
-    let preUnit = product.premium_tier?.unit_price ?? 0;
+    const stdTier = product.standard_tier || {};
+    const preTier = product.premium_tier || {};
+    let stdBase = Math.max(0, parseFloat(stdTier.base_price) || 0);
+    let stdUnit = Math.max(0, parseFloat(stdTier.unit_price) || 0);
+    let preBase = Math.max(0, parseFloat(preTier.base_price) || 0);
+    let preUnit = Math.max(0, parseFloat(preTier.unit_price) || 0);
     let mode = "master";
 
-    // For agents: check club flex first, then agent overrides, then inherit from agency
-    if (isClubFlex && agencyPriceMatrix) {
-      // Agent is club flex - use agency pricing
-      const agencyMatrixPricing = (agencyPriceMatrix?.product_pricing || []).find(p => p.product_id === product.id);
-      const agencyUseDefault = agencyPriceMatrix?.use_default_pricing ?? true;
-      const agencyBlanketEnabled = !agencyUseDefault && agencyPriceMatrix?.blanket_discount?.enabled;
-      
-      if (!agencyUseDefault) {
-        if (agencyBlanketEnabled) {
-          const agencyProductDiscountPct = Math.min(100, Math.max(0, parseFloat(agencyPriceMatrix?.blanket_discount?.product_percent) || 0));
-          stdBase = applyDiscount(stdBase, agencyProductDiscountPct);
-          stdUnit = applyDiscount(stdUnit, agencyProductDiscountPct);
-          preBase = applyDiscount(preBase, agencyProductDiscountPct);
-          preUnit = applyDiscount(preUnit, agencyProductDiscountPct);
-          mode = "club_flex";
-        } else if (agencyMatrixPricing?.override_enabled) {
-          stdBase = agencyMatrixPricing.standard_base ?? stdBase;
-          stdUnit = agencyMatrixPricing.standard_unit ?? stdUnit;
-          preBase = agencyMatrixPricing.premium_base ?? preBase;
-          preUnit = agencyMatrixPricing.premium_unit ?? preUnit;
-          mode = "club_flex";
-        }
-      }
-    } else if (!useDefault) {
-      // Agent has custom pricing
-      const matrixPricing = (priceMatrix?.product_pricing || []).find(p => p.product_id === product.id);
-      if (blanketEnabled) {
-        stdBase = applyDiscount(stdBase, productDiscountPct);
-        stdUnit = applyDiscount(stdUnit, productDiscountPct);
-        preBase = applyDiscount(preBase, productDiscountPct);
-        preUnit = applyDiscount(preUnit, productDiscountPct);
-        mode = "blanket";
-      } else if (matrixPricing?.override_enabled) {
-        stdBase = matrixPricing.standard_base ?? stdBase;
-        stdUnit = matrixPricing.standard_unit ?? stdUnit;
-        preBase = matrixPricing.premium_base ?? preBase;
-        preUnit = matrixPricing.premium_unit ?? preUnit;
-        mode = "override";
-      } else if (agencyPriceMatrix) {
-        // No agent overrides, inherit from agency
-        const agencyMatrixPricing = (agencyPriceMatrix?.product_pricing || []).find(p => p.product_id === product.id);
-        const agencyUseDefault = agencyPriceMatrix?.use_default_pricing ?? true;
-        const agencyBlanketEnabled = !agencyUseDefault && agencyPriceMatrix?.blanket_discount?.enabled;
-        
-        if (!agencyUseDefault) {
-          if (agencyBlanketEnabled) {
-            const agencyProductDiscountPct = Math.min(100, Math.max(0, parseFloat(agencyPriceMatrix?.blanket_discount?.product_percent) || 0));
-            stdBase = applyDiscount(stdBase, agencyProductDiscountPct);
-            stdUnit = applyDiscount(stdUnit, agencyProductDiscountPct);
-            preBase = applyDiscount(preBase, agencyProductDiscountPct);
-            preUnit = applyDiscount(preUnit, agencyProductDiscountPct);
-            mode = "master";
-          } else if (agencyMatrixPricing?.override_enabled) {
-            stdBase = agencyMatrixPricing.standard_base ?? stdBase;
-            stdUnit = agencyMatrixPricing.standard_unit ?? stdUnit;
-            preBase = agencyMatrixPricing.premium_base ?? preBase;
-            preUnit = agencyMatrixPricing.premium_unit ?? preUnit;
-            mode = "master";
-          }
-        }
-      }
+    // Per-item override wins over blanket (matches engine precedence).
+    const stdOverride = resolveProductOverride(product.id, "standard", agentMatrix, agencyMatrix);
+    const preOverride = resolveProductOverride(product.id, "premium", agentMatrix, agencyMatrix);
+    if (stdOverride) {
+      if (stdOverride.base != null) stdBase = Math.max(0, stdOverride.base);
+      if (stdOverride.unit != null) stdUnit = Math.max(0, stdOverride.unit);
+      mode = modeFor(stdOverride.entity_type, "override");
+    } else if (preOverride) {
+      mode = modeFor(preOverride.entity_type, "override");
+    }
+    if (preOverride) {
+      if (preOverride.base != null) preBase = Math.max(0, preOverride.base);
+      if (preOverride.unit != null) preUnit = Math.max(0, preOverride.unit);
+    }
+
+    // Blanket only applies when there's no per-item override (engine semantics
+    // are "blanket on subtotal of non-overridden lines"; for this preview table
+    // the closest per-component analogue is "skip blanket if override fired").
+    if (!stdOverride && !preOverride && blanket && blanket.product_percent > 0) {
+      const pct = blanket.product_percent;
+      stdBase = applyBlanketToComponent(stdBase, pct);
+      stdUnit = applyBlanketToComponent(stdUnit, pct);
+      preBase = applyBlanketToComponent(preBase, pct);
+      preUnit = applyBlanketToComponent(preUnit, pct);
+      mode = modeFor(blanket.entity_type, "blanket");
     }
 
     return { id: product.id, name: product.name, pricing_type: product.pricing_type, stdBase, stdUnit, preBase, preUnit, mode };
-  }), [activeProducts, priceMatrix, useDefault, blanketEnabled, productDiscountPct, isClubFlex, agencyPriceMatrix]);
+  }), [activeProducts, agentMatrix, agencyMatrix, blanket, isClubFlex]);
 
   const resolvedPackages = useMemo(() => activePackages.map(pkg => {
-    let stdPrice = pkg.standard_tier?.package_price ?? 0;
-    let prePrice = pkg.premium_tier?.package_price ?? 0;
+    const stdTier = pkg.standard_tier || {};
+    const preTier = pkg.premium_tier || {};
+    let stdPrice = Math.max(0, parseFloat(stdTier.package_price) || 0);
+    let prePrice = Math.max(0, parseFloat(preTier.package_price) || 0);
     let mode = "master";
 
-    // For agents: check club flex first, then agent overrides, then inherit from agency
-    if (isClubFlex && agencyPriceMatrix) {
-      // Agent is club flex - use agency pricing
-      const agencyMatrixPricing = (agencyPriceMatrix?.package_pricing || []).find(p => p.package_id === pkg.id);
-      const agencyUseDefault = agencyPriceMatrix?.use_default_pricing ?? true;
-      const agencyBlanketEnabled = !agencyUseDefault && agencyPriceMatrix?.blanket_discount?.enabled;
-      
-      if (!agencyUseDefault) {
-        if (agencyBlanketEnabled) {
-          const agencyPackageDiscountPct = Math.min(100, Math.max(0, parseFloat(agencyPriceMatrix?.blanket_discount?.package_percent) || 0));
-          stdPrice = applyDiscount(stdPrice, agencyPackageDiscountPct);
-          prePrice = applyDiscount(prePrice, agencyPackageDiscountPct);
-          mode = "club_flex";
-        } else if (agencyMatrixPricing?.override_enabled) {
-          stdPrice = agencyMatrixPricing.standard_price ?? stdPrice;
-          prePrice = agencyMatrixPricing.premium_price ?? prePrice;
-          mode = "club_flex";
-        }
-      }
-    } else if (!useDefault) {
-      // Agent has custom pricing
-      const matrixPricing = (priceMatrix?.package_pricing || []).find(p => p.package_id === pkg.id);
-      if (blanketEnabled) {
-        stdPrice = applyDiscount(stdPrice, packageDiscountPct);
-        prePrice = applyDiscount(prePrice, packageDiscountPct);
-        mode = "blanket";
-      } else if (matrixPricing?.override_enabled) {
-        stdPrice = matrixPricing.standard_price ?? stdPrice;
-        prePrice = matrixPricing.premium_price ?? prePrice;
-        mode = "override";
-      } else if (agencyPriceMatrix) {
-        // No agent overrides, inherit from agency
-        const agencyMatrixPricing = (agencyPriceMatrix?.package_pricing || []).find(p => p.package_id === pkg.id);
-        const agencyUseDefault = agencyPriceMatrix?.use_default_pricing ?? true;
-        const agencyBlanketEnabled = !agencyUseDefault && agencyPriceMatrix?.blanket_discount?.enabled;
-        
-        if (!agencyUseDefault) {
-          if (agencyBlanketEnabled) {
-            const agencyPackageDiscountPct = Math.min(100, Math.max(0, parseFloat(agencyPriceMatrix?.blanket_discount?.package_percent) || 0));
-            stdPrice = applyDiscount(stdPrice, agencyPackageDiscountPct);
-            prePrice = applyDiscount(prePrice, agencyPackageDiscountPct);
-            mode = "master";
-          } else if (agencyMatrixPricing?.override_enabled) {
-            stdPrice = agencyMatrixPricing.standard_price ?? stdPrice;
-            prePrice = agencyMatrixPricing.premium_price ?? prePrice;
-            mode = "master";
-          }
-        }
-      }
+    const stdOverride = resolvePackageOverride(pkg.id, "standard", agentMatrix, agencyMatrix);
+    const preOverride = resolvePackageOverride(pkg.id, "premium", agentMatrix, agencyMatrix);
+    if (stdOverride) {
+      stdPrice = stdOverride.price;
+      mode = modeFor(stdOverride.entity_type, "override");
+    }
+    if (preOverride) {
+      prePrice = preOverride.price;
+      if (!stdOverride) mode = modeFor(preOverride.entity_type, "override");
+    }
+
+    if (!stdOverride && !preOverride && blanket && blanket.package_percent > 0) {
+      const pct = blanket.package_percent;
+      stdPrice = applyBlanketToComponent(stdPrice, pct);
+      prePrice = applyBlanketToComponent(prePrice, pct);
+      mode = modeFor(blanket.entity_type, "blanket");
     }
 
     return { id: pkg.id, name: pkg.name, stdPrice, prePrice, mode };
-  }), [activePackages, priceMatrix, useDefault, blanketEnabled, packageDiscountPct, isClubFlex, agencyPriceMatrix]);
+  }), [activePackages, agentMatrix, agencyMatrix, blanket, isClubFlex]);
 
   return (
     <div className="space-y-4 mt-3 pt-3 border-t">
