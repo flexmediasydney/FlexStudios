@@ -2113,11 +2113,15 @@ export default function PulseListingsTab({
         force_ids: ids,
         max_listings: Math.min(1000, ids.length),
       });
-      const ok = res?.error ? false : true;
-      if (ok) {
+      // api.functions.invoke throws on transport/HTTP errors; soft errors come
+      // back inside the response body, which is under `.data`. Check both so a
+      // server-reported error isn't silently treated as success.
+      const body = res?.data ?? res;
+      const softError = body?.error;
+      if (!softError) {
         toast.success(`Force-enrich queued for ${ids.length} listing${ids.length === 1 ? "" : "s"}`);
       } else {
-        throw new Error(res?.error?.message || "Enrichment trigger failed");
+        throw new Error(typeof softError === 'string' ? softError : softError?.message || "Enrichment trigger failed");
       }
     } catch (err) {
       toast.error(`Force-enrich failed: ${err?.message || err}`);

@@ -1079,7 +1079,11 @@ export default function TerritoryMap() {
         setGeocodeResult({ ok: false, message: 'No un-geocoded projects with addresses found.' });
         return;
       }
-      const result = await api.functions.invoke('geocodeProject', { projectIds: ungeocodedIds });
+      const response = await api.functions.invoke('geocodeProject', { projectIds: ungeocodedIds });
+      // api.functions.invoke wraps the edge function body in { data }; unwrap so
+      // `result.geocoded`/`result.total` read the actual fields instead of always
+      // defaulting to 0.
+      const result = response?.data ?? response;
       setGeocodeResult({ ok: true, message: `Geocoded ${result?.geocoded ?? 0} of ${result?.total ?? ungeocodedIds.length} projects.` });
       if (refreshProjects) refreshProjects();
     } catch (err) {

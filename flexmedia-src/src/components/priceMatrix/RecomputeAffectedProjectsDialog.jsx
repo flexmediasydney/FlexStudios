@@ -50,13 +50,16 @@ export default function RecomputeAffectedProjectsDialog({
   const [hasFetched, setHasFetched] = useState(false);
 
   // Dry-run mutation — runs once on open.
+  // Unwrap the `{ data }` wrapper added by api.functions.invoke (supabaseClient.js
+  // line 518) so downstream reads (`result.results`, `result.summary`) find fields
+  // at the top level — previously `result?.results` was always undefined.
   const dryRun = useMutation({
     mutationFn: async () => {
-      const result = await api.functions.invoke("bulkRecomputeProjectsByMatrix", {
+      const response = await api.functions.invoke("bulkRecomputeProjectsByMatrix", {
         matrix_id: matrixId,
         dry_run: true,
       });
-      return result;
+      return response?.data ?? response;
     },
     onSuccess: () => setHasFetched(true),
     onError: (err) => {
@@ -80,11 +83,11 @@ export default function RecomputeAffectedProjectsDialog({
 
   const apply = useMutation({
     mutationFn: async () => {
-      const result = await api.functions.invoke("bulkRecomputeProjectsByMatrix", {
+      const response = await api.functions.invoke("bulkRecomputeProjectsByMatrix", {
         matrix_id: matrixId,
         dry_run: false,
       });
-      return result;
+      return response?.data ?? response;
     },
     onSuccess: async (result) => {
       const applied = result?.summary?.applied ?? 0;
