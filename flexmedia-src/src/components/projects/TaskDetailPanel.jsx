@@ -124,26 +124,26 @@ export default function TaskDetailPanel({
   return (
     <div className="bg-card p-2.5 rounded-lg border border-border/50 space-y-1.5 text-xs">
       {isOnsite && (
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 border border-blue-200 text-xs text-blue-700">
+        <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-50 border border-blue-200 dark:bg-blue-950/30 dark:border-blue-800 text-xs text-blue-700 dark:text-blue-300">
           <Lock className="h-3 w-3 flex-shrink-0" />
           <span>Onsite task — read only</span>
         </div>
       )}
       {/* Blocking/Status Alert */}
       {(task.is_blocked || task.is_locked) && (
-        <div className={`rounded px-2 py-1.5 flex items-start gap-2 ${task.is_locked ? 'bg-red-50 border border-red-200' : 'bg-orange-50 border border-orange-200'}`}>
+        <div className={`rounded px-2 py-1.5 flex items-start gap-2 ${task.is_locked ? 'bg-red-50 border border-red-200 dark:bg-red-950/30 dark:border-red-800' : 'bg-orange-50 border border-orange-200 dark:bg-orange-950/30 dark:border-orange-800'}`}>
           {task.is_locked ? (
             <>
-              <Lock className="h-3 w-3 text-red-600 flex-shrink-0 mt-0.5" />
+              <Lock className="h-3 w-3 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
               <div>
-                <p className="font-semibold text-red-700">Locked</p>
-                <p className="text-red-600">Time logging disabled</p>
+                <p className="font-semibold text-red-700 dark:text-red-300">Locked</p>
+                <p className="text-red-600 dark:text-red-400">Time logging disabled</p>
               </div>
               {effectiveCanEdit && (
-                <Button 
-                  size="sm" 
-                  variant="ghost" 
-                  className="h-4 text-xs text-red-600 hover:text-red-700 ml-auto"
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-4 text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 ml-auto"
                   onClick={() => lockMutation.mutate(false)}
                 >
                   Unlock
@@ -152,21 +152,21 @@ export default function TaskDetailPanel({
             </>
           ) : (
             <>
-              <AlertTriangle className="h-3 w-3 text-orange-600 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="h-3 w-3 text-orange-600 dark:text-orange-400 flex-shrink-0 mt-0.5" />
               <div>
                 {task.depends_on_task_ids?.length > 0 ? (
                   <>
-                    <p className="font-semibold text-orange-700 mb-1">Waiting for dependencies:</p>
+                    <p className="font-semibold text-orange-700 dark:text-orange-300 mb-1">Waiting for dependencies:</p>
                     <div className="space-y-0.5">
                       {task._depTasks?.map(depTask => (
-                        <div key={depTask.id} className={cn("text-xs", depTask.is_completed ? "text-green-600" : "text-orange-600 font-medium")}>
+                        <div key={depTask.id} className={cn("text-xs", depTask.is_completed ? "text-green-600 dark:text-green-400" : "text-orange-600 dark:text-orange-400 font-medium")}>
                           {depTask.is_completed ? "✓" : "→"} {depTask.title}
                         </div>
                       ))}
                     </div>
                   </>
                 ) : (
-                  <p className="text-orange-700">Waiting for <strong>{task.timer_trigger?.replace('project_', '').replace(/_/g, ' ')}</strong></p>
+                  <p className="text-orange-700 dark:text-orange-300">Waiting for <strong>{task.timer_trigger?.replace('project_', '').replace(/_/g, ' ')}</strong></p>
                 )}
               </div>
             </>
@@ -253,9 +253,9 @@ export default function TaskDetailPanel({
         <div className="space-y-1 bg-muted/30 rounded px-2 py-1.5">
           {task._depBlockingTasks?.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
-              <span className="text-red-700 font-semibold">Blocks {task._depBlockingTasks.length}:</span>
+              <span className="text-red-700 dark:text-red-300 font-semibold">Blocks {task._depBlockingTasks.length}:</span>
               {task._depBlockingTasks.map(blockedTask => (
-                <Badge key={blockedTask.id} variant="outline" className="text-xs px-1 py-0 bg-red-50 border-red-200 text-red-700">
+                <Badge key={blockedTask.id} variant="outline" className="text-xs px-1 py-0 bg-red-50 border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-800 dark:text-red-300">
                   🔒 {blockedTask.title}
                 </Badge>
               ))}
@@ -263,12 +263,12 @@ export default function TaskDetailPanel({
           )}
           {task.depends_on_task_ids?.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
-              <span className="text-blue-700 font-semibold">Depends on:</span>
+              <span className="text-blue-700 dark:text-blue-300 font-semibold">Depends on:</span>
               {task._depTasks?.map(depTask => (
                 <Badge
                   key={depTask.id}
                   className={`text-xs px-1 py-0 ${
-                    depTask.is_completed ? "bg-green-100 text-green-700" : depTask.is_blocked ? "bg-orange-100 text-orange-700" : "bg-card border border-border text-muted-foreground"
+                    depTask.is_completed ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300" : depTask.is_blocked ? "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300" : "bg-card border border-border text-muted-foreground"
                   }`}
                 >
                   {depTask.is_completed ? "✓" : depTask.is_blocked ? "🔒" : "→"} {depTask.title}
@@ -277,7 +277,7 @@ export default function TaskDetailPanel({
             </div>
           )}
           {task.timer_trigger && task.timer_trigger !== "none" && (
-            <div className="flex items-center gap-2 text-blue-600">
+            <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400">
               <ClockIcon className="h-3 w-3" />
               <span className="text-xs">Triggered: {task.timer_trigger === "dependencies_cleared" ? "dependencies cleared" : task.timer_trigger.replace("project_", "").replace(/_/g, " ")}</span>
             </div>
@@ -313,7 +313,7 @@ export default function TaskDetailPanel({
             <Button
               size="sm"
               variant="outline"
-              className={`h-6 text-xs px-2 ${task.is_locked ? "text-red-600 bg-red-50" : "text-blue-600"}`}
+              className={`h-6 text-xs px-2 ${task.is_locked ? "text-red-600 bg-red-50 dark:text-red-400 dark:bg-red-950/30" : "text-blue-600 dark:text-blue-400"}`}
               onClick={() => {
                 // Warn before unlocking auto-generated onsite tasks
                 if (task.is_locked && task.task_type === 'onsite' && task.auto_generated) {

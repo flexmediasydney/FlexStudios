@@ -59,27 +59,27 @@ export default function ProductBrandingSummary({ product, agency }) {
   if (brandingPreferences.length === 0) return null;
 
   return (
-    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2 mb-3">
-      <p className="text-xs font-semibold text-blue-900">📋 Branding Preferences</p>
+    <div className="bg-blue-50 border border-blue-200 dark:bg-blue-950/30 dark:border-blue-800 rounded-lg p-3 space-y-2 mb-3">
+      <p className="text-xs font-semibold text-blue-900 dark:text-blue-200">📋 Branding Preferences</p>
       <div className="space-y-1.5">
         {brandingPreferences.map((pref, idx) => (
           <div key={idx} className="text-xs">
             <div className="flex items-start gap-2">
-              <span className="text-blue-700 font-medium flex-shrink-0">{pref.label}:</span>
+              <span className="text-blue-700 dark:text-blue-300 font-medium flex-shrink-0">{pref.label}:</span>
               {pref.value.startsWith('http') ? (
                 <a 
                   href={pref.value} 
                   target="_blank" 
                   rel="noopener noreferrer"
-                  className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                  className="text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
                 >
                   View <ExternalLink className="h-2.5 w-2.5" />
                 </a>
               ) : (
-                <span className="text-blue-900">{pref.value}</span>
+                <span className="text-blue-900 dark:text-blue-200">{pref.value}</span>
               )}
             </div>
-            {pref.notes && <p className="text-blue-700 italic ml-20">{pref.notes}</p>}
+            {pref.notes && <p className="text-blue-700 dark:text-blue-300 italic ml-20">{pref.notes}</p>}
           </div>
         ))}
       </div>

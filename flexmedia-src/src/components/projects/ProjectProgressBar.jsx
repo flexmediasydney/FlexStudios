@@ -25,11 +25,11 @@ export default function ProjectProgressBar({ tasks = [] }) {
   };
 
   const getTextColor = () => {
-    if (percentage === 100) return "text-green-600";
-    if (percentage >= 75) return "text-emerald-600";
-    if (percentage >= 50) return "text-blue-600";
-    if (percentage >= 25) return "text-amber-600";
-    return "text-orange-600";
+    if (percentage === 100) return "text-green-600 dark:text-green-400";
+    if (percentage >= 75) return "text-emerald-600 dark:text-emerald-400";
+    if (percentage >= 50) return "text-blue-600 dark:text-blue-400";
+    if (percentage >= 25) return "text-amber-600 dark:text-amber-400";
+    return "text-orange-600 dark:text-orange-400";
   };
 
   return (
@@ -38,10 +38,10 @@ export default function ProjectProgressBar({ tasks = [] }) {
         <div className="flex items-center gap-3">
           <div className={cn(
             "flex items-center justify-center w-10 h-10 rounded-full flex-shrink-0",
-            percentage === 100 ? "bg-green-100" : "bg-muted"
+            percentage === 100 ? "bg-green-100 dark:bg-green-900/40" : "bg-muted"
           )}>
             {percentage === 100 ? (
-              <CheckCircle2 className="h-5 w-5 text-green-600" />
+              <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
             ) : (
               <ListTodo className="h-5 w-5 text-muted-foreground" />
             )}

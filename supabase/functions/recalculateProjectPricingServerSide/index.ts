@@ -69,9 +69,28 @@ serveWithAudit('recalculateProjectPricingServerSide', async (req) => {
     const newPrice = Math.max(0, parsedPrice);
     const tier = calcResult.pricing_tier || project.pricing_tier || 'standard';
 
+    // Resolve the versioned-matrix FK. 2026-04-20 (Phase 3) added
+    // price_matrix_versions as an immutable archive of every matrix state.
+    // Pin the project to the CURRENT version of the matrix that was used
+    // so calculated_price stays reproducible even if the matrix is edited
+    // later. Null when no matrix applied (e.g. no agent/agency).
+    let versionId: string | null = null;
+    const usedMatrixId = calcResult.price_matrix_snapshot?.id || null;
+    if (usedMatrixId) {
+      const { data: versionRow } = await admin
+        .from('price_matrix_versions')
+        .select('id')
+        .eq('matrix_id', usedMatrixId)
+        .is('superseded_at', null)
+        .limit(1)
+        .maybeSingle();
+      versionId = versionRow?.id || null;
+    }
+
     await entities.Project.update(project_id, {
       calculated_price: newPrice, price: newPrice, products_needs_recalc: false,
       price_matrix_snapshot: calcResult.price_matrix_snapshot || null,
+      price_matrix_version_id: versionId,
     });
 
     const oldPrice = project.calculated_price || 0;

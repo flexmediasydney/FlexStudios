@@ -23,31 +23,31 @@ import { createNotificationsForUsers, writeFeedEvent } from "@/components/notifi
 import AttachmentLightbox from "@/components/common/AttachmentLightbox";
 
 const REVISION_TYPES = {
-  images: { label: "Images", icon: "📷", color: "bg-blue-50 border-blue-200 text-blue-700" },
-  drones: { label: "Drones", icon: "🚁", color: "bg-sky-50 border-sky-200 text-sky-700" },
-  floorplan: { label: "Floorplan", icon: "📐", color: "bg-amber-50 border-amber-200 text-amber-700" },
-  video: { label: "Video", icon: "🎬", color: "bg-purple-50 border-purple-200 text-purple-700" },
+  images: { label: "Images", icon: "📷", color: "bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-300" },
+  drones: { label: "Drones", icon: "🚁", color: "bg-sky-50 border-sky-200 text-sky-700 dark:bg-sky-950/30 dark:border-sky-800 dark:text-sky-300" },
+  floorplan: { label: "Floorplan", icon: "📐", color: "bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300" },
+  video: { label: "Video", icon: "🎬", color: "bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-950/30 dark:border-purple-800 dark:text-purple-300" },
 };
 
 const REQUEST_KIND_CONFIG = {
-  revision: { label: "Revision", color: "bg-red-100 text-red-700 border-red-200" },
-  change_request: { label: "Change Request", color: "bg-purple-100 text-purple-700 border-purple-200" },
+  revision: { label: "Revision", color: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800" },
+  change_request: { label: "Change Request", color: "bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800" },
 };
 
 const STATUS_CONFIG = {
-  identified: { label: "Identified", icon: Clock, color: "bg-slate-100 text-slate-700 border-slate-200" },
-  in_progress: { label: "In Progress", icon: AlertCircle, color: "bg-blue-100 text-blue-700 border-blue-200" },
-  completed: { label: "Completed", icon: CheckCircle2, color: "bg-green-100 text-green-700 border-green-200" },
-  delivered: { label: "Delivered", icon: CheckCircle2, color: "bg-emerald-100 text-emerald-700 border-emerald-200" },
-  cancelled: { label: "Cancelled", icon: XCircle, color: "bg-red-100 text-red-700 border-red-200" },
-  stuck: { label: "Stuck", icon: AlertCircle, color: "bg-orange-100 text-orange-700 border-orange-200" },
+  identified: { label: "Identified", icon: Clock, color: "bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700" },
+  in_progress: { label: "In Progress", icon: AlertCircle, color: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800" },
+  completed: { label: "Completed", icon: CheckCircle2, color: "bg-green-100 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-300 dark:border-green-800" },
+  delivered: { label: "Delivered", icon: CheckCircle2, color: "bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800" },
+  cancelled: { label: "Cancelled", icon: XCircle, color: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 dark:border-red-800" },
+  stuck: { label: "Stuck", icon: AlertCircle, color: "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950/40 dark:text-orange-300 dark:border-orange-800" },
 };
 
 const PRIORITY_COLORS = {
   low: "text-muted-foreground",
-  normal: "text-blue-600",
-  high: "text-orange-600",
-  urgent: "text-red-600 font-semibold",
+  normal: "text-blue-600 dark:text-blue-400",
+  high: "text-orange-600 dark:text-orange-400",
+  urgent: "text-red-600 dark:text-red-400 font-semibold",
 };
 
 function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], allPackages = [], logActivity, currentUser }) {
@@ -373,8 +373,8 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
 
   return (
     <div className={cn("rounded-xl overflow-hidden", kindBorderStyle, {
-      'bg-gradient-to-br from-purple-50/30 to-transparent': revision.request_kind === 'change_request',
-      'bg-gradient-to-br from-red-50/30 to-transparent': revision.request_kind === 'revision'
+      'bg-gradient-to-br from-purple-50/30 to-transparent dark:from-purple-950/20 dark:to-transparent': revision.request_kind === 'change_request',
+      'bg-gradient-to-br from-red-50/30 to-transparent dark:from-red-950/20 dark:to-transparent': revision.request_kind === 'revision'
     })}>
       {/* Header */}
       <div
@@ -461,8 +461,8 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
               size="sm"
               className={cn('h-7 text-xs px-2',
                 revision.status === 'stuck'
-                  ? 'bg-amber-50 border-amber-200 text-amber-600 hover:bg-amber-100'
-                  : 'text-amber-600 hover:bg-amber-50 border-amber-200'
+                  ? 'bg-amber-50 border-amber-200 text-amber-600 hover:bg-amber-100 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-900/40'
+                  : 'text-amber-600 hover:bg-amber-50 border-amber-200 dark:text-amber-400 dark:hover:bg-amber-950/30 dark:border-amber-800'
               )}
               onClick={e => { e.stopPropagation(); handleStuckToggle(); }}
               disabled={updateMutation.isPending}
@@ -477,7 +477,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs px-2 text-red-600 hover:bg-red-50 border-red-200"
+              className="h-7 text-xs px-2 text-red-600 hover:bg-red-50 border-red-200 dark:text-red-400 dark:hover:bg-red-950/30 dark:border-red-800"
               onClick={e => { e.stopPropagation(); setShowCancelDialog(true); }}
               title="Cancel request"
             >
@@ -659,9 +659,9 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
                         className={cn(
                           "flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm group cursor-pointer transition-colors",
                           task.is_completed
-                            ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800 hover:bg-green-100/60"
+                            ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800 hover:bg-green-100/60 dark:hover:bg-green-900/40"
                             : isBlocked
-                              ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800 hover:bg-amber-100/60"
+                              ? "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800 hover:bg-amber-100/60 dark:hover:bg-amber-900/40"
                               : "bg-background border-border hover:bg-muted/40",
                           isTaskExpanded && "rounded-b-none border-b-0"
                         )}
@@ -699,7 +699,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
 
                         {/* Blocked badge */}
                         {isBlocked && (
-                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 border-amber-300 flex-shrink-0">
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-700 flex-shrink-0">
                             blocked
                           </Badge>
                         )}
@@ -707,7 +707,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
                         {/* Due date / overdue */}
                         {task.due_date && !task.is_completed && (
                           daysOverdue > 0 ? (
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-red-100 text-red-700 border-red-300 flex-shrink-0">
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 bg-red-100 text-red-700 border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-700 flex-shrink-0">
                               {daysOverdue}d overdue
                             </Badge>
                           ) : (
@@ -818,15 +818,15 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
                  <div className="space-y-2">
                    <p>Mark this pricing impact as pending again?</p>
                    {revision.pricing_impact && (
-                     <div className="text-xs space-y-1 bg-orange-50 p-2 rounded border border-orange-200">
+                     <div className="text-xs space-y-1 bg-orange-50 p-2 rounded border border-orange-200 dark:bg-orange-950/30 dark:border-orange-800">
                        {(revision.pricing_impact.products_added || []).filter(p => p.product_id).map((p, i) => (
-                         <p key={i} className="text-orange-700">+ {p.product_name} (qty {p.quantity})</p>
+                         <p key={i} className="text-orange-700 dark:text-orange-300">+ {p.product_name} (qty {p.quantity})</p>
                        ))}
                        {(revision.pricing_impact.quantity_changes || []).filter(p => p.product_id).map((p, i) => (
-                         <p key={i} className="text-orange-700">~ {p.product_name}: {p.old_quantity}→{p.new_quantity}</p>
+                         <p key={i} className="text-orange-700 dark:text-orange-300">~ {p.product_name}: {p.old_quantity}→{p.new_quantity}</p>
                        ))}
                        {(revision.pricing_impact.products_removed || []).filter(p => p.product_id).map((p, i) => (
-                         <p key={i} className="text-orange-700">- {p.product_name}</p>
+                         <p key={i} className="text-orange-700 dark:text-orange-300">- {p.product_name}</p>
                        ))}
                      </div>
                    )}

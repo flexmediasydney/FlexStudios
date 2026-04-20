@@ -447,7 +447,7 @@ export default function ProjectActivityHub({ projectId, project }) {
         <div className="mt-3">
           <button
             onClick={() => setPinnedExpanded(e => !e)}
-            className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-50/50 transition-colors rounded-t-lg bg-amber-50/30 border border-amber-100/60"
+            className="w-full flex items-center justify-between px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-50/50 dark:hover:bg-amber-900/20 transition-colors rounded-t-lg bg-amber-50/30 dark:bg-amber-950/20 border border-amber-100/60 dark:border-amber-900/40"
           >
             <span className="flex items-center gap-1.5">
               <Pin className="h-3 w-3 fill-amber-400 text-amber-500" />
@@ -456,7 +456,7 @@ export default function ProjectActivityHub({ projectId, project }) {
             {pinnedExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           </button>
           {pinnedExpanded && (
-            <div className="border border-t-0 border-amber-100/60 rounded-b-lg bg-amber-50/10 px-3 py-2 space-y-1">
+            <div className="border border-t-0 border-amber-100/60 dark:border-amber-900/40 rounded-b-lg bg-amber-50/10 dark:bg-amber-950/10 px-3 py-2 space-y-1">
               {pinnedNotes.map((note, idx) => (
                 <ProjectActivityFeedItem
                   key={note.id}
@@ -525,7 +525,7 @@ export default function ProjectActivityHub({ projectId, project }) {
           }}
           className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium transition-colors whitespace-nowrap ${
             fieldChangesOnly
-              ? 'bg-amber-100 text-amber-800 border border-amber-300'
+              ? 'bg-amber-100 text-amber-800 border border-amber-300 dark:bg-amber-900/40 dark:text-amber-200 dark:border-amber-700'
               : 'bg-muted text-muted-foreground hover:bg-muted/80'
           }`}
         >

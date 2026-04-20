@@ -27,13 +27,13 @@ const ROLE_ICONS = {
 };
 
 const ROLE_COLORS = {
-  project_owner: { bg: "bg-purple-100", text: "text-purple-700", badge: "bg-purple-500" },
-  photographer: { bg: "bg-blue-100", text: "text-blue-700", badge: "bg-blue-500" },
-  videographer: { bg: "bg-rose-100", text: "text-rose-700", badge: "bg-rose-500" },
-  image_editor: { bg: "bg-emerald-100", text: "text-emerald-700", badge: "bg-emerald-500" },
-  video_editor: { bg: "bg-orange-100", text: "text-orange-700", badge: "bg-orange-500" },
-  floorplan_editor: { bg: "bg-cyan-100", text: "text-cyan-700", badge: "bg-cyan-500" },
-  drone_editor: { bg: "bg-indigo-100", text: "text-indigo-700", badge: "bg-indigo-500" },
+  project_owner: { bg: "bg-purple-100 dark:bg-purple-900/40", text: "text-purple-700 dark:text-purple-300", badge: "bg-purple-500" },
+  photographer: { bg: "bg-blue-100 dark:bg-blue-900/40", text: "text-blue-700 dark:text-blue-300", badge: "bg-blue-500" },
+  videographer: { bg: "bg-rose-100 dark:bg-rose-900/40", text: "text-rose-700 dark:text-rose-300", badge: "bg-rose-500" },
+  image_editor: { bg: "bg-emerald-100 dark:bg-emerald-900/40", text: "text-emerald-700 dark:text-emerald-300", badge: "bg-emerald-500" },
+  video_editor: { bg: "bg-orange-100 dark:bg-orange-900/40", text: "text-orange-700 dark:text-orange-300", badge: "bg-orange-500" },
+  floorplan_editor: { bg: "bg-cyan-100 dark:bg-cyan-900/40", text: "text-cyan-700 dark:text-cyan-300", badge: "bg-cyan-500" },
+  drone_editor: { bg: "bg-indigo-100 dark:bg-indigo-900/40", text: "text-indigo-700 dark:text-indigo-300", badge: "bg-indigo-500" },
 };
 
 function getInitials(name) {
@@ -226,7 +226,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
                ? "bg-card border-border text-foreground hover:border-primary/50"
                : isNotRequired
                ? "bg-muted/30 border-border text-muted-foreground"
-               : "bg-amber-50 border-amber-300 text-amber-700 hover:border-amber-400",
+               : "bg-amber-50 border-amber-300 text-amber-700 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300 hover:border-amber-400 dark:hover:border-amber-700",
              !canEdit && "cursor-default opacity-80",
              isLoading && "opacity-70 pointer-events-none"
            )}
@@ -262,7 +262,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
               {isSet ? currentName : isNotRequired ? "N/R" : "Unassigned"}
             </span>
             {isSet && currentType === "team" && (
-              <span className="ml-1 text-[8px] px-1 rounded bg-indigo-100 text-indigo-600 font-semibold">TEAM</span>
+              <span className="ml-1 text-[8px] px-1 rounded bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300 font-semibold">TEAM</span>
             )}
           </div>
           {canEdit && !isLoading && <ChevronDown className="h-3 w-3 text-muted-foreground flex-shrink-0" />}
@@ -321,11 +321,11 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
                   )}
                   onClick={() => select(t.id, t.name, "team")}
                 >
-                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-indigo-100 text-indigo-600 flex-shrink-0">
+                  <span className="inline-flex items-center justify-center h-5 w-5 rounded-full bg-indigo-100 text-indigo-600 dark:bg-indigo-900/40 dark:text-indigo-300 flex-shrink-0">
                     <Users className="h-3 w-3" />
                   </span>
                   {t.name}
-                  <span className="ml-auto text-[9px] font-semibold uppercase tracking-wider text-indigo-500 bg-indigo-50 px-1 py-px rounded">Team</span>
+                  <span className="ml-auto text-[9px] font-semibold uppercase tracking-wider text-indigo-500 bg-indigo-50 dark:text-indigo-300 dark:bg-indigo-950/30 px-1 py-px rounded">Team</span>
                 </button>
               ))}
             </>

@@ -9,41 +9,41 @@ import {
 import { Badge } from "@/components/ui/badge";
 
 const ACTION_CONFIG = {
-  create:         { label: "Created",        color: "bg-emerald-500", textColor: "text-emerald-700", bg: "bg-emerald-50 border-emerald-200", icon: Plus,           iconBg: "bg-emerald-100" },
-  update:         { label: "Updated",        color: "bg-blue-500",    textColor: "text-blue-700",    bg: "bg-blue-50 border-blue-200",       icon: RefreshCw,      iconBg: "bg-blue-100" },
-  delete:         { label: "Deleted",        color: "bg-red-500",     textColor: "text-red-700",     bg: "bg-red-50 border-red-200",         icon: Trash2,         iconBg: "bg-red-100" },
-  status_change:  { label: "Status changed", color: "bg-purple-500",  textColor: "text-purple-700",  bg: "bg-purple-50 border-purple-200",   icon: ArrowUpDown,    iconBg: "bg-purple-100" },
-  task_added:     { label: "Task added",     color: "bg-indigo-500",  textColor: "text-indigo-700",  bg: "bg-indigo-50 border-indigo-200",   icon: ListPlus,       iconBg: "bg-indigo-100" },
-  task_completed: { label: "Task done",      color: "bg-teal-500",    textColor: "text-teal-700",    bg: "bg-teal-50 border-teal-200",       icon: ListChecks,     iconBg: "bg-teal-100" },
-  task_deleted:        { label: "Task deleted",      color: "bg-red-400",     textColor: "text-red-700",     bg: "bg-red-50 border-red-200",         icon: FileX,          iconBg: "bg-red-100" },
-  outcome_changed:     { label: "Outcome changed",   color: "bg-pink-500",    textColor: "text-pink-700",    bg: "bg-pink-50 border-pink-200",       icon: Trophy,         iconBg: "bg-pink-100" },
-  payment_changed:     { label: "Payment changed",   color: "bg-green-500",   textColor: "text-green-700",   bg: "bg-green-50 border-green-200",     icon: CreditCard,     iconBg: "bg-green-100" },
-  agent_changed:       { label: "Agent changed",     color: "bg-sky-500",     textColor: "text-sky-700",     bg: "bg-sky-50 border-sky-200",         icon: UserCheck,      iconBg: "bg-sky-100" },
-  request_created:     { label: "Request created",   color: "bg-violet-500",  textColor: "text-violet-700",  bg: "bg-violet-50 border-violet-200",   icon: FileText,       iconBg: "bg-violet-100" },
-  request_updated:     { label: "Request updated",   color: "bg-blue-400",    textColor: "text-blue-700",    bg: "bg-blue-50 border-blue-200",       icon: RefreshCw,      iconBg: "bg-blue-100" },
-  request_cancelled:   { label: "Request cancelled", color: "bg-orange-500",  textColor: "text-orange-700",  bg: "bg-orange-50 border-orange-200",   icon: XOctagon,       iconBg: "bg-orange-100" },
-  request_completed:   { label: "Request completed", color: "bg-teal-500",    textColor: "text-teal-700",    bg: "bg-teal-50 border-teal-200",       icon: MailCheck,      iconBg: "bg-teal-100" },
-  note_added:          { label: "Note added",        color: "bg-amber-500",   textColor: "text-amber-700",   bg: "bg-amber-50 border-amber-200",     icon: StickyNote,     iconBg: "bg-amber-100" },
+  create:         { label: "Created",        color: "bg-emerald-500", textColor: "text-emerald-700 dark:text-emerald-300", bg: "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800", icon: Plus,           iconBg: "bg-emerald-100 dark:bg-emerald-900/40" },
+  update:         { label: "Updated",        color: "bg-blue-500",    textColor: "text-blue-700 dark:text-blue-300",    bg: "bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800",       icon: RefreshCw,      iconBg: "bg-blue-100 dark:bg-blue-900/40" },
+  delete:         { label: "Deleted",        color: "bg-red-500",     textColor: "text-red-700 dark:text-red-300",     bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",         icon: Trash2,         iconBg: "bg-red-100 dark:bg-red-900/40" },
+  status_change:  { label: "Status changed", color: "bg-purple-500",  textColor: "text-purple-700 dark:text-purple-300",  bg: "bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-800",   icon: ArrowUpDown,    iconBg: "bg-purple-100 dark:bg-purple-900/40" },
+  task_added:     { label: "Task added",     color: "bg-indigo-500",  textColor: "text-indigo-700 dark:text-indigo-300",  bg: "bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-800",   icon: ListPlus,       iconBg: "bg-indigo-100 dark:bg-indigo-900/40" },
+  task_completed: { label: "Task done",      color: "bg-teal-500",    textColor: "text-teal-700 dark:text-teal-300",    bg: "bg-teal-50 border-teal-200 dark:bg-teal-950/30 dark:border-teal-800",       icon: ListChecks,     iconBg: "bg-teal-100 dark:bg-teal-900/40" },
+  task_deleted:        { label: "Task deleted",      color: "bg-red-400",     textColor: "text-red-700 dark:text-red-300",     bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",         icon: FileX,          iconBg: "bg-red-100 dark:bg-red-900/40" },
+  outcome_changed:     { label: "Outcome changed",   color: "bg-pink-500",    textColor: "text-pink-700 dark:text-pink-300",    bg: "bg-pink-50 border-pink-200 dark:bg-pink-950/30 dark:border-pink-800",       icon: Trophy,         iconBg: "bg-pink-100 dark:bg-pink-900/40" },
+  payment_changed:     { label: "Payment changed",   color: "bg-green-500",   textColor: "text-green-700 dark:text-green-300",   bg: "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800",     icon: CreditCard,     iconBg: "bg-green-100 dark:bg-green-900/40" },
+  agent_changed:       { label: "Agent changed",     color: "bg-sky-500",     textColor: "text-sky-700 dark:text-sky-300",     bg: "bg-sky-50 border-sky-200 dark:bg-sky-950/30 dark:border-sky-800",         icon: UserCheck,      iconBg: "bg-sky-100 dark:bg-sky-900/40" },
+  request_created:     { label: "Request created",   color: "bg-violet-500",  textColor: "text-violet-700 dark:text-violet-300",  bg: "bg-violet-50 border-violet-200 dark:bg-violet-950/30 dark:border-violet-800",   icon: FileText,       iconBg: "bg-violet-100 dark:bg-violet-900/40" },
+  request_updated:     { label: "Request updated",   color: "bg-blue-400",    textColor: "text-blue-700 dark:text-blue-300",    bg: "bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800",       icon: RefreshCw,      iconBg: "bg-blue-100 dark:bg-blue-900/40" },
+  request_cancelled:   { label: "Request cancelled", color: "bg-orange-500",  textColor: "text-orange-700 dark:text-orange-300",  bg: "bg-orange-50 border-orange-200 dark:bg-orange-950/30 dark:border-orange-800",   icon: XOctagon,       iconBg: "bg-orange-100 dark:bg-orange-900/40" },
+  request_completed:   { label: "Request completed", color: "bg-teal-500",    textColor: "text-teal-700 dark:text-teal-300",    bg: "bg-teal-50 border-teal-200 dark:bg-teal-950/30 dark:border-teal-800",       icon: MailCheck,      iconBg: "bg-teal-100 dark:bg-teal-900/40" },
+  note_added:          { label: "Note added",        color: "bg-amber-500",   textColor: "text-amber-700 dark:text-amber-300",   bg: "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800",     icon: StickyNote,     iconBg: "bg-amber-100 dark:bg-amber-900/40" },
   // Tonomo system actions
-  tonomo_booking_created:  { label: "Booking received",    color: "bg-violet-500",  textColor: "text-violet-700",  bg: "bg-violet-50 border-violet-200",  icon: Zap,            iconBg: "bg-violet-100" },
-  tonomo_booking_updated:  { label: "Booking updated",     color: "bg-violet-400",  textColor: "text-violet-700",  bg: "bg-violet-50 border-violet-200",  icon: Zap,            iconBg: "bg-violet-100" },
-  tonomo_rescheduled:      { label: "Rescheduled",         color: "bg-amber-500",   textColor: "text-amber-700",   bg: "bg-amber-50 border-amber-200",    icon: Calendar,       iconBg: "bg-amber-100" },
-  tonomo_changed:          { label: "Booking changed",     color: "bg-orange-500",  textColor: "text-orange-700",  bg: "bg-orange-50 border-orange-200",  icon: RefreshCw,      iconBg: "bg-orange-100" },
-  tonomo_cancelled:        { label: "Cancellation",        color: "bg-red-500",     textColor: "text-red-700",     bg: "bg-red-50 border-red-200",        icon: XOctagon,       iconBg: "bg-red-100" },
-  tonomo_delivered:        { label: "Delivered",           color: "bg-teal-500",    textColor: "text-teal-700",    bg: "bg-teal-50 border-teal-200",      icon: CheckCircle,    iconBg: "bg-teal-100" },
+  tonomo_booking_created:  { label: "Booking received",    color: "bg-violet-500",  textColor: "text-violet-700 dark:text-violet-300",  bg: "bg-violet-50 border-violet-200 dark:bg-violet-950/30 dark:border-violet-800",  icon: Zap,            iconBg: "bg-violet-100 dark:bg-violet-900/40" },
+  tonomo_booking_updated:  { label: "Booking updated",     color: "bg-violet-400",  textColor: "text-violet-700 dark:text-violet-300",  bg: "bg-violet-50 border-violet-200 dark:bg-violet-950/30 dark:border-violet-800",  icon: Zap,            iconBg: "bg-violet-100 dark:bg-violet-900/40" },
+  tonomo_rescheduled:      { label: "Rescheduled",         color: "bg-amber-500",   textColor: "text-amber-700 dark:text-amber-300",   bg: "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800",    icon: Calendar,       iconBg: "bg-amber-100 dark:bg-amber-900/40" },
+  tonomo_changed:          { label: "Booking changed",     color: "bg-orange-500",  textColor: "text-orange-700 dark:text-orange-300",  bg: "bg-orange-50 border-orange-200 dark:bg-orange-950/30 dark:border-orange-800",  icon: RefreshCw,      iconBg: "bg-orange-100 dark:bg-orange-900/40" },
+  tonomo_cancelled:        { label: "Cancellation",        color: "bg-red-500",     textColor: "text-red-700 dark:text-red-300",     bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",        icon: XOctagon,       iconBg: "bg-red-100 dark:bg-red-900/40" },
+  tonomo_delivered:        { label: "Delivered",           color: "bg-teal-500",    textColor: "text-teal-700 dark:text-teal-300",    bg: "bg-teal-50 border-teal-200 dark:bg-teal-950/30 dark:border-teal-800",      icon: CheckCircle,    iconBg: "bg-teal-100 dark:bg-teal-900/40" },
   // System automation actions
-  system_roles_applied:    { label: "Roles auto-assigned", color: "bg-cyan-500",    textColor: "text-cyan-700",    bg: "bg-cyan-50 border-cyan-200",      icon: UserCheck,      iconBg: "bg-cyan-100" },
-  system_tasks_generated:  { label: "Tasks generated",     color: "bg-indigo-500",  textColor: "text-indigo-700",  bg: "bg-indigo-50 border-indigo-200",  icon: ClipboardList,  iconBg: "bg-indigo-100" },
-  system_tasks_failed:     { label: "Tasks failed",        color: "bg-red-400",     textColor: "text-red-700",     bg: "bg-red-50 border-red-200",        icon: AlertTriangle,  iconBg: "bg-red-100" },
-  automation_rule_fired:   { label: "Automation",          color: "bg-purple-500",  textColor: "text-purple-700",  bg: "bg-purple-50 border-purple-200",  icon: Bot,            iconBg: "bg-purple-100" },
+  system_roles_applied:    { label: "Roles auto-assigned", color: "bg-cyan-500",    textColor: "text-cyan-700 dark:text-cyan-300",    bg: "bg-cyan-50 border-cyan-200 dark:bg-cyan-950/30 dark:border-cyan-800",      icon: UserCheck,      iconBg: "bg-cyan-100 dark:bg-cyan-900/40" },
+  system_tasks_generated:  { label: "Tasks generated",     color: "bg-indigo-500",  textColor: "text-indigo-700 dark:text-indigo-300",  bg: "bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-800",  icon: ClipboardList,  iconBg: "bg-indigo-100 dark:bg-indigo-900/40" },
+  system_tasks_failed:     { label: "Tasks failed",        color: "bg-red-400",     textColor: "text-red-700 dark:text-red-300",     bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",        icon: AlertTriangle,  iconBg: "bg-red-100 dark:bg-red-900/40" },
+  automation_rule_fired:   { label: "Automation",          color: "bg-purple-500",  textColor: "text-purple-700 dark:text-purple-300",  bg: "bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-800",  icon: Bot,            iconBg: "bg-purple-100 dark:bg-purple-900/40" },
   // Task-level system changes
-  task_auto_completed:     { label: "Task auto-completed", color: "bg-teal-500",    textColor: "text-teal-700",    bg: "bg-teal-50 border-teal-200",      icon: CheckCircle,    iconBg: "bg-teal-100" },
-  task_effort_auto_logged: { label: "Effort auto-logged",  color: "bg-amber-500",   textColor: "text-amber-700",   bg: "bg-amber-50 border-amber-200",    icon: Timer,          iconBg: "bg-amber-100" },
-  task_owner_changed:      { label: "Task owner changed",  color: "bg-sky-500",     textColor: "text-sky-700",     bg: "bg-sky-50 border-sky-200",        icon: UserCog,        iconBg: "bg-sky-100" },
-  task_due_date_changed:   { label: "Due dates recalculated", color: "bg-blue-500", textColor: "text-blue-700",    bg: "bg-blue-50 border-blue-200",      icon: Calendar,       iconBg: "bg-blue-100" },
-  task_auto_archived:      { label: "Tasks auto-archived", color: "bg-slate-500",   textColor: "text-slate-700",   bg: "bg-slate-50 border-slate-200",    icon: Archive,        iconBg: "bg-slate-100" },
+  task_auto_completed:     { label: "Task auto-completed", color: "bg-teal-500",    textColor: "text-teal-700 dark:text-teal-300",    bg: "bg-teal-50 border-teal-200 dark:bg-teal-950/30 dark:border-teal-800",      icon: CheckCircle,    iconBg: "bg-teal-100 dark:bg-teal-900/40" },
+  task_effort_auto_logged: { label: "Effort auto-logged",  color: "bg-amber-500",   textColor: "text-amber-700 dark:text-amber-300",   bg: "bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800",    icon: Timer,          iconBg: "bg-amber-100 dark:bg-amber-900/40" },
+  task_owner_changed:      { label: "Task owner changed",  color: "bg-sky-500",     textColor: "text-sky-700 dark:text-sky-300",     bg: "bg-sky-50 border-sky-200 dark:bg-sky-950/30 dark:border-sky-800",        icon: UserCog,        iconBg: "bg-sky-100 dark:bg-sky-900/40" },
+  task_due_date_changed:   { label: "Due dates recalculated", color: "bg-blue-500", textColor: "text-blue-700 dark:text-blue-300",    bg: "bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800",      icon: Calendar,       iconBg: "bg-blue-100 dark:bg-blue-900/40" },
+  task_auto_archived:      { label: "Tasks auto-archived", color: "bg-slate-500",   textColor: "text-slate-700 dark:text-slate-300",   bg: "bg-slate-50 border-slate-200 dark:bg-slate-800/60 dark:border-slate-700",    icon: Archive,        iconBg: "bg-slate-100 dark:bg-slate-800/60" },
   // Property re-engagement signals
-  pulse_relisting_detected: { label: "Re-listing detected", color: "bg-emerald-500", textColor: "text-emerald-700", bg: "bg-emerald-50 border-emerald-200", icon: Home,         iconBg: "bg-emerald-100" },
+  pulse_relisting_detected: { label: "Re-listing detected", color: "bg-emerald-500", textColor: "text-emerald-700 dark:text-emerald-300", bg: "bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800", icon: Home,         iconBg: "bg-emerald-100 dark:bg-emerald-900/40" },
 };
 
 // Fields to completely ignore in delta display
@@ -125,12 +125,12 @@ function parsePackageDelta(oldVal, newVal) {
 
 function DeltaChip({ label, oldVal, newVal, type = "change" }) {
   if (type === "added") return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-medium border border-emerald-200">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300 text-xs font-medium border border-emerald-200 dark:border-emerald-800">
       <Plus className="h-2.5 w-2.5" /> {label}
     </span>
   );
   if (type === "removed") return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 text-xs font-medium border border-red-200 line-through opacity-70">
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 text-xs font-medium border border-red-200 dark:border-red-800 line-through opacity-70">
       {label}
     </span>
   );
@@ -163,7 +163,7 @@ function renderDeltaRows(changedFields) {
           {added.map((p, i) => <DeltaChip key={`a${i}`} label={p[nameKey] || "Unknown"} type="added" />)}
           {removed.map((p, i) => <DeltaChip key={`r${i}`} label={p[nameKey] || "Unknown"} type="removed" />)}
           {qtyChanged.map((p, i) => (
-            <span key={`q${i}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium border border-blue-200">
+            <span key={`q${i}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 text-xs font-medium border border-blue-200 dark:border-blue-800">
               {p[nameKey]}: <span className="line-through opacity-60">{p.oldQty}</span><ArrowRight className="h-2.5 w-2.5" />{p.quantity}
             </span>
           ))}
@@ -184,7 +184,7 @@ function renderDeltaRows(changedFields) {
           {added.map((p, i) => <DeltaChip key={`a${i}`} label={p[nameKey] || "Unknown"} type="added" />)}
           {removed.map((p, i) => <DeltaChip key={`r${i}`} label={p[nameKey] || "Unknown"} type="removed" />)}
           {qtyChanged.map((p, i) => (
-            <span key={`q${i}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-medium border border-blue-200">
+            <span key={`q${i}`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 text-xs font-medium border border-blue-200 dark:border-blue-800">
               {p[nameKey]}: <span className="line-through opacity-60">{p.oldQty}</span><ArrowRight className="h-2.5 w-2.5" />{p.quantity}
             </span>
           ))}
@@ -238,17 +238,17 @@ export default function ActivityLogItem({ activity }) {
            {/* Actor badge — clearly distinguishes human vs system */}
            <span className="flex items-center gap-1">
              {activity.actor_type === 'tonomo' && (
-               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-violet-100 text-violet-700 border border-violet-200">
+               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 border border-violet-200 dark:border-violet-800">
                  ⚡ Tonomo
                </span>
              )}
              {activity.actor_type === 'system' && (
-               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-600 dark:bg-slate-800/60 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
                  ⚙ System
                </span>
              )}
              {activity.actor_type === 'automation' && (
-               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-700 border border-purple-200">
+               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-semibold bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
                  🤖 Automation
                  {activity.automation_rule_name && (
                    <span className="font-normal opacity-80">· {activity.automation_rule_name}</span>
@@ -298,8 +298,8 @@ export default function ActivityLogItem({ activity }) {
                 {confidence && confidence !== 'full' && (
                   <span className={`inline-flex text-xs px-1.5 py-0.5 rounded border ${
                     confidence === 'partial'
-                      ? 'bg-amber-50 text-amber-700 border-amber-200'
-                      : 'bg-red-50 text-red-700 border-red-200'
+                      ? 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-800'
+                      : 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-300 dark:border-red-800'
                   }`}>
                     Mapping confidence: {confidence}
                   </span>

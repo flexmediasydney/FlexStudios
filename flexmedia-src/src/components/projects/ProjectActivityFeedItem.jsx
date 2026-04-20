@@ -23,21 +23,21 @@ import { sanitizeEmailHtml } from '@/utils/sanitizeHtml';
 const TYPE_CONFIG = {
   note: {
     icon: MessageSquare,
-    iconBg: 'bg-blue-100',
-    iconColor: 'text-blue-600',
-    borderColor: 'border-blue-200',
-    bgColor: 'bg-blue-50',
+    iconBg: 'bg-blue-100 dark:bg-blue-900/40',
+    iconColor: 'text-blue-600 dark:text-blue-300',
+    borderColor: 'border-blue-200 dark:border-blue-800',
+    bgColor: 'bg-blue-50 dark:bg-blue-950/30',
     label: 'Note',
-    badgeClass: 'bg-blue-50 text-blue-700 border-blue-200',
+    badgeClass: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800',
   },
   email: {
     icon: Mail,
-    iconBg: 'bg-purple-100',
-    iconColor: 'text-purple-600',
-    borderColor: 'border-purple-200',
-    bgColor: 'bg-purple-50',
+    iconBg: 'bg-purple-100 dark:bg-purple-900/40',
+    iconColor: 'text-purple-600 dark:text-purple-300',
+    borderColor: 'border-purple-200 dark:border-purple-800',
+    bgColor: 'bg-purple-50 dark:bg-purple-950/30',
     label: 'Email',
-    badgeClass: 'bg-purple-50 text-purple-700 border-purple-200',
+    badgeClass: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800',
   },
   activity: {
     icon: Activity,
@@ -175,7 +175,7 @@ export default function ProjectActivityFeedItem({
                   title={item._raw.is_pinned ? 'Unpin' : 'Pin'}
                   className={`p-1 rounded transition-colors ${
                     item._raw.is_pinned
-                      ? 'text-amber-500 hover:bg-amber-50'
+                      ? 'text-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/30'
                       : 'text-muted-foreground hover:bg-muted/60'
                   }`}
                 >
@@ -281,10 +281,10 @@ export default function ProjectActivityFeedItem({
 
               {/* Reply thread */}
               {(sortedReplies.length > 0 || isReplying) && (
-                <div className="mt-2 border-t border-blue-100 pt-2">
+                <div className="mt-2 border-t border-blue-100 dark:border-blue-900/40 pt-2">
                   {repliesExpanded && sortedReplies.map(reply => (
                     <div key={reply.id} className="flex gap-2 py-1.5">
-                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-[9px] font-bold shrink-0">
+                      <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 flex items-center justify-center text-[9px] font-bold shrink-0">
                         {(reply.author_name || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
                       </div>
                       <div className="flex-1 min-w-0">

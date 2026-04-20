@@ -181,24 +181,24 @@ export default function TonomoTab({ project }) {
             <ReviewBanner reviewType={project.pending_review_type} />
 
             {approvalErrors.length > 0 && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-3 space-y-1.5">
-                <p className="text-sm font-medium text-red-700 flex items-center gap-1.5">
+              <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/30 dark:border-red-800 p-3 space-y-1.5">
+                <p className="text-sm font-medium text-red-700 dark:text-red-300 flex items-center gap-1.5">
                   <XCircle className="h-4 w-4 flex-shrink-0" />
                   Cannot approve — fix these issues first:
                 </p>
                 {approvalErrors.map((err, i) => (
-                  <p key={i} className="text-xs text-red-600 pl-5">• {err}</p>
+                  <p key={i} className="text-xs text-red-600 dark:text-red-400 pl-5">• {err}</p>
                 ))}
               </div>
             )}
             {approvalWarnings.length > 0 && approvalErrors.length === 0 && (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-1">
-                <p className="text-sm font-medium text-amber-700 flex items-center gap-1.5">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 p-3 space-y-1">
+                <p className="text-sm font-medium text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
                   <AlertCircle className="h-4 w-4 flex-shrink-0" />
                   Heads up:
                 </p>
                 {approvalWarnings.map((w, i) => (
-                  <p key={i} className="text-xs text-amber-600 pl-5">• {w}</p>
+                  <p key={i} className="text-xs text-amber-600 dark:text-amber-400 pl-5">• {w}</p>
                 ))}
               </div>
             )}
@@ -276,7 +276,8 @@ export default function TonomoTab({ project }) {
                       value={
                         <span className="inline-flex items-center gap-1 text-xs font-medium
                                        px-2 py-0.5 rounded-full bg-amber-100 text-amber-700
-                                       border border-amber-200">
+                                       dark:bg-amber-900/40 dark:text-amber-300
+                                       border border-amber-200 dark:border-amber-700">
                           ⭐ First order from this agent
                         </span>
                       }
@@ -333,12 +334,12 @@ export default function TonomoTab({ project }) {
                   <div className="space-y-3">
                     {bookingTimeline.map((item, idx) => {
                       const statusConfig = {
-                        completed: { dot: 'bg-green-500', bg: 'bg-green-50', text: 'text-green-700', label: 'Completed' },
-                        failed: { dot: 'bg-red-500', bg: 'bg-red-50', text: 'text-red-700', label: 'Failed' },
-                        dead_letter: { dot: 'bg-amber-500', bg: 'bg-amber-50', text: 'text-amber-700', label: 'Dead Letter' },
-                        processing: { dot: 'bg-blue-500', bg: 'bg-blue-50', text: 'text-blue-700', label: 'Processing' },
+                        completed: { dot: 'bg-green-500', bg: 'bg-green-50 dark:bg-green-950/30', text: 'text-green-700 dark:text-green-300', label: 'Completed' },
+                        failed: { dot: 'bg-red-500', bg: 'bg-red-50 dark:bg-red-950/30', text: 'text-red-700 dark:text-red-300', label: 'Failed' },
+                        dead_letter: { dot: 'bg-amber-500', bg: 'bg-amber-50 dark:bg-amber-950/30', text: 'text-amber-700 dark:text-amber-300', label: 'Dead Letter' },
+                        processing: { dot: 'bg-blue-500', bg: 'bg-blue-50 dark:bg-blue-950/30', text: 'text-blue-700 dark:text-blue-300', label: 'Processing' },
                         pending: { dot: 'bg-slate-400', bg: 'bg-muted/50', text: 'text-muted-foreground', label: 'Pending' },
-                        superseded: { dot: 'bg-gray-400', bg: 'bg-gray-50', text: 'text-gray-500', label: 'Superseded' },
+                        superseded: { dot: 'bg-gray-400', bg: 'bg-gray-50 dark:bg-gray-800/40', text: 'text-gray-500 dark:text-gray-400', label: 'Superseded' },
                       };
                       const cfg = statusConfig[item.status] || statusConfig.pending;
                       const actionLabels = {
@@ -446,30 +447,30 @@ function ReviewHistoryPanel({ project }) {
           <h4 className="text-sm font-semibold">Review Decision</h4>
 
           {isAutoApproved && (
-            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs">
-              <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-800 text-xs">
+              <CheckCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
               <div>
-                <p className="font-medium text-emerald-800">Auto-approved by system</p>
+                <p className="font-medium text-emerald-800 dark:text-emerald-200">Auto-approved by system</p>
               </div>
             </div>
           )}
 
           {approvalAct && (
-            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-xs">
-              <CheckCircle className="h-4 w-4 text-blue-600 shrink-0" />
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-blue-50 border border-blue-200 dark:bg-blue-950/30 dark:border-blue-800 text-xs">
+              <CheckCircle className="h-4 w-4 text-blue-600 dark:text-blue-400 shrink-0" />
               <div>
-                <p className="font-medium text-blue-800">Manually approved by {approvalAct.user_name || 'admin'}</p>
-                {approvalAct.created_at && <p className="text-blue-600 mt-0.5">{fmtTs(approvalAct.created_at)}</p>}
+                <p className="font-medium text-blue-800 dark:text-blue-200">Manually approved by {approvalAct.user_name || 'admin'}</p>
+                {approvalAct.created_at && <p className="text-blue-600 dark:text-blue-400 mt-0.5">{fmtTs(approvalAct.created_at)}</p>}
               </div>
             </div>
           )}
 
           {flagAct && (
-            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs">
-              <AlertCircle className="h-4 w-4 text-red-600 shrink-0" />
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 border border-red-200 dark:bg-red-950/30 dark:border-red-800 text-xs">
+              <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0" />
               <div>
-                <p className="font-medium text-red-800">Flagged as urgent by {flagAct.user_name || 'admin'}</p>
-                {flagAct.created_at && <p className="text-red-600 mt-0.5">{fmtTs(flagAct.created_at)}</p>}
+                <p className="font-medium text-red-800 dark:text-red-200">Flagged as urgent by {flagAct.user_name || 'admin'}</p>
+                {flagAct.created_at && <p className="text-red-600 dark:text-red-400 mt-0.5">{fmtTs(flagAct.created_at)}</p>}
               </div>
             </div>
           )}
@@ -493,10 +494,10 @@ function ReviewHistoryPanel({ project }) {
 
 function ReviewBanner({ reviewType }) {
   const config = {
-    cancellation: { bg: 'bg-red-50 border-red-200', text: 'text-red-800', msg: '⚠️ Cancellation — Approving will mark this project as CANCELLED' },
-    restoration: { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-800', msg: '🔄 Restoration — Approving will re-enter this project into the active workflow' },
-    reopened_after_delivery: { bg: 'bg-amber-50 border-amber-200', text: 'text-amber-800', msg: '🔄 Reopened after delivery — Approving will move back to Scheduled' },
-    additional_appointment: { bg: 'bg-blue-50 border-blue-200', text: 'text-blue-800', msg: '📅 Additional appointment added — Approving will return to previous stage' },
+    cancellation: { bg: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800', text: 'text-red-800 dark:text-red-200', msg: '⚠️ Cancellation — Approving will mark this project as CANCELLED' },
+    restoration: { bg: 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800', text: 'text-amber-800 dark:text-amber-200', msg: '🔄 Restoration — Approving will re-enter this project into the active workflow' },
+    reopened_after_delivery: { bg: 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-800', text: 'text-amber-800 dark:text-amber-200', msg: '🔄 Reopened after delivery — Approving will move back to Scheduled' },
+    additional_appointment: { bg: 'bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800', text: 'text-blue-800 dark:text-blue-200', msg: '📅 Additional appointment added — Approving will return to previous stage' },
   };
   const cfg = config[reviewType] || { bg: 'bg-muted border', text: 'text-muted-foreground', msg: '✅ New booking — Approving will move to Scheduled' };
   return (
@@ -645,8 +646,8 @@ function AutoProductsCard({ project }) {
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
         {autoApplied && (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-            <p className="text-green-700 font-semibold">✅ Products auto-applied from confirmed mappings</p>
+          <div className="bg-green-50 border border-green-200 dark:bg-green-950/30 dark:border-green-800 rounded-lg p-3">
+            <p className="text-green-700 dark:text-green-300 font-semibold">✅ Products auto-applied from confirmed mappings</p>
             <div className="mt-2 space-y-1">
               {products.map((p, i) => (
                 <p key={i} className="text-xs">• {p.product_name || productMap.get(p.product_id)?.name || 'Unknown product'} × {p.quantity}</p>
@@ -656,20 +657,20 @@ function AutoProductsCard({ project }) {
               ))}
             </div>
             {needsRecalc && (
-              <p className="text-xs text-green-600 mt-2">💰 Pricing recalculation needed</p>
+              <p className="text-xs text-green-600 dark:text-green-400 mt-2">💰 Pricing recalculation needed</p>
             )}
           </div>
         )}
-        
+
         {mappingGaps.length > 0 && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-            <p className="text-amber-700 font-semibold">⚠️ Unmapped services (products NOT applied)</p>
+          <div className="bg-amber-50 border border-amber-200 dark:bg-amber-950/30 dark:border-amber-800 rounded-lg p-3">
+            <p className="text-amber-700 dark:text-amber-300 font-semibold">⚠️ Unmapped services (products NOT applied)</p>
             <div className="mt-2 space-y-1">
               {mappingGaps.map((serviceName, i) => (
-                <p key={i} className="text-xs text-amber-600">• {serviceName}</p>
+                <p key={i} className="text-xs text-amber-600 dark:text-amber-400">• {serviceName}</p>
               ))}
             </div>
-            <p className="text-xs text-amber-600 mt-2">→ Confirm mappings in Bookings Engine → Mappings</p>
+            <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">→ Confirm mappings in Bookings Engine → Mappings</p>
           </div>
         )}
       </CardContent>

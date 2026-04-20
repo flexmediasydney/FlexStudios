@@ -19,7 +19,7 @@ function getProgressColor(pct) {
 }
 
 const BAR_CLASSES = { green: 'bg-green-500', amber: 'bg-amber-500', red: 'bg-red-500' };
-const TEXT_CLASSES = { green: 'text-green-600', amber: 'text-amber-600', red: 'text-red-600' };
+const TEXT_CLASSES = { green: 'text-green-600 dark:text-green-400', amber: 'text-amber-600 dark:text-amber-400', red: 'text-red-600 dark:text-red-400' };
 
 export default function ProjectEffortCard({ projectId, project, onNavigateToEffort }) {
   const data = useProjectEffortSummary(projectId, project);
@@ -60,12 +60,12 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
           <CardContent className="py-4 px-4">
             {/* Header */}
             <div className="flex items-center gap-2 mb-3">
-              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-100">
-                <Zap className="h-4 w-4 text-amber-600" />
+              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/40">
+                <Zap className="h-4 w-4 text-amber-600 dark:text-amber-400" />
               </div>
               <p className="text-sm font-semibold">Project Effort</p>
               {data.hasRunning && (
-                <span className="ml-auto flex items-center gap-1 text-xs text-green-600 font-medium">
+                <span className="ml-auto flex items-center gap-1 text-xs text-green-600 dark:text-green-400 font-medium">
                   <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                   {runningCount} active
                 </span>
@@ -92,7 +92,7 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
                   </div>
                   <div className={cn(
                     'text-center p-2 rounded-lg',
-                    color === 'green' ? 'bg-green-50' : color === 'amber' ? 'bg-amber-50' : 'bg-red-50'
+                    color === 'green' ? 'bg-green-50 dark:bg-green-950/30' : color === 'amber' ? 'bg-amber-50 dark:bg-amber-950/30' : 'bg-red-50 dark:bg-red-950/30'
                   )}>
                     <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">Progress</p>
                     <p className={cn('text-sm font-bold tabular-nums', TEXT_CLASSES[color])}>
@@ -111,7 +111,7 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
                       />
                     </div>
                     {variance !== 0 && (
-                      <p className={cn('text-xs mt-1.5', variance > 0 ? 'text-red-600' : 'text-green-600')}>
+                      <p className={cn('text-xs mt-1.5', variance > 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400')}>
                         {variance > 0 ? '+' : ''}{formatTime(Math.abs(variance))} {variance > 0 ? 'over' : 'under'} estimate
                       </p>
                     )}
@@ -131,16 +131,16 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
             {runningCount > 0 && (
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
-                  <Timer className="h-3.5 w-3.5 text-green-600" />
-                  <h4 className="text-xs font-semibold uppercase tracking-wider text-green-700">
+                  <Timer className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                  <h4 className="text-xs font-semibold uppercase tracking-wider text-green-700 dark:text-green-300">
                     Active Timers ({runningCount})
                   </h4>
                 </div>
                 <div className="space-y-1.5">
                   {data.runningTimers.map(timer => (
-                    <div key={timer.id} className="flex items-center justify-between text-xs bg-green-50 rounded px-2 py-1.5">
+                    <div key={timer.id} className="flex items-center justify-between text-xs bg-green-50 dark:bg-green-950/30 rounded px-2 py-1.5">
                       <span className="font-medium truncate mr-2">{timer.taskTitle}</span>
-                      <span className="text-green-700 font-bold tabular-nums whitespace-nowrap flex items-center gap-1">
+                      <span className="text-green-700 dark:text-green-300 font-bold tabular-nums whitespace-nowrap flex items-center gap-1">
                         <span className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
                         {formatTime(timer.elapsed)}
                       </span>

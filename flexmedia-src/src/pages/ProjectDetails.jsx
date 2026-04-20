@@ -1224,7 +1224,7 @@ export default function ProjectDetails() {
               <Button
                 variant="outline"
                 size="sm"
-                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50 px-2.5 transition-colors h-9"
+                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50 dark:text-orange-400 dark:hover:text-orange-300 dark:hover:bg-orange-950/30 px-2.5 transition-colors h-9"
                 title="Archive this project"
                 aria-label="Archive project"
                 onClick={computeArchiveWarnings}
@@ -1240,7 +1240,7 @@ export default function ProjectDetails() {
                         {archiveWarnings.length > 0 && (
                           <div className="space-y-1.5">
                             {archiveWarnings.map((w, i) => (
-                              <div key={i} className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-1.5 text-sm">
+                              <div key={i} className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-300 dark:bg-amber-950/30 dark:border-amber-800 rounded-md px-3 py-1.5 text-sm">
                                 <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                                 <span>{w}</span>
                               </div>
@@ -1273,8 +1273,8 @@ export default function ProjectDetails() {
       {/* Delivery prompt */}
       {!dismissedDeliveryPrompt && isDeliverable && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-green-50 border
-                        border-green-200 dark:bg-green-950/20 shrink-0 rounded-lg">
-          <CheckCircle className="h-4 w-4 text-green-600 flex-shrink-0" />
+                        border-green-200 dark:bg-green-950/20 dark:border-green-800 shrink-0 rounded-lg">
+          <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400 flex-shrink-0" />
           <p className="text-sm text-green-700 dark:text-green-300 flex-1 font-medium">
             All tasks complete — ready to deliver?
           </p>
@@ -1361,7 +1361,7 @@ export default function ProjectDetails() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className="h-7 text-xs border-red-300 text-red-700 hover:bg-red-100"
+                      className="h-7 text-xs border-red-300 text-red-700 hover:bg-red-100 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40"
                       onClick={async () => {
                         try {
                           await api.entities.Project.update(project.id, {
@@ -1510,7 +1510,7 @@ export default function ProjectDetails() {
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm">Pricing & Deliverables</CardTitle>
                 {project.source === 'tonomo' && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-violet-100 text-violet-700 border border-violet-200">⚡ Tonomo</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-violet-100 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700">⚡ Tonomo</span>
                 )}
               </div>
             </CardHeader>
@@ -1639,11 +1639,11 @@ export default function ProjectDetails() {
                   <div className="flex items-center gap-1">
                     <ClockIcon className="h-3 w-3 text-muted-foreground" />
                     <span className="text-xs">{project.shoot_time}</span>
-                    {project.tonomo_is_twilight && <span className="text-[9px] px-1 rounded bg-purple-100 text-purple-700">twilight</span>}
+                    {project.tonomo_is_twilight && <span className="text-[9px] px-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">twilight</span>}
                   </div>
                 )}
                 <div className="flex items-center gap-1">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${project?.pricing_tier === 'premium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${project?.pricing_tier === 'premium' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
                     {project?.pricing_tier === 'premium' ? 'Premium' : 'Standard'}
                   </span>
                 </div>
@@ -1700,7 +1700,7 @@ export default function ProjectDetails() {
                     {/* Team sub-widget */}
                     {agent.current_team_name && (
                       <div className="flex items-center gap-1.5 mt-1 ml-8">
-                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800">
                           <Users className="h-2.5 w-2.5" />
                           {agent.current_team_name}
                         </span>

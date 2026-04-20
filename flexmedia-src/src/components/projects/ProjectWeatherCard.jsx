@@ -175,7 +175,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 p-3 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-600 animate-pulse">
+      <div className="flex items-center gap-2 p-3 rounded-lg bg-sky-50 border border-sky-200 dark:bg-sky-950/30 dark:border-sky-800 text-xs text-sky-600 dark:text-sky-300 animate-pulse">
         <Cloud className="h-4 w-4" />
         Loading weather for {suburb}...
       </div>
@@ -195,7 +195,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
   const sunsetTime = formatSunsetTime(weather.sunset);
 
   return (
-    <Card className={`${hasDusk ? "bg-orange-50 border-orange-200" : "bg-sky-50 border-sky-200"}`}>
+    <Card className={`${hasDusk ? "bg-orange-50 border-orange-200 dark:bg-orange-950/20 dark:border-orange-800" : "bg-sky-50 border-sky-200 dark:bg-sky-950/20 dark:border-sky-800"}`}>
       <CardContent className="p-4 space-y-3">
         {/* Summary row */}
         <div className="flex flex-wrap items-center gap-3">
@@ -227,7 +227,7 @@ export default function ProjectWeatherCard({ project, products = [], packages = 
             </div>
 
             {hasDusk && sunsetTime && (
-              <div className="flex items-center gap-1 font-semibold text-orange-600 bg-orange-100 px-2 py-0.5 rounded-full">
+              <div className="flex items-center gap-1 font-semibold text-orange-600 bg-orange-100 dark:text-orange-300 dark:bg-orange-900/40 px-2 py-0.5 rounded-full">
                 <Sunrise className="h-3.5 w-3.5" />
                 Sunset {sunsetTime}
               </div>

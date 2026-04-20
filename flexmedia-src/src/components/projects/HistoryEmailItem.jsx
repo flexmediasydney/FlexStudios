@@ -80,10 +80,10 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
     <div className="pb-6 relative">
       <div className="flex gap-4">
         <div className="flex flex-col items-center">
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isOwner ? 'bg-purple-100' : 'bg-gray-100'}`}>
-            <Mail className={`h-4 w-4 ${isOwner ? 'text-purple-600' : 'text-muted-foreground/70'}`} />
+          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isOwner ? 'bg-purple-100 dark:bg-purple-900/40' : 'bg-muted'}`}>
+            <Mail className={`h-4 w-4 ${isOwner ? 'text-purple-600 dark:text-purple-300' : 'text-muted-foreground/70'}`} />
           </div>
-          <div className="w-0.5 h-12 bg-gray-200 mt-2" />
+          <div className="w-0.5 h-12 bg-border mt-2" />
         </div>
 
         <div className="pt-1 flex-1">
@@ -165,7 +165,7 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
           <div className="flex items-center gap-2 mt-2 flex-wrap">
             {/* Private-and-owner badge — only you see this */}
             {isPrivateAndOwner && (
-              <Badge variant="outline" className="text-xs px-1.5 py-0 border-amber-300 text-amber-700 bg-amber-50 gap-1">
+              <Badge variant="outline" className="text-xs px-1.5 py-0 border-amber-300 text-amber-700 bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:bg-amber-950/30 gap-1">
                 <EyeOff className="h-2.5 w-2.5" />
                 Only visible to you
               </Badge>
@@ -173,7 +173,7 @@ export default function HistoryEmailItem({ email, projectId, isOwner = false }) 
 
             {/* Shared badge for non-owners viewing it */}
             {!isOwner && (
-              <Badge variant="outline" className="text-xs px-1.5 py-0 border-blue-200 text-blue-700 bg-blue-50 gap-1">
+              <Badge variant="outline" className="text-xs px-1.5 py-0 border-blue-200 text-blue-700 bg-blue-50 dark:border-blue-800 dark:text-blue-300 dark:bg-blue-950/30 gap-1">
                 <Users className="h-2.5 w-2.5" />
                 Shared by {email.from_name || email.from}
               </Badge>

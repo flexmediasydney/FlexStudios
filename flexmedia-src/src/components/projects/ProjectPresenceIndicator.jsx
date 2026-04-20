@@ -31,10 +31,10 @@ function AvatarBubble({ viewer, index, total, showLabel = false }) {
             className={`
               relative flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center
               text-white text-xs font-bold select-none cursor-default
-              border-2 border-white shadow-sm
+              border-2 border-card shadow-sm
               transition-all duration-300 ease-out
               ${colors.bg}
-              ${isSelf ? `ring-2 ${colors.ring} ring-offset-1` : ""}
+              ${isSelf ? `ring-2 ${colors.ring} ring-offset-1 ring-offset-card` : ""}
             `}
             style={{ zIndex: total - index }}
           >
@@ -42,7 +42,7 @@ function AvatarBubble({ viewer, index, total, showLabel = false }) {
             {/* Pulsing dot for "live" indicator */}
             <span className="absolute -bottom-0.5 -right-0.5 flex h-2.5 w-2.5">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 ${colors.bg}`} />
-              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${colors.bg} border border-white`} />
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${colors.bg} border border-card`} />
             </span>
           </div>
         </TooltipTrigger>
@@ -168,7 +168,7 @@ export default function ProjectPresenceIndicator({ projectId, currentUser, label
                 <TooltipTrigger asChild>
                   <div
                     className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center
-                      text-xs font-bold bg-muted text-muted-foreground border-2 border-white shadow-sm cursor-default"
+                      text-xs font-bold bg-muted text-muted-foreground border-2 border-card shadow-sm cursor-default"
                     style={{ marginLeft: -8, zIndex: 0 }}
                   >
                     +{overflow}

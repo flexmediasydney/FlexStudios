@@ -17,8 +17,8 @@ const REVISION_TYPE_CONFIG = {
 };
 
 const REVISION_KIND_CONFIG = {
-  revision: { color: "bg-red-50 border-red-200 text-red-700" },
-  change_request: { color: "bg-purple-50 border-purple-200 text-purple-700" },
+  revision: { color: "bg-red-50 border-red-200 text-red-700 dark:bg-red-950/30 dark:border-red-800 dark:text-red-300" },
+  change_request: { color: "bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-950/30 dark:border-purple-800 dark:text-purple-300" },
 };
 
 const getProgressPercentage = (task) => {
@@ -37,14 +37,14 @@ const getProgressPercentage = (task) => {
 const isRevisionTask = (task) => /^\[Revision #\d+\]/.test(task.title || "");
 
 const REVISION_KIND_BORDER = {
-  revision: "border-l-4 border-l-red-600 border-t border-r border-b border-t-red-200 border-r-red-200 border-b-red-200 bg-red-50/40",
-  change_request: "border-l-4 border-l-purple-600 border-t border-r border-b border-t-purple-200 border-r-purple-200 border-b-purple-200 bg-purple-50/40",
+  revision: "border-l-4 border-l-red-600 border-t border-r border-b border-t-red-200 border-r-red-200 border-b-red-200 bg-red-50/40 dark:border-t-red-900/60 dark:border-r-red-900/60 dark:border-b-red-900/60 dark:bg-red-950/20",
+  change_request: "border-l-4 border-l-purple-600 border-t border-r border-b border-t-purple-200 border-r-purple-200 border-b-purple-200 bg-purple-50/40 dark:border-t-purple-900/60 dark:border-r-purple-900/60 dark:border-b-purple-900/60 dark:bg-purple-950/20",
 };
 
 const getTaskRowColor = (task, revisionKind) => {
-  if (task.is_completed) return "bg-green-50 border-green-200";
-  if (revisionKind && !task.is_blocked) return REVISION_KIND_BORDER[revisionKind] || "border-l-4 border-l-red-500 border border-red-200 bg-red-50/40";
-  if (task.is_blocked) return "bg-orange-50 border-orange-200";
+  if (task.is_completed) return "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800";
+  if (revisionKind && !task.is_blocked) return REVISION_KIND_BORDER[revisionKind] || "border-l-4 border-l-red-500 border border-red-200 bg-red-50/40 dark:border-red-800 dark:bg-red-950/20";
+  if (task.is_blocked) return "bg-orange-50 border-orange-200 dark:bg-orange-950/30 dark:border-orange-800";
   return "bg-card border-border";
 };
 

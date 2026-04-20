@@ -90,16 +90,16 @@ export default function ProjectHistorySection({ projectId }) {
           <div key={item.id} className="pb-6 relative">
             <div className="flex gap-4">
               <div className="flex flex-col items-center">
-                <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
-                  <MessageSquare className="h-4 w-4 text-blue-600" />
+                <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
+                  <MessageSquare className="h-4 w-4 text-blue-600 dark:text-blue-300" />
                 </div>
-                <div className="w-0.5 h-12 bg-gray-200 mt-2" />
+                <div className="w-0.5 h-12 bg-border mt-2" />
               </div>
               <div className="pt-1 flex-1">
                 <p className="text-sm font-medium text-foreground">
                   {fmtTimestampCustom(item.timestamp, { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })} • {item.author}
                 </p>
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-2">
+                <div className="bg-blue-50 border border-blue-200 dark:bg-blue-950/30 dark:border-blue-800 rounded-lg p-3 mt-2">
                   <p className="text-sm text-foreground/80 whitespace-pre-wrap">{item.content}</p>
                 </div>
               </div>

@@ -274,7 +274,7 @@ export default function EffortLoggingTab({ projectId, project }) {
                   size="sm"
                   variant="ghost"
                   onClick={() => { setFilterPerson("all"); setFilterTask("all"); setFilterStatus("all"); }}
-                  className="h-8 px-2 ml-auto text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                  className="h-8 px-2 ml-auto text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:text-blue-400 dark:hover:text-blue-300 dark:hover:bg-blue-950/30"
                 >
                   <X className="h-3 w-3 mr-1" />
                   Clear

@@ -31,11 +31,11 @@ export default function RequestsProgressBar({ projectId }) {
   };
 
   const getTextColor = () => {
-    if (percentage === 100) return "text-green-600";
-    if (percentage >= 75) return "text-emerald-600";
-    if (percentage >= 50) return "text-blue-600";
-    if (percentage >= 25) return "text-amber-600";
-    return "text-orange-600";
+    if (percentage === 100) return "text-green-600 dark:text-green-400";
+    if (percentage >= 75) return "text-emerald-600 dark:text-emerald-400";
+    if (percentage >= 50) return "text-blue-600 dark:text-blue-400";
+    if (percentage >= 25) return "text-amber-600 dark:text-amber-400";
+    return "text-orange-600 dark:text-orange-400";
   };
 
   const stuckCount = revisions.filter(r => r.status === 'stuck').length;
@@ -46,10 +46,10 @@ export default function RequestsProgressBar({ projectId }) {
         <div className="flex items-center gap-3">
           <div className={cn(
             "flex items-center justify-center w-10 h-10 rounded-full flex-shrink-0",
-            percentage === 100 ? "bg-green-100" : "bg-muted"
+            percentage === 100 ? "bg-green-100 dark:bg-green-900/40" : "bg-muted"
           )}>
             {percentage === 100 ? (
-              <CheckCircle2 className="h-5 w-5 text-green-600" />
+              <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" />
             ) : (
               <MessageSquareWarning className="h-5 w-5 text-muted-foreground" />
             )}
@@ -82,7 +82,7 @@ export default function RequestsProgressBar({ projectId }) {
                 <span className="tabular-nums">{total - resolved}</span> open
               </span>
               {stuckCount > 0 && (
-                <span className="flex items-center gap-1 text-xs text-orange-600">
+                <span className="flex items-center gap-1 text-xs text-orange-600 dark:text-orange-400">
                   <MessageSquareWarning className="h-3 w-3" aria-hidden="true" />
                   <span className="tabular-nums">{stuckCount}</span> stuck
                 </span>
