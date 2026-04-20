@@ -509,6 +509,18 @@ export default function ProjectPricingTable({
       // ignores them (see processTonomoQueue/utils.ts::reconcileProductsPackagesAgainstLock).
       // Other override keys (e.g. agent_id, shoot_date) are preserved if present.
 
+      // Pre-save snapshot for structured audit diff (products/packages + price + tier + discount).
+      const preSaveSnapshot = {
+        products: JSON.parse(JSON.stringify(project?.products || [])),
+        packages: JSON.parse(JSON.stringify(project?.packages || [])),
+        calculated_price: project?.calculated_price || 0,
+        pricing_tier: project?.pricing_tier || 'standard',
+        discount_type: project?.discount_type || 'fixed',
+        discount_value: project?.discount_value || 0,
+        discount_mode: project?.discount_mode || 'discount',
+        title: project?.title,
+      };
+
       await batchUpdate.mutateAsync({
         products: productsToSave,
         packages: packagesToSave,
@@ -520,7 +532,25 @@ export default function ProjectPricingTable({
         discount_value: parseFloat(formState.discount_value) || 0,
         discount_mode: formState.discount_mode || 'discount',
       });
-      
+
+      // Structured audit diff via logProjectChange — covers products/packages adds/
+      // removes/qty changes alongside the price change. Complements the narrative
+      // ProjectActivity entry below (which is human-readable but not queryable).
+      api.functions.invoke('logProjectChange', {
+        event: { type: 'update', entity_id: projectId },
+        data: {
+          products: productsToSave,
+          packages: packagesToSave,
+          calculated_price: pendingCalcResult.calculated_price,
+          pricing_tier: pricingTier,
+          discount_type: formState.discount_type || 'fixed',
+          discount_value: parseFloat(formState.discount_value) || 0,
+          discount_mode: formState.discount_mode || 'discount',
+          title: project?.title,
+        },
+        old_data: preSaveSnapshot,
+      }).catch((err) => console.warn('Audit log failed (non-fatal):', err?.message));
+
       // Audit: log pricing change to ProjectActivity + TeamActivityFeed
       const oldPrice = project?.calculated_price || 0;
       const newPrice = pendingCalcResult.calculated_price;

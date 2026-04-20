@@ -95,6 +95,25 @@ export interface AppUser {
   [key: string]: unknown;
 }
 
+/**
+ * Resolve the calling user from the request's Authorization header.
+ *
+ * Auth-algorithm note (2026-04-20):
+ * This function is algorithm-agnostic. It calls `admin.auth.getUser(token)`
+ * which hits the Supabase Auth API and that service handles both legacy HS256
+ * JWTs and the new ES256 asymmetric JWTs (via its JWKS) transparently.
+ *
+ * The prior outage was NOT here — it was the Supabase edge gateway's
+ * `verify_jwt: true` middleware rejecting ES256 before the function body ever
+ * ran (`UNAUTHORIZED_UNSUPPORTED_TOKEN_ALGORITHM`). That gateway layer is now
+ * disabled on every user-facing function (`verify_jwt: false` set via the
+ * Management API). Each function continues to do its own role-based auth
+ * below — belt-and-braces now that the gateway belt is off.
+ *
+ * If Supabase rotates signing keys again in the future, nothing here needs
+ * to change. Monitor `/config/auth/signing-keys` on the Management API to
+ * detect rotation events.
+ */
 export async function getUserFromReq(req: Request): Promise<AppUser | null> {
   const authHeader = req.headers.get('Authorization');
   if (!authHeader) return null;
@@ -119,6 +138,7 @@ export async function getUserFromReq(req: Request): Promise<AppUser | null> {
     }
   } catch (_) { /* not a JWT or invalid — continue to normal auth */ }
 
+  // admin.auth.getUser resolves HS256 and ES256 tokens identically.
   const admin = getAdminClient();
   const { data: { user: authUser }, error } = await admin.auth.getUser(token);
   if (error || !authUser) return null;

@@ -71,6 +71,23 @@ serveWithAudit('revertRevisionPricingImpact', async (req) => {
       },
     });
 
+    // ProjectActivity audit row — paired with the apply-side write in
+    // applyRevisionPricingImpact so the history tab shows both halves of the
+    // revision lifecycle with structured before/after state.
+    entities.ProjectActivity.create({
+      project_id,
+      project_title: project.title || project.property_address || 'Project',
+      action: 'revision_pricing_reverted',
+      description: `Revision #${revision.revision_number || '?'} pricing impact reverted. Price: $${Math.round(preRevertPrice || 0).toLocaleString()} -> $${Math.round(revertedPrice).toLocaleString()}. Items restored.`,
+      actor_type: 'system',
+      actor_source: 'revertRevisionPricingImpact',
+      user_name: 'System',
+      user_email: 'system@flexstudios.app',
+      previous_state: { products: project.products || [], packages: project.packages || [], calculated_price: preRevertPrice },
+      new_state: { products: revertedProducts, packages: revertedPackages, calculated_price: revertedPrice },
+      changed_fields: [{ field: 'products_and_packages', reverted_from_revision: revision_id }],
+    }).catch(() => {});
+
     // Sync tasks and effort after pricing revert
     invokeFunction('syncProjectTasksFromProducts', { project_id }).catch(() => {});
     invokeFunction('syncOnsiteEffortTasks', { project_id }).catch(() => {});

@@ -616,6 +616,19 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     }
   }
 
+  // Structured before/after for audit trail. Only included when products or
+  // packages actually changed — keeps the activity feed signal-heavy.
+  // 2026-04-20: closes the Tonomo-CRUD audit gap. writeProjectActivity now
+  // accepts `previous_state` + `new_state` and writes them into the jsonb
+  // columns on project_activities so history is queryable, not just
+  // human-readable.
+  const preUpdateProducts = JSON.parse(JSON.stringify(project?.products || []));
+  const preUpdatePackages = JSON.parse(JSON.stringify(project?.packages || []));
+  const postUpdateProducts = dedupedSched?.products ?? sharedData?.products ?? project?.products ?? [];
+  const postUpdatePackages = dedupedSched?.packages ?? sharedData?.packages ?? project?.packages ?? [];
+  const itemsChanged = JSON.stringify(preUpdateProducts) !== JSON.stringify(postUpdateProducts) ||
+                       JSON.stringify(preUpdatePackages) !== JSON.stringify(postUpdatePackages);
+
   await writeProjectActivity(entities, {
     project_id: project.id,
     project_title: project.title || project.property_address || '',
@@ -625,6 +638,15 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
       : `Project updated from Tonomo webhook (${originAction}). Order: ${orderId}.`,
     tonomo_order_id: orderId,
     tonomo_event_type: originAction,
+    previous_state: itemsChanged ? { products: preUpdateProducts, packages: preUpdatePackages } : null,
+    new_state: itemsChanged ? { products: postUpdateProducts, packages: postUpdatePackages } : null,
+    changed_fields: itemsChanged ? [{
+      field: 'products_and_packages',
+      products_before_count: preUpdateProducts.length,
+      products_after_count: (postUpdateProducts as any[]).length,
+      packages_before_count: preUpdatePackages.length,
+      packages_after_count: (postUpdatePackages as any[]).length,
+    }] : [],
     metadata: {
       mapping_confidence: mappingConfidence,
       mapping_gaps: mappingGaps,

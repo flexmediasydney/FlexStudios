@@ -864,19 +864,50 @@ export function filterOverriddenFields(data: any, overriddenFields: string[]) {
 }
 
 export async function writeProjectActivity(entities: any, params: any) {
+  // If a structured diff was passed but changed_fields wasn't populated, derive
+  // it here so every Tonomo-initiated products/packages change leaves a
+  // queryable audit trail (not just a text description buried in metadata).
+  // 2026-04-20: closes the user/tonomo CRUD audit-coverage gap flagged in the
+  // engine review. The ProjectActivity table has first-class columns for this
+  // (changed_fields jsonb, previous_state jsonb, new_state jsonb) — we were
+  // just never populating them.
+  let changedFields = params.changed_fields;
+  let previousState = params.previous_state ?? null;
+  let newState = params.new_state ?? null;
+  if ((!changedFields || (Array.isArray(changedFields) && changedFields.length === 0)) && params.diff) {
+    changedFields = [];
+    const d = params.diff || {};
+    if ((d.added_products?.length || 0) > 0 || (d.removed_products?.length || 0) > 0 || (d.qty_changed_products?.length || 0) > 0) {
+      changedFields.push({
+        field: 'products',
+        added: d.added_products || [],
+        removed: d.removed_products || [],
+        qty_changed: (d.qty_changed || []).filter((q: any) => q.product_id),
+      });
+    }
+    if ((d.added_packages?.length || 0) > 0 || (d.removed_packages?.length || 0) > 0) {
+      changedFields.push({
+        field: 'packages',
+        added: d.added_packages || [],
+        removed: d.removed_packages || [],
+      });
+    }
+  }
   try {
     await entities.ProjectActivity.create({
       project_id: params.project_id,
       project_title: params.project_title || '',
       action: params.action,
       description: params.description,
-      actor_type: 'tonomo',
-      actor_source: 'processTonomoQueue',
-      user_name: 'Tonomo System',
-      user_email: 'system@tonomo',
+      actor_type: params.actor_type || 'tonomo',
+      actor_source: params.actor_source || 'processTonomoQueue',
+      user_name: params.user_name || 'Tonomo System',
+      user_email: params.user_email || 'system@tonomo',
       tonomo_order_id: params.tonomo_order_id || null,
       tonomo_event_type: params.tonomo_event_type || null,
-      changed_fields: params.changed_fields || [],
+      changed_fields: changedFields || [],
+      previous_state: previousState,
+      new_state: newState,
       metadata: params.metadata ? JSON.stringify(params.metadata) : null,
     });
   } catch (e: any) {

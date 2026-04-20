@@ -128,6 +128,12 @@ Deno.serve(async (req) => {
       user_name: actorName,
       user_email: actorEmail,
       actor_type: 'user',
+      // Structured snapshot of the proposed change (before = current project
+      // state, after = what Tonomo wanted but user rejected). Lets audit
+      // queries answer "what did the user reject" without parsing metadata.
+      previous_state: { products: project.products || [], packages: project.packages || [] },
+      new_state: pendingObj.after ? { products: pendingObj.after.products || [], packages: pendingObj.after.packages || [] } : null,
+      changed_fields: pendingObj.diff ? [{ field: 'products_and_packages', diff: pendingObj.diff, decision: 'dismissed' }] : [],
       metadata: JSON.stringify({
         diff: pendingObj.diff || null,
         source_queue_id: pendingObj.source_queue_id || null,
@@ -179,6 +185,10 @@ Deno.serve(async (req) => {
     user_name: actorName,
     user_email: actorEmail,
     actor_type: 'user',
+    // Structured before/after — queryable audit trail of the apply decision.
+    previous_state: { products: project.products || [], packages: project.packages || [] },
+    new_state: { products: after.products || [], packages: after.packages || [] },
+    changed_fields: pendingObj.diff ? [{ field: 'products_and_packages', diff: pendingObj.diff, decision: 'applied' }] : [],
     metadata: JSON.stringify({
       diff: pendingObj.diff || null,
       source_queue_id: pendingObj.source_queue_id || null,

@@ -372,10 +372,26 @@ export default function ProjectProductsPackages({ project }) {
         allPackagesRaw
       );
       
+      // Capture pre-save state for audit diff (logProjectChange's products/packages
+      // differ handler renders added/removed/qty_changed lines). Without this the
+      // user-initiated CRUD on items goes completely unlogged — the key gap in our
+      // audit coverage review on 2026-04-20.
+      const preSaveProducts = JSON.parse(JSON.stringify(project.products || []));
+      const preSavePackages = JSON.parse(JSON.stringify(project.packages || []));
+
       await batchUpdate.mutateAsync({
         products: normalized.products,
         packages: normalized.packages
       });
+
+      // Audit log: structured diff of products/packages. Non-blocking.
+      // logProjectChange edge function (index.ts:49-74) renders item diffs into
+      // readable lines like "Product added: Cut Down Reel" and "Package removed: …".
+      api.functions.invoke('logProjectChange', {
+        event: { type: 'update', entity_id: project.id },
+        data: { products: normalized.products, packages: normalized.packages, title: project.title },
+        old_data: { products: preSaveProducts, packages: preSavePackages, title: project.title },
+      }).catch((err) => console.warn('Audit log failed (non-fatal):', err?.message));
 
       // Trigger task and effort sync sequentially
       try {
