@@ -37,6 +37,7 @@ import {
   ClipboardList,
   ShieldCheck,
   Upload,
+  MessageSquareWarning,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -264,6 +265,7 @@ function LayoutContent({ currentPageName, children }) {
               can("NotificationsPulse") && { name: "Pulse", href: "NotificationsPulse", icon: Activity },
             ].filter(Boolean)
           },
+          can("Feedback") && { name: "Feedback", href: "Feedback", icon: MessageSquareWarning },
         ].filter(Boolean)
       },
       {
