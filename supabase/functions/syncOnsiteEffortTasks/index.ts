@@ -45,26 +45,34 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
       if (mins > onsiteMaxMins) onsiteMaxMins = mins;
     });
 
+    // Onsite time is MAX across BOTH the package-level scheduling_time AND
+    // each nested product's onsite_time. Previously this was if/else — when
+    // a package had scheduling_time set, nested products were skipped entirely.
+    // Bug: a package with scheduling_time=60 but a nested Dusk Video product
+    // needing 90 min onsite would incorrectly estimate 60 min. Now we take
+    // the max of both dimensions so the bigger number always wins.
     (project.packages || []).forEach((pkgItem: any) => {
       const pkg = packageMap.get(pkgItem.package_id);
       if (!pkg) return;
       const tier = pkg[tierKey] || pkg.standard_tier || {};
       const schedulingTime = tier.scheduling_time || 0;
-      if (schedulingTime > 0) {
-        if (schedulingTime > onsiteMaxMins) onsiteMaxMins = schedulingTime;
-      } else {
-        (pkgItem.products || pkg.products || []).forEach((prodItem: any) => {
-          const product = productMap.get(prodItem.product_id);
-          if (!product) return;
-          const prodTier = product[tierKey] || product.standard_tier || {};
-          const qty = prodItem.quantity || 1;
-          const base = prodTier.onsite_time || 0;
-          const increment = prodTier.onsite_time_increment || 0;
-          const includedQty = prodTier.included_qty || product.min_quantity || 1;
-          const mins = base + Math.max(0, qty - includedQty) * increment;
-          if (mins > onsiteMaxMins) onsiteMaxMins = mins;
-        });
-      }
+
+      // Package-level contribution
+      if (schedulingTime > onsiteMaxMins) onsiteMaxMins = schedulingTime;
+
+      // Product-level contribution — always evaluated, even when the package
+      // also has scheduling_time set. Whichever is bigger wins.
+      (pkgItem.products || pkg.products || []).forEach((prodItem: any) => {
+        const product = productMap.get(prodItem.product_id);
+        if (!product) return;
+        const prodTier = product[tierKey] || product.standard_tier || {};
+        const qty = prodItem.quantity || 1;
+        const base = prodTier.onsite_time || 0;
+        const increment = prodTier.onsite_time_increment || 0;
+        const includedQty = prodTier.included_qty || product.min_quantity || 1;
+        const mins = base + Math.max(0, qty - includedQty) * increment;
+        if (mins > onsiteMaxMins) onsiteMaxMins = mins;
+      });
     });
 
     const existingTasks = await entities.ProjectTask.filter({ project_id }, null, 1000);
