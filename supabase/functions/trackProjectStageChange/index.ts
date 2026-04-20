@@ -77,6 +77,27 @@ serveWithAudit('trackProjectStageChange', async (req) => {
       return jsonResponse({ message: 'No status change detected' });
     }
 
+    // ── Open-revision guard (2026-04-20) ────────────────────────────────
+    // Matches the DB-level trg_project_revision_guard (migration 203). Runs
+    // here too so the UI gets a clean 409 with a readable message instead of
+    // catching a Postgres EXCEPTION that has already aborted the transaction
+    // higher up. Do NOT remove this duplicate — the DB trigger is the real
+    // source of truth; this is just for UX.
+    if (oldStatus === 'in_revision' && newStatus !== 'in_revision') {
+      const revisions = await entities.ProjectRevision.filter({ project_id: project.id }, null, 500).catch(() => []);
+      const openRevisions = revisions.filter((r: any) =>
+        !['completed', 'delivered', 'cancelled', 'rejected'].includes(r.status)
+      );
+      if (openRevisions.length > 0) {
+        return jsonResponse({
+          blocked: true,
+          code: 'open_revisions_exist',
+          message: `Cannot move out of In Revision: ${openRevisions.length} open revision(s) still need to be closed. Mark the revision(s) as completed or cancel them first.`,
+          open_revision_ids: openRevisions.map((r: any) => r.id),
+        }, 409);
+      }
+    }
+
     const allTimers = await retryWithBackoff(() =>
       entities.ProjectStageTimer.filter({ project_id: project.id }, null, 1000)
     );
