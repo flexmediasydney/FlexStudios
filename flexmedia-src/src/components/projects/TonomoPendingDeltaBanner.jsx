@@ -117,7 +117,7 @@ export default function TonomoPendingDeltaBanner({ project, canEdit = false, onR
             <span className="text-sm font-semibold text-amber-900 dark:text-amber-100">
               Tonomo updated this booking, but a manual-edit lock is on
             </span>
-            <Badge variant="outline" className="border-amber-300 text-amber-800 bg-white/60 dark:bg-transparent dark:text-amber-200 text-[10px] uppercase tracking-wide">
+            <Badge variant="outline" className="border-amber-300 dark:border-amber-800 text-amber-800 bg-white/60 dark:bg-transparent dark:text-amber-200 text-[10px] uppercase tracking-wide">
               {eventType}
             </Badge>
           </div>

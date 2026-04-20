@@ -207,6 +207,20 @@ serveWithAudit('applyRevisionPricingImpact', async (req) => {
       }).catch(() => {});
     }
 
+    // Resolve the version FK for the matrix used (phase 3 versioned archive).
+    let newVersionId: string | null = null;
+    const usedMatrixId = priceMatrixSnapshot?.id || null;
+    if (usedMatrixId) {
+      const { data: versionRow } = await admin
+        .from('price_matrix_versions')
+        .select('id')
+        .eq('matrix_id', usedMatrixId)
+        .is('superseded_at', null)
+        .limit(1)
+        .maybeSingle();
+      newVersionId = versionRow?.id || null;
+    }
+
     // 6. Batch both updates in parallel
     await Promise.all([
       entities.Project.update(project_id, {
@@ -215,6 +229,7 @@ serveWithAudit('applyRevisionPricingImpact', async (req) => {
         calculated_price: newCalculatedPrice,
         price: newCalculatedPrice,
         price_matrix_snapshot: priceMatrixSnapshot,
+        price_matrix_version_id: newVersionId,
       }),
       entities.ProjectRevision.update(revision_id, {
         pricing_impact: {
@@ -228,6 +243,25 @@ serveWithAudit('applyRevisionPricingImpact', async (req) => {
         },
       }),
     ]);
+
+    // Audit log entry (phase 3d). Non-blocking.
+    try {
+      await admin.rpc('record_pricing_audit', {
+        p_project_id: project_id,
+        p_old_price: originalPrice,
+        p_new_price: newCalculatedPrice,
+        p_old_version_id: project.price_matrix_version_id || null,
+        p_new_version_id: newVersionId,
+        p_reason: 'revision_apply',
+        p_triggered_by: 'revision',
+        p_actor_id: null,    // revision apply has no direct user actor
+        p_actor_name: 'revision-apply',
+        p_engine_version: 'v2.0.0-shared',
+        p_notes: `revision_id=${revision_id}`,
+      });
+    } catch (auditErr: any) {
+      console.warn('pricing audit write failed (non-fatal):', auditErr?.message);
+    }
 
     // Sync onsite effort estimates
     invokeFunction('syncOnsiteEffortTasks', { project_id }).catch(() => {});

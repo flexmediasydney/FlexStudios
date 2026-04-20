@@ -31,12 +31,34 @@ serveWithAudit('revertRevisionPricingImpact', async (req) => {
     const revertedPackages = pi.pre_impact_packages || [];
     const revertedPrice = pi.pre_impact_price;
 
+    const preRevertPrice = project.calculated_price;
+    const preRevertVersionId = project.price_matrix_version_id || null;
+
     // Step 1: Update project first (the critical data)
     await entities.Project.update(project_id, {
       products: revertedProducts,
       packages: revertedPackages,
       calculated_price: revertedPrice,
     });
+
+    // Audit log (phase 3d). Non-blocking.
+    try {
+      await admin.rpc('record_pricing_audit', {
+        p_project_id: project_id,
+        p_old_price: preRevertPrice,
+        p_new_price: revertedPrice,
+        p_old_version_id: preRevertVersionId,
+        p_new_version_id: preRevertVersionId, // revert doesn't change matrix, only products/discount
+        p_reason: 'revision_revert',
+        p_triggered_by: 'revision',
+        p_actor_id: null,
+        p_actor_name: null,
+        p_engine_version: 'v2.0.0-shared',
+        p_notes: `revision_id=${revision_id} reverted`,
+      });
+    } catch (auditErr: any) {
+      console.warn('pricing audit write failed (non-fatal):', auditErr?.message);
+    }
 
     // Step 2: Mark revision as reverted (if this fails, project is correct but revision flag is stale — safer)
     await entities.ProjectRevision.update(revision_id, {

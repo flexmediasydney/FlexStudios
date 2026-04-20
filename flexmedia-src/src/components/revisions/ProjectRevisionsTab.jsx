@@ -368,8 +368,8 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
 
   // Get kind-specific styling for card border
   const kindBorderStyle = revision.request_kind === 'change_request'
-    ? 'border-2 border-purple-400'
-    : 'border-2 border-red-400';
+    ? 'border-2 border-purple-400 dark:border-purple-800'
+    : 'border-2 border-red-400 dark:border-red-800';
 
   return (
     <div className={cn("rounded-xl overflow-hidden", kindBorderStyle, {
@@ -411,17 +411,17 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
               <span className="font-medium text-primary">{completedTaskCount}/{nonDeletedTasks.length} tasks done</span>
             )}
             {hasPricingImpact && (
-              <span className={`flex items-center gap-0.5 font-medium ${pricingApplied ? "text-green-600" : "text-orange-600"}`}>
+              <span className={`flex items-center gap-0.5 font-medium ${pricingApplied ? "text-green-600 dark:text-green-400" : "text-orange-600 dark:text-orange-400"}`}>
                 <DollarSign className="h-3 w-3" />
                 {pricingApplied ? "Price updated" : "Price impact pending"}
               </span>
             )}
           </div>
           {revision.status === "stuck" && (
-           <p className="text-xs text-orange-600 mt-1 italic">⏸ Request is paused - all effort timers are stopped</p>
+           <p className="text-xs text-orange-600 dark:text-orange-400 mt-1 italic">⏸ Request is paused - all effort timers are stopped</p>
           )}
           {revision.status === "cancelled" && (
-           <p className="text-xs text-red-600 mt-1 italic">✕ Request cancelled - all tasks deleted</p>
+           <p className="text-xs text-red-600 dark:text-red-400 mt-1 italic">✕ Request cancelled - all tasks deleted</p>
           )}
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
@@ -669,7 +669,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
                       >
                         {/* Checkbox / Status Icon */}
                         {isBlocked ? (
-                          <Lock className="h-3.5 w-3.5 text-amber-600 flex-shrink-0" title="Blocked - complete dependencies first" />
+                          <Lock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" title="Blocked - complete dependencies first" />
                         ) : (
                           <Checkbox
                             checked={task.is_completed}

@@ -257,7 +257,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
             <span className="text-[10px] text-muted-foreground mr-1">{label}:</span>
             <span className={cn(
               "text-xs truncate",
-              isSet ? "font-medium" : isNotRequired ? "text-muted-foreground italic" : "text-amber-600 italic"
+              isSet ? "font-medium" : isNotRequired ? "text-muted-foreground italic" : "text-amber-600 dark:text-amber-400 italic"
             )}>
               {isSet ? currentName : isNotRequired ? "N/R" : "Unassigned"}
             </span>

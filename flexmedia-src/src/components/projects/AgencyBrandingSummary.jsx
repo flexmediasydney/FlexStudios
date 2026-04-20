@@ -65,7 +65,7 @@ export default function AgencyBrandingSummary({ agency }) {
           {enabledPrefs.length > 0 && (
             <div className="space-y-2">
               {enabledPrefs.map((pref, idx) => (
-                <div key={pref.category_id || idx} className="bg-white dark:bg-background border border-purple-100 dark:border-purple-900/30 rounded-md px-2.5 py-2">
+                <div key={pref.category_id || idx} className="bg-card border border-purple-100 dark:border-purple-900/30 rounded-md px-2.5 py-2">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-foreground">{pref.category_name || "Unknown Category"}</span>
                     <Badge variant="outline" className="text-[10px] h-4 px-1.5 border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-300">

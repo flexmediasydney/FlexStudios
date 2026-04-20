@@ -487,14 +487,14 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
                 : isCompleted
                 ? "bg-[#34a853] text-white"
                 : timeInfo
-                ? "bg-[#c5cae9] text-[#3c4043]"
-                : "bg-[#e8eaed] text-[#5f6368]";
+                ? "bg-[#c5cae9] text-[#3c4043] dark:bg-[#2a3550] dark:text-[#b8c4e0]"
+                : "bg-[#e8eaed] text-[#5f6368] dark:bg-[#2a2d32] dark:text-[#9ca0a6]";
 
               const hoverClass = canEdit && !isArchived
                 ? isCurrent ? "hover:bg-[#1558b0]"
                 : isCompleted ? "hover:bg-[#2d8f47]"
-                : timeInfo ? "hover:bg-[#aab0e0]"
-                : "hover:bg-[#dadce0]"
+                : timeInfo ? "hover:bg-[#aab0e0] dark:hover:bg-[#384568]"
+                : "hover:bg-[#dadce0] dark:hover:bg-[#363940]"
                 : "";
 
               const clipPath = isFirst
@@ -535,7 +535,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
                   {timeInfo?.isReEntry && (
                     <span className={cn(
                       "absolute top-0.5 right-1.5 text-[8px] font-bold rounded-full px-1.5 py-0.5 leading-tight shadow-sm",
-                      isCurrent || isCompleted ? "bg-card/40 text-white backdrop-blur-sm" : "bg-[#3c4043]/30 text-[#3c4043]"
+                      isCurrent || isCompleted ? "bg-card/40 text-white backdrop-blur-sm" : "bg-[#3c4043]/30 text-[#3c4043] dark:bg-white/10 dark:text-white/80"
                     )} title={`Visited ${timeInfo.visitCount} times`}>
                       x{timeInfo.visitCount}
                     </span>

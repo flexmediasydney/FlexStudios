@@ -92,16 +92,16 @@ export function CountdownTimer({ dueDate, compact = false, thresholds }) {
   let text, color;
   if (isPast) {
     text = `${days}d ${hours}h ${minutes}m overdue`;
-    color = "text-red-600";
+    color = "text-red-600 dark:text-red-400";
   } else if (totalHours < t.red_threshold) {
     text = `${days}d ${hours}h ${minutes}m`;
-    color = "text-red-500";
+    color = "text-red-500 dark:text-red-400";
   } else if (totalHours < t.yellow_end) {
     text = `${days}d ${hours}h ${minutes}m`;
-    color = "text-orange-500";
+    color = "text-orange-500 dark:text-orange-400";
   } else if (totalHours < t.yellow_start) {
     text = `${days}d ${hours}h ${minutes}m`;
-    color = "text-amber-500";
+    color = "text-amber-500 dark:text-amber-400";
   } else {
     text = `${days}d ${hours}h ${minutes}m`;
     color = "text-muted-foreground";
@@ -126,7 +126,7 @@ export function CompletionTimer({ dueDate, completedDate }) {
   const minutes = Math.floor((absSeconds % 3600) / 60);
 
   const text = `completed in ${days}d ${hours}h ${minutes}m`;
-  const color = differenceInSeconds(completed, due) <= 0 ? "text-green-600" : "text-orange-500";
+  const color = differenceInSeconds(completed, due) <= 0 ? "text-green-600 dark:text-green-400" : "text-orange-500 dark:text-orange-400";
 
   return <span className={`text-xs font-mono flex-shrink-0 ${color}`}>{text}</span>;
 }

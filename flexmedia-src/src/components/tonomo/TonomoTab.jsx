@@ -375,7 +375,7 @@ export default function TonomoTab({ project }) {
                               </p>
                             )}
                             {item.retry_count > 0 && (
-                              <p className="text-[10px] text-amber-600 mt-1">Attempt {item.retry_count + 1}</p>
+                              <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">Attempt {item.retry_count + 1}</p>
                             )}
                           </div>
                         </div>
@@ -576,20 +576,20 @@ function TonomoOrderBrief({ project }) {
         <div>
           <h3 className="font-semibold mb-2">Delivery</h3>
           {project.tonomo_delivered_at ? (
-            <p className="text-green-600">✅ Delivered {toSydney(parseTS(project.tonomo_delivered_at))}</p>
+            <p className="text-green-600 dark:text-green-400">✅ Delivered {toSydney(parseTS(project.tonomo_delivered_at))}</p>
           ) : null}
           {deliveredFiles.length > 0 && (
             <div className="space-y-1 mt-1">
               {deliveredFiles.map((f, i) => (
                 <p key={i}>
-                  • {f?.name || 'File'} {f?.type ? `(${f.type})` : ''} — {f?.url ? <a href={f.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Download ↗</a> : 'No link'}
+                  • {f?.name || 'File'} {f?.type ? `(${f.type})` : ''} — {f?.url ? <a href={f.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">Download ↗</a> : 'No link'}
                 </p>
               ))}
             </div>
           )}
           {project.tonomo_deliverable_link && (
             <p>
-              <a href={project.tonomo_deliverable_link} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+              <a href={project.tonomo_deliverable_link} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">
                 📁 Dropbox folder ↗
               </a>
             </p>
@@ -604,7 +604,7 @@ function TonomoOrderBrief({ project }) {
           <p>Status: {project.tonomo_order_status || "—"} · Payment: {project.tonomo_payment_status || "—"}</p>
           {showPricing && project.tonomo_invoice_link && (
             <p>
-              <a href={project.tonomo_invoice_link} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline flex items-center gap-1">
+              <a href={project.tonomo_invoice_link} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1">
                 View invoice <ExternalLink className="h-3 w-3" />
               </a>
             </p>

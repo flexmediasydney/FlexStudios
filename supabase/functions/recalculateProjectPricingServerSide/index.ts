@@ -87,13 +87,59 @@ serveWithAudit('recalculateProjectPricingServerSide', async (req) => {
       versionId = versionRow?.id || null;
     }
 
+    const oldPrice = project.calculated_price || 0;
+    const oldVersionId = project.price_matrix_version_id || null;
+
     await entities.Project.update(project_id, {
       calculated_price: newPrice, price: newPrice, products_needs_recalc: false,
       price_matrix_snapshot: calcResult.price_matrix_snapshot || null,
       price_matrix_version_id: versionId,
     });
 
-    const oldPrice = project.calculated_price || 0;
+    // Append to pricing_audit_log (migration 208). Captures every meaningful
+    // price change with full provenance — who, what, which matrix version.
+    // Silent no-op when delta < $0.01. Never blocks the main write path.
+    let auditId: string | null = null;
+    let auditErrorMsg: string | null = null;
+    try {
+      const triggered_by = body?.triggered_by_webhook ? 'webhook'
+        : body?.triggered_by_cron ? 'cron'
+        : body?.triggered_by_revision ? 'revision'
+        : body?.triggered_by_bulk ? 'bulk'
+        : user ? 'user' : 'system';
+      const reason = body?.audit_reason
+        || (body?.triggered_by_webhook ? 'tonomo_webhook'
+            : body?.triggered_by_revision ? 'revision_apply'
+            : body?.triggered_by_bulk ? 'bulk_matrix_recompute'
+            : oldPrice === 0 ? 'initial'
+            : 'user_edit');
+      // Guard: when called via service_role JWT, user.id is the literal
+      // "__service_role__" string which fails the uuid cast. Only pass
+      // actor_id when it looks like a real UUID.
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const actorId = (user?.id && UUID_RE.test(user.id)) ? user.id : null;
+      const actorName = user?.email || user?.full_name
+        || (user?.id === '__service_role__' ? 'system' : null);
+      const rpcResult = await admin.rpc('record_pricing_audit', {
+        p_project_id: project_id,
+        p_old_price: oldPrice,
+        p_new_price: newPrice,
+        p_old_version_id: oldVersionId,
+        p_new_version_id: versionId,
+        p_reason: reason,
+        p_triggered_by: triggered_by,
+        p_actor_id: actorId,
+        p_actor_name: actorName,
+        p_engine_version: calcResult?.engine_version || null,
+        p_notes: body?.audit_notes || null,
+      });
+      auditId = rpcResult?.data || null;
+      if (rpcResult?.error) auditErrorMsg = rpcResult.error.message;
+    } catch (auditErr: any) {
+      auditErrorMsg = auditErr?.message || String(auditErr);
+      console.warn('pricing audit log write failed (non-fatal):', auditErrorMsg);
+    }
+
     entities.ProjectActivity.create({
       project_id, project_title: project.title || project.property_address || '',
       action: 'update',
@@ -199,7 +245,7 @@ serveWithAudit('recalculateProjectPricingServerSide', async (req) => {
     invokeFunction('syncOnsiteEffortTasks', { project_id }, 'recalculateProjectPricingServerSide').catch(() => {});
     invokeFunction('cleanupOrphanedProjectTasks', { project_id }, 'recalculateProjectPricingServerSide').catch(() => {});
 
-    return jsonResponse({ success: true, project_id, calculated_price: newPrice, pricing_tier: tier, used_matrix: !!calcResult.price_matrix_snapshot, delegated_to: 'calculateProjectPricing' });
+    return jsonResponse({ success: true, project_id, calculated_price: newPrice, pricing_tier: tier, used_matrix: !!calcResult.price_matrix_snapshot, delegated_to: 'calculateProjectPricing', audit_id: auditId, audit_error: auditErrorMsg });
   } catch (error: any) {
     console.error('recalculateProjectPricingServerSide error:', error);
     return errorResponse(error.message);

@@ -5,14 +5,16 @@ import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityDa
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
-import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp, Crown, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp, Crown, Sparkles, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import PriceMatrixAuditLog from "./PriceMatrixAuditLog";
 import PriceMatrixSummaryTable from "./PriceMatrixSummaryTable";
+import RecomputeAffectedProjectsDialog from "./RecomputeAffectedProjectsDialog";
 
 const safeNum = (val) => { const n = parseFloat(val); return isFinite(n) && n >= 0 ? n : 0; };
 const clamp = (val, min, max) => Math.min(Math.max(safeNum(val), min), max);
@@ -22,6 +24,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
   const [localData, setLocalData] = useState(null);
   const [showActivity, setShowActivity] = useState(false);
   const [activeSection, setActiveSection] = useState("overrides"); // "overrides" | "summary"
+  const [recomputeOpen, setRecomputeOpen] = useState(false);
   const lastSavedJsonRef = useRef(null);
   const queryClient = useQueryClient();
 
@@ -46,9 +49,35 @@ export default function PriceMatrixEditor({ priceMatrix }) {
     queryFn: () => api.auth.me(),
     staleTime: 60000,
   });
-  const { canViewPriceMatrixPricing } = usePermissions();
+  const { canViewPriceMatrixPricing, isAdminOrAbove } = usePermissions();
   const { canEdit, canView } = useEntityAccess('price_matrices');
   const canSeePrices = canViewPriceMatrixPricing;
+
+  // Count of ACTIVE projects pinned to any version of this matrix.
+  // Versioning layer: projects.price_matrix_version_id FK → price_matrix_versions.
+  // We first resolve every version row for this matrix_id (current +
+  // superseded) so a project still pinned to a pre-edit snapshot counts as
+  // "affected" and will show up in the recompute modal. Only admins need
+  // this signal, so the query is gated on isAdminOrAbove.
+  const { data: affectedCount = 0 } = useQuery({
+    queryKey: ["matrix-affected-projects", priceMatrix.id],
+    enabled: !!priceMatrix.id && isAdminOrAbove,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const { data: versions } = await api._supabase
+        .from("price_matrix_versions")
+        .select("id")
+        .eq("matrix_id", priceMatrix.id);
+      const versionIds = (versions || []).map((v) => v.id);
+      if (versionIds.length === 0) return 0;
+      const { count } = await api._supabase
+        .from("projects")
+        .select("id", { count: "exact", head: true })
+        .in("price_matrix_version_id", versionIds)
+        .eq("is_archived", false);
+      return count || 0;
+    },
+  });
 
   const saveMutation = useMutation({
     mutationFn: async (data) => {
@@ -109,6 +138,7 @@ export default function PriceMatrixEditor({ priceMatrix }) {
       await refetchEntityList("PriceMatrix");
       refetchEntityList("PriceMatrixAuditLog");
       queryClient.invalidateQueries({ queryKey: ["price-matrix-audit", priceMatrix.id] });
+      queryClient.invalidateQueries({ queryKey: ["matrix-affected-projects", priceMatrix.id] });
 
       // Force-recompute the Market Share substrate for every listing under this
       // matrix's agency/agent. The DB trigger from migration 193 has already
@@ -346,6 +376,18 @@ export default function PriceMatrixEditor({ priceMatrix }) {
             )}
             {hasChanges && <Badge variant="outline" className="text-xs h-5 text-orange-600 border-orange-300">Unsaved</Badge>}
             {hasCatalogueChanges && <Badge className="text-xs h-5 bg-orange-100 text-orange-700 border-orange-200"><AlertTriangle className="h-3 w-3 mr-0.5" />Catalogue update</Badge>}
+            {isAdminOrAbove && affectedCount > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge variant="outline" className="text-xs h-5 border-blue-200 text-blue-700 bg-blue-50 cursor-help">
+                    {affectedCount} active project{affectedCount === 1 ? "" : "s"}
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Projects currently priced against this matrix. Recompute after saving to bring them onto the latest version.
+                </TooltipContent>
+              </Tooltip>
+            )}
           </div>
         </div>
 
@@ -366,6 +408,25 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                 <Save className="h-3.5 w-3.5 mr-1" />{saveMutation.isPending ? "Saving..." : "Save"}
               </Button>
             </>
+          )}
+          {isAdminOrAbove && !hasChanges && affectedCount > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setRecomputeOpen(true)}
+                  disabled={saveMutation.isPending}
+                >
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                  Recompute Affected
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Preview + apply new prices to all {affectedCount} active project{affectedCount === 1 ? "" : "s"} on this matrix.
+              </TooltipContent>
+            </Tooltip>
           )}
           <Button variant="ghost" size="sm" className={`h-7 w-7 p-0 ${showActivity ? "bg-muted" : ""}`} onClick={() => setShowActivity(v => !v)} title="Activity">
             <History className="h-3.5 w-3.5" />
@@ -558,6 +619,15 @@ export default function PriceMatrixEditor({ priceMatrix }) {
             </div>
           )}
         </div>
+      )}
+
+      {isAdminOrAbove && (
+        <RecomputeAffectedProjectsDialog
+          open={recomputeOpen}
+          onOpenChange={setRecomputeOpen}
+          matrixId={priceMatrix.id}
+          matrixLabel={`${priceMatrix.entity_name || ""}${priceMatrix.project_type_name ? ` — ${priceMatrix.project_type_name}` : ""}`.trim()}
+        />
       )}
     </div>
   );

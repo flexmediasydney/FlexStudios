@@ -1292,7 +1292,7 @@ export default function ProjectDetails() {
             {updateStatusMutation.isPending ? "Updating..." : "Mark as Delivered"}
           </Button>
           <button
-            className="text-xs text-green-600 hover:text-green-800"
+            className="text-xs text-green-600 dark:text-green-400 hover:text-green-800 dark:hover:text-green-300"
             onClick={() => setDismissedDeliveryPrompt(true)}
             aria-label="Dismiss delivery prompt"
           >
@@ -1338,10 +1338,10 @@ export default function ProjectDetails() {
                 ? "bg-red-50 border-red-300 dark:bg-red-950/30 dark:border-red-800"
                 : "bg-amber-50 border-amber-300 dark:bg-amber-950/30 dark:border-amber-800"
             )}>
-              <AlertCircle className={cn("h-5 w-5 shrink-0", project.urgent_review ? "text-red-600" : "text-amber-600")} />
+              <AlertCircle className={cn("h-5 w-5 shrink-0", project.urgent_review ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400")} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Badge variant="outline" className={cn("text-[10px] font-bold uppercase border-0", project.urgent_review ? "bg-red-200 text-red-800" : "bg-amber-200 text-amber-800")}>
+                  <Badge variant="outline" className={cn("text-[10px] font-bold uppercase border-0", project.urgent_review ? "bg-red-200 text-red-800 dark:bg-red-900/50 dark:text-red-200" : "bg-amber-200 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200")}>
                     {project.urgent_review ? 'Flagged for Review' : 'Pending Review'}
                   </Badge>
                   {project.pending_review_type && (
