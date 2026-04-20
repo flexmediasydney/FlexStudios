@@ -2226,6 +2226,26 @@ const rows = __rows_raw.data ?? [];
       }
     }
 
+    // ── Step 7b: Refresh agency-level derived stats (migration 214) ──────
+    // Zero-cost agency aggregate: roll up pulse_agents into pulse_agencies.
+    // Populates team_size, total_sold_12m, total_sold_volume_aud,
+    // avg_sold_price, median_sold_price, DOM aggregates, avg_rating,
+    // total_reviews, and top suburbs — derived from the freshly-synced
+    // agent roster. Complements (does not replace) pulseAgencyEnrich which
+    // scrapes agency-page-only fields (awards, franchise, testimonials).
+    // Non-blocking — a failure here must not abort the sync.
+    try {
+      const { error: refreshErr, data: refreshRes } = await admin.rpc('refresh_pulse_agency_derived_stats');
+      if (refreshErr) {
+        console.warn('[agency-derived] refresh failed (non-fatal):', refreshErr.message?.substring(0, 200));
+      } else {
+        const row = Array.isArray(refreshRes) ? refreshRes[0] : refreshRes;
+        console.log(`[agency-derived] refreshed: ${row?.agencies_updated ?? '?'} updated, ${row?.agencies_skipped_no_agents ?? 0} zeroed`);
+      }
+    } catch (e: any) {
+      console.warn('[agency-derived] refresh threw (non-fatal):', e?.message?.substring(0, 200));
+    }
+
     // ── Step 8: CRM client listing notifications ────────────────────────
     if (newListingsDetected > 0) {
       const newListingsFromCrmAgents = listingRecords.filter(l => {
