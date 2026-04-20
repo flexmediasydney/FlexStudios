@@ -294,16 +294,29 @@ export default function ProjectProductsPackages({ project }) {
   // Save all changes — guarded against double-submit
   const handleSave = async () => {
     if (isSaving) return;
+
+    // HARD GUARD (2026-04-20): block saves while the product/package catalog is
+    // still loading. Without this, `.find()` against empty allProductsRaw /
+    // allPackagesRaw returns undefined for every item and `validatedProducts`
+    // / `validatedPackages` filter to []. That silently persists an empty
+    // products/packages array over whatever the project actually had.
+    // Root cause of 7 Tonomo projects losing their packages post-ingest.
+    if (!Array.isArray(allProductsRaw) || allProductsRaw.length === 0 ||
+        !Array.isArray(allPackagesRaw) || allPackagesRaw.length === 0) {
+      setError('Product/package catalog still loading — please wait a moment and try again.');
+      return;
+    }
+
     setIsSaving(true);
     try {
       setError(null);
-      
+
       // Final validation: filter out any type-mismatched or deleted items
       const projectTypeId = project.project_type_id;
-      
+
       const validatedProducts = formState.products.filter(item => {
         const prod = allProductsRaw.find(p => p.id === item.product_id);
-        
+
         // Product doesn't exist anymore
         if (!prod) return false;
         

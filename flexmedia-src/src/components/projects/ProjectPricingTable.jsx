@@ -272,6 +272,18 @@ export default function ProjectPricingTable({
   // Step 2: user confirmed — commit to database
   const handleConfirmSave = async () => {
     if (!pendingCalcResult) return;
+
+    // HARD GUARD (2026-04-20): block saves while catalog is still loading.
+    // normalizeProjectItems relies on the full product/package list; an empty
+    // catalog would drop every item during normalization and silently persist
+    // products:[] and packages:[]. Root cause of 7 Tonomo projects losing
+    // their packages. See also ProjectProductsPackages.handleSave guard.
+    if (!Array.isArray(allProducts) || allProducts.length === 0 ||
+        !Array.isArray(allPackages) || allPackages.length === 0) {
+      setError('Product/package catalog still loading — please wait a moment and try again.');
+      return;
+    }
+
     setShowConfirmSave(false);
     setIsSaving(true);
     try {
@@ -299,38 +311,13 @@ export default function ProjectPricingTable({
         })),
       }));
 
-      // Per-line locks: every product_id / package_id the user just saved is
-      // considered manually-edited. Tonomo webhook handlers respect these so
-      // future Tonomo updates can still add new services without overwriting
-      // the user's edits. We no longer add the coarse 'products'/'packages'
-      // keys to manually_overridden_fields on new saves — that flag silently
-      // dropped every future Tonomo delta. Existing legacy locks on the row
-      // are left untouched (backward compat).
-      const existingLockedProducts = (() => {
-        try { return JSON.parse(project?.manually_locked_product_ids || '[]'); }
-        catch { return []; }
-      })();
-      const existingLockedPackages = (() => {
-        try { return JSON.parse(project?.manually_locked_package_ids || '[]'); }
-        catch { return []; }
-      })();
-      const lockedProductSet = new Set(existingLockedProducts);
-      for (const p of productsToSave) {
-        if (p.product_id) lockedProductSet.add(p.product_id);
-      }
-      const lockedPackageSet = new Set(existingLockedPackages);
-      for (const pkg of packagesToSave) {
-        if (pkg.package_id) lockedPackageSet.add(pkg.package_id);
-      }
-
-      // Strip 'products' / 'packages' from legacy manually_overridden_fields
-      // so the reconciler uses the per-line locks instead of the coarse flag.
-      // Other override keys (e.g. 'agent_id', 'shoot_date') are preserved.
-      const existingOverrides = (() => {
-        try { return JSON.parse(project?.manually_overridden_fields || '[]'); }
-        catch { return []; }
-      })();
-      const overrideSet = new Set(existingOverrides.filter(f => f !== 'products' && f !== 'packages'));
+      // 2026-04-20: Tonomo is the authoritative source for products/packages.
+      // We no longer write `manually_overridden_fields`, `manually_locked_product_ids`,
+      // or `manually_locked_package_ids` from this save path. Every next Tonomo
+      // webhook overwrites local edits — that's the intended behaviour. Legacy
+      // values on existing rows are left untouched; the backend reconciler
+      // ignores them (see processTonomoQueue/utils.ts::reconcileProductsPackagesAgainstLock).
+      // Other override keys (e.g. agent_id, shoot_date) are preserved if present.
 
       await batchUpdate.mutateAsync({
         products: productsToSave,
@@ -342,9 +329,6 @@ export default function ProjectPricingTable({
         discount_type: formState.discount_type || 'fixed',
         discount_value: parseFloat(formState.discount_value) || 0,
         discount_mode: formState.discount_mode || 'discount',
-        manually_overridden_fields: JSON.stringify([...overrideSet]),
-        manually_locked_product_ids: JSON.stringify([...lockedProductSet]),
-        manually_locked_package_ids: JSON.stringify([...lockedPackageSet]),
       });
       
       // Audit: log pricing change to ProjectActivity + TeamActivityFeed
