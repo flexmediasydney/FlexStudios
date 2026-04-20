@@ -568,7 +568,7 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
   try {
     // ── Candidate selection ──────────────────────────────────────────────
     // B03: include detail_enrich_count so we can increment it correctly.
-    const SELECT_COLS = 'id, source_listing_id, source_url, listing_type, sold_date, price_text, last_synced_at, detail_enriched_at, detail_enrich_count';
+    const SELECT_COLS = 'id, source_listing_id, source_url, listing_type, sold_date, price_text, last_synced_at, detail_enriched_at, detail_enrich_count, withdrawal_miss_count, withdrawal_first_miss_at';
     let candidates: any[] = [];
     // B18: track how many forceIds listings were already enriched within 14d.
     // Surfaced in stats + console.warn so ad-hoc debug runs don't silently
@@ -771,6 +771,30 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
         if (id) itemsById.set(id, it);
       }
 
+      // ─── Withdrawal-detection debounce — 2026-04-19 ────────────────────
+      // Root cause of 6 false positives on 2026-04-19 (migration 202):
+      // memo23 occasionally returns fewer items than requested (rate limits,
+      // parser issues, timeouts). One-strike-out semantics turned every
+      // memo23 hiccup into a fake withdrawal.
+      //
+      // Two-layer guard:
+      //   1. BATCH HEALTH — if this batch returned < 75% of requested URLs,
+      //      the sample is too noisy; skip the withdrawal path entirely.
+      //      We don't even increment miss counters (noise in, noise out).
+      //   2. 2-MISS DEBOUNCE — even with a healthy batch, require the URL
+      //      to be absent across 2 separate probe runs before marking
+      //      withdrawn. Reset the counter the moment the URL reappears.
+      //
+      // Trade-off: worst-case detection latency doubles (one extra probe
+      // cycle — a few hours on the current cron). Vs 100% false-positive
+      // rate on the historical sample, that's an easy trade.
+      const batchHealth = batch.length > 0 ? (result.items.length / batch.length) : 1;
+      const BATCH_HEALTH_MIN = 0.75;
+      const skipWithdrawalPath = batchHealth < BATCH_HEALTH_MIN;
+      if (skipWithdrawalPath) {
+        console.warn(`[pulseDetailEnrich] batch ${batchIndex} health ${(batchHealth * 100).toFixed(0)}% — skipping withdrawal detection path`);
+      }
+
       const timelineEvents: any[] = [];
       const historyRows: any[] = [];
       const now = new Date();
@@ -784,14 +808,22 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       for (const cand of batch) {
         const item = itemsById.get(String(cand.source_listing_id));
         if (!item) {
-          // Withdrawn: was in our DB as active, memo23 returned no item for its URL
-          if (['for_sale', 'for_rent', 'under_contract'].includes(cand.listing_type)) {
-            // P1 #8 (2026-04-19): check error before counter increment.
+          // Withdrawal path — gated by batch health + miss-count debounce.
+          if (skipWithdrawalPath) continue;
+          if (!['for_sale', 'for_rent', 'under_contract'].includes(cand.listing_type)) continue;
+
+          const prevMisses = cand.withdrawal_miss_count || 0;
+          const nextMisses = prevMisses + 1;
+          const isConfirmed = nextMisses >= 2;
+
+          if (isConfirmed) {
+            // Second+ miss — flip the flag, emit the event, write history.
             const { error: withdrawErr } = await admin.from('pulse_listings').update({
               listing_withdrawn_at: now.toISOString(),
               listing_withdrawn_reason: 'absent_from_rea',
               detail_enriched_at: now.toISOString(),
               last_sync_log_id: syncLogId,
+              withdrawal_miss_count: nextMisses,
             }).eq('id', cand.id);
             if (withdrawErr) {
               console.error(`[pulseDetailEnrich] withdraw update failed for ${cand.id}: ${withdrawErr.message?.substring(0, 200)}`);
@@ -805,16 +837,29 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
               event_type: 'listing_withdrawn',
               event_category: 'market',
               title: `Listing withdrawn from REA`,
-              description: `Detail enrich returned 0 items for this URL — listing has been removed from realestate.com.au (not moved to sold).`,
+              description: `Detail enrich returned 0 items for this URL across ${nextMisses} consecutive probe runs — listing has been removed from realestate.com.au (not moved to sold).`,
               source: SOURCE_ID,
               idempotency_key: `withdrawn:${cand.source_listing_id}`,
             });
             historyRows.push({
               entity_type: 'listing', entity_id: cand.id, entity_key: cand.source_listing_id,
               sync_log_id: syncLogId, action: 'withdrawn_detected',
-              changes_summary: { reason: 'absent_from_rea' },
+              changes_summary: {
+                reason: 'absent_from_rea',
+                miss_count: nextMisses,
+                first_miss_at: cand.withdrawal_first_miss_at,
+              },
               source: SOURCE_ID,
             });
+          } else {
+            // First miss — bump counter only, no public signal yet.
+            const { error: missErr } = await admin.from('pulse_listings').update({
+              withdrawal_miss_count: nextMisses,
+              withdrawal_first_miss_at: cand.withdrawal_first_miss_at || now.toISOString(),
+            }).eq('id', cand.id);
+            if (missErr) {
+              console.warn(`[pulseDetailEnrich] miss-counter bump failed for ${cand.id}: ${missErr.message?.substring(0, 200)}`);
+            }
           }
           continue;
         }
@@ -833,6 +878,12 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
           // B17: clear withdrawn flags if listing reappears
           listing_withdrawn_at: null,
           listing_withdrawn_reason: null,
+          // Debounce reset — the URL came back in a memo23 response, so
+          // whatever prior absence looked like withdrawal was noise.
+          // Nulling withdrawal_first_miss_at keeps the column clean so
+          // UI/analytics only see "streak in progress" states.
+          withdrawal_miss_count: 0,
+          withdrawal_first_miss_at: null,
         };
         if (auctionTimeIso) listingUpdates.auction_date = auctionTimeIso;
         if (soldDateIso) listingUpdates.sold_date = soldDateIso;
