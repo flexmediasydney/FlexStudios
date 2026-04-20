@@ -20,7 +20,127 @@ import { normalizeProjectItems } from "@/components/lib/normalizeProjectItems";
 import { writeFeedEvent } from "@/components/notifications/createNotification";
 import { toast } from "sonner";
 
-export default function ProjectPricingTable({ 
+/**
+ * Single-line badge that expresses the full matrix-resolution state for a
+ * project at a glance. Summarises all scenarios the engine handles:
+ *
+ *   • no matrix at all          → "Standard · master pricing"
+ *   • matrix use_default_pricing → "Standard · matrix ignored"
+ *   • blanket discount (pkg)    → "Premium · Belle Strath · 20% packages"
+ *   • blanket discount (both)   → "Premium · Ray White · 30% pkg + 20% prod"
+ *   • overrides only            → "Standard · Balmain · N overrides, no blanket"
+ *   • overrides + blanket       → "Premium · X · 20% pkg + N overrides"
+ *
+ * Hover reveals the full breakdown via a shadcn Tooltip.
+ */
+function MatrixStateBadge({ pricingTier, blanketMeta, snapshot }) {
+  const tierLabel = pricingTier === "premium" ? "Premium" : "Standard";
+
+  // Resolve the "shape" of what's pricing this project.
+  let summary = "master pricing";
+  let tone = "muted";  // slate | emerald | purple | amber | muted
+
+  const useDefault = !!snapshot?.use_default_pricing;
+  const pkgPct = blanketMeta?.package_percent || 0;
+  const prodPct = blanketMeta?.product_percent || 0;
+  const hasBlanket = pkgPct > 0 || prodPct > 0;
+  const overrideCount =
+    (snapshot?.product_pricing?.filter(p => p.override_enabled)?.length || 0) +
+    (snapshot?.package_pricing?.filter(p => p.override_enabled)?.length || 0);
+  const matrixName = snapshot?.entity_name || null;
+
+  if (useDefault) {
+    summary = "matrix ignored";
+    tone = "muted";
+  } else if (hasBlanket || overrideCount > 0) {
+    const parts = [];
+    if (pkgPct > 0) parts.push(`${pkgPct}% pkg`);
+    if (prodPct > 0) parts.push(`${prodPct}% prod`);
+    if (overrideCount > 0) parts.push(`${overrideCount} override${overrideCount === 1 ? "" : "s"}`);
+    summary = parts.join(" + ");
+    tone = hasBlanket ? "purple" : "emerald";
+  } else if (snapshot) {
+    summary = "no blanket";
+    tone = "muted";
+  }
+
+  const colorClass = {
+    purple: "border-purple-300 bg-purple-50 text-purple-800 dark:bg-purple-950/30 dark:text-purple-300 dark:border-purple-900/40",
+    emerald: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-900/40",
+    amber: "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300 dark:border-amber-900/40",
+    muted: "border-border text-muted-foreground",
+  }[tone];
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={cn(
+              "inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] font-medium cursor-help",
+              colorClass,
+            )}
+          >
+            <span className="font-semibold">{tierLabel}</span>
+            {matrixName && <span className="opacity-70">·</span>}
+            {matrixName && <span className="truncate max-w-[140px]">{matrixName}</span>}
+            <span className="opacity-70">·</span>
+            <span>{summary}</span>
+            <Info className="h-3 w-3 opacity-50" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="end" className="max-w-sm">
+          <div className="space-y-1.5">
+            <div className="font-semibold">
+              {tierLabel} tier
+              {matrixName && <> · {matrixName} matrix</>}
+            </div>
+            {useDefault && (
+              <div className="text-xs">
+                Matrix is configured to <strong>use default pricing</strong> — all
+                overrides and blanket discounts are ignored. Project prices at
+                master tier.
+              </div>
+            )}
+            {!useDefault && hasBlanket && (
+              <>
+                {pkgPct > 0 && (
+                  <div className="text-xs">• <strong>{pkgPct}%</strong> off package base prices</div>
+                )}
+                {prodPct > 0 && (
+                  <div className="text-xs">• <strong>{prodPct}%</strong> off standalone products + nested package extras</div>
+                )}
+                {pkgPct > 0 && prodPct === 0 && (
+                  <div className="text-[10px] text-muted-foreground">Standalone products and package extras not rebated.</div>
+                )}
+              </>
+            )}
+            {!useDefault && overrideCount > 0 && (
+              <div className="text-xs">
+                • <strong>{overrideCount}</strong> per-item override{overrideCount === 1 ? "" : "s"}
+                {" "}(matrix replaces master tier price for those lines)
+              </div>
+            )}
+            {!useDefault && !hasBlanket && overrideCount === 0 && !snapshot && (
+              <div className="text-xs">
+                No price matrix for this project — lines price at master tier
+                {pricingTier === "premium" ? " (premium)" : " (standard)"}.
+              </div>
+            )}
+            {!useDefault && !hasBlanket && overrideCount === 0 && snapshot && (
+              <div className="text-xs">
+                Matrix exists but has no blanket discount or overrides enabled.
+                Effectively pricing at master tier.
+              </div>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+export default function ProjectPricingTable({
   project, 
   pricingTier = "standard", 
   canSeePricing = false, 
@@ -540,9 +660,21 @@ export default function ProjectPricingTable({
             <CardTitle>Pricing Breakdown</CardTitle>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-xs">
-              {pricingTier === "premium" ? "Premium" : "Standard"} Tier
-            </Badge>
+            {/* Full matrix-state badge. Shows tier + resolved matrix
+                configuration at a glance so users can see exactly what's
+                pricing this project without hunting through tooltips.
+                Scenarios covered:
+                  - no matrix         → "Standard · master pricing"
+                  - use_default       → "Standard · matrix ignored"
+                  - blanket pkg only  → "Premium · Belle Strath · 20% pkg"
+                  - blanket both      → "Premium · Ray White · 30% pkg + 20% prod"
+                  - overrides only    → "Standard · Balmain · 1 override, no blanket"
+            */}
+            <MatrixStateBadge
+              pricingTier={pricingTier}
+              blanketMeta={breakdown.blanketMeta}
+              snapshot={breakdown._engine?.price_matrix_snapshot}
+            />
             {canEdit && (
               <Button
                 variant="outline"
