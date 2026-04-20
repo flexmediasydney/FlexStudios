@@ -20,6 +20,11 @@ export default defineConfig({
       '@hooks': path.resolve(__dirname, './src/hooks'),
       '@pages': path.resolve(__dirname, './src/pages'),
       '@utils': path.resolve(__dirname, './src/utils'),
+      // Shared pricing library — lives under supabase/functions/_shared/pricing
+      // so Deno edge functions and Vite frontend import the SAME TypeScript
+      // module. No duplication of math. See _shared/pricing/engine.ts for the
+      // single computePrice() orchestrator.
+      '@pricing': path.resolve(__dirname, '../supabase/functions/_shared/pricing'),
     },
     dedupe: ['react', 'react-dom'], // Prevents duplicate React in worktrees
   },
