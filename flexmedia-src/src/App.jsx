@@ -173,6 +173,7 @@ const AuthenticatedApp = () => {
       } />
       {/* Redirects for deleted pages */}
       <Route path="/Analytics" element={<Navigate to="/Dashboard" replace />} />
+      <Route path="/feedback" element={<Navigate to="/Feedback" replace />} />
       <Route path="/BusinessIntelligence" element={<Navigate to="/Dashboard?tab=revenue" replace />} />
       <Route path="/EmployeeUtilization" element={<Navigate to="/Dashboard?tab=team" replace />} />
       <Route path="/TeamPulsePage" element={<Navigate to="/Dashboard?tab=team" replace />} />

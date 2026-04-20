@@ -83,6 +83,7 @@ const IndustryPulse = React.lazy(() => import('./pages/IndustryPulse'));
 const SalesCommand = React.lazy(() => import('./pages/SalesCommand'));
 const SalesMap = React.lazy(() => import('./pages/SalesMap'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
+const Feedback = React.lazy(() => import('./pages/Feedback'));
 const FieldMode = React.lazy(() => import('./pages/FieldMode'));
 const NotificationsPage = React.lazy(() => import('./pages/NotificationsPage'));
 const NotificationsPulse = React.lazy(() => import('./pages/NotificationsPulse'));
@@ -142,6 +143,7 @@ export const PAGES = {
     "EdgeFunctionAuditLog": EdgeFunctionAuditLog,
     "EmailSyncSettings": EmailSyncSettings,
     "SettingsEmailSyncHealth": SettingsEmailSyncHealth,
+    "Feedback": Feedback,
     "FieldMode": FieldMode,
     "GoalDetails": GoalDetails,
     "Goals": Goals,

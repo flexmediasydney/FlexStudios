@@ -57,6 +57,7 @@ import NotificationToast from "@/components/notifications/NotificationToast";
 import { ActiveTimersProvider } from "@/components/utilization/ActiveTimersContext";
 import CalendarConnectBanner from "@/components/calendar/CalendarConnectBanner";
 import QuickLogTouchpoint from "@/components/nurturing/QuickLogTouchpoint";
+import FeedbackFloatingButton from "@/components/feedback/FeedbackFloatingButton";
 import { Eye, XCircle } from "lucide-react";
 
 // ── Simulation Banner ─────────────────────────────────────────────────────
@@ -540,6 +541,8 @@ function LayoutContent({ currentPageName, children }) {
       <NotificationToast />
       {/* Global Quick Log Touchpoint (Ctrl+Shift+L) */}
       <QuickLogTouchpoint open={quickLogOpen} onClose={() => setQuickLogOpen(false)} />
+      {/* Global Feedback "Report" button — hidden on /Feedback to avoid redundancy */}
+      <FeedbackFloatingButton />
       {/* Skip to content link for keyboard navigation */}
       <a
         href="#main-content"
