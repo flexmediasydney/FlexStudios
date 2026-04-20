@@ -37,18 +37,59 @@ export interface BlanketResult {
   post_blanket: number;
 }
 
+/**
+ * Apply the matrix's blanket discount.
+ *
+ * Semantic (set 2026-04-20): nested per-unit extras added INSIDE a package
+ * (e.g. user bumps Sales Images from the included 20 to 22) are treated as
+ * products for discount purposes — they get `product_percent`, not
+ * `package_percent`. The package base price is what gets `package_percent`.
+ *
+ * Rationale: these extras are ad-hoc additions by the end user and aren't
+ * part of the standing "package deal" the matrix is discounting. Charging
+ * them under the product side of the blanket matches how they'd be treated
+ * if the user had added them as standalone products.
+ *
+ * Historical note: before this change, the engine bundled extras into the
+ * package line's `final_price` and applied `package_percent` to the whole
+ * thing. No production project actually exercised that path (zero projects
+ * had extras at the time of the switch), so the semantic change didn't
+ * move any stored prices. Parity tests (pricingParityCheck) stayed 53/53
+ * green through the transition.
+ *
+ * `subtotal` remains `Σ line.final_price` for line-item display consistency.
+ * What changes is how we carve up that subtotal into package-discountable
+ * vs product-discountable portions for the blanket math. Sums of rounded
+ * sub-portions can drift from `final_price` by $5 on awkward percentages;
+ * that's accepted rounding noise.
+ */
 export function applyBlanketDiscount(
   lineItems: LineItem[],
   agentMatrix: PriceMatrix | null,
   agencyMatrix: PriceMatrix | null,
 ): BlanketResult {
-  const productSubtotal = lineItems
+  // Display subtotal — sum of already-rounded line finals. Unchanged.
+  const productLineSubtotal = lineItems
     .filter((li) => li.type === 'product')
     .reduce((sum, li) => sum + (li.final_price || 0), 0);
-  const packageSubtotal = lineItems
+  const packageLineSubtotal = lineItems
     .filter((li) => li.type === 'package')
     .reduce((sum, li) => sum + (li.final_price || 0), 0);
-  const subtotal = productSubtotal + packageSubtotal;
+  const subtotal = productLineSubtotal + packageLineSubtotal;
+
+  // ── Discount basis — NEW 2026-04-20 semantic ──────────────────────────
+  // Package blanket applies to package BASE only (rounded per instance, × qty).
+  // Product blanket applies to standalone products + nested package extras.
+  let packageDiscountBasis = 0;
+  let productExtrasFromPackages = 0;
+  for (const li of lineItems) {
+    if (li.type !== 'package') continue;
+    const base = li.base_price || 0;
+    const qty = li.quantity || 1;
+    packageDiscountBasis += roundToNearestFive(base) * qty;
+    productExtrasFromPackages += (li.nested_extra_cost || 0) * qty;
+  }
+  const productDiscountBasis = productLineSubtotal + productExtrasFromPackages;
 
   const blanket = resolveBlanketDiscount(agentMatrix, agencyMatrix);
 
@@ -57,11 +98,11 @@ export function applyBlanketDiscount(
   if (blanket) {
     productDiscount =
       blanket.product_percent > 0
-        ? Math.min(productSubtotal, roundToNearestFive((productSubtotal * blanket.product_percent) / 100))
+        ? Math.min(productDiscountBasis, roundToNearestFive((productDiscountBasis * blanket.product_percent) / 100))
         : 0;
     packageDiscount =
       blanket.package_percent > 0
-        ? Math.min(packageSubtotal, roundToNearestFive((packageSubtotal * blanket.package_percent) / 100))
+        ? Math.min(packageDiscountBasis, roundToNearestFive((packageDiscountBasis * blanket.package_percent) / 100))
         : 0;
   }
 
@@ -70,8 +111,10 @@ export function applyBlanketDiscount(
 
   return {
     subtotal,
-    product_subtotal: productSubtotal,
-    package_subtotal: packageSubtotal,
+    // Report the discount-basis breakdown, not the line-display breakdown —
+    // these feed the UI's per-line effective price calculation.
+    product_subtotal: productDiscountBasis,
+    package_subtotal: packageDiscountBasis,
     product_discount: productDiscount,
     package_discount: packageDiscount,
     applied_discount: appliedDiscount,

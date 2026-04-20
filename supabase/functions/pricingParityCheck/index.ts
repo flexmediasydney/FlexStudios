@@ -160,10 +160,19 @@ function legacyComputePrice(args: {
   if (activeBlanket) {
     const productPct = Math.min(100, Math.max(0, parseFloat(activeBlanket.product_percent) || 0));
     const packagePct = Math.min(100, Math.max(0, parseFloat(activeBlanket.package_percent) || 0));
-    const productSub = lineItems.filter((li: any) => li.type === 'product').reduce((s: number, li: any) => s + (li.final_price || 0), 0);
-    const packageSub = lineItems.filter((li: any) => li.type === 'package').reduce((s: number, li: any) => s + (li.final_price || 0), 0);
-    const productDisc = productPct > 0 ? Math.min(productSub, Math.ceil((productSub * productPct) / 100 / 5) * 5) : 0;
-    const packageDisc = packagePct > 0 ? Math.min(packageSub, Math.ceil((packageSub * packagePct) / 100 / 5) * 5) : 0;
+    // 2026-04-20 semantic: nested package extras carve into product basis,
+    // package blanket applies to package BASE only. Matches applyBlanketDiscount.
+    let packageBasis = 0;
+    let extrasIntoProducts = 0;
+    for (const li of lineItems) {
+      if (li.type !== 'package') continue;
+      packageBasis += Math.ceil(((li.base_price || 0)) / 5) * 5 * (li.quantity || 1);
+      extrasIntoProducts += (li.nested_extra_cost || 0) * (li.quantity || 1);
+    }
+    const productLineSub = lineItems.filter((li: any) => li.type === 'product').reduce((s: number, li: any) => s + (li.final_price || 0), 0);
+    const productBasis = productLineSub + extrasIntoProducts;
+    const productDisc = productPct > 0 ? Math.min(productBasis, Math.ceil((productBasis * productPct) / 100 / 5) * 5) : 0;
+    const packageDisc = packagePct > 0 ? Math.min(packageBasis, Math.ceil((packageBasis * packagePct) / 100 / 5) * 5) : 0;
     appliedDiscount = productDisc + packageDisc;
     finalPrice = Math.max(0, totalPrice - appliedDiscount);
   }

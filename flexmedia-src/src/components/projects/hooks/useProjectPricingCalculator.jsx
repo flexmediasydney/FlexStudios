@@ -203,9 +203,17 @@ export function useProjectPricingCalculator(
             };
           })
           .filter(Boolean);
-        const packageLineDiscount = packagePct > 0
-          ? Math.min(line.final_price, roundUp5((line.final_price * packagePct) / 100))
+        // New 2026-04-20 semantic: package blanket % applies to base only,
+        // nested extras go to product % (treated like ad-hoc products).
+        const baseRoundedXQty = roundUp5(line.base_price || 0) * line.quantity;
+        const extrasXQty = (line.nested_extra_cost || 0) * line.quantity;
+        const packageBaseDiscount = packagePct > 0
+          ? Math.min(baseRoundedXQty, roundUp5((baseRoundedXQty * packagePct) / 100))
           : 0;
+        const packageExtrasDiscount = productPct > 0
+          ? Math.min(extrasXQty, roundUp5((extrasXQty * productPct) / 100))
+          : 0;
+        const packageLineDiscount = packageBaseDiscount + packageExtrasDiscount;
         packageItems.push({
           id: pkg.id,
           name: pkg.name,
@@ -213,8 +221,10 @@ export function useProjectPricingCalculator(
           quantity: line.quantity,
           basePrice: line.base_price,
           lineTotal: line.final_price,
-          // Per-line effective price after blanket rebate.
+          // Per-line effective price after blanket rebate (base at pkg%, extras at product%).
           lineTotalEffective: line.final_price - packageLineDiscount,
+          // Tag shows the package-base percent — the most salient rebate on this line.
+          // Extras-level product % is summarised at the subtotal row tooltip.
           blanketPct: packagePct,
           products,
           pkg,
