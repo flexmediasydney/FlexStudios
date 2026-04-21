@@ -10,7 +10,10 @@ import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@
 import { Skeleton } from '@/components/ui/skeleton';
 import { ChevronUp, ExternalLink, MessageCircle, X } from 'lucide-react';
 import { formatDistanceToNow, format } from 'date-fns';
-import ReactMarkdown from 'react-markdown';
+// 2026-04-21: removed ReactMarkdown — `react-markdown` v9 is ESM-only and
+// was failing to evaluate inside this lazy chunk on Vercel, blanking the
+// entire Feedback page. Plain whitespace-pre-wrap rendering is fine for v1
+// (descriptions are user-typed plaintext, no markdown features in active use).
 import { toast } from 'sonner';
 import { api } from '@/api/supabaseClient';
 import { refetchEntityList } from '@/components/hooks/useEntityData';
@@ -166,12 +169,12 @@ export default function FeedbackDetailSlideout({
                 </div>
               </div>
 
-              {/* Description */}
+              {/* Description — plaintext with newline preservation */}
               {item.description && (
                 <div>
                   <div className="text-xs text-muted-foreground mb-1">Description</div>
-                  <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
-                    <ReactMarkdown>{item.description}</ReactMarkdown>
+                  <div className="text-sm whitespace-pre-wrap break-words text-foreground">
+                    {item.description}
                   </div>
                 </div>
               )}
