@@ -18,6 +18,7 @@ import {
   writeAudit,
   writeProjectActivity,
   fireRoleNotif,
+  hasPendingCancelForEvent,
 } from '../utils.ts';
 
 export interface HandlerContext {
@@ -165,14 +166,24 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
     }
   }
 
+  // Defer services-changed review reason — only flush it when the product
+  // reconciler (below) confirms a real product-level change. See #9 in the
+  // webhook audit: a stale tonomo_raw_services snapshot combined with an
+  // operator having manually added the product causes a false "added: X"
+  // flip even though the resolved products are identical.
+  let pendingServicesReviewReason: string | null = null;
+  let servicesDiffDetected = false;
   if (services.length > 0 && !overriddenFields.includes('tonomo_raw_services')) {
     if (ACTIVE_STAGES.includes(project.status)) {
       const prev = safeJsonParse(project.tonomo_raw_services, [] as string[]);
-      const added = services.filter((s: string) => !prev.includes(s));
-      const removed = prev.filter((s: string) => !services.includes(s));
-      if (added.length > 0 || removed.length > 0) {
-        reviewReasons.push(`Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`);
-        updates.pending_review_type = 'service_change';
+      // First-time population (empty → N) is not a "change".
+      if (prev.length > 0) {
+        const added = services.filter((s: string) => !prev.includes(s));
+        const removed = prev.filter((s: string) => !services.includes(s));
+        if (added.length > 0 || removed.length > 0) {
+          servicesDiffDetected = true;
+          pendingServicesReviewReason = `Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`;
+        }
       }
     }
     updates.tonomo_raw_services = JSON.stringify(services);
@@ -251,8 +262,10 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
               : []);
         const appointmentStillTracked = trackedAppointmentIds.includes(appointmentEventId);
         const orderCancelled = (p.order?.orderStatus || p.orderStatus) === 'cancelled';
+        // Guard against in-flight cancel for the same event (see handleRescheduled).
+        const cancelPending = await hasPendingCancelForEvent(entities, orderId, appointmentEventId);
 
-        if (appointmentStillTracked && !orderCancelled) {
+        if (appointmentStillTracked && !orderCancelled && !cancelPending) {
           const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
           await entities.CalendarEvent.create({
             title: project.title || `Shoot — ${orderId}`,
@@ -275,7 +288,7 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
             event_source: 'tonomo',
           });
         } else {
-          console.log(`[changed] Skipping calendar-event recreate for appointment ${appointmentEventId}: tracked=${appointmentStillTracked}, orderCancelled=${orderCancelled}`);
+          console.log(`[changed] Skipping calendar-event recreate for appointment ${appointmentEventId}: tracked=${appointmentStillTracked}, orderCancelled=${orderCancelled}, cancelPending=${cancelPending}`);
         }
       }
     } catch (calErr: any) {
@@ -346,6 +359,10 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
     Object.assign(updates, reconciled.updates);
     if (reconciled.activityDescription) reconcileActivityDescription = reconciled.activityDescription;
 
+    // Real product change = anything other than `noop`. Used to flush the
+    // deferred services-changed review reason only when there's substance.
+    const reconcilerReportedRealChange = reconciled.decision !== 'noop';
+
     if (reconciled.decision === 'stash_for_review') {
       if (!updates.pending_review_type) updates.pending_review_type = 'tonomo_drift';
       if (reconciled.reviewReason) reviewReasons.push(reconciled.reviewReason);
@@ -372,6 +389,23 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
           reviewReasons.push('Product quantities changed in Tonomo — pricing recalculation required');
         }
       }
+    }
+
+    // Flush deferred services-changed review only when a real product-level
+    // change was detected. Suppresses false positives where service names
+    // drift but resolved products are identical.
+    if (servicesDiffDetected && pendingServicesReviewReason && reconcilerReportedRealChange) {
+      reviewReasons.push(pendingServicesReviewReason);
+      if (!updates.pending_review_type) updates.pending_review_type = 'service_change';
+    }
+  } else if (servicesDiffDetected && pendingServicesReviewReason) {
+    // Payload had no tiers/workDays (so reconciler never ran), but services
+    // list differs from the stored snapshot. This is rare — emit the review
+    // only if services were REMOVED (destructive). Pure-addition without a
+    // corresponding tier payload is almost certainly a stale snapshot.
+    if (pendingServicesReviewReason.includes('removed:')) {
+      reviewReasons.push(pendingServicesReviewReason);
+      if (!updates.pending_review_type) updates.pending_review_type = 'service_change';
     }
   }
   if (p.order?.package?.name && !overriddenFields.includes('tonomo_package')) updates.tonomo_package = p.order.package.name;

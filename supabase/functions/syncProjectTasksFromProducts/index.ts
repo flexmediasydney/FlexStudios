@@ -485,10 +485,15 @@ serveWithAudit('syncProjectTasksFromProducts', async (req) => {
     const tasksToReactivate = tasksToCreate.filter((t: any) => t.type === 'reactivate');
 
     if (tasksToReactivate.length > 0) {
+      // Preserve is_completed / completed_at on reactivate. If the task was
+      // completed before its source product was removed, the work is still
+      // valid — resetting to is_completed=false wipes legitimate task history
+      // and re-fires overdue notifications. Undelete only; leave completion
+      // state alone.
       for (let i = 0; i < tasksToReactivate.length; i += batchSize) {
         const batch = tasksToReactivate.slice(i, i + batchSize);
         await Promise.all(batch.map((t: any) =>
-          retryWithBackoff(() => entities.ProjectTask.update(t.taskId, { is_deleted: false, is_completed: false }))
+          retryWithBackoff(() => entities.ProjectTask.update(t.taskId, { is_deleted: false }))
             .catch((err: any) => console.error(`Failed to reactivate task ${t.taskId}:`, err.message))
         ));
       }

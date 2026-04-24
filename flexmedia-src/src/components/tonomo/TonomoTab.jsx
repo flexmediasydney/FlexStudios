@@ -87,6 +87,13 @@ export default function TonomoTab({ project }) {
       setApprovalErrors([]);
     }
 
+    // Default: restore pre_revision_stage (where the project came from before
+    // the flip). This preserves workflow continuity — delivered/submitted/
+    // uploaded/onsite projects don't regress to "scheduled" on approval.
+    // Exceptions: cancellation → cancelled; restoration / reopened_after_delivery
+    // intentionally re-enter the active workflow (pre_revision_stage would be
+    // 'cancelled'/'delivered' which we don't want to restore).
+    const fallbackStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
     let newStatus;
     switch (reviewType) {
       case 'cancellation':
@@ -94,13 +101,10 @@ export default function TonomoTab({ project }) {
         break;
       case 'restoration':
       case 'reopened_after_delivery':
-        newStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
-        break;
-      case 'additional_appointment':
-        newStatus = project.pre_revision_stage || (project.shoot_date ? 'scheduled' : 'to_be_scheduled');
+        newStatus = fallbackStatus;
         break;
       default:
-        newStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
+        newStatus = project.pre_revision_stage || fallbackStatus;
     }
 
     setIsApproving(true);
@@ -109,6 +113,7 @@ export default function TonomoTab({ project }) {
         status: newStatus,
         pending_review_reason: null,
         pending_review_type: null,
+        pre_revision_stage: null,
         urgent_review: false,
         auto_approved: false,
       });
@@ -121,9 +126,12 @@ export default function TonomoTab({ project }) {
           console.warn('applyProjectRoleDefaults failed (non-fatal):', err?.message);
         });
 
+        // Pass 'pending_review' as old_data so the timer closes correctly —
+        // project.status IS pending_review at this point, but be explicit to
+        // survive stale closures over project across React renders.
         api.functions.invoke('trackProjectStageChange', {
           projectId: project.id,
-          old_data: { status: project.status },
+          old_data: { status: 'pending_review' },
           actor_id: null,
           actor_name: 'Booking Approval',
         }).catch(() => {});

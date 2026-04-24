@@ -166,12 +166,27 @@ serveWithAudit('recalculateProjectPricingServerSide', async (req) => {
             pricing_mismatch_details: `Tonomo: $${tqp.toFixed(2)} vs Matrix: $${newPrice.toFixed(2)} (${mismatch > 0 ? '+' : ''}$${mismatch.toFixed(2)})`,
             // HARD RULE: Price mismatch ALWAYS downgrades confidence to partial.
             mapping_confidence: 'partial',
-            pending_review_type: 'pricing_mismatch',
-            pending_review_reason: `Price mismatch detected: Tonomo quoted $${tqp.toFixed(2)} but our price matrix calculates $${newPrice.toFixed(2)} (difference: $${Math.abs(mismatch).toFixed(2)}). Please review pricing before proceeding.`,
           };
-          // If the project was auto-approved past pending_review, pull it back.
+
+          // Only touch pending_review fields when the project is being flipped
+          // to pending_review, or is already in pending_review FOR THIS reason.
+          // Previously these two fields were written unconditionally, which
+          // (a) overwrote unrelated review reasons (e.g. rescheduled, services
+          // change) on projects already in pending_review, and (b) polluted
+          // non-pending active projects with phantom pending_review_type values
+          // that surfaced the next time the project re-entered pending_review.
           const AUTO_APPROVED_STAGES = ['to_be_scheduled', 'scheduled'];
-          if (project.auto_approved && AUTO_APPROVED_STAGES.includes(project.status)) {
+          const willFlipToPendingReview =
+            project.auto_approved && AUTO_APPROVED_STAGES.includes(project.status);
+          const alreadyPendingForPricing =
+            project.status === 'pending_review' &&
+            (project.pending_review_type === 'pricing_mismatch' ||
+             project.pending_review_type == null);
+          if (willFlipToPendingReview || alreadyPendingForPricing) {
+            mismatchUpdates.pending_review_type = 'pricing_mismatch';
+            mismatchUpdates.pending_review_reason = `Price mismatch detected: Tonomo quoted $${tqp.toFixed(2)} but our price matrix calculates $${newPrice.toFixed(2)} (difference: $${Math.abs(mismatch).toFixed(2)}). Please review pricing before proceeding.`;
+          }
+          if (willFlipToPendingReview) {
             mismatchUpdates.status = 'pending_review';
             mismatchUpdates.pre_revision_stage = project.status;
             mismatchUpdates.auto_approved = false;

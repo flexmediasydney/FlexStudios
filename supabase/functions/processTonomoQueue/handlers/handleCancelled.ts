@@ -110,19 +110,35 @@ export async function handleCancelled(entities: any, orderId: string, p: any) {
       console.warn(`[cancelled/appt-only] Failed to clean calendar events:`, err?.message);
     }
 
-    // Clear appointment metadata but keep project status (booking is still live)
+    // Clear appointment metadata but keep project status (booking is still live).
+    // Two safety tightenings vs prior behaviour:
+    //   1. Only null shoot_date/shoot_time when the cancelled appointment is
+    //      actually the one the project's shoot_date corresponds to. Prior
+    //      code cleared unconditionally — which, in a rescheduled-then-cancel
+    //      race (cancel arrives for the OLD appointment after the reschedule
+    //      payload already wrote the new date), destroyed the live shoot_date.
+    //   2. Only overwrite pending_review_type / pending_review_reason when we
+    //      are actually flipping to pending_review. Prior code overwrote them
+    //      unconditionally, clobbering unrelated review context (e.g. a
+    //      pricing_mismatch or rescheduled review would lose its reason).
+    const cancellationMatchesProjectEvent =
+      !!cancelledEventId &&
+      (project.tonomo_event_id === cancelledEventId ||
+       project.tonomo_google_event_id === cancelledEventId);
     const apptOnlyUpdates: Record<string, any> = {
       tonomo_appointment_ids: [],
-      shoot_date: null,
-      shoot_time: null,
-      pending_review_type: 'appointment_cancelled',
-      pending_review_reason: 'Appointment removed in Tonomo — order is still active. Awaiting reschedule.',
     };
+    if (cancellationMatchesProjectEvent) {
+      apptOnlyUpdates.shoot_date = null;
+      apptOnlyUpdates.shoot_time = null;
+    }
     // If the project is currently 'scheduled' or similar, move to pending_review
     // so operators see it needs attention (new shoot date required).
     if (project.status && !['pending_review', 'delivered', 'cancelled'].includes(project.status)) {
       apptOnlyUpdates.pre_revision_stage = project.status;
       apptOnlyUpdates.status = 'pending_review';
+      apptOnlyUpdates.pending_review_type = 'appointment_cancelled';
+      apptOnlyUpdates.pending_review_reason = 'Appointment removed in Tonomo — order is still active. Awaiting reschedule.';
     }
     if (project.tonomo_event_id === cancelledEventId) apptOnlyUpdates.tonomo_event_id = null;
     if (project.tonomo_google_event_id === cancelledEventId) apptOnlyUpdates.tonomo_google_event_id = null;

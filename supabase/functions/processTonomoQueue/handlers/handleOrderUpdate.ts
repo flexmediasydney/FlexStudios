@@ -101,10 +101,26 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
     return { summary: `Skipped order update for cancelled project ${orderId}`, skipped: true };
   }
 
-  // Lifecycle reversal: if project is cancelled/delivered but incoming status is active, route to pending_review
-  const isCancelledOrDelivered = project.status === 'cancelled' || project.status === 'delivered' ||
-    project.tonomo_lifecycle_stage === 'cancelled' || project.pending_review_type === 'cancellation';
-  if (isCancelledOrDelivered && incomingStatus && incomingStatus !== 'cancelled' && incomingStatus !== 'complete') {
+  // Lifecycle reversal: if project is TRULY cancelled/delivered but incoming
+  // status is active, route to pending_review. Two surgical changes from the
+  // prior version:
+  //   1. Skip entirely for payment-only events. Payment webhooks carry stale
+  //      order-level status and must never trigger a status reversal.
+  //   2. Remove `pending_review_type === 'cancellation'` from the predicate.
+  //      A project awaiting cancellation confirmation is NOT yet cancelled —
+  //      treating it as such caused its original review reason to be overwritten
+  //      with 'restoration' on any subsequent order update, losing context.
+  const isActuallyCancelledOrDelivered =
+    project.status === 'cancelled' ||
+    project.status === 'delivered' ||
+    project.tonomo_lifecycle_stage === 'cancelled';
+  if (
+    !paymentOnly &&
+    isActuallyCancelledOrDelivered &&
+    incomingStatus &&
+    incomingStatus !== 'cancelled' &&
+    incomingStatus !== 'complete'
+  ) {
     await entities.Project.update(project.id, {
       status: 'pending_review',
       pre_revision_stage: project.status,
@@ -131,13 +147,30 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
   const services = [...new Set([...servicesA, ...servicesB])].filter(Boolean);
   const tiers = (p.order?.service_custom_tiers || p.service_custom_tiers || []).map((t: any) => ({ name: t.serviceName, selected: t.selected?.name }));
 
+  // Capture the services diff but DEFER the review reason until after the
+  // product reconciler runs. If the reconciler decides the products don't
+  // actually differ (Tonomo's proposed set == current set), the name-level
+  // service diff is noise from stale tonomo_raw_services (operator manually
+  // added a product that also happens to be in Tonomo's service list). Firing
+  // a review in that case creates a false "services changed" flip — confirmed
+  // on 7e/164 Burwood Rd ("added: Digital Dusk Image" when it was already a
+  // product). See #9 in the audit.
+  let pendingServicesReviewReason: string | null = null;
+  let servicesDiffDetected = false;
   if (!paymentOnly && services.length > 0) {
     if (!overriddenFields.includes('tonomo_raw_services')) {
       if (ACTIVE_STAGES.includes(project.status)) {
         const prev = safeJsonParse(project.tonomo_raw_services, [] as string[]);
-        const added = services.filter((s: string) => !prev.includes(s));
-        const removed = prev.filter((s: string) => !services.includes(s));
-        if (added.length > 0 || removed.length > 0) reviewReasons.push(`Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`);
+        // Only treat this as a real change if we have a prior snapshot. A
+        // first-time population from empty → N services is not a "change".
+        if (prev.length > 0) {
+          const added = services.filter((s: string) => !prev.includes(s));
+          const removed = prev.filter((s: string) => !services.includes(s));
+          if (added.length > 0 || removed.length > 0) {
+            servicesDiffDetected = true;
+            pendingServicesReviewReason = `Services changed during active production${added.length ? ` — added: ${added.join(', ')}` : ''}${removed.length ? ` — removed: ${removed.join(', ')}` : ''} — please confirm billing`;
+          }
+        }
       }
       updates.tonomo_raw_services = JSON.stringify(services);
     }
@@ -155,7 +188,12 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
 
   const incomingStatusBCC = p.orderStatus || p.order?.orderStatus;
   if (incomingStatusBCC) {
-    const wasRestored = project.tonomo_order_status === 'cancelled' && incomingStatusBCC !== 'cancelled';
+    // Payment-only webhooks MUST NOT trigger a restoration flow. They carry
+    // stale order-level status that can falsely read as "restored from cancel"
+    // if the project was previously cancelled + a payment comes in later.
+    const wasRestored = !paymentOnly &&
+      project.tonomo_order_status === 'cancelled' &&
+      incomingStatusBCC !== 'cancelled';
     updates.tonomo_order_status = incomingStatusBCC;
     if (wasRestored) {
       reviewReasons.push('Order restored in Tonomo after cancellation — please re-confirm all details');
@@ -171,9 +209,13 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
     }
   }
 
-  const rawTiersBCC = p.order?.service_custom_tiers || p.service_custom_tiers || [];
-  const workDaysArrBCC = p.order?.workDays || p.workDays || [];
+  // Payment-only webhooks must not rebuild products/packages. The payload
+  // often includes stale order-level tier/workDay data that, if reconciled,
+  // would overwrite operator edits and fire spurious "Tonomo drift" reviews.
+  const rawTiersBCC = paymentOnly ? [] : (p.order?.service_custom_tiers || p.service_custom_tiers || []);
+  const workDaysArrBCC = paymentOnly ? [] : (p.order?.workDays || p.workDays || []);
   let reconcileActivityDescriptionBCC: string | null = null;
+  let reconcilerReportedRealChange = false;
   if (rawTiersBCC.length > 0 || workDaysArrBCC.length > 0) {
     const allMappingsBCC = await loadMappingTable(entities);
     const { autoProducts: newProd, autoPackages: newPkg, mappingGaps: newGapsBCC } =
@@ -199,12 +241,23 @@ export async function handleOrderUpdate(entities: any, orderId: string, p: any, 
 
       Object.assign(updates, reconciled.updates);
       if (reconciled.activityDescription) reconcileActivityDescriptionBCC = reconciled.activityDescription;
+      // A real product change per the reconciler — i.e. Tonomo's proposed
+      // state differs from the project's current products/packages.
+      reconcilerReportedRealChange = reconciled.decision !== 'noop';
 
       if (reconciled.decision === 'stash_for_review') {
         if (!updates.pending_review_type) updates.pending_review_type = 'tonomo_drift';
         if (reconciled.reviewReason) reviewReasons.push(reconciled.reviewReason);
       }
     }
+  }
+
+  // Flush the deferred services-changed review reason only when a real product
+  // change was detected. Suppresses false positives where the services NAME
+  // delta exists but the resolved products are identical (operator had already
+  // added the product manually).
+  if (servicesDiffDetected && pendingServicesReviewReason && reconcilerReportedRealChange) {
+    reviewReasons.push(pendingServicesReviewReason);
   }
 
   if (!overriddenFields.includes('tonomo_package')) updates.tonomo_package = p.package?.name || p.order?.package?.name || project.tonomo_package;

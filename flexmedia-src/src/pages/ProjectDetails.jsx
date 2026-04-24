@@ -1329,7 +1329,12 @@ export default function ProjectDetails() {
         const flagActivity = allProjectActivities?.find(a => a.activity_type === 'flagged');
 
         if (project?.status === 'pending_review') {
-          const approveStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
+          // Prefer pre_revision_stage (where the project came from before the
+          // flip) so delivered/submitted/uploaded/onsite projects are restored
+          // to their real stage on approval. Fall back to scheduled when
+          // shoot_date is known, otherwise to_be_scheduled.
+          const fallbackStatus = project.shoot_date ? 'scheduled' : 'to_be_scheduled';
+          const approveStatus = project.pre_revision_stage || fallbackStatus;
           const isCancellation = project.pending_review_type === 'cancellation';
           return (
             <div className={cn(
@@ -1394,6 +1399,7 @@ export default function ProjectDetails() {
                           status: newStatus,
                           pending_review_reason: null,
                           pending_review_type: null,
+                          pre_revision_stage: null,
                           urgent_review: false,
                           auto_approved: false,
                         });

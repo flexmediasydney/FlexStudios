@@ -10,6 +10,8 @@ import {
   writeAudit,
   writeProjectActivity,
   fireRoleNotif,
+  normalizeShootDate,
+  hasPendingCancelForEvent,
 } from '../utils.ts';
 
 export interface HandlerContext {
@@ -117,11 +119,24 @@ export async function handleRescheduled(entities: any, orderId: string, p: any, 
     const hoursUntilShoot = (startTime - Date.now()) / 3600000;
     updates.urgent_review = hoursUntilShoot <= 24 && hoursUntilShoot > 0;
   }
-  if (ACTIVE_STAGES.includes(project.status)) {
+  // Only flip to pending_review when the shoot date/time ACTUALLY changed.
+  // Tonomo fires `rescheduled` for various appointment-level edits (photographer
+  // swap, notes, re-confirms) even when the start_time is unchanged — without
+  // this guard, every such ping pushes the project to pending_review with a
+  // misleading "from 2026-04-22 to 2026-04-22" reason. See investigation on 4
+  // stuck projects (18 Bilson Rd, 2/17-19 Gould St, 4 Hardy Pl, 36 Ward St).
+  const normalizedPrevDate = normalizeShootDate(previousShootDate);
+  const newDate = updates.shoot_date || null;
+  const newTime = updates.shoot_time || null;
+  const dateActuallyChanged = !!newDate && normalizedPrevDate !== newDate;
+  const timeActuallyChanged = !!newTime && !!project.shoot_time && newTime !== project.shoot_time;
+  if (ACTIVE_STAGES.includes(project.status) && (dateActuallyChanged || timeActuallyChanged)) {
     updates.pre_revision_stage = project.status;
     updates.status = 'pending_review';
     updates.pending_review_type = 'rescheduled';
-    updates.pending_review_reason = `Shoot rescheduled in Tonomo from ${previousShootDate || 'unknown'} to ${updates.shoot_date || 'unknown'} — please confirm`;
+    const fromLabel = normalizedPrevDate || previousShootDate || 'unknown';
+    const toLabel = newDate || 'unknown';
+    updates.pending_review_reason = `Shoot rescheduled in Tonomo from ${fromLabel} to ${toLabel} — please confirm`;
   }
 
   await entities.Project.update(project.id, updates);
@@ -163,8 +178,13 @@ export async function handleRescheduled(entities: any, orderId: string, p: any, 
               : []);
         const appointmentStillTracked = trackedAppointmentIds.includes(eventId);
         const orderCancelled = (p.order?.orderStatus || p.orderStatus) === 'cancelled';
+        // Cancel-race guard #2: if a 'canceled' webhook for this exact event
+        // is already queued (but hasn't processed yet — FIFO by created_at
+        // isn't clock-monotonic across Tonomo bursts), don't resurrect the
+        // calendar event. Prior guard only covered already-processed cancels.
+        const cancelPending = await hasPendingCancelForEvent(entities, orderId, eventId);
 
-        if (appointmentStillTracked && !orderCancelled) {
+        if (appointmentStillTracked && !orderCancelled && !cancelPending) {
           const endTime = p.when?.end_time ? p.when.end_time * 1000 : null;
           await entities.CalendarEvent.create({
             title: project.title || `Shoot — ${orderId}`,
@@ -184,7 +204,7 @@ export async function handleRescheduled(entities: any, orderId: string, p: any, 
             event_source: 'tonomo',
           });
         } else {
-          console.log(`[rescheduled] Skipping calendar-event recreate for appointment ${eventId}: tracked=${appointmentStillTracked}, orderCancelled=${orderCancelled}`);
+          console.log(`[rescheduled] Skipping calendar-event recreate for appointment ${eventId}: tracked=${appointmentStillTracked}, orderCancelled=${orderCancelled}, cancelPending=${cancelPending}`);
         }
       }
     } catch (calErr: any) {

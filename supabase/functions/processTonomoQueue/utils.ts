@@ -18,6 +18,72 @@ export function safeJsonParse<T>(value: string | null | undefined, fallback: T):
   try { return JSON.parse(value); } catch { return fallback; }
 }
 
+// Normalize a shoot_date value to Sydney-local YYYY-MM-DD for comparison.
+// Handles: plain YYYY-MM-DD strings, ISO strings with TZ (e.g.
+// "2026-04-22T00:00:00+00:00"), and Postgres timestamptz serializations
+// ("2026-04-22 00:00:00+00"). Returns null for falsy/unparseable input.
+// Used by handleRescheduled to decide whether a Tonomo reschedule payload
+// actually changed the date vs fired on the same day with identical time —
+// without this, every Tonomo appointment-level ping would flip projects to
+// pending_review regardless of real change.
+export function normalizeShootDate(raw: unknown): string | null {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+  }
+  if (raw instanceof Date) {
+    return raw.toLocaleDateString('en-CA', { timeZone: 'Australia/Sydney' });
+  }
+  return null;
+}
+
+// Check if the queue has a pending `canceled` row matching this order + event.
+// Used by reschedule/change handlers to avoid resurrecting a calendar event
+// for an appointment that's about to be cancelled — a known race where Tonomo
+// bursts 'canceled' + 'changed' in the same second and FIFO ordering can land
+// the 'changed' first.
+export async function hasPendingCancelForEvent(
+  entities: any,
+  orderId: string | null | undefined,
+  eventId: string | null | undefined,
+): Promise<boolean> {
+  if (!orderId || !eventId) return false;
+  try {
+    // Look for any pending/processing `canceled` rows targeting this order.
+    // We can't filter by raw_payload field easily via the entities layer, so
+    // we fetch pending canceled rows for the order and confirm eventId match
+    // by checking the log payload. Keep the batch small — typical burst is
+    // 1-3 rows.
+    const rows = await entities.TonomoProcessingQueue.filter(
+      { order_id: orderId, action: 'canceled', status: 'pending' }, null, 10,
+    ).catch(() => []);
+    if (!rows || rows.length === 0) return false;
+    // event_id is stored on the queue row itself when the receiver had it.
+    for (const row of rows) {
+      if (row.event_id === eventId) return true;
+    }
+    // Fall back to checking the log payload for p.id match, in case the
+    // queue row's event_id was nulled during the dedup-fallback insert path.
+    const logIds = rows.map((r: any) => r.webhook_log_id).filter(Boolean);
+    if (logIds.length === 0) return false;
+    for (const logId of logIds) {
+      try {
+        const log = await entities.TonomoWebhookLog.get(logId);
+        if (!log?.raw_payload) continue;
+        const payload = JSON.parse(log.raw_payload);
+        const cancelEventId = payload?.id || payload?.appointment_id || null;
+        if (cancelEventId === eventId) return true;
+      } catch { /* skip bad payloads */ }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 // Multi-appointment & lifecycle helpers
 export function trackAppointment(existingIdsJson: string | null, newEventId: string | null) {
   if (!newEventId) return { isNew: false, updatedIds: [] as string[] };

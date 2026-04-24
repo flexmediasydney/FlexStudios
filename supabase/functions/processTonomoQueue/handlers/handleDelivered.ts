@@ -36,9 +36,28 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
     updates.payment_status = mappedPayment;
   }
 
-  // NOTE: Project status is intentionally NOT auto-transitioned on Tonomo delivery.
-  // Delivery metadata (links, files, invoice, delivered_at) is still captured below,
-  // but status transitions must be performed manually by staff.
+  // Auto-resolve a narrow class of stale pending_reviews on delivery:
+  // when the project is sitting in pending_review for `rescheduled` or
+  // `appointment_cancelled` (both appointment-level reasons that are moot
+  // once Tonomo has delivered), and pre_revision_stage is set, silently
+  // clear the review and restore the prior stage. Anything else
+  // (cancellation, restoration, pricing_mismatch, new_booking, tonomo_drift,
+  // service_change, staff_change, products_removed) still requires human
+  // review — the delivery fact doesn't dissolve those concerns.
+  const APPOINTMENT_ONLY_REVIEW_TYPES = ['rescheduled', 'appointment_cancelled'];
+  if (
+    project.status === 'pending_review' &&
+    project.pre_revision_stage &&
+    project.pending_review_type &&
+    APPOINTMENT_ONLY_REVIEW_TYPES.includes(project.pending_review_type)
+  ) {
+    updates.status = project.pre_revision_stage;
+    updates.pending_review_type = null;
+    updates.pending_review_reason = null;
+    updates.pre_revision_stage = null;
+    updates.urgent_review = false;
+    console.log(`[handleDelivered] Auto-resolved stale ${project.pending_review_type} pending_review for ${orderId} → ${project.pre_revision_stage}`);
+  }
 
   if (p.deliveredDate) updates.tonomo_delivered_at = new Date(p.deliveredDate).toISOString();
   if (p.deliverable_link) updates.tonomo_deliverable_link = p.deliverable_link;

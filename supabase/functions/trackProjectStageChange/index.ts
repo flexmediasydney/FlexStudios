@@ -282,7 +282,13 @@ serveWithAudit('trackProjectStageChange', async (req) => {
             { idempotency_key: key, user_id: userId }, null, 1
           );
           return recent.length > 0;
-        } catch { return false; }
+        } catch (err: any) {
+          // Fail CLOSED: on a transient query error, assume the notification
+          // was already sent rather than risk duplicating it. Dropping one
+          // notification is recoverable; spamming operators is not.
+          console.error(`[trackProjectStageChange] notification dedup check failed for ${key}:${userId}, failing closed:`, err?.message);
+          return true;
+        }
       };
 
       const fireNotif = async (userId: string, type: string, title: string, message: string, category: string, severity: string, idempKey?: string) => {
