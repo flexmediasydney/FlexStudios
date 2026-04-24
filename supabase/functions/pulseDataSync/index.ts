@@ -1499,6 +1499,7 @@ const chunkExisting = __chunkExisting_raw.data ?? [];
       // Extract dates with robust multi-field fallback
       let extractedListedDate = extractListingDate(l, listingType);
       let extractedSoldDate = extractSoldDate(l);
+      let soldDateInferredForThisRow = false;
       // ── Migration 100 fix: listed_date / sold_date fallback ─────────
       // Azzouzana doesn't return any date fields. For new rows we set
       // listed_date = first_seen_at (what we're about to write for this
@@ -1508,6 +1509,23 @@ const chunkExisting = __chunkExisting_raw.data ?? [];
       }
       if (!extractedSoldDate && isSoldListing && isNew) {
         extractedSoldDate = now.slice(0, 10);
+        soldDateInferredForThisRow = true;
+      }
+      // ── P3 fix (2026-04-24): for_sale → sold transition on an EXISTING
+      // row. The prior fallback only fired on `isNew`, so when a known
+      // for-sale listing flipped to sold on a subsequent scrape (and the
+      // scraper returned no soldDate), sold_date was left NULL. This left
+      // 2,025 sold listings invisible to every sold_date-filtered rollup
+      // (migration 217 backfills the historical stragglers; this block
+      // prevents new ones). We only populate for the transition — an
+      // already-sold row keeps whatever sold_date it had.
+      if (!extractedSoldDate && isSoldListing && !isNew) {
+        const prev = existingListingData.get(listingId!);
+        const wasNotSoldBefore = prev && prev.listing_type !== 'sold';
+        if (wasNotSoldBefore) {
+          extractedSoldDate = now.slice(0, 10);
+          soldDateInferredForThisRow = true;
+        }
       }
       // Days on Market: explicit field first, then parse from description (REA sold often has "Days on Market: N")
       const extractedDom = l.daysOnMarket
@@ -1540,6 +1558,14 @@ const chunkExisting = __chunkExisting_raw.data ?? [];
         listed_date: extractedListedDate,
         created_date: extractedListedDate,
         sold_date: extractedSoldDate,
+        // Track the provenance of sold_date. Used by pulse_get_market_share's
+        // date_confidence breakdown so operators can caveat rollups.
+        //   • sold_date came from the scraper (real field) → false
+        //   • sold_date came from our timestamp fallback   → true
+        //   • no sold_date at all                          → don't touch
+        // Writing only the true/false case (never null) so an authoritative
+        // sold_date arriving later correctly clears a prior inferred flag.
+        ...(extractedSoldDate ? { sold_date_inferred: soldDateInferredForThisRow } : {}),
         auction_date: l.auctionDate || null,
         days_on_market: extractedDom,
         status: l.status || null,

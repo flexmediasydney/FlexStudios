@@ -35,16 +35,24 @@ import DataFreshnessCard from "@/components/marketshare/DataFreshnessCard";
 
 // ── Time window helpers ─────────────────────────────────────────────────────
 
+// Each window is a half-open interval [from, to). `to` defaults to startOfTomorrow
+// (not `new Date()`) so TODAY is fully included on the sold dimension — the
+// RPC's sold_date filter uses `AT TIME ZONE 'Australia/Sydney'::date` and
+// exclusive upper bound, so `to = now` would silently drop today's rows.
+// Yesterday is an explicit closed-ish window [yesterday 00:00, today 00:00).
 const WINDOWS = [
-  { value: "day",     label: "Today",       from: () => startOfDay(new Date()) },
-  { value: "week",    label: "This week",   from: () => startOfWeek(new Date()) },
-  { value: "month",   label: "This month",  from: () => startOfMonth(new Date()) },
-  { value: "quarter", label: "This quarter",from: () => startOfQuarter(new Date()) },
-  { value: "ytd",     label: "YTD",         from: () => startOfYear(new Date()) },
-  { value: "12m",     label: "12m rolling", from: () => minusMonths(new Date(), 12) },
+  { value: "day",       label: "Today",        from: () => startOfDay(new Date()),             to: () => startOfTomorrow() },
+  { value: "yesterday", label: "Yesterday",    from: () => startOfYesterday(),                 to: () => startOfDay(new Date()) },
+  { value: "week",      label: "This week",    from: () => startOfWeek(new Date()),            to: () => startOfTomorrow() },
+  { value: "month",     label: "This month",   from: () => startOfMonth(new Date()),           to: () => startOfTomorrow() },
+  { value: "quarter",   label: "This quarter", from: () => startOfQuarter(new Date()),         to: () => startOfTomorrow() },
+  { value: "ytd",       label: "YTD",          from: () => startOfYear(new Date()),            to: () => startOfTomorrow() },
+  { value: "12m",       label: "12m rolling",  from: () => minusMonths(new Date(), 12),        to: () => startOfTomorrow() },
 ];
 
 function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function startOfYesterday() { const x = startOfDay(new Date()); x.setDate(x.getDate() - 1); return x; }
+function startOfTomorrow() { const x = startOfDay(new Date()); x.setDate(x.getDate() + 1); return x; }
 function startOfWeek(d) { const x = startOfDay(d); const dow = x.getDay(); x.setDate(x.getDate() - (dow === 0 ? 6 : dow - 1)); return x; }
 function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function startOfQuarter(d) { return new Date(d.getFullYear(), Math.floor(d.getMonth()/3)*3, 1); }
@@ -81,8 +89,11 @@ export default function PulseMarketShare({ onOpenEntity, onNavigateTab }) {
   const [captureVisibility, setCaptureVisibility] = useState("uncaptured"); // "uncaptured" | "all"
 
   const { fromDate, toDate } = useMemo(() => {
-    const wd = WINDOWS.find(w => w.value === window) || WINDOWS[5];
-    return { fromDate: wd.from(), toDate: new Date() };
+    const wd = WINDOWS.find(w => w.value === window) || WINDOWS[WINDOWS.length - 1];
+    return {
+      fromDate: wd.from(),
+      toDate: typeof wd.to === 'function' ? wd.to() : new Date(),
+    };
   }, [window]);
 
   const fromIso = fromDate.toISOString();

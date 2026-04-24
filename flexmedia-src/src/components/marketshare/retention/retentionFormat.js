@@ -5,16 +5,24 @@
  * main component stays focused on layout/state.
  */
 
+// Each window is a half-open interval [from, to). `to` is startOfTomorrow
+// (not `new Date()`) so today is fully included in aggregations. The Pulse
+// retention + market-share RPCs cast `p_to AT TIME ZONE 'Australia/Sydney'::date`
+// with an exclusive upper bound, so `to = now` would silently drop today's
+// sold/shoot rows. Yesterday is [yesterday 00:00, today 00:00).
 export const WINDOWS = [
-  { value: "day",     label: "Today",        from: () => startOfDay(new Date()) },
-  { value: "week",    label: "This week",    from: () => startOfWeek(new Date()) },
-  { value: "month",   label: "This month",   from: () => startOfMonth(new Date()) },
-  { value: "quarter", label: "This quarter", from: () => startOfQuarter(new Date()) },
-  { value: "ytd",     label: "YTD",          from: () => startOfYear(new Date()) },
-  { value: "12m",     label: "12m rolling",  from: () => minusMonths(new Date(), 12) },
+  { value: "day",       label: "Today",        from: () => startOfDay(new Date()),     to: () => startOfTomorrow() },
+  { value: "yesterday", label: "Yesterday",    from: () => startOfYesterday(),         to: () => startOfDay(new Date()) },
+  { value: "week",      label: "This week",    from: () => startOfWeek(new Date()),    to: () => startOfTomorrow() },
+  { value: "month",     label: "This month",   from: () => startOfMonth(new Date()),   to: () => startOfTomorrow() },
+  { value: "quarter",   label: "This quarter", from: () => startOfQuarter(new Date()), to: () => startOfTomorrow() },
+  { value: "ytd",       label: "YTD",          from: () => startOfYear(new Date()),    to: () => startOfTomorrow() },
+  { value: "12m",       label: "12m rolling",  from: () => minusMonths(new Date(), 12),to: () => startOfTomorrow() },
 ];
 
 export function startOfDay(d)     { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+export function startOfYesterday(){ const x = startOfDay(new Date()); x.setDate(x.getDate() - 1); return x; }
+export function startOfTomorrow() { const x = startOfDay(new Date()); x.setDate(x.getDate() + 1); return x; }
 export function startOfWeek(d)    { const x = startOfDay(d); const dow = x.getDay(); x.setDate(x.getDate() - (dow === 0 ? 6 : dow - 1)); return x; }
 export function startOfMonth(d)   { return new Date(d.getFullYear(), d.getMonth(), 1); }
 export function startOfQuarter(d) { return new Date(d.getFullYear(), Math.floor(d.getMonth()/3)*3, 1); }

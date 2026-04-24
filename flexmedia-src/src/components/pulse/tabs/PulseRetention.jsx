@@ -58,8 +58,11 @@ export default function PulseRetention({ onOpenEntity, onNavigateTab }) {
   const [showFilters, setShowFilters] = useState(false);
 
   const { fromDate, toDate } = useMemo(() => {
-    const wd = WINDOWS.find(w => w.value === windowKey) || WINDOWS[5];
-    return { fromDate: wd.from(), toDate: new Date() };
+    const wd = WINDOWS.find(w => w.value === windowKey) || WINDOWS[WINDOWS.length - 1];
+    return {
+      fromDate: wd.from(),
+      toDate: typeof wd.to === 'function' ? wd.to() : new Date(),
+    };
   }, [windowKey]);
   const fromIso = fromDate.toISOString();
   const toIso = toDate.toISOString();
