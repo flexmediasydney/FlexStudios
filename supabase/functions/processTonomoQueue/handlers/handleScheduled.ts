@@ -115,7 +115,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   let staffAssignment: Record<string, any> = {};
   if (resolvedPhotographers.length > 0) {
     const bookingTypes = detectBookingTypes(services);
-    staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes);
+    staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes, existing || null);
   }
 
   const rawTiers = p.order?.service_custom_tiers || p.service_custom_tiers || [];

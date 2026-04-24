@@ -66,7 +66,7 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
 
     if (resolvedPhotographers.length > 0) {
       const bookingTypes = detectBookingTypes(services);
-      const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes);
+      const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes, project);
       // Build name map for denormalization
       const staffNameMap: Record<string, string> = {};
       for (const rp of resolvedPhotographers) {

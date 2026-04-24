@@ -72,7 +72,7 @@ export async function handleRescheduled(entities: any, orderId: string, p: any, 
     const { resolvedPhotographers, unresolvedPhotographers } = await resolveMappingsMulti(entities, { photographers: rescheduledPhotographers }, allMappings);
     if (resolvedPhotographers.length > 0) {
       const bookingTypes = detectBookingTypes(reschServices.length > 0 ? reschServices : safeJsonParse(project.tonomo_raw_services, [] as string[]));
-      const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes);
+      const staffAssignment = assignStaffToProjectFields(resolvedPhotographers, bookingTypes, project);
       // Build name map for denormalization
       const staffNameMap: Record<string, string> = {};
       for (const rp of resolvedPhotographers) {

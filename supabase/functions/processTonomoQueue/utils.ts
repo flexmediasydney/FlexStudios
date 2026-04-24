@@ -272,50 +272,95 @@ export function detectBookingTypes(serviceNames: string[]) {
   return { isVideoBooking, isDroneBooking, isFloorPlanBooking, isPhotoBooking };
 }
 
-export function assignStaffToProjectFields(resolvedPhotographers: any[], bookingTypes: any) {
-  // Each person's default_staff_role determines their project slot.
-  // Webhook never sets project_owner — that comes from applyProjectRoleDefaults.
-  // Roles not covered by webhook staff are left null for defaults to fill.
+// Tonomo is source of truth for who's onsite. Slot them into what the booking
+// actually needs — not their default_staff_role label. If a slot is currently
+// held by a team fallback (applyProjectRoleDefaults ran first), evict it when
+// a real user arrives. Single-person bookings with multiple needed slots put
+// that person in every needed slot.
+export function assignStaffToProjectFields(
+  resolvedPhotographers: any[],
+  bookingTypes: any,
+  existingProject: any = null,
+) {
   const fields: Record<string, any> = {};
-
   if (resolvedPhotographers.length === 0) return fields;
 
-  // Map default_staff_role → project field
-  const roleToField: Record<string, { idField: string; onsiteField: string | null }> = {
-    photographer:     { idField: 'photographer_id',    onsiteField: 'onsite_staff_1_id' },
-    videographer:     { idField: 'videographer_id',    onsiteField: 'onsite_staff_2_id' },
-    drone_operator:   { idField: 'photographer_id',    onsiteField: 'onsite_staff_1_id' },
-    floor_plan:       { idField: 'photographer_id',    onsiteField: 'onsite_staff_1_id' },
+  const needsPhotographer = !!(
+    bookingTypes.isPhotoBooking || bookingTypes.isDroneBooking || bookingTypes.isFloorPlanBooking
+  );
+  const needsVideographer = !!bookingTypes.isVideoBooking;
+
+  // A slot is fillable if it's empty or currently held by a team fallback.
+  // For new projects (no existingProject), both slots are fillable.
+  const photographerSlotFillable = !existingProject
+    || !existingProject.photographer_id
+    || existingProject.photographer_type === 'team';
+  const videographerSlotFillable = !existingProject
+    || !existingProject.videographer_id
+    || existingProject.videographer_type === 'team';
+
+  const roleToSlot: Record<string, 'photographer_id' | 'videographer_id'> = {
+    photographer:   'photographer_id',
+    videographer:   'videographer_id',
+    drone_operator: 'photographer_id',
+    floor_plan:     'photographer_id',
+  };
+
+  const writeSlot = (slot: 'photographer_id' | 'videographer_id', userId: string) => {
+    fields[slot] = userId;
+    if (slot === 'photographer_id') {
+      fields.photographer_type = 'user';
+      fields.onsite_staff_1_id = userId;
+    } else {
+      fields.videographer_type = 'user';
+      fields.onsite_staff_2_id = userId;
+    }
+  };
+
+  const isSlotAvailable = (slot: 'photographer_id' | 'videographer_id') => {
+    if (fields[slot]) return false;
+    return slot === 'photographer_id' ? photographerSlotFillable : videographerSlotFillable;
   };
 
   const assigned = new Set<string>();
 
-  // Pass 1: assign anyone with a declared default_staff_role
+  // Pass 1: respect default_staff_role, but only if that slot is actually needed.
   for (const person of resolvedPhotographers) {
-    const mapping = person.role ? roleToField[person.role] : null;
-    if (mapping && !fields[mapping.idField]) {
-      fields[mapping.idField] = person.userId;
-      // Webhook staff are always users, not teams — set type explicitly
-      const typeField = mapping.idField.replace('_id', '_type');
-      fields[typeField] = 'user';
-      if (mapping.onsiteField) fields[mapping.onsiteField] = person.userId;
+    const slot = person.role ? roleToSlot[person.role] : null;
+    if (!slot) continue;
+    const slotNeeded = slot === 'photographer_id' ? needsPhotographer : needsVideographer;
+    if (slotNeeded && isSlotAvailable(slot)) {
+      writeSlot(slot, person.userId);
       assigned.add(person.userId);
     }
   }
 
-  // Pass 2: anyone without a role (or whose slot was already taken) — use booking type
+  // Pass 2: remaining people fill remaining needed slots (ignore default role).
+  // This is how Joseph (default=videographer) ends up as photographer on a
+  // photo-only booking: his declared role wasn't needed, so Pass 1 skipped
+  // him and Pass 2 places him into the photographer slot that the booking
+  // requires.
   for (const person of resolvedPhotographers) {
     if (assigned.has(person.userId)) continue;
-    if (bookingTypes.isVideoBooking && !fields.videographer_id) {
-      fields.videographer_id   = person.userId;
-      fields.videographer_type = 'user';
-      fields.onsite_staff_2_id = person.userId;
-    } else if (!fields.photographer_id) {
-      fields.photographer_id   = person.userId;
-      fields.photographer_type = 'user';
-      fields.onsite_staff_1_id = person.userId;
+    if (needsPhotographer && isSlotAvailable('photographer_id')) {
+      writeSlot('photographer_id', person.userId);
+      assigned.add(person.userId);
+    } else if (needsVideographer && isSlotAvailable('videographer_id')) {
+      writeSlot('videographer_id', person.userId);
+      assigned.add(person.userId);
     }
-    assigned.add(person.userId);
+  }
+
+  // Pass 3: single-person duplication. One person on a booking that needs
+  // multiple slots (e.g. dusk + video) fills every needed slot.
+  if (resolvedPhotographers.length === 1) {
+    const onlyUserId = resolvedPhotographers[0].userId;
+    if (needsPhotographer && isSlotAvailable('photographer_id')) {
+      writeSlot('photographer_id', onlyUserId);
+    }
+    if (needsVideographer && isSlotAvailable('videographer_id')) {
+      writeSlot('videographer_id', onlyUserId);
+    }
   }
 
   return fields;
