@@ -280,11 +280,16 @@ interface ListFolderResult {
 /**
  * List a folder, paginated. Returns all entries up to `maxEntries` (default 5000).
  * Set `recursive: true` to list subfolders too.
+ *
+ * The returned `cursor` is always the latest one — even when pagination has
+ * fully drained — so callers doing delta tracking (webhook + reconcile) can
+ * pass it to `listFolderContinue` later to receive only changes since this
+ * point. `truncated=true` indicates we hit `maxEntries` mid-stream.
  */
 export async function listFolder(
   path: string,
   opts?: { recursive?: boolean; maxEntries?: number },
-): Promise<{ entries: DropboxFileMetadata[]; truncated: boolean; cursor: string | null }> {
+): Promise<{ entries: DropboxFileMetadata[]; truncated: boolean; cursor: string }> {
   const max = opts?.maxEntries ?? 5000;
   const first = await dropboxApi<ListFolderResult>('/files/list_folder', {
     path,
@@ -308,7 +313,7 @@ export async function listFolder(
       break;
     }
   }
-  return { entries, truncated, cursor: hasMore ? cursor : null };
+  return { entries, truncated, cursor };
 }
 
 /** Continue a list_folder cursor (used by reconcile). */
