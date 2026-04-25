@@ -45,7 +45,11 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     : typeof rawStartTime === 'string' ? Number(rawStartTime) * 1000
     : null;
   const startTime = parsedStartTime && !isNaN(parsedStartTime) ? parsedStartTime : null;
-  const bookingFlowObj = p.order?.bookingFlow || null;
+  // Tonomo nests bookingFlow under p.order for appointment-level events (scheduled/changed)
+  // but flattens it to p.bookingFlow for order-level events (booking_created_or_changed).
+  // Without the second fallback, blank-order/draft-order webhooks lose the pricing tier
+  // and the project gets created at standard pricing even when the flow is premium.
+  const bookingFlowObj = p.order?.bookingFlow || p.bookingFlow || null;
   const flowType = bookingFlowObj?.type || null;
   const isFirstOrder = p.isFirstOrder || p.order?.isFirstOrder || false;
   const brokerageCode = p.brokerage_code || p.order?.brokerage_code || null;
@@ -142,6 +146,18 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
   const { projectTypeId, projectTypeName, isUnmapped: typeUnmapped } =
     await resolveProjectTypeFromFlowType(entities, flowType);
 
+  // Defensive: if the booking flow didn't resolve a tier (unmapped flow, or
+  // bookingFlow missing entirely from a malformed payload), infer from per-line
+  // tier hints. Tonomo tags premium-tier line items with "(P)" on selected.name —
+  // detectTierHint reads that. If any line is premium, the project is premium.
+  const productTierHints = autoProducts.map((ap: any) => ap.tier_hint).filter(Boolean);
+  const inferredTier =
+    flowTier ||
+    (productTierHints.includes('premium') ? 'premium' :
+     productTierHints.length > 0 && productTierHints.every((h: string) => h === 'standard') ? 'standard' :
+     null);
+  const resolvedPricingTier = inferredTier || 'standard';
+
   const strippedAddress = stripAddressTail(address) || address;
   const projectSuburb = extractSuburbFromAddress(address);
 
@@ -165,7 +181,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     tonomo_invoice_amount: p.order?.invoice_amount ?? p.invoice_amount ?? null,
     tonomo_payment_status: p.order?.paymentStatus || p.paymentStatus || null,
     tonomo_photographer_ids: JSON.stringify(photographers),
-    tonomo_booking_flow: p.order?.bookingFlow?.name || null,
+    tonomo_booking_flow: p.order?.bookingFlow?.name || p.bookingFlow?.name || null,
     tonomo_booking_flow_id: bookingFlowObj?.id || null,
     tonomo_is_twilight: p.isTwilight || false,
     tonomo_order_status: p.order?.orderStatus || null,
@@ -178,7 +194,7 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     products_mapping_gaps: JSON.stringify(productGapNames),
     products_auto_applied: hasAutoProducts,
     products_needs_recalc: hasAutoProducts,
-    pricing_tier: flowTier || 'standard',
+    pricing_tier: resolvedPricingTier,
     project_type_id: projectTypeId || null,
     project_type_name: projectTypeName || null,
   };

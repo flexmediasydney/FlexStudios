@@ -589,10 +589,16 @@ export async function resolveProductsFromTiers(entities: any, tiers: any[], allM
         }).catch(() => {});
       }
 
+      // Also check the selected tier name — Tonomo puts the (P)/(S) suffix on
+      // selected.name (e.g. "Premium Cut Down Reel (P)"), not on serviceName
+      // (which is just "Reel - Cut Down"). Without this, premium-tier line items
+      // always read as untagged and the project's pricing_tier never gets a hint.
+      const tierHintEffective = detectTierHint(selectedTierName) || tierHint;
+
       autoProducts.push({
         product_id: confirmedService.flexmedia_entity_id,
         quantity: finalQty,
-        tier_hint: tierHint || null,
+        tier_hint: tierHintEffective || null,
       });
 
     } else if (confirmedPackage) {

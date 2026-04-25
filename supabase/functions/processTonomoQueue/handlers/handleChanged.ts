@@ -308,7 +308,7 @@ export async function handleChanged(entities: any, orderId: string, p: any, ctx:
   const tiers = (p.order?.service_custom_tiers || p.service_custom_tiers || []).map((t: any) => ({ name: t.serviceName, selected: t.selected?.name }));
   if (tiers.length > 0 && !overriddenFields.includes('tonomo_service_tiers')) updates.tonomo_service_tiers = JSON.stringify(tiers);
 
-  const changedBookingFlow = p.order?.bookingFlow || null;
+  const changedBookingFlow = p.order?.bookingFlow || p.bookingFlow || null;
   if (changedBookingFlow?.id && !overriddenFields.includes('pricing_tier')) {
     const { tier: newFlowTier } = await resolveBookingFlowTier(entities, changedBookingFlow);
     if (newFlowTier && newFlowTier !== project.pricing_tier) {
