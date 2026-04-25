@@ -541,14 +541,26 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const cascadedShootIds: string[] = [];
 
   // Resolve the list of shoots to enqueue against. World-anchored ⇒ all
-  // shoots in the project (cascade). Pixel-only or no-op ⇒ just the active
-  // shoot (legacy behaviour).
+  // shoots in the project that have at least one rendered shot (cascade).
+  // Pixel-only or no-op ⇒ just the active shoot (legacy behaviour).
+  //
+  // CASCADE FILTER (Final E2E walk fix): only fan out to sibling shoots that
+  // already have at least one drone_renders row in column_state IN ('proposed',
+  // 'adjustments','final'). Pre-edit shoots (no renders yet) are skipped —
+  // they'll pick up the world-anchored pin change automatically on their
+  // first render run via the unified drone_custom_pins query in drone-render.
+  // Without this filter, the cascade fans out renders for shoots whose shots
+  // have no edited_dropbox_path, which produces "0/N rendered" responses that
+  // can dead-letter (see W1-γ deferred path in drone-job-dispatcher). The
+  // active shoot is always included even if it has no renders yet — the
+  // operator just edited pins on it, so they expect a render attempt.
   let targetShoots: { id: string; project_id: string }[] = [
     { id: shoot.id, project_id: shoot.project_id },
   ];
   let cascadeReason: 'pin_edit_saved' | 'pin_edit_cascade' = 'pin_edit_saved';
   if (touchedWorld) {
     cascadeReason = 'pin_edit_cascade';
+    // Step 1: list all shoots in the project.
     const { data: siblingShoots, error: siblingErr } = await admin
       .from('drone_shoots')
       .select('id, project_id')
@@ -559,7 +571,57 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         siblingErr,
       );
     } else {
-      targetShoots = siblingShoots as { id: string; project_id: string }[];
+      const allSiblings = siblingShoots as { id: string; project_id: string }[];
+      const allShootIds = allSiblings.map((s) => s.id);
+      // Step 2: resolve which sibling shoots have at least one render row.
+      // Use a two-hop query (shots → renders) since drone_renders is keyed by
+      // shot_id, not shoot_id. Filtering at the DB layer keeps the result set
+      // bounded even on large projects.
+      const { data: shotsInProject, error: shotsErr } = await admin
+        .from('drone_shots')
+        .select('id, shoot_id')
+        .in('shoot_id', allShootIds);
+      let renderedShootIds = new Set<string>();
+      if (shotsErr || !shotsInProject) {
+        console.warn(
+          `[${GENERATOR}] shot lookup for cascade filter failed; falling back to all-shoots enqueue:`,
+          shotsErr,
+        );
+        renderedShootIds = new Set(allShootIds);
+      } else {
+        const shotIdToShootId = new Map<string, string>();
+        for (const s of shotsInProject as { id: string; shoot_id: string }[]) {
+          shotIdToShootId.set(s.id, s.shoot_id);
+        }
+        const allShotIds = Array.from(shotIdToShootId.keys());
+        if (allShotIds.length > 0) {
+          const { data: renderedRows, error: renderedErr } = await admin
+            .from('drone_renders')
+            .select('shot_id')
+            .in('column_state', ['proposed', 'adjustments', 'final'])
+            .in('shot_id', allShotIds);
+          if (renderedErr) {
+            console.warn(
+              `[${GENERATOR}] render lookup for cascade filter failed; falling back to all-shoots enqueue:`,
+              renderedErr,
+            );
+            renderedShootIds = new Set(allShootIds);
+          } else {
+            for (const r of (renderedRows || []) as { shot_id: string }[]) {
+              const sId = shotIdToShootId.get(r.shot_id);
+              if (sId) renderedShootIds.add(sId);
+            }
+          }
+        }
+      }
+      // Always include the active shoot (operator just edited it on this
+      // shoot, so the user expects an attempt — even if no renders exist yet
+      // the existing skipped_no_edit + dispatcher deferred path handles it).
+      renderedShootIds.add(shoot.id);
+      targetShoots = allSiblings.filter((s) => renderedShootIds.has(s.id));
+      console.info(
+        `[${GENERATOR}] cascade resolved ${targetShoots.length}/${allSiblings.length} shoot(s) with existing renders (project ${shoot.project_id})`,
+      );
     }
   }
 

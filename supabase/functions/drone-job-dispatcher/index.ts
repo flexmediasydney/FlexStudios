@@ -695,19 +695,34 @@ async function callEdgeFunction(
         // can distinguish "render genuinely failed" from "nothing to render
         // until the editor uploads".
         //
-        // Treat (skipped > 0 AND rendered == 0 AND skipped + rendered ==
-        // total) as a DEFER, not a failure: the job goes back to 'pending'
-        // with a short backoff window WITHOUT burning an attempt. (If we
-        // hard-fail here, three back-to-back ticks while the editor is
-        // still uploading would dead-letter the job.)
+        // Treat the run as a DEFER (not failure) when EVERY shot processed
+        // in this invocation was skipped_no_edit. drone-render caps each
+        // invocation at PER_INVOCATION_CAP=4 shots and re-enqueues a
+        // continuation for the rest, so the totals don't always satisfy
+        // skipped + rendered === shots_total. We use shots_failed_this_run
+        // (== shotsCapped.length - rendered) as the per-invocation
+        // denominator: when skipped == failed_this_run AND rendered == 0,
+        // every shot we tried this round was a no-edit skip. (Job goes back
+        // to 'pending' with a short backoff window WITHOUT burning an
+        // attempt — three back-to-back ticks while the editor is still
+        // uploading would otherwise dead-letter the job. Live evidence: 3
+        // dead-letter renders for Everton on 2026-04-25 hit this exact path
+        // because the prior shots_total-based check excluded the multi-
+        // invocation case.)
         const skipped =
           typeof bodyJson.shots_skipped_no_edit === "number"
             ? bodyJson.shots_skipped_no_edit
             : 0;
-        if (
+        const failedThisRun =
+          typeof bodyJson.shots_failed_this_run === "number"
+            ? bodyJson.shots_failed_this_run
+            : -1;
+        const allFailedAreSkipped =
+          skipped > 0 && failedThisRun > 0 && skipped === failedThisRun;
+        const totalsMatch =
           skipped > 0 &&
-          skipped + (bodyJson.shots_rendered as number) === bodyJson.shots_total
-        ) {
+          skipped + (bodyJson.shots_rendered as number) === bodyJson.shots_total;
+        if (allFailedAreSkipped || totalsMatch) {
           return {
             ok: true,
             deferred: true,
