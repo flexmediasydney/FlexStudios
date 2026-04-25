@@ -33,6 +33,19 @@
  *     `ground_level` was tightened from <10m to <5m so the building_hero
  *     band starts cleanly at 5m. Pure ground-level shots (e.g. drone on
  *     ground, person walking past) stay separate.
+ *   - refineNadirClassifications(): post-pass that runs on a whole shoot
+ *     after every shot has been classified. classifyShotRole() flags every
+ *     gimbal-pitch ≤ -85° shot as nadir_grid, but DJI shooters use
+ *     near-90° pitch in two very different contexts:
+ *       (a) An autonomous SfM grid mission: 10–30 sequential nadirs spaced
+ *           a few seconds apart. Used as SfM input only — never delivered.
+ *       (b) An MLS-hero one-off: a single isolated top-down shot taken at
+ *           altitude as the deliverable hero image. Should be delivered.
+ *     We distinguish (b) from (a) with a 30-second cluster heuristic: any
+ *     nadir with fewer than 3 OTHER nadirs within ±30s of its captured_at
+ *     gets reclassified `nadir_hero` (delivered). Sequential bursts stay
+ *     `nadir_grid` (SfM input). Run this AFTER classifyShotRole, scoped to
+ *     a single shoot so two flights' nadirs don't conflate.
  *   - groupShotsIntoShoots(): clusters shots by their captured_at timestamp.
  *     A gap > 30 minutes between consecutive shots starts a new shoot.
  *
@@ -76,6 +89,7 @@ export interface DjiFilenameInfo {
 
 export type ShotRole =
   | 'nadir_grid'
+  | 'nadir_hero'
   | 'orbital'
   | 'oblique_hero'
   | 'building_hero'
@@ -312,6 +326,55 @@ export function classifyShotRole(shot: ClassifiableShot): ShotRole {
     if (alt > 25 && pitch < -30) return 'oblique_hero';
   }
   return 'unclassified';
+}
+
+// ─── Nadir refinement (sfm-grid vs mls-hero) ────────────────────────────────
+
+/**
+ * Refine nadir classifications: distinguish SfM-grid nadirs (sequential burst)
+ * from MLS-hero nadirs (isolated single shot).
+ *
+ * A nadir is part of an SfM grid if there are >= 3 OTHER nadirs within
+ * a 30-second window centered on it. Isolated nadirs (no neighbors within
+ * 30s) get reclassified to nadir_hero.
+ *
+ * Apply this AFTER classifyShotRole has run on every shot, and scope each
+ * call to a single shoot — otherwise two distinct flights' nadirs may
+ * conflate. The function is pure: returns a new array, mutates nothing.
+ *
+ * Shots without captured_at can't be clustered; they're left at whatever
+ * classifyShotRole picked (typically nadir_grid).
+ */
+const NADIR_CLUSTER_WINDOW_MS = 30_000;
+const NADIR_CLUSTER_NEIGHBOR_THRESHOLD = 3;
+
+interface NadirRefinable {
+  captured_at: string | null;
+  shot_role: ShotRole;
+}
+
+export function refineNadirClassifications<T extends NadirRefinable>(shots: T[]): T[] {
+  // Build sorted list of nadir captured_at timestamps.
+  const nadirs = shots
+    .map((s, idx) => ({ idx, t: s.captured_at ? Date.parse(s.captured_at) : NaN }))
+    .filter((x) => x.t > 0 && shots[x.idx].shot_role === 'nadir_grid')
+    .sort((a, b) => a.t - b.t);
+
+  if (nadirs.length === 0) return shots;
+
+  const out = [...shots];
+  for (const n of nadirs) {
+    const neighbors = nadirs.filter(
+      (other) =>
+        other.idx !== n.idx &&
+        Math.abs(other.t - n.t) <= NADIR_CLUSTER_WINDOW_MS,
+    ).length;
+    if (neighbors < NADIR_CLUSTER_NEIGHBOR_THRESHOLD) {
+      // Isolated nadir → MLS hero (delivered).
+      out[n.idx] = { ...out[n.idx], shot_role: 'nadir_hero' };
+    }
+  }
+  return out;
 }
 
 // ─── Shoot grouping ──────────────────────────────────────────────────────────

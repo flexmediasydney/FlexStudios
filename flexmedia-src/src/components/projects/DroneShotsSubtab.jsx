@@ -51,6 +51,7 @@ import DroneThumbnail from "@/components/drone/DroneThumbnail";
 
 const ROLE_LABEL = {
   nadir_grid: "Nadir grid",
+  nadir_hero: "Nadir hero",
   orbital: "Orbital",
   oblique_hero: "Oblique hero",
   building_hero: "Building hero",
@@ -60,6 +61,7 @@ const ROLE_LABEL = {
 
 const ROLE_TONE = {
   nadir_grid: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  nadir_hero: "bg-cyan-100 text-cyan-700 dark:bg-cyan-950 dark:text-cyan-300",
   orbital: "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
   oblique_hero: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
   building_hero: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",

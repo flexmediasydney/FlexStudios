@@ -17,6 +17,7 @@ import {
   extractExifFromBytes,
   groupShotsIntoShoots,
   parseDjiFilename,
+  refineNadirClassifications,
 } from './droneIngest.ts';
 
 // ─── parseDjiFilename ────────────────────────────────────────────────────────
@@ -163,6 +164,65 @@ Deno.test('groupShotsIntoShoots: drops shots with null captured_at', () => {
 
 Deno.test('groupShotsIntoShoots: empty input → empty array', () => {
   assertEquals(groupShotsIntoShoots([]), []);
+});
+
+// ─── refineNadirClassifications ──────────────────────────────────────────────
+
+Deno.test('refineNadirClassifications: 3+ nadirs within 30s all stay nadir_grid', () => {
+  // 4 nadirs spaced ~5s apart — every one has >=3 neighbors in ±30s → cluster.
+  const shots = [
+    { captured_at: '2026-04-20T09:00:00.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:05.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:10.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:15.000Z', shot_role: 'nadir_grid' as const },
+  ];
+  const out = refineNadirClassifications(shots);
+  assertEquals(out.map((s) => s.shot_role), [
+    'nadir_grid', 'nadir_grid', 'nadir_grid', 'nadir_grid',
+  ]);
+});
+
+Deno.test('refineNadirClassifications: 1 isolated nadir + 0 neighbors → nadir_hero', () => {
+  const shots = [
+    { captured_at: '2026-04-20T09:00:00.000Z', shot_role: 'nadir_grid' as const },
+  ];
+  const out = refineNadirClassifications(shots);
+  assertEquals(out[0].shot_role, 'nadir_hero');
+});
+
+Deno.test('refineNadirClassifications: 5 grid + 1 isolated 5min later → 5 grid + 1 hero', () => {
+  const shots = [
+    { captured_at: '2026-04-20T09:00:00.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:05.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:10.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:15.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:20.000Z', shot_role: 'nadir_grid' as const },
+    // 5 minutes after the burst — outside the 30s window, no neighbors.
+    { captured_at: '2026-04-20T09:05:20.000Z', shot_role: 'nadir_grid' as const },
+  ];
+  const out = refineNadirClassifications(shots);
+  assertEquals(out.map((s) => s.shot_role), [
+    'nadir_grid', 'nadir_grid', 'nadir_grid', 'nadir_grid', 'nadir_grid',
+    'nadir_hero',
+  ]);
+});
+
+Deno.test('refineNadirClassifications: empty input → empty output', () => {
+  assertEquals(refineNadirClassifications([]), []);
+});
+
+Deno.test('refineNadirClassifications: all non-nadir shots → unchanged', () => {
+  const shots = [
+    { captured_at: '2026-04-20T09:00:00.000Z', shot_role: 'orbital' as const },
+    { captured_at: '2026-04-20T09:00:05.000Z', shot_role: 'building_hero' as const },
+    { captured_at: '2026-04-20T09:00:10.000Z', shot_role: 'oblique_hero' as const },
+    { captured_at: '2026-04-20T09:00:15.000Z', shot_role: 'ground_level' as const },
+    { captured_at: '2026-04-20T09:00:20.000Z', shot_role: 'unclassified' as const },
+  ];
+  const out = refineNadirClassifications(shots);
+  assertEquals(out.map((s) => s.shot_role), [
+    'orbital', 'building_hero', 'oblique_hero', 'ground_level', 'unclassified',
+  ]);
 });
 
 // ─── extractExifFromBytes ────────────────────────────────────────────────────

@@ -6,19 +6,34 @@
  * PR6 reconcile, PR7 Files UI) calls this lib instead of touching Dropbox
  * directly.
  *
- * Folder skeleton per IMPLEMENTATION_PLAN_V2.md §1.1:
+ * Folder skeleton (drone restructure 2026-04 — drones now top-level, raws +
+ * editor curation lanes split out; photos/videos still live in 01_RAW_WORKING):
  *
  *   /Flex Media Team Folder/Projects/<projectId>_<slug>/
- *     ├── 01_RAW_WORKING/photos        ← raw_photos
- *     ├── 01_RAW_WORKING/drones        ← raw_drones
- *     ├── 01_RAW_WORKING/videos        ← raw_videos
- *     ├── 06_ENRICHMENT/drone_renders_proposed   ← enrichment_drone_renders_proposed
- *     ├── 06_ENRICHMENT/drone_renders_adjusted   ← enrichment_drone_renders_adjusted
- *     ├── 06_ENRICHMENT/orthomosaics             ← enrichment_orthomosaics
- *     ├── 06_ENRICHMENT/sfm_meshes               ← enrichment_sfm_meshes
- *     ├── 07_FINAL_DELIVERY/drones               ← final_delivery_drones
- *     └── _AUDIT/                                 ← audit
- *           └── events/                            (per-event JSON mirror)
+ *     ├── 01_RAW_WORKING/photos                                           ← raw_photos
+ *     ├── 01_RAW_WORKING/videos                                           ← raw_videos
+ *     ├── 06_ENRICHMENT/orthomosaics                                      ← enrichment_orthomosaics
+ *     ├── 06_ENRICHMENT/sfm_meshes                                        ← enrichment_sfm_meshes
+ *     ├── 07_FINAL_DELIVERY/                                              (no drone subfolder; see Drones/Finals)
+ *     ├── _AUDIT/                                                         ← audit
+ *     │     └── events/                                                    (per-event JSON mirror)
+ *     └── Drones/                                                         (NEW top-level bucket for drone work)
+ *           ├── Raws/
+ *           │     ├── Shortlist Proposed/                                 ← drones_raws_shortlist_proposed
+ *           │     │     └── Previews/                                     ← drones_raws_shortlist_proposed_previews
+ *           │     ├── Final Shortlist/                                    ← drones_raws_final_shortlist (post-Lock)
+ *           │     ├── Rejected/                                           ← drones_raws_rejected (post-Lock; un-rejectable)
+ *           │     └── Others/                                             ← drones_raws_others (SfM-only nadirs/leftovers)
+ *           ├── Editors/
+ *           │     ├── Edited Post Production/                             ← drones_editors_edited_post_production
+ *           │     ├── AI Proposed Enriched/                               ← drones_editors_ai_proposed_enriched
+ *           │     └── Final Enriched/                                     ← drones_editors_final_enriched
+ *           └── Finals/                                                   ← drones_finals (copy of Final Enriched)
+ *
+ * Deprecated kinds (raw_drones, enrichment_drone_renders_*, final_delivery_drones)
+ * remain in the FolderKind union for backward-compat reads against existing
+ * project_folders rows but are no longer provisioned for new projects. The
+ * drone-folder-backfill one-shot will move existing files into the new tree.
  *
  * Reserved folders 02–05 (shortlist, editor) are not provisioned in Phase 1.
  *
@@ -45,17 +60,39 @@ const SLUG_MAX_CHARS = 40;
 
 export type FolderKind =
   | 'raw_photos'
+  // DEPRECATED: superseded by drones_* kinds in 2026-04 restructure. Do not use for new project provisioning. Migration path-mapper will move existing files.
   | 'raw_drones'
   | 'raw_videos'
+  // DEPRECATED: superseded by drones_* kinds in 2026-04 restructure. Do not use for new project provisioning. Migration path-mapper will move existing files.
   | 'enrichment_drone_renders_proposed'
+  // DEPRECATED: superseded by drones_* kinds in 2026-04 restructure. Do not use for new project provisioning. Migration path-mapper will move existing files.
   | 'enrichment_drone_renders_adjusted'
   | 'enrichment_orthomosaics'
   | 'enrichment_sfm_meshes'
+  // DEPRECATED: superseded by drones_* kinds in 2026-04 restructure. Do not use for new project provisioning. Migration path-mapper will move existing files.
   | 'final_delivery_drones'
-  | 'audit';
+  | 'audit'
+  // New drone restructure (2026-04)
+  | 'drones_raws_shortlist_proposed'
+  | 'drones_raws_shortlist_proposed_previews'
+  | 'drones_raws_final_shortlist'
+  | 'drones_raws_rejected'
+  | 'drones_raws_others'
+  | 'drones_editors_edited_post_production'
+  | 'drones_editors_ai_proposed_enriched'
+  | 'drones_editors_final_enriched'
+  | 'drones_finals';
 
+/**
+ * All folder kinds the system understands — includes both the legacy drone
+ * kinds (still referenced by historical project_folders rows) and the new
+ * drone restructure kinds. NEW projects should be provisioned only with
+ * `NEW_PROJECT_FOLDER_KINDS` (see below); ALL_FOLDER_KINDS exists for
+ * exhaustive type checks and backward-compat reads.
+ */
 export const ALL_FOLDER_KINDS: FolderKind[] = [
   'raw_photos',
+  // Legacy drone kinds — kept for backward-compat with existing rows.
   'raw_drones',
   'raw_videos',
   'enrichment_drone_renders_proposed',
@@ -64,22 +101,80 @@ export const ALL_FOLDER_KINDS: FolderKind[] = [
   'enrichment_sfm_meshes',
   'final_delivery_drones',
   'audit',
+  // New drone restructure (2026-04)
+  'drones_raws_shortlist_proposed',
+  'drones_raws_shortlist_proposed_previews',
+  'drones_raws_final_shortlist',
+  'drones_raws_rejected',
+  'drones_raws_others',
+  'drones_editors_edited_post_production',
+  'drones_editors_ai_proposed_enriched',
+  'drones_editors_final_enriched',
+  'drones_finals',
+];
+
+/**
+ * Folder kinds provisioned for NEW projects. Excludes the deprecated drone
+ * kinds (raw_drones, enrichment_drone_renders_*, final_delivery_drones) which
+ * have been replaced by the `drones_*` tree under the top-level `Drones/`
+ * bucket. Existing rows for deprecated kinds remain queryable until the
+ * drone-folder-backfill one-shot migrates them.
+ */
+export const NEW_PROJECT_FOLDER_KINDS: FolderKind[] = [
+  'raw_photos',
+  'raw_videos',
+  'enrichment_orthomosaics',
+  'enrichment_sfm_meshes',
+  'audit',
+  'drones_raws_shortlist_proposed',
+  'drones_raws_shortlist_proposed_previews',
+  'drones_raws_final_shortlist',
+  'drones_raws_rejected',
+  'drones_raws_others',
+  'drones_editors_edited_post_production',
+  'drones_editors_ai_proposed_enriched',
+  'drones_editors_final_enriched',
+  'drones_finals',
 ];
 
 const FOLDER_RELATIVE_PATHS: Record<FolderKind, string> = {
   raw_photos: '01_RAW_WORKING/photos',
+  // DEPRECATED — kept so rows referencing this kind still resolve.
   raw_drones: '01_RAW_WORKING/drones',
   raw_videos: '01_RAW_WORKING/videos',
+  // DEPRECATED — kept so rows referencing this kind still resolve.
   enrichment_drone_renders_proposed: '06_ENRICHMENT/drone_renders_proposed',
+  // DEPRECATED — kept so rows referencing this kind still resolve.
   enrichment_drone_renders_adjusted: '06_ENRICHMENT/drone_renders_adjusted',
   enrichment_orthomosaics: '06_ENRICHMENT/orthomosaics',
   enrichment_sfm_meshes: '06_ENRICHMENT/sfm_meshes',
+  // DEPRECATED — kept so rows referencing this kind still resolve.
   final_delivery_drones: '07_FINAL_DELIVERY/drones',
   audit: '_AUDIT',
+  // New drone restructure (2026-04) — top-level Drones/ bucket.
+  drones_raws_shortlist_proposed: 'Drones/Raws/Shortlist Proposed',
+  drones_raws_shortlist_proposed_previews: 'Drones/Raws/Shortlist Proposed/Previews',
+  drones_raws_final_shortlist: 'Drones/Raws/Final Shortlist',
+  drones_raws_rejected: 'Drones/Raws/Rejected',
+  drones_raws_others: 'Drones/Raws/Others',
+  drones_editors_edited_post_production: 'Drones/Editors/Edited Post Production',
+  drones_editors_ai_proposed_enriched: 'Drones/Editors/AI Proposed Enriched',
+  drones_editors_final_enriched: 'Drones/Editors/Final Enriched',
+  drones_finals: 'Drones/Finals',
 };
 
 // Intermediate parent folders that must exist before leaves can be created.
-const INTERMEDIATE_FOLDERS = ['01_RAW_WORKING', '06_ENRICHMENT', '07_FINAL_DELIVERY'];
+// Includes the legacy 01/06/07 trees (still in use for photos/videos/orthos
+// /sfm) AND the new top-level Drones/ subtree.
+const INTERMEDIATE_FOLDERS = [
+  '01_RAW_WORKING',
+  '06_ENRICHMENT',
+  '07_FINAL_DELIVERY',
+  'Drones',
+  'Drones/Raws',
+  'Drones/Raws/Shortlist Proposed',
+  'Drones/Editors',
+];
 
 // ─── Slug + path helpers ─────────────────────────────────────────────────────
 
@@ -182,11 +277,14 @@ export async function createProjectFolders(
   const rootPath = proj.dropbox_root_path || defaultProjectRootPath(projectId, effectiveAddress);
 
   // 1. Create Dropbox tree (top-down; each call is idempotent).
+  // Provision only NEW_PROJECT_FOLDER_KINDS — deprecated drone kinds
+  // (raw_drones, enrichment_drone_renders_*, final_delivery_drones) are no
+  // longer created for new projects per the 2026-04 drone restructure.
   await createFolder(rootPath);
   for (const inter of INTERMEDIATE_FOLDERS) {
     await createFolder(`${rootPath}/${inter}`);
   }
-  for (const kind of ALL_FOLDER_KINDS) {
+  for (const kind of NEW_PROJECT_FOLDER_KINDS) {
     await createFolder(`${rootPath}/${FOLDER_RELATIVE_PATHS[kind]}`);
   }
   // _AUDIT/events/ exists for the per-event mirror (Dropbox uploads do not
@@ -204,7 +302,7 @@ export async function createProjectFolders(
 
   // 3. Upsert project_folders rows.
   const now = new Date().toISOString();
-  const rows = ALL_FOLDER_KINDS.map((kind) => ({
+  const rows = NEW_PROJECT_FOLDER_KINDS.map((kind) => ({
     project_id: projectId,
     folder_kind: kind,
     dropbox_path: `${rootPath}/${FOLDER_RELATIVE_PATHS[kind]}`,
@@ -233,7 +331,7 @@ export async function createProjectFolders(
       eventType: 'folders_created',
       actorType: opts?.actorType || 'system',
       actorId: opts?.actorId,
-      metadata: { root_path: rootPath, folder_count: ALL_FOLDER_KINDS.length },
+      metadata: { root_path: rootPath, folder_count: NEW_PROJECT_FOLDER_KINDS.length },
     });
   }
 

@@ -59,6 +59,7 @@ import {
   classifyShotRole,
   groupShotsIntoShoots,
   parseDjiFilename,
+  refineNadirClassifications,
   NADIR_GRID_MIN_SHOTS,
   type ExtractedExif,
   type ShotRole,
@@ -464,6 +465,36 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
       console.warn(
         `[${GENERATOR}] group ${i} for project ${projectId} produced no shoot row; skipping`,
       );
+    }
+  }
+
+  // 5b. Per-shoot post-pass: refine nadir_grid → nadir_hero for isolated
+  //     single nadirs (MLS hero shots). The refinement runs over the COMBINED
+  //     existing + new shot set per shoot so a new nadir landing among many
+  //     existing nadirs stays nadir_grid, and a single new nadir at a fresh
+  //     shoot gets correctly flagged nadir_hero. We then propagate any role
+  //     change back onto the NewShotMaterialised entry — only new shots are
+  //     INSERTed below, so existing-shot reclassifications would be no-ops here
+  //     (a separate one-off backfill SQL handles legacy rows). Scoping to a
+  //     single shoot prevents two distinct flights' nadirs from conflating.
+  for (let i = 0; i < groups.length; i++) {
+    const group = groups[i];
+    const refinable = group.shots.map((m) => {
+      const role: ShotRole = m.__kind === 'existing'
+        ? (m.ref.shot_role ?? 'unclassified')
+        : (m.ref as NewShotMaterialised).shot_role;
+      const captured_at = m.captured_at;
+      return { captured_at, shot_role: role };
+    });
+    const refined = refineNadirClassifications(refinable);
+    // Propagate role changes back onto NEW shots (existing rows ignored).
+    for (let j = 0; j < group.shots.length; j++) {
+      const member = group.shots[j];
+      if (member.__kind !== 'new') continue;
+      const ns = member.ref as NewShotMaterialised;
+      if (ns.shot_role !== refined[j].shot_role) {
+        ns.shot_role = refined[j].shot_role;
+      }
     }
   }
 

@@ -34,7 +34,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { useBlocker } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { Button } from "@/components/ui/button";
@@ -937,22 +936,15 @@ export default function PinEditor({
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [items, isItemDirty]);
 
-  // #25: react-router v6.4+ useBlocker handles in-app navigation away from a
-  // dirty editor — beforeUnload above only catches full reload / tab close.
-  // Confirm via window.confirm to keep this lightweight.
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      items.some(isItemDirty) &&
-      currentLocation.pathname !== nextLocation.pathname,
-  );
-  useEffect(() => {
-    if (blocker?.state !== "blocked") return;
-    if (window.confirm("You have unsaved pin edits. Discard and leave?")) {
-      blocker.proceed();
-    } else {
-      blocker.reset();
-    }
-  }, [blocker]);
+  // #25: in-app navigation guard. We previously used react-router 6.4+
+  // useBlocker here, but the app is mounted under <BrowserRouter> (declarative)
+  // not a Data Router (createBrowserRouter), and useBlocker throws
+  // "useBlocker must be used within a data router" in that mode — which
+  // crashed the editor on mount. The editor still has beforeunload above
+  // for full-reload / tab-close, and the explicit Cancel button via
+  // requestCancel for in-editor navigation. In-app navigation away (e.g.
+  // clicking project breadcrumb) is unguarded for now. TODO: migrate the
+  // app to a Data Router and reinstate useBlocker.
 
   // ── UI ──────────────────────────────────────────────────────────────────
   const selectedItem = useMemo(

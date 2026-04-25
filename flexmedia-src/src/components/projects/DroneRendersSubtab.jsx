@@ -97,6 +97,7 @@ const VALID_DROP_TARGETS = {
 // a new shot_role.
 const SHOT_ROLE_LABEL = {
   nadir_grid: "Nadir grid",
+  nadir_hero: "Nadir hero",
   orbital: "Orbital",
   oblique_hero: "Oblique hero",
   building_hero: "Building hero",

@@ -394,12 +394,14 @@ export default function DronePinEditor() {
   const goBackToProject = () =>
     navigate(createPageUrl(`ProjectDetails?id=${projectId}&tab=drones`));
 
-  // Distinguish "theme fetched but empty" from "theme failed to load". A failed
-  // theme load means the editor would silently render POIs that won't appear in
-  // real renders — we surface that as a blocking error inside PinEditor.
-  // (Audit finding #11.)
-  const themeError =
-    themeQ.error || (!themeQ.isLoading && themeQ.data == null) || null;
+  // Theme is non-fatal: only treat an actual fetch error as an error.
+  // The previous version also treated `themeQ.data == null` as fatal, which
+  // (a) blocked the editor when getDroneTheme legitimately returned no theme
+  // (e.g. brand-new project pre-seed), and (b) fired during the brief window
+  // before the query was enabled because `enabled: false` queries report
+  // isLoading=false + data=undefined. Net result: editor was blocked for
+  // most users. Revert to "only block on hard error". (Audit #11 softened.)
+  const themeError = themeQ.error || null;
 
   return (
     <PinEditor

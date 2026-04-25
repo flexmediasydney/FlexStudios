@@ -53,6 +53,8 @@ import ProjectWeatherCard from "@/components/projects/ProjectWeatherCard";
 import ActiveTimersPanel from "@/components/projects/ActiveTimersPanel";
 import { scheduleDeadlineSync } from "@/components/projects/taskDeadlineSync";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useProjectHasDroneWork } from "@/hooks/useProjectHasDroneWork";
 import TonomoTab from "@/components/tonomo/TonomoTab";
 import { createNotification, createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
@@ -337,6 +339,10 @@ export default function ProjectDetails() {
    const { data: productsData = [] } = useSmartEntityList('Product');
    const { data: packagesData = [] } = useSmartEntityList('Package');
    const { data: user = null } = useCurrentUser();
+
+   // Drone tab gating — disabled if no drone-category line items in pricing
+   // and no existing drone shoots. See useProjectHasDroneWork for signal.
+   const { hasDroneWork, isLoading: hasDroneWorkLoading } = useProjectHasDroneWork(projectId, project);
 
    const filterProjectTasks = useCallback((t) => t.project_id === projectId, [projectId]);
    const filterProjectActivities = useCallback((a) => !!(projectId && a.project_id === projectId), [projectId]);
@@ -1587,7 +1593,30 @@ export default function ProjectDetails() {
                 <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
                 <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
                 <TabsTrigger value="files"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Files</TabsTrigger>
-                <TabsTrigger value="drones"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Drones</TabsTrigger>
+                {hasDroneWork || hasDroneWorkLoading ? (
+                  <TabsTrigger value="drones"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Drones</TabsTrigger>
+                ) : (
+                  <TooltipProvider delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        {/* Wrap in span so the tooltip still receives hover events even when the trigger is disabled. */}
+                        <span tabIndex={0} className="inline-flex">
+                          <TabsTrigger
+                            value="drones"
+                            disabled
+                            aria-disabled="true"
+                            className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold cursor-not-allowed"
+                          >
+                            Drones
+                          </TabsTrigger>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="max-w-xs">
+                        No drone work in this project's price matrix or task list. Add a drone-category product (e.g. Drone Shots) to a price-matrix line item to enable this tab.
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
                 {project.source === 'tonomo' && (
                   <TabsTrigger value="tonomo"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tonomo</TabsTrigger>
                 )}
@@ -1642,7 +1671,16 @@ export default function ProjectDetails() {
 
             <TabsContent value="drones" className="mt-4">
               {mountedTabs.has("drones") ? (
-                <ErrorBoundary><ProjectDronesTab project={project} /></ErrorBoundary>
+                hasDroneWork || hasDroneWorkLoading ? (
+                  <ErrorBoundary><ProjectDronesTab project={project} /></ErrorBoundary>
+                ) : (
+                  <Card>
+                    <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                      <p className="font-medium text-foreground mb-1">No drone work in this project</p>
+                      <p>Add a drone-category product (e.g. Drone Shots) to the price matrix to enable the Drones tab.</p>
+                    </CardContent>
+                  </Card>
+                )
               ) : (
                 <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
               )}

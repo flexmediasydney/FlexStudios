@@ -108,18 +108,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     .eq("shoot_id", shoot.id);
   if (body.shot_id) shotQ = shotQ.eq("id", body.shot_id);
   // Render eligibility:
-  //   - orbital, oblique_hero, building_hero, unclassified → delivered
-  //   - nadir_grid                                         → SfM-only, NOT delivered
-  //   - ground_level                                       → projection math
-  //                                                          doesn't fit horizontal
-  //                                                          cameras well
+  //   - nadir_hero, orbital, oblique_hero, building_hero, unclassified → delivered
+  //   - nadir_grid                                                     → SfM-only, NOT delivered
+  //   - ground_level                                                   → projection math
+  //                                                                      doesn't fit horizontal
+  //                                                                      cameras well
   // The nadir grid was historically rendered as deliverable too, but operators
   // never wanted 26 near-identical top-down shots in the swimlane — for unit
   // blocks they want zero top-downs, for houses they want at most one MLS hero
-  // (handled by a separate workflow, not the default render). (2026-04-25)
+  // shot. nadir_hero (an isolated single nadir, distinguished from sequential
+  // grid bursts by the refineNadirClassifications post-pass) IS delivered:
+  // it's the MLS hero shot operators expect. (2026-04-25)
   shotQ = shotQ.in(
     "shot_role",
-    ["orbital", "oblique_hero", "building_hero", "unclassified"],
+    ["nadir_hero", "orbital", "oblique_hero", "building_hero", "unclassified"],
   );
 
   const { data: shotsAll, error: shotsErr } = await shotQ;
