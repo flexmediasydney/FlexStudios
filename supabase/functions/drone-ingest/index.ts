@@ -203,23 +203,35 @@ interface IngestResult {
 async function ingestProject(projectId: string, actorId: string | null): Promise<IngestResult> {
   const admin = getAdminClient();
 
-  // 1. List raw_drones files in Dropbox (one round-trip).
-  // Note: listFiles wraps listFolder which silently caps at maxEntries=5000.
-  // Audit #19: emit a warning AND a drone_event when truncation happens so
-  // the activity log surfaces the cap. listFiles doesn't currently return a
-  // `truncated` flag (owned by Z2's projectFolders.ts), so we approximate by
-  // logging the count and emitting a warn-event when we observe the cap value.
+  // 1. List raw drone files in Dropbox.
+  // The post-restructure (2026-04) source-of-truth folder is
+  // 'drones_raws_shortlist_proposed' (Drones/Raws/Shortlist Proposed/).
+  // For backwards-compatibility with projects that haven't been backfilled
+  // yet, we fall through to the legacy 'raw_drones' kind. drone-folder-
+  // backfill physically moves files from the legacy folder to the new one
+  // so this fallback drains as backfill rolls out across all 53 projects.
   let files: Awaited<ReturnType<typeof listFiles>>;
   try {
-    files = await listFiles(projectId, 'raw_drones');
+    files = await listFiles(projectId, 'drones_raws_shortlist_proposed');
   } catch (err) {
-    // No raw_drones folder yet (project_folders not provisioned) → nothing to do.
     const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("No folder of kind 'raw_drones'")) {
-      console.log(`[${GENERATOR}] project ${projectId} has no raw_drones folder; skipping`);
-      return emptyResult();
+    if (msg.includes('drones_raws_shortlist_proposed')) {
+      // Folder kind not provisioned for this project — try legacy.
+      try {
+        files = await listFiles(projectId, 'raw_drones');
+      } catch (legacyErr) {
+        const legacyMsg = legacyErr instanceof Error ? legacyErr.message : String(legacyErr);
+        if (legacyMsg.includes('raw_drones')) {
+          console.log(
+            `[${GENERATOR}] project ${projectId} has no drones_raws_shortlist_proposed OR raw_drones folder; skipping`,
+          );
+          return emptyResult();
+        }
+        throw legacyErr;
+      }
+    } else {
+      throw err;
     }
-    throw err;
   }
   // Heuristic truncation alert: listFolder defaults to 5000 entries — if we
   // got exactly that count back, we're almost certainly truncated. Emit a
@@ -527,6 +539,12 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
         flight_roll: ns.exif.flight_roll,
         gps_status: ns.exif.gps_status,
         shot_role: ns.shot_role,
+        // Initial lifecycle_state per the curate-then-edit-then-render workflow:
+        //   nadir_grid → 'sfm_only'    (excluded from delivery; SfM input only)
+        //   everything else → 'raw_proposed' (lands in Raw Proposed swimlane
+        //                     for operator triage)
+        // The operator then accepts/rejects via the swimlane before locking.
+        lifecycle_state: ns.shot_role === 'nadir_grid' ? 'sfm_only' : 'raw_proposed',
         registered_in_sfm: false,
         exif_raw: ns.exif.raw,
       };

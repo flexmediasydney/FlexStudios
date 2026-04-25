@@ -144,7 +144,7 @@ async function enqueueIngestForRecentRawDrones(): Promise<number> {
   const { data, error } = await admin
     .from('project_folder_events')
     .select('project_id')
-    .eq('folder_kind', 'raw_drones')
+    .in('folder_kind', ['drones_raws_shortlist_proposed', 'raw_drones'])
     .eq('event_type', 'file_added')
     .gte('created_at', since);
   if (error) throw error;
