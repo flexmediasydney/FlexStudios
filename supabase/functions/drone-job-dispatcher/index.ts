@@ -3,9 +3,15 @@
  * ────────────────────
  * Pulls pending `drone_jobs` and dispatches them to the appropriate handler:
  *
- *   kind='ingest'   → POST to drone-ingest      payload: { project_id }
- *   kind='render'   → POST to drone-render      payload: { shoot_id, kind?, fallback? }
- *   kind='sfm_run'  → DEFERRED for now (Stream C SfM worker has no HTTP entry)
+ *   kind='ingest'           → POST to drone-ingest    payload: { project_id }
+ *   kind='render'           → POST to drone-render    payload: { shoot_id, kind?, fallback? }
+ *   kind='sfm' / 'sfm_run'  → POST to Modal sfm_http  payload: { _token, shoot_id }
+ *
+ *     On SfM success the dispatcher chains a follow-up `kind='render'` job
+ *     (debounced ~10s) for the same shoot, so the next dispatcher tick will
+ *     render with the now-valid sfm_pose values. Chained at the dispatcher
+ *     layer rather than inside the Modal endpoint to keep all queue logic
+ *     in one place (and so retries of the SfM job don't re-fan-out renders).
  *
  * Trigger: pg_cron every minute (migration 232).
  *
@@ -30,6 +36,10 @@ import {
 
 const GENERATOR = "drone-job-dispatcher";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "https://rjzdznwkxnzfekgcdkei.supabase.co";
+const MODAL_SFM_URL =
+  Deno.env.get("MODAL_SFM_URL") ||
+  "https://joseph-89037--flexstudios-drone-sfm-sfm-http.modal.run";
+const SFM_HTTP_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — matches Modal function timeout
 const MAX_JOBS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
 
@@ -100,10 +110,46 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       if (ok.ok) {
         await admin
           .from("drone_jobs")
-          .update({ status: "succeeded", finished_at: new Date().toISOString(), error_message: null })
+          .update({
+            status: "succeeded",
+            finished_at: new Date().toISOString(),
+            error_message: null,
+            result: ok.result ?? null,
+          })
           .eq("id", job.id);
         dispatched++;
         results.push({ id: job.id, kind: job.kind, ok: true });
+
+        // Chain: on a successful SfM dispatch where Modal also reported a
+        // valid reconstruction, enqueue a follow-up render job for the same
+        // shoot. The next dispatcher tick will render with the now-populated
+        // drone_shots.sfm_pose values. Shoots that exit cleanly with too few
+        // images (Modal returns ok=false but HTTP 200) do NOT trigger a
+        // chained render — they remain at status='sfm_failed' for review.
+        if ((job.kind === "sfm_run" || job.kind === "sfm") && ok.sfm_ok === true) {
+          const shootId =
+            (job.payload?.shoot_id as string | undefined) || job.shoot_id;
+          if (shootId) {
+            const scheduled = new Date(Date.now() + 10_000).toISOString();
+            const { error: enqErr } = await admin.from("drone_jobs").insert({
+              project_id: (job.payload?.project_id as string | null) ?? null,
+              shoot_id: shootId,
+              kind: "render",
+              status: "pending",
+              payload: {
+                shoot_id: shootId,
+                kind: "poi_plus_boundary",
+                chained_from: job.id,
+              },
+              scheduled_for: scheduled,
+            });
+            if (enqErr) {
+              console.warn(
+                `[${GENERATOR}] failed to chain render job after sfm ${job.id}: ${enqErr.message}`,
+              );
+            }
+          }
+        }
       } else {
         await markFailed(admin, job, ok.error || "unknown");
         failed++;
@@ -132,10 +178,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────
+// Result type carries optional `sfm_ok` (Modal-reported success) and `result`
+// (small JSON blob persisted into drone_jobs.result for the SfM/render tick).
+type DispatchResult = {
+  ok: boolean;
+  error?: string;
+  sfm_ok?: boolean;
+  result?: Record<string, unknown> | null;
+};
+
 async function dispatchOne(
   _admin: ReturnType<typeof getAdminClient>,
   job: DroneJob,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<DispatchResult> {
   switch (job.kind) {
     case "ingest":
       return await callEdgeFunction("drone-ingest", {
@@ -146,24 +201,69 @@ async function dispatchOne(
         shoot_id: job.payload?.shoot_id || job.shoot_id,
         kind: job.payload?.kind || "poi_plus_boundary",
       });
+    // We accept both 'sfm_run' (legacy/dispatcher-canonical) and 'sfm' (the
+    // value that drone-ingest enqueues per migration 225 CHECK constraint).
     case "sfm_run":
-      // Deferred: SfM worker has no HTTP endpoint. Mark as 'deferred' and bail.
-      // (Implementation note: add @modal.fastapi_endpoint to sfm_worker.py
-      //  in a follow-up to enable dispatching here.)
-      return {
-        ok: false,
-        error:
-          "sfm_run dispatch not yet implemented (Modal SfM worker has no HTTP entry — deferred to follow-up)",
-      };
+    case "sfm":
+      return await callModalSfm({
+        shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
+      });
     default:
       return { ok: false, error: `unknown kind: ${job.kind}` };
+  }
+}
+
+async function callModalSfm(args: {
+  shoot_id: string | null | undefined;
+}): Promise<DispatchResult> {
+  if (!args.shoot_id) {
+    return { ok: false, error: "callModalSfm: shoot_id missing on job" };
+  }
+  const renderToken = Deno.env.get("FLEXSTUDIOS_RENDER_TOKEN") || "";
+  if (!renderToken) {
+    return { ok: false, error: "FLEXSTUDIOS_RENDER_TOKEN not set" };
+  }
+
+  try {
+    const resp = await fetch(MODAL_SFM_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ _token: renderToken, shoot_id: args.shoot_id }),
+      // Long timeout — Modal pipeline can take several minutes for a real
+      // nadir grid. The Edge Function's wall-clock cap (Deno) is enforced by
+      // the platform; we set ours just in case.
+      signal: AbortSignal.timeout(SFM_HTTP_TIMEOUT_MS),
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return {
+        ok: false,
+        error: `sfm_http returned ${resp.status}: ${text.slice(0, 400)}`,
+      };
+    }
+    let json: Record<string, unknown> = {};
+    try {
+      json = await resp.json();
+    } catch {
+      return { ok: false, error: "sfm_http returned non-JSON body" };
+    }
+    const sfmOk = json.ok === true;
+    // We treat HTTP 200 with body.ok=false as a successful DISPATCH (we
+    // talked to Modal cleanly), but the SfM run itself failed/skipped — the
+    // Modal endpoint already wrote the failure to drone_sfm_runs and
+    // drone_shoots.status. Don't retry the dispatcher; mark dispatcher
+    // success but leave sfm_ok=false so chaining is suppressed.
+    return { ok: true, sfm_ok: sfmOk, result: json };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `sfm_http call failed: ${msg}` };
   }
 }
 
 async function callEdgeFunction(
   fnName: string,
   body: Record<string, unknown>,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<DispatchResult> {
   const url = `${SUPABASE_URL}/functions/v1/${fnName}`;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
   if (!serviceKey) {
