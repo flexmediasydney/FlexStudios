@@ -37,30 +37,69 @@ import {
   Loader2,
   Image as ImageIcon,
 } from "lucide-react";
-import {
-  SHARED_THUMB_CACHE,
-  enqueueFetch,
-  fetchMediaProxy,
-} from "@/utils/mediaPerf";
+import { enqueueFetch } from "@/utils/mediaPerf";
 import { cn } from "@/lib/utils";
 
 const SWIPE_THRESHOLD_PX = 50;
 
-// Single source of truth for the proxy fetch — keeps cache-key parity with
-// DroneThumbnail. Returns the cached blob URL synchronously when available so
-// flicking through pre-loaded items feels instant.
-function getCachedProxyUrl(path) {
-  if (!path) return null;
-  const key = `proxy::default::${path}`;
-  return SHARED_THUMB_CACHE.get(key) || null;
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+// ── Isolated lightbox blob cache ───────────────────────────────────────────
+// The lightbox fetches FULL-RESOLUTION proxy blobs (4–8MB each). If we wrote
+// these into SHARED_THUMB_CACHE, opening the lightbox on 200 final renders
+// would retain ~1GB of full-res blobs across the whole app until LRU
+// eviction. Worse — when we revoked them on close, the swimlane / shots
+// subtab thumbnails would silently break (they share the same cache).
+//
+// Instead each lightbox INSTANCE owns its own Map<path, blobUrl>. On close
+// (or unmount) we revoke every blob in that map and clear it. The swimlane's
+// SHARED_THUMB_CACHE is never touched.
+function makeLightboxCache() {
+  return new Map();
 }
 
-async function fetchProxyUrl(path) {
-  if (!path) return null;
-  const url = await enqueueFetch(() =>
-    fetchMediaProxy(SHARED_THUMB_CACHE, path, "proxy"),
-  );
-  return url || null;
+async function _doFetchProxy(path) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON}`,
+        },
+        body: JSON.stringify({ action: "proxy", file_path: path }),
+        signal: controller.signal,
+      },
+    );
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob.type?.startsWith("image/") && blob.size < 200) return null;
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function makeProxyFetcher(cache) {
+  const inflight = new Map();
+  return async function fetchProxyUrl(path) {
+    if (!path) return null;
+    if (cache.has(path)) return cache.get(path);
+    if (inflight.has(path)) return inflight.get(path);
+    const p = enqueueFetch(() => _doFetchProxy(path)).then((url) => {
+      inflight.delete(path);
+      if (url) cache.set(path, url);
+      return url;
+    });
+    inflight.set(path, p);
+    return p;
+  };
 }
 
 export default function DroneLightbox({
@@ -75,6 +114,20 @@ export default function DroneLightbox({
   const safeIndex = total > 0 ? Math.max(0, Math.min(index, total - 1)) : 0;
   const item = total > 0 ? items[safeIndex] : null;
 
+  // Per-instance blob cache + fetcher. Lifetime is bounded by this lightbox's
+  // mount; on unmount we revoke every blob in the map (see effect below).
+  const cacheRef = useRef(null);
+  if (cacheRef.current === null) cacheRef.current = makeLightboxCache();
+  const fetchProxyUrlRef = useRef(null);
+  if (fetchProxyUrlRef.current === null) {
+    fetchProxyUrlRef.current = makeProxyFetcher(cacheRef.current);
+  }
+  const fetchProxyUrl = fetchProxyUrlRef.current;
+  const getCachedProxyUrl = useCallback(
+    (path) => (path ? cacheRef.current.get(path) || null : null),
+    [],
+  );
+
   // Image state for the currently-displayed item.
   const [imageUrl, setImageUrl] = useState(() => getCachedProxyUrl(item?.dropbox_path));
   const [isFetching, setIsFetching] = useState(false);
@@ -86,6 +139,26 @@ export default function DroneLightbox({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+    };
+  }, []);
+
+  // ── Cleanup: revoke ALL blob URLs we created when the lightbox unmounts.
+  // The local cache holds only this instance's blobs, so it's safe to nuke
+  // everything here without affecting the swimlane or shots-subtab thumbs.
+  useEffect(() => {
+    return () => {
+      const cache = cacheRef.current;
+      if (!cache) return;
+      for (const url of cache.values()) {
+        if (typeof url === "string" && url.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(url);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      cache.clear();
     };
   }, []);
 

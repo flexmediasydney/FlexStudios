@@ -87,8 +87,15 @@ export async function processDropboxDelta(
     if (opts?.forceEmitOnSeed) {
       entries = result.entries
         .filter((e) => e['.tag'] === 'file' && /\.(jpe?g)$/i.test(e.name || ''))
-        .filter((e) => /\/01_RAW_WORKING\/drones\//i.test(e.path_display || e.path_lower || ''));
-      console.log(`[dropboxSync] forceEmitOnSeed: queuing ${entries.length} raw_drones JPG(s) for emission`);
+        // Match BOTH the legacy path (01_RAW_WORKING/drones/) and the new
+        // post-restructure path (Drones/Raws/Shortlist Proposed/) so seeds
+        // for backfilled projects also surface raw drone JPGs.
+        .filter((e) =>
+          /\/(01_RAW_WORKING\/drones|Drones\/Raws\/Shortlist Proposed)\//i.test(
+            e.path_display || e.path_lower || '',
+          ),
+        );
+      console.log(`[dropboxSync] forceEmitOnSeed: queuing ${entries.length} raw drone JPG(s) for emission`);
     }
   } else {
     let hasMore = true;

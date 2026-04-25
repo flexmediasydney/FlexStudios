@@ -88,6 +88,12 @@ function toTableName(entityName) {
     'price_matrix_snapshotses': 'price_matrix_snapshots',
     'employee_utilitys': 'employee_utilization',
     'external_listings': 'external_listings',
+    // drone_pois_cache + drone_cadastral_cache + drone_external_cache are
+    // singular by design (per-project cache rows). Override the default
+    // pluraliser so api.entities.DronePoisCache resolves to the right table.
+    'drone_pois_caches': 'drone_pois_cache',
+    'drone_cadastral_caches': 'drone_cadastral_cache',
+    'drone_external_caches': 'drone_external_cache',
   };
 
   snake = overrides[snake] || snake;

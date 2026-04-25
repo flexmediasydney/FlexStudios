@@ -456,10 +456,31 @@ function ActivityLog({ events, projectsById, isLoading, onRefresh, isFetching })
 }
 
 // ── Alerts panel ────────────────────────────────────────────────────────────
-function AlertsPanel({ sfmFailures, highRollShoots, missingNadirShoots, projectsById }) {
+function AlertsPanel({
+  sfmFailures,
+  highRollShoots,
+  missingNadirShoots,
+  deadJobs,
+  projectsById,
+}) {
   const navigate = useNavigate();
   const allAlerts = useMemo(() => {
     const out = [];
+    // Dead-letter jobs first — these are the highest-severity signal that
+    // the pipeline is wedged and needs operator attention. Truncated error
+    // message is in the sub-line so the operator sees the cause without
+    // needing to click into the project.
+    for (const j of deadJobs || []) {
+      out.push({
+        key: `dead-${j.id}`,
+        kind: "dead_letter_job",
+        severity: "error",
+        label: `Dead-letter: ${j.kind || "job"}`,
+        sub: (j.error_message || `job ${String(j.id).slice(0, 8)}`).slice(0, 80),
+        ts: j.finished_at || j.created_at,
+        project_id: j.project_id,
+      });
+    }
     for (const r of sfmFailures || []) {
       out.push({
         key: `sfm-${r.id}`,
@@ -496,7 +517,7 @@ function AlertsPanel({ sfmFailures, highRollShoots, missingNadirShoots, projects
     }
     out.sort((a, b) => new Date(b.ts || 0).getTime() - new Date(a.ts || 0).getTime());
     return out;
-  }, [sfmFailures, highRollShoots, missingNadirShoots, projectsById]);
+  }, [sfmFailures, highRollShoots, missingNadirShoots, deadJobs, projectsById]);
 
   const visible = allAlerts.slice(0, 5);
 
@@ -747,6 +768,26 @@ export default function DroneCommandCenter() {
     enabled: adminGateOpen,
   });
 
+  // Dead-letter jobs from the last 24h. Surfaced in the Alerts panel because
+  // a dead-letter job means an automated step (ingest / SfM / render / poi
+  // fetch) failed past its retry budget — no further automated recovery will
+  // happen and operator intervention is required. Without this query the
+  // panel would show "All clear" while the pipeline was silently wedged.
+  const deadJobsQuery = useQuery({
+    queryKey: ["drone_dead_letter_jobs_24h"],
+    queryFn: async () => {
+      const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const rows = await api.entities.DroneJob.filter(
+        { status: "dead_letter", finished_at: { $gte: since } },
+        "-finished_at",
+        50,
+      );
+      return rows || [];
+    },
+    staleTime: 60 * 1000,
+    enabled: adminGateOpen,
+  });
+
   // ─── Realtime invalidations ─────────────────────────────────────────────
   // #82: Throttle invalidations per-queryKey so a busy day (dozens of drone
   // events/min) doesn't refetch the dashboard every event. We coalesce into
@@ -813,10 +854,13 @@ export default function DroneCommandCenter() {
     } catch (e) { console.warn("[DroneCommandCenter] DroneShoot subscribe failed:", e); }
     try {
       // drone_jobs realtime — primary signal for "X running" / "K failed"
-      // updating live without waiting on the 20s polling fallback.
+      // updating live without waiting on the 20s polling fallback. Also
+      // refreshes the dead-letter alerts feed so a freshly-dead-lettered
+      // job appears in the Alerts panel immediately.
       unsubs.push(
         api.entities.DroneJob.subscribe(() => {
           throttledInvalidate(["drone_dashboard_stats"]);
+          throttledInvalidate(["drone_dead_letter_jobs_24h"]);
           queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
         }),
       );
@@ -1001,6 +1045,7 @@ export default function DroneCommandCenter() {
           sfmFailures={sfmFailuresQuery.data || []}
           highRollShoots={highRollShotsQuery.data || []}
           missingNadirShoots={missingNadirQuery.data || []}
+          deadJobs={deadJobsQuery.data || []}
           projectsById={projectsById}
         />
       </div>

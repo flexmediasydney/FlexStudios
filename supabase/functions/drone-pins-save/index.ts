@@ -224,6 +224,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let updates = 0;
   let deletes = 0;
   const errors: string[] = [];
+  // Collect IDs of newly inserted rows so the frontend can populate the
+  // local item.dbId on its in-memory _new entries — without this, a second
+  // save in the same session would re-issue create actions for pins that
+  // already exist server-side, causing duplicates.
+  const created_ids: string[] = [];
 
   // (Code archaeology: a prior version of this function rejected the
   // combination pixel-anchored + scope='all_shots' here. The `scope` field
@@ -280,17 +285,24 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
 
     if (e.action === 'create') {
-      const { error } = await admin.from('drone_custom_pins').insert({
-        ...payload,
-        created_by: user.id === '__service_role__' ? null : user.id,
-        // (#45 audit) created_by carries the contractor's UUID; the audit
-        // event payload also flags is_contractor for fast UI filtering.
-      });
+      const { data: insRow, error } = await admin
+        .from('drone_custom_pins')
+        .insert({
+          ...payload,
+          created_by: user.id === '__service_role__' ? null : user.id,
+          // (#45 audit) created_by carries the contractor's UUID; the audit
+          // event payload also flags is_contractor for fast UI filtering.
+        })
+        .select('id')
+        .maybeSingle();
       if (error) {
         console.error(`[${GENERATOR}] insert failed:`, error);
         errors.push(`create: ${error.message}`);
       } else {
         creates += 1;
+        if (insRow && (insRow as { id?: string }).id) {
+          created_ids.push((insRow as { id: string }).id);
+        }
       }
     } else if (e.action === 'update' && e.pin_id) {
       // Strip shoot_id from update — it's immutable in the schema and we
@@ -373,6 +385,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         payload: {
           reason: 'pin_edit_saved',
           changes_count: creates + updates + deletes,
+          // Force the dispatched render to wipe the prior 'adjustments'
+          // lane rows for this shoot before re-rendering. Without this,
+          // the existing-renders pre-filter in drone-render skips every
+          // shot that already has an adjustments row → renderer is a
+          // no-op and the operator's new pins never make it into a
+          // delivered file. (Pin Editor write-only-sandbox repair.)
+          wipe_existing: true,
         },
       })
       .select('id')
@@ -408,6 +427,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     {
       success: !isTotalFail,
       applied: { creates, updates, deletes },
+      // created_ids is the list of NEW pin row IDs (in insertion order).
+      // The frontend uses this to populate item.dbId on its in-memory _new
+      // entries so a second save in the same session updates rather than
+      // re-creating those pins. (Pin Editor write-only-sandbox repair.)
+      created_ids,
       partial_failures: isPartial ? errors : undefined,
       errors: isTotalFail ? errors : undefined,
       job_id: jobId,

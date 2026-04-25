@@ -11,6 +11,13 @@
  * promote into Drones/Raws/Final Shortlist (a separate Lock action owned by
  * drone-shortlist-lock).
  *
+ * IMPORTANT — AI never auto-promotes shots:
+ *   The operator's lifecycle_state ('raw_proposed' on entry) is INTENTIONALLY
+ *   left untouched. AI only sets the `is_ai_recommended` flag — accept/reject
+ *   decisions remain a manual operator step. Any future change that flips
+ *   lifecycle_state from this function would be a regression of the curate-
+ *   then-edit-then-render workflow.
+ *
  * POST { shoot_id }
  *
  * Auth: master_admin / admin / manager / employee. Contractors no.
@@ -163,6 +170,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // verdict: clear the flag for the entire eligible set, then set it for the
   // recommended subset. Cheaper than diffing in-app, and atomic enough for a
   // single shoot (eligible counts are typically <50).
+  //
+  // INVARIANT — DO NOT REGRESS: this function ONLY mutates is_ai_recommended.
+  // The shot's lifecycle_state MUST remain 'raw_proposed' so the operator
+  // explicitly triages each AI-flagged candidate via the Raw Proposed swimlane
+  // (Accept moves to raw_accepted, Reject to rejected). Auto-promoting to
+  // raw_accepted would skip the operator's curation step and silently
+  // change which files end up in the deliverable Shortlist Final folder.
+  // If a future revision needs to set lifecycle_state from this codepath,
+  // it MUST be gated behind an explicit operator-confirmed flag.
   const eligibleIds = shots.map((s) => s.id);
   const { error: clearErr } = await admin
     .from("drone_shots")
@@ -184,6 +200,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       );
     }
   }
+  console.log(
+    `[${GENERATOR}] flagged ${recommendedIds.length}/${eligibleIds.length} shots is_ai_recommended=true; lifecycle_state intentionally unchanged (operator must triage via Raw Proposed swimlane).`,
+  );
 
   // ── Audit event for the shortlist decision ──────────────────────
   await admin.from("drone_events").insert({

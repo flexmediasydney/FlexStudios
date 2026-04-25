@@ -71,6 +71,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Pencil,
   Check,
   ChevronRight,
@@ -93,7 +100,52 @@ import { cn } from "@/lib/utils";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import DroneLightbox from "@/components/drone/DroneLightbox";
-import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
+import { enqueueFetch } from "@/utils/mediaPerf";
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+// Direct-fetch helper for one-shot downloads. Bypasses SHARED_THUMB_CACHE
+// because (a) downloads pull a fresh full-resolution copy each time and
+// (b) we revoke the blob URL ~1s after triggering the save, so caching it
+// would corrupt the cache for any other consumer that read the same key.
+async function _downloadProxyBlob(path) {
+  const res = await fetch(
+    `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${SUPABASE_ANON}`,
+      },
+      body: JSON.stringify({ action: "proxy", file_path: path }),
+    },
+  );
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  return res.blob();
+}
+
+// Below this viewport width the 5-column swimlane truncates headers to
+// "RAW PROP / RAW ACCE / AI PROP / ADJUS / FINA" and squeezes cards under
+// 90px wide — unusable on iPad-landscape (1456×840). Collapse to a single
+// column with a stage selector instead. Threshold is 1500px so a typical
+// 13" laptop in split-screen / Safari with sidebar still gets the full grid.
+const COMPACT_BREAKPOINT_PX = 1500;
+
+function useIsCompactSwimlane() {
+  const [compact, setCompact] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < COMPACT_BREAKPOINT_PX,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => {
+      setCompact(window.innerWidth < COMPACT_BREAKPOINT_PX);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return compact;
+}
 
 const COLUMNS = [
   { key: "raw_proposed", label: "Raw Proposed", tone: "border-slate-300 dark:border-slate-700" },
@@ -154,6 +206,14 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // Drag state — tracks which render is mid-drag so we can highlight valid
   // drop targets and ignore invalid drops without a network round-trip.
   const [dragRender, setDragRender] = useState(null); // { id, fromColumn }
+
+  // iPad-landscape (1456px) collapses the 5-column grid into a single column
+  // with a stage selector — at that width headers were truncating to
+  // "RAW PROP / RAW ACCE / AI PROP / ADJUS / FINA" and cards squeezed under
+  // 90px wide. Default to the first column with content so opening the tab
+  // doesn't land on an empty stage.
+  const isCompact = useIsCompactSwimlane();
+  const [activeColumnKey, setActiveColumnKey] = useState(COLUMNS[0].key);
 
   // ── Fetch shots (needed for the RAW column) ─────────────────────────────────
   const shotsKey = ["drone_shots_for_renders", shootId];
@@ -477,24 +537,52 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   );
 
   // ── Lock shortlist ────────────────────────────────────────────────────────
-  // Calls the orchestrator-built `drone-shortlist-lock` Edge Function. Until
-  // that function exists, the call will fail with a non-2xx — we surface that
-  // as a friendly toast so it's discoverable, not silent.
+  // Calls the orchestrator-built `drone-shortlist-lock` Edge Function. Surfaces
+  // outcomes as toasts so the operator never sees a silent click.
+  //
+  // Response-shape fix: api.functions.invoke wraps the server body as
+  // `{ data: serverBody }`. The previous code read `data?.success` directly
+  // on the wrapper (always undefined), so the explicit-failure throw never
+  // fired AND a partial-failure with errors[] populated would still show a
+  // green "Shortlist locked" toast. Now we unwrap once, accept either shape
+  // for forward-compat, and expose partial errors honestly.
   const [isLocking, setIsLocking] = useState(false);
   const lockShortlist = useCallback(async () => {
     if (!shootId) return;
     setIsLocking(true);
     try {
-      const data = await api.functions.invoke("drone-shortlist-lock", {
+      const resp = await api.functions.invoke("drone-shortlist-lock", {
         shoot_id: shootId,
       });
-      if (data?.success === false) {
-        throw new Error(data?.error || "Lock failed");
+      // Be defensive: some callers used to read the wrapper directly.
+      const result = resp?.data ?? resp ?? {};
+      if (result?.success === false) {
+        throw new Error(result?.error || "Lock failed");
       }
-      toast.success("Shortlist locked — files moved into Final Shortlist / Rejected / Others.");
+      // Partial-failure path: server returns success=true but errors[] non-
+      // empty. Surface that as a warning so the operator knows to follow up
+      // (e.g. one file couldn't be moved because Dropbox webhook hadn't
+      // synced its path yet).
+      const errs = Array.isArray(result?.errors) ? result.errors : [];
+      const moved = result?.moved || {};
+      const movedTotal =
+        (moved.accepted || 0) + (moved.rejected || 0) + (moved.sfm_only || 0);
+      if (errs.length > 0) {
+        toast.warning(
+          `Shortlist locked with ${errs.length} error${errs.length === 1 ? "" : "s"} — moved ${movedTotal} file${movedTotal === 1 ? "" : "s"}. See console for details.`,
+        );
+        console.warn("[DroneRendersSubtab] lockShortlist partial errors:", errs);
+      } else {
+        toast.success(
+          movedTotal > 0
+            ? `Shortlist locked — moved ${movedTotal} file${movedTotal === 1 ? "" : "s"} into Final Shortlist / Rejected / Others.`
+            : "Shortlist locked.",
+        );
+      }
       queryClient.invalidateQueries({ queryKey: ["drone_shots_for_renders", shootId] });
       queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
     } catch (err) {
+      console.error("[DroneRendersSubtab] lockShortlist failed:", err);
       toast.error(err?.message || "Lock shortlist failed");
     } finally {
       setIsLocking(false);
@@ -801,9 +889,13 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
           </div>
         )}
 
-        {/* Pipeline columns */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          {COLUMNS.map((col) => (
+        {/* Pipeline columns
+            ≥1500px: 5-column grid (existing layout).
+            <1500px (iPad landscape, narrow laptop split): single column with
+            a stage selector at top so cards stay readable instead of being
+            squeezed under 90px wide. */}
+        {(() => {
+          const renderColumn = (col) => (
             <PipelineColumn
               key={col.key}
               column={col}
@@ -830,9 +922,52 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
               staleByRenderId={staleByRenderId}
               onReRenderShot={reRenderShot}
               pendingRerenderShotId={pendingRerenderShotId}
+              isCompact={isCompact}
             />
-          ))}
-        </div>
+          );
+
+          if (isCompact) {
+            const activeCol =
+              COLUMNS.find((c) => c.key === activeColumnKey) || COLUMNS[0];
+            return (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold flex-shrink-0">
+                    Stage
+                  </span>
+                  <Select
+                    value={activeColumnKey}
+                    onValueChange={setActiveColumnKey}
+                  >
+                    <SelectTrigger className="h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {COLUMNS.map((c) => {
+                        const items = grouped[c.key] || [];
+                        const count = Array.isArray(items)
+                          ? items.length
+                          : items?.size || 0;
+                        return (
+                          <SelectItem key={c.key} value={c.key}>
+                            {c.label} ({count})
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {renderColumn(activeCol)}
+              </div>
+            );
+          }
+
+          return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+              {COLUMNS.map(renderColumn)}
+            </div>
+          );
+        })()}
 
         {/* Rejected drawer (collapsed list under the columns) */}
         {grouped.rejected.length > 0 && (
@@ -958,6 +1093,9 @@ function PipelineColumn({
   staleByRenderId,
   onReRenderShot,
   pendingRerenderShotId,
+  // Compact mode (single-column layout on iPad-landscape) — give the column
+  // more vertical room since it's the only one on screen.
+  isCompact = false,
 }) {
   // A column is a valid drop target only if there's an active drag from a
   // different column AND the transition (fromCol → thisCol) is allowed by the
@@ -1027,7 +1165,14 @@ function PipelineColumn({
         <span className="uppercase tracking-wide">{column.label}</span>
         <span className="tabular-nums">{items.length}</span>
       </div>
-      <div className="p-2 space-y-2 min-h-[120px] max-h-[480px] overflow-y-auto">
+      <div
+        className={cn(
+          "p-2 space-y-2 min-h-[120px] overflow-y-auto",
+          // In compact mode the column owns the full viewport — give it room
+          // to breathe; in grid mode keep the original cap so rows stay tidy.
+          isCompact ? "max-h-[70vh]" : "max-h-[480px]",
+        )}
+      >
         {items.length === 0 ? (
           <div className="text-center py-6 text-[11px] text-muted-foreground">
             {emptyLabel}
@@ -1305,14 +1450,17 @@ function RenderCard({
     const path = selectedRender?.dropbox_path;
     if (!path) return;
     setIsDownloading(true);
+    let blobUrl = null;
     try {
-      const blobUrl = await enqueueFetch(() =>
-        fetchMediaProxy(SHARED_THUMB_CACHE, path, "proxy"),
-      );
-      if (!blobUrl) {
+      // Direct fetch (bypass SHARED_THUMB_CACHE) so the URL we revoke after
+      // triggering the save can't poison shared cache entries used by the
+      // swimlane / lightbox / shots subtab.
+      const blob = await enqueueFetch(() => _downloadProxyBlob(path));
+      if (!blob) {
         toast.error("Download failed — proxy returned no blob");
         return;
       }
+      blobUrl = URL.createObjectURL(blob);
       const filename =
         shot?.filename ||
         path.split("/").pop() ||
@@ -1323,9 +1471,26 @@ function RenderCard({
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      // Defer revocation slightly so Safari/Firefox have the URL still
+      // resolvable when the save dialog opens. 1s is the same window
+      // mediaActions.downloadFile uses.
+      setTimeout(() => {
+        try {
+          URL.revokeObjectURL(blobUrl);
+        } catch {
+          /* ignore */
+        }
+      }, 1000);
     } catch (err) {
       console.error("[DroneRendersSubtab] download failed:", err);
       toast.error(err?.message || "Download failed");
+      if (blobUrl) {
+        try {
+          URL.revokeObjectURL(blobUrl);
+        } catch {
+          /* ignore */
+        }
+      }
     } finally {
       setIsDownloading(false);
     }

@@ -56,6 +56,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   ArrowLeft,
   Save as SaveIcon,
   Eye,
@@ -124,21 +130,40 @@ export default function PinEditor({
   theme,
   themeError = null, // truthy when theme failed to load — blocks editing
   customPins = [],
+  cachedPois = [], // drone_pois_cache.pois — read-only "AI-detected" layer
   projectCoord,
   imageUrl,
   imageError = null, // truthy when source image failed to load
   poseAvailable = true, // false → SfM not available, use GPS prior
+  onShotChange, // (newShotId) => void — drives URL + image swap from parent
+  onAfterSave, // optional — called after a successful save with the response
   onSave,
   onCancel,
 }) {
   // ── State ────────────────────────────────────────────────────────────────
   const [tool, setTool] = useState(TOOLS.SELECT);
   const [activeShotId, setActiveShotId] = useState(currentShotId);
+  // Keep activeShotId in lockstep with the parent's currentShotId. The
+  // parent owns the `?shot=` URL param and the imageUrl pipeline; if the
+  // URL changes externally (back/forward, deep-link) we need to update
+  // local state so the Inspector + projection use the right shot.
+  useEffect(() => {
+    if (currentShotId && currentShotId !== activeShotId) {
+      setActiveShotId(currentShotId);
+      setSelectedItemId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentShotId]);
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [hiddenIds, setHiddenIds] = useState(new Set());
   const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
   const [isSaving, setIsSaving] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
+  // Inline preview modal — replaces the previous window.open() flow which
+  // was killed by every common pop-up blocker (window.open after async
+  // fetch is blocked by default in Safari + Brave). Stays in-tab + the
+  // operator can close with ESC or the Done button.
+  const [previewDataUrl, setPreviewDataUrl] = useState(null);
   const [imageLoaded, setImageLoaded] = useState(false);
   // #22: Initial seed uses camera-native dimensions (5280x3956 for Mavic 3 Pro)
   // but `output_variants.target_width_px` may render a downscaled JPEG (e.g.
@@ -258,15 +283,20 @@ export default function PinEditor({
   const projectedItems = useMemo(() => {
     if (!activeShot) return [];
     const out = [];
-    for (const item of items) {
+    // Iterate persisted/local items first, then virtual cachedPoiItems so
+    // operator-saved pins paint on top of AI-detected ones.
+    const allRenderable = [...items, ...(cachedPoiItems || [])];
+    for (const item of allRenderable) {
       if (hiddenIds.has(item.id)) continue;
       // Master-toggle suppression of overlay markers. Property pin is the
       // virtual "property" item; POIs are theme POIs + any manual poi_manual
-      // pin (world or pixel anchored).
+      // pin (world or pixel anchored). Cached POIs follow the POI toggle.
       if (!pinEnabled && item.virtual === "property") continue;
       if (
         !poisEnabled &&
-        (item.virtual === "theme_poi" || item.subtype === "poi_manual")
+        (item.virtual === "theme_poi" ||
+          item.virtual === "cached_poi" ||
+          item.subtype === "poi_manual")
       ) {
         continue;
       }
@@ -292,7 +322,7 @@ export default function PinEditor({
       out.push({ ...item, _pixel: pixel });
     }
     return out;
-  }, [items, hiddenIds, activeShot, pose, pinEnabled, poisEnabled]);
+  }, [items, cachedPoiItems, hiddenIds, activeShot, pose, pinEnabled, poisEnabled]);
 
   // ── Canvas / image refs ─────────────────────────────────────────────────
   const containerRef = useRef(null);
@@ -829,7 +859,7 @@ export default function PinEditor({
           (result?.applied?.deletes ?? result?.deletes ?? 0);
 
         toast.success(
-          `Saved ${totalApplied || edits.length} change${
+          `Saved ${totalApplied || edits.length} pin${
             (totalApplied || edits.length) === 1 ? "" : "s"
           }`,
           {
@@ -850,13 +880,45 @@ export default function PinEditor({
         // Drop _delete rows (they're gone server-side) and reset _dirty/_new
         // on everything else; this also means the "saved" snapshot becomes
         // the new baseline for undo, so we clear both stacks too.
+        // Also: stamp dbId on items that just got created server-side, using
+        // the response's created_ids array (server emits IDs in the same
+        // order computeSaveEdits emitted 'create' actions). Without this,
+        // a second save in the same session re-issues create actions for
+        // already-persisted pins → dupes in drone_custom_pins.
+        const createdIds = Array.isArray(result?.created_ids)
+          ? result.created_ids
+          : [];
+        // Reconstruct the order of create-emitting items from computeSaveEdits:
+        // any item that was _dirty or _new and had no dbId became a create.
+        const createOrderItemIds = [];
+        for (const it of items) {
+          if (it._delete) continue;
+          if (it.virtual === "property") continue;
+          if (!it._dirty && !it._new) continue;
+          if (!it.dbId) createOrderItemIds.push(it.id);
+        }
+        const dbIdByLocalId = new Map();
+        for (let i = 0; i < createOrderItemIds.length && i < createdIds.length; i++) {
+          dbIdByLocalId.set(createOrderItemIds[i], createdIds[i]);
+        }
         _setItems((prev) =>
           prev
             .filter((i) => !i._delete)
-            .map((i) => ({ ...i, _dirty: false, _new: false })),
+            .map((i) => {
+              const newDbId = dbIdByLocalId.get(i.id);
+              return {
+                ...i,
+                _dirty: false,
+                _new: false,
+                ...(newDbId ? { dbId: newDbId, id: newDbId } : {}),
+              };
+            }),
         );
         clearHistory(undoStack);
         clearHistory(redoStack);
+        // Notify the page so it can invalidate the customPinsQ + renders queries
+        // → next refetch picks up the server's authoritative pin set.
+        if (typeof onAfterSave === "function") onAfterSave(result);
         if (typeof onSave === "function") onSave({ edits, result });
       } catch (err) {
         console.error("[PinEditor] save failed", err);
@@ -869,6 +931,7 @@ export default function PinEditor({
   );
 
   // Preview-only render: hits drone-render-preview for fast iteration.
+  // Renders inline in a Dialog (was: window.open which pop-up blockers kill).
   const handlePreview = useCallback(async () => {
     if (!theme) {
       toast.warning("No theme loaded — preview unavailable");
@@ -884,22 +947,8 @@ export default function PinEditor({
       if (!data?.success || !data?.image_b64) {
         throw new Error(data?.error || "Preview render failed");
       }
-      // Open in a new tab so we don't disturb the editing canvas.
-      const win = window.open("");
-      if (win) {
-        win.document.title = "Pin Editor — Preview";
-        win.document.body.style.margin = "0";
-        win.document.body.style.background = "#000";
-        const img = win.document.createElement("img");
-        img.src = `data:image/${(data.format || "JPEG").toLowerCase()};base64,${data.image_b64}`;
-        img.style.maxWidth = "100vw";
-        img.style.maxHeight = "100vh";
-        img.style.display = "block";
-        img.style.margin = "0 auto";
-        win.document.body.appendChild(img);
-      } else {
-        toast.warning("Pop-up blocked — allow pop-ups to view preview");
-      }
+      const fmt = (data.format || "JPEG").toLowerCase();
+      setPreviewDataUrl(`data:image/${fmt};base64,${data.image_b64}`);
     } catch (err) {
       console.error("[PinEditor] preview failed", err);
       toast.error(`Preview failed: ${err?.message || err}`);
@@ -954,18 +1003,53 @@ export default function PinEditor({
 
   const dirtyCount = items.filter(isItemDirty).length;
 
+  // Read-only "Detected POIs" layer items derived from drone_pois_cache.
+  // These are NOT persisted in drone_custom_pins — they're informational so
+  // the operator can see what the AI ingested. Clicking one (TODO) would
+  // promote it into an editable custom pin.
+  const cachedPoiItems = useMemo(() => {
+    if (!Array.isArray(cachedPois) || cachedPois.length === 0) return [];
+    const out = [];
+    for (const p of cachedPois) {
+      if (!p) continue;
+      const lat = Number(p.lat);
+      const lng = Number(p.lng ?? p.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      out.push({
+        id: `cached_poi_${p.place_id || `${lat}_${lng}`}`,
+        kind: "world",
+        kindLabel: "Detected POI",
+        label: p.name || p.label || "POI",
+        color: "#10B981", // emerald — distinct from theme POIs (indigo)
+        world: { lat, lng },
+        virtual: "cached_poi",
+        readOnly: true,
+        meta: {
+          type: p.type || null,
+          distance_m: p.distance_m ?? null,
+          rating: p.rating ?? null,
+        },
+      });
+    }
+    return out;
+  }, [cachedPois]);
+
   // Layer groups for the tree.
   const layerGroups = useMemo(() => {
     const groups = {
       world: { label: "World-anchored", items: [] },
       pixel: { label: "Pixel-anchored", items: [] },
+      detected: { label: "Detected POIs (AI)", items: [] },
     };
     for (const it of items) {
       if (it._delete) continue;
       groups[it.kind === "world" ? "world" : "pixel"].items.push(it);
     }
+    for (const it of cachedPoiItems) {
+      groups.detected.items.push(it);
+    }
     return groups;
-  }, [items]);
+  }, [items, cachedPoiItems]);
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -1115,6 +1199,8 @@ export default function PinEditor({
                     )}
                     {key === "world" ? (
                       <Globe className="h-3 w-3" />
+                    ) : key === "detected" ? (
+                      <PinIcon className="h-3 w-3" />
                     ) : (
                       <ImageIconLucide className="h-3 w-3" />
                     )}
@@ -1127,7 +1213,9 @@ export default function PinEditor({
                     <p className="pl-5 text-[11px] text-muted-foreground italic mt-1">
                       {key === "world"
                         ? "Property + theme POIs (GPS-anchored)"
-                        : "Text, ribbons, address overlays (per-shot)"}
+                        : key === "detected"
+                          ? "AI-detected nearby places (read-only)"
+                          : "Text, ribbons, address overlays (per-shot)"}
                     </p>
                   )}
                   {!folded && (
@@ -1449,6 +1537,13 @@ export default function PinEditor({
                     onClick={() => {
                       setActiveShotId(s.id);
                       setSelectedItemId(null);
+                      // Bubble the shot change up so the page can update the
+                      // URL `?shot=` param and re-derive the imageDropboxPath
+                      // → without this the canvas image never swaps even
+                      // though `activeShotId` and the Inspector update.
+                      if (typeof onShotChange === "function") {
+                        onShotChange(s.id);
+                      }
                     }}
                     className={cn(
                       "flex flex-col items-center gap-0.5 rounded border px-2 py-1 text-[10px] shrink-0 transition",
@@ -1565,6 +1660,35 @@ export default function PinEditor({
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Inline preview modal — replaces the prior window.open() flow which
+            most pop-up blockers killed. drone-render-preview returns a base64
+            JPEG of the resolved theme over a stock background scene; we
+            display it as a data URL inside a Dialog. */}
+        <Dialog
+          open={Boolean(previewDataUrl)}
+          onOpenChange={(open) => {
+            if (!open) setPreviewDataUrl(null);
+          }}
+        >
+          <DialogContent className="max-w-5xl p-0 overflow-hidden">
+            <DialogHeader className="px-4 py-3 border-b border-border">
+              <DialogTitle className="flex items-center gap-2">
+                <Eye className="h-4 w-4" />
+                Theme preview
+              </DialogTitle>
+            </DialogHeader>
+            <div className="bg-black flex items-center justify-center max-h-[80vh] overflow-auto">
+              {previewDataUrl ? (
+                <img
+                  src={previewDataUrl}
+                  alt="Theme preview"
+                  className="max-w-full max-h-[80vh] object-contain"
+                />
+              ) : null}
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   );

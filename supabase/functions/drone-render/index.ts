@@ -136,6 +136,58 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (projErr || !project)
     return errorResponse(`project lookup failed: ${projErr?.message || "missing"}`, 500, req);
 
+  // ── Load drone_custom_pins for this shoot ──────────────────────────
+  // The Pin Editor persists operator-saved pins (text labels, manual POIs,
+  // pixel-anchored ribbons) into drone_custom_pins. Each row is either:
+  //   - World-anchored: world_lat/world_lng populated, applies to every
+  //     shot in the shoot (projected per-shot via _gps_to_px in Modal).
+  //   - Pixel-anchored: pixel_anchored_shot_id + pixel_x/pixel_y populated,
+  //     applies ONLY to that one shot (drawn at exact stored coords).
+  //
+  // We load the full set once per drone-render invocation and partition
+  // per-shot inside the renderOneShot closure below. Without this query
+  // saved pins NEVER reach Modal — historic bug where the Pin Editor
+  // appeared to save successfully but renders never reflected the edits.
+  type CustomPinRow = {
+    pin_type: 'poi_manual' | 'text' | 'line' | 'measurement';
+    world_lat: number | null;
+    world_lng: number | null;
+    pixel_anchored_shot_id: string | null;
+    pixel_x: number | null;
+    pixel_y: number | null;
+    content: Record<string, unknown> | null;
+    style_overrides: Record<string, unknown> | null;
+  };
+  const { data: customPinsRaw, error: pinsErr } = await admin
+    .from("drone_custom_pins")
+    .select(
+      "pin_type, world_lat, world_lng, pixel_anchored_shot_id, pixel_x, pixel_y, content, style_overrides",
+    )
+    .eq("shoot_id", shoot.id);
+  if (pinsErr) {
+    console.warn(`[${GENERATOR}] drone_custom_pins lookup failed (non-fatal): ${pinsErr.message}`);
+  }
+  const allCustomPins: CustomPinRow[] = (customPinsRaw as CustomPinRow[] | null) || [];
+  const worldCustomPins = allCustomPins.filter(
+    (p) =>
+      (p.pin_type === 'poi_manual' ||
+        p.pin_type === 'text' ||
+        p.pin_type === 'line' ||
+        p.pin_type === 'measurement') &&
+      p.world_lat !== null &&
+      p.world_lng !== null,
+  );
+  // Pixel-anchored pins are keyed by pixel_anchored_shot_id; build an
+  // index so the per-shot loop below is O(1) per shot.
+  const pixelPinsByShot = new Map<string, CustomPinRow[]>();
+  for (const p of allCustomPins) {
+    if (p.pixel_anchored_shot_id && p.pixel_x !== null && p.pixel_y !== null) {
+      const arr = pixelPinsByShot.get(p.pixel_anchored_shot_id) || [];
+      arr.push(p);
+      pixelPinsByShot.set(p.pixel_anchored_shot_id, arr);
+    }
+  }
+
   // ── Load shots to render ─────────────────────────────────────────
   let shotQ = admin
     .from("drone_shots")
@@ -211,19 +263,27 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     };
   }
 
-  // ── Optional wipe of prior 'proposed' renders (Re-analyse action) ──
-  // Stream D's swimlane Re-analyse calls drone-render with wipe_existing=true
-  // so a fresh AI render replaces the prior proposals rather than colliding
-  // with them. Adjustments/final/rejected slots are preserved — only the
-  // 'proposed' lane is cleared, which lets the existing-renders pre-filter
-  // below treat the shoot as if it had never been rendered.
+  // ── Optional wipe of prior renders for THIS lane (Re-analyse + Pin Save) ──
+  // Two callers set wipe_existing=true:
+  //   - Stream D's swimlane Re-analyse → wipes the 'proposed' lane so a fresh
+  //     AI render replaces the prior proposals rather than colliding with them.
+  //   - Pin Editor save (drone-pins-save) → wipes the 'adjustments' lane so
+  //     the new adjustment render reflects the latest pin set instead of
+  //     colliding with the prior adjustment row.
+  // Lane is inferred from the same logic the writer uses below: pin-edit
+  // signals route to 'adjustments'; everything else stays on 'proposed'.
+  // Final/rejected slots are NEVER wiped — those are operator-locked.
   if (body.wipe_existing === true) {
     const shotIds = shotsAll.map((s) => s.id);
+    const wipeColumnState =
+      body?.reason === "pin_edit_saved" || body?.column_state === "adjustments"
+        ? "adjustments"
+        : "proposed";
     const { error: wipeErr } = await admin
       .from("drone_renders")
       .delete()
       .eq("kind", kind)
-      .eq("column_state", "proposed")
+      .eq("column_state", wipeColumnState)
       .in("shot_id", shotIds);
     if (wipeErr) {
       return errorResponse(`wipe_existing failed: ${wipeErr.message}`, 500, req);
@@ -242,11 +302,22 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // SfM+poi_fetch; re-runs shouldn't re-render every shot). We pre-filter
   // against preview rows ONLY, ignoring proposed/adjustments/final since the
   // Edited Post Production source is different from the raw source used here.
+  //
+  // For adjustments lane (Pin Editor save): skip only against existing
+  // adjustments + final rows. A shot that has a 'proposed' render but no
+  // adjustment row should still re-render into the adjustments slot. The
+  // wipe block above just cleared adjustments, so this filter degenerates
+  // to skipping only 'final' (operator-locked).
   // Note: use isPreviewRun here directly. isPreviewRender (an alias for the
   // same value) is declared further down in the output-folder block.
+  const isAdjustmentsRunForSkip =
+    !isPreviewRun &&
+    (body?.reason === "pin_edit_saved" || body?.column_state === "adjustments");
   const skipStates = isPreviewRun
     ? ["preview"]
-    : ["proposed", "adjustments", "final"];
+    : isAdjustmentsRunForSkip
+      ? ["adjustments", "final"]
+      : ["proposed", "adjustments", "final"];
   const { data: existingRenders } = await admin
     .from("drone_renders")
     .select("shot_id")
@@ -484,6 +555,43 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         scene.polygon_latlon = cadastral.polygon.map((v: { lat: number; lng: number }) => [v.lat, v.lng]);
       }
 
+      // ── Operator-saved custom pins (drone_custom_pins) ───────────
+      // World-anchored pins fan out across every shot in the shoot;
+      // pixel-anchored pins are scoped to their specific shot. Modal's
+      // render_engine reads scene.custom_pins and projects/draws each
+      // entry alongside the theme POIs + property pin.
+      const pinsForThisShot: Array<{
+        pin_type: string;
+        world_lat?: number;
+        world_lng?: number;
+        pixel_x?: number;
+        pixel_y?: number;
+        content?: Record<string, unknown> | null;
+        style_overrides?: Record<string, unknown> | null;
+      }> = [];
+      for (const wp of worldCustomPins) {
+        pinsForThisShot.push({
+          pin_type: wp.pin_type,
+          world_lat: wp.world_lat as number,
+          world_lng: wp.world_lng as number,
+          content: wp.content,
+          style_overrides: wp.style_overrides,
+        });
+      }
+      const myPixelPins = pixelPinsByShot.get(shot.id) || [];
+      for (const pp of myPixelPins) {
+        pinsForThisShot.push({
+          pin_type: pp.pin_type,
+          pixel_x: pp.pixel_x as number,
+          pixel_y: pp.pixel_y as number,
+          content: pp.content,
+          style_overrides: pp.style_overrides,
+        });
+      }
+      if (pinsForThisShot.length > 0) {
+        scene.custom_pins = pinsForThisShot;
+      }
+
       // Determine if this theme requested multi-variant output
       const variantsCfg = Array.isArray(themeForKind?.output_variants)
         ? (themeForKind.output_variants as Array<Record<string, unknown>>)
@@ -570,9 +678,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           // the chain, store the id + version pointer only — the snapshot can
           // be reproduced from drone_themes. Inline snapshot is reserved for
           // ad-hoc previews where there's no canonical theme to refer to.
+          //
+          // NOTE: the legacy `theme_version` column was never created on
+          // drone_renders — only `theme_version_int_at_render` (migration 244).
+          // Writing `theme_version` previously threw 42703 and silently dead-
+          // lettered every render with a real theme_id. Removed.
           const themeIdForRow = themeChain[0]?.theme_id || null;
-          const themeVersion = (themeForKind as { _version?: string | number } | null | undefined)
-            ?._version ?? null;
           // Migration 244: stamp the most-specific theme's id + version_int so
           // the swimlane can amber-badge any render that's behind the theme's
           // current version. themeChain[0] is the highest-priority theme
@@ -599,9 +710,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             pin_overrides: null,
             output_variant: v.name,
           };
-          if (themeIdForRow && themeVersion !== null) {
-            renderRow.theme_version = themeVersion;
-          }
           const { error: insErr } = await admin.from("drone_renders").insert(renderRow);
           if (insErr) {
             anyVariantFailed = true;

@@ -62,6 +62,9 @@ const BACKOFF_SECONDS = [60, 300, 1800];
 
 type DroneJob = {
   id: string;
+  // claim_drone_jobs() returns project_id directly as of migration 248 so the
+  // chain logic doesn't have to derive it via a per-shoot lookup.
+  project_id: string | null;
   kind: string;
   status: string;
   payload: Record<string, unknown>;
@@ -98,7 +101,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Reset stale 'running' jobs back to 'pending'. Edge Function crashes
   // (panic, OOM, gateway timeout) leave claimed jobs stuck in 'running'
   // forever. Anything still 'running' after STALE_CLAIM_MIN minutes gets
-  // requeued. Also bumps attempts so dead-letter still applies. (#30 audit fix)
+  // requeued. (#30 audit fix)
+  //
+  // claim_drone_jobs() already incremented attempt_count when it claimed the
+  // job — the sweep below has to UN-burn that attempt, otherwise an Edge-
+  // Function timeout (which is not the operator's fault and not a real
+  // failure signal) ratchets the job toward dead_letter as fast as a real
+  // per-shot error would. Without the decrement, a 3-strike retry budget
+  // evaporates after 3 unrelated platform timeouts.
   const STALE_CLAIM_MIN = 20;
   const { data: stale } = await admin
     .from("drone_jobs")
@@ -107,7 +117,26 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     .lt("started_at", new Date(Date.now() - STALE_CLAIM_MIN * 60 * 1000).toISOString())
     .select("id");
   if ((stale?.length ?? 0) > 0) {
-    console.warn(`[${GENERATOR}] reset ${stale!.length} stale-claim job(s) older than ${STALE_CLAIM_MIN}m`);
+    // Refund the attempt via the dedicated RPC — supabase-js can't express
+    // attempt_count = GREATEST(0, attempt_count - 1) in .update(), so this
+    // is a follow-up call. Idempotent: if the row was claimed again between
+    // the reset and this decrement, attempt_count is now 1 (claim already
+    // bumped) and we'd pull it back to 0 — which is fine, the next claim
+    // bumps it to 1 again and the only effect is the OOM/timeout is fully
+    // forgiven.
+    const ids = stale!.map((r) => r.id);
+    const { error: decErr } = await admin.rpc("drone_jobs_decrement_attempts", {
+      p_ids: ids,
+    });
+    if (decErr) {
+      console.warn(
+        `[${GENERATOR}] reset ${stale!.length} stale-claim job(s) older than ${STALE_CLAIM_MIN}m, but attempt-decrement RPC failed: ${decErr.message}`,
+      );
+    } else {
+      console.warn(
+        `[${GENERATOR}] reset ${stale!.length} stale-claim job(s) older than ${STALE_CLAIM_MIN}m and refunded their attempt`,
+      );
+    }
   }
 
   // ── Atomically claim up to N pending jobs ──────────────────────────────
@@ -154,6 +183,38 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (isSfmKind) sfmDispatched++;
     try {
       const ok = await dispatchOne(admin, job);
+      if (ok.ok && ok.deferred === true) {
+        // Deferred path — the dispatched function ran cleanly but had nothing
+        // to do (e.g. drone-render: every eligible shot is waiting on the
+        // editor). Push back to 'pending' WITHOUT counting this attempt
+        // against the dead-letter budget, with a short backoff window.
+        const backoffSec = ok.defer_backoff_sec ?? DEFER_BACKOFF_SEC;
+        const next = new Date(Date.now() + backoffSec * 1000).toISOString();
+        // Decrement attempt_count (claim_drone_jobs already bumped it). Use
+        // the same RPC the stale-claim sweeper uses.
+        await admin
+          .from("drone_jobs")
+          .update({
+            status: "pending",
+            scheduled_for: next,
+            started_at: null,
+            error_message: null,
+            result: ok.result ?? null,
+          })
+          .eq("id", job.id);
+        const { error: decErr } = await admin.rpc(
+          "drone_jobs_decrement_attempts",
+          { p_ids: [job.id] },
+        );
+        if (decErr) {
+          console.warn(
+            `[${GENERATOR}] deferred job ${job.id} attempt-refund failed: ${decErr.message}`,
+          );
+        }
+        dispatched++;
+        results.push({ id: job.id, kind: job.kind, ok: true });
+        continue;
+      }
       if (ok.ok) {
         await admin
           .from("drone_jobs")
@@ -309,12 +370,28 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 // ──────────────────────────────────────────────────────────────────────
 // Result type carries optional `sfm_ok` (Modal-reported success) and `result`
 // (small JSON blob persisted into drone_jobs.result for the SfM/render tick).
+//
+// `deferred=true` means the dispatched function ran cleanly but its outcome
+// was "nothing to do right now, try again later" — e.g. drone-render
+// returning 0 rendered when every eligible shot was skipped because the
+// editor team hasn't uploaded edited JPGs yet. We push the job back into
+// 'pending' WITHOUT burning an attempt and WITHOUT marking it as failed; a
+// short backoff window gives the editor time to upload and the next
+// dispatcher tick re-tries.
 type DispatchResult = {
   ok: boolean;
   error?: string;
   sfm_ok?: boolean;
   result?: Record<string, unknown> | null;
+  deferred?: boolean;
+  /** Backoff hint in seconds when deferred=true (default DEFER_BACKOFF_SEC). */
+  defer_backoff_sec?: number;
 };
+
+// Default backoff window when a job is deferred (e.g. waiting on editor
+// uploads). 5 minutes is short enough to feel responsive once the editor
+// drops the file but long enough not to thrash the dispatcher tick budget.
+const DEFER_BACKOFF_SEC = 300;
 
 async function dispatchOne(
   _admin: ReturnType<typeof getAdminClient>,
@@ -332,6 +409,10 @@ async function dispatchOne(
         // Pass-through `reason` so drone-render can route Pin Editor saves
         // to the drone_renders_adjusted/ folder + adjustments column state.
         reason: job.payload?.reason,
+        // Pin Editor saves enqueue with payload.wipe_existing=true so the
+        // adjustments lane regenerates with the new pins instead of stacking
+        // alongside stale rows. Pass-through for any caller that sets it.
+        wipe_existing: job.payload?.wipe_existing === true,
       });
     // 'sfm' is the canonical kind per migration 225 CHECK constraint.
     // 'sfm_run' is a deprecated alias kept for forward-compat with any rows
@@ -550,6 +631,32 @@ async function callEdgeFunction(
         bodyJson.shots_total > 0 &&
         bodyJson.shots_rendered === 0
       ) {
+        // "0/N rendered" is the dispatcher's red-flag pattern — but a sub-
+        // category of zero-rendered runs is benign: ALL eligible shots were
+        // skipped because they have no edited_dropbox_path yet (editor team
+        // owes the file). drone-render returns shots_skipped_no_edit so we
+        // can distinguish "render genuinely failed" from "nothing to render
+        // until the editor uploads".
+        //
+        // Treat (skipped > 0 AND rendered == 0 AND skipped + rendered ==
+        // total) as a DEFER, not a failure: the job goes back to 'pending'
+        // with a short backoff window WITHOUT burning an attempt. (If we
+        // hard-fail here, three back-to-back ticks while the editor is
+        // still uploading would dead-letter the job.)
+        const skipped =
+          typeof bodyJson.shots_skipped_no_edit === "number"
+            ? bodyJson.shots_skipped_no_edit
+            : 0;
+        if (
+          skipped > 0 &&
+          skipped + (bodyJson.shots_rendered as number) === bodyJson.shots_total
+        ) {
+          return {
+            ok: true,
+            deferred: true,
+            result: bodyJson,
+          };
+        }
         // Pull a representative per-shot error if present.
         const firstErr = Array.isArray(bodyJson.results)
           ? (bodyJson.results as Array<{ ok: boolean; error?: string }>)
@@ -569,7 +676,7 @@ async function callEdgeFunction(
         };
       }
     }
-    return { ok: true };
+    return { ok: true, result: bodyJson };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: msg };

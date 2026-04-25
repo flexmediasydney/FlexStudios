@@ -1315,6 +1315,74 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
                 secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
             canvas = _draw_poi_label(canvas, x, y, poi["name"], label_style, anchor_style, secondary, w, h)
 
+    # ───── Custom pins (operator-saved via Pin Editor) ─────
+    # Read from drone_custom_pins (loaded by drone-render). Each entry is
+    # either world-anchored (project to pixel via _gps_to_px) or pixel-
+    # anchored (drawn at the stored pixel coords). content/style_overrides
+    # are passed through verbatim from the row; we merge style_overrides
+    # over the theme's poi_label defaults so operator colour edits apply
+    # but the typeface/padding/anchor-line behaviour matches the theme.
+    custom_pins = scene.get("custom_pins", []) or []
+    for cp in custom_pins:
+        try:
+            # Resolve target pixel
+            if cp.get("world_lat") is not None and cp.get("world_lng") is not None:
+                px = _gps_to_px(
+                    cp["world_lat"], cp["world_lng"],
+                    scene["lat"], scene["lon"], scene["alt"],
+                    scene["yaw"], scene["pitch"], w, h,
+                    intrinsics=intrinsics,
+                )
+                if px is None:
+                    continue
+                if not (-200 < px[0] < w + 200 and -200 < px[1] < h + 200):
+                    continue
+                x, y = int(px[0]), int(px[1])
+            elif cp.get("pixel_x") is not None and cp.get("pixel_y") is not None:
+                x, y = int(cp["pixel_x"]), int(cp["pixel_y"])
+            else:
+                continue
+
+            pin_type = cp.get("pin_type", "poi_manual")
+            content = cp.get("content") or {}
+            style = cp.get("style_overrides") or {}
+            # Merge non-null style_overrides into the theme label_style. The
+            # operator's colour override (e.g. "color":"#3B82F6") becomes
+            # text_color/fill via the theme schema, so we keep the merge
+            # narrow: any explicit override wins, missing keys inherit.
+            merged_style = {**label_style, **{k: v for k, v in style.items() if v is not None}}
+            if pin_type == "text":
+                text = content.get("text") or content.get("label") or ""
+                if text:
+                    # Pixel-anchored text labels render WITHOUT an anchor line
+                    # (they're stuck to a point on the frame, not floating
+                    # above a feature). Pass an anchor_style with width_px=0
+                    # AND end_marker.shape='none' so _draw_anchor_line still
+                    # runs but produces no visible artifact.
+                    no_anchor_style = {
+                        "shape": "thin",
+                        "width_px": 0,
+                        "color": merged_style.get("fill", "#FFFFFF"),
+                        "end_marker": {"shape": "none"},
+                    }
+                    canvas = _draw_poi_label(
+                        canvas, x, y, text, merged_style, no_anchor_style, None, w, h,
+                    )
+            elif pin_type == "poi_manual":
+                label = content.get("label") or content.get("name") or content.get("text") or ""
+                if label:
+                    canvas = _draw_poi_label(
+                        canvas, x, y, label, merged_style, anchor_style, None, w, h,
+                    )
+            else:
+                # 'line' and 'measurement' pin types are reserved for Wave 2;
+                # log + skip so the renderer doesn't crash on early adopter
+                # data.
+                print(f"[render] custom pin type '{pin_type}' not yet supported, skipping")
+        except Exception as e:
+            print(f"[render] custom pin {cp.get('pin_type')} failed: {e}")
+            continue
+
     # ───── Property pin ─────
     # Master toggle: skip the entire property-pin block when property_pin.enabled is false.
     # Defaults to True so existing themes without the field still render the pin.

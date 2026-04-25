@@ -25,7 +25,7 @@
  * Save / Cancel both navigate back to /ProjectDetails?id=... &tab=drones
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
@@ -33,7 +33,47 @@ import { Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import PinEditor from "@/components/drone/PinEditor";
-import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
+import { enqueueFetch } from "@/utils/mediaPerf";
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+// ── Isolated Pin Editor blob cache ─────────────────────────────────────────
+// PinEditor's `previousImageUrlRef` cleanup revokes the blob URL it was given
+// when it unmounts. If we fed it a URL stored in SHARED_THUMB_CACHE, the
+// global cache would still hold the now-revoked URL — opening the Pin Editor
+// would silently break thumbnails app-wide (renders subtab, shots subtab,
+// swimlane) until LRU eviction.
+//
+// Solution: every Pin Editor mount owns its own cache. The page revokes any
+// blobs it created on unmount, and the swimlane's SHARED_THUMB_CACHE is
+// never touched.
+async function _pinEditorFetchProxy(path) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${SUPABASE_ANON}`,
+        },
+        body: JSON.stringify({ action: "proxy", file_path: path }),
+        signal: controller.signal,
+      },
+    );
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob.type?.startsWith("image/") && blob.size < 200) return null;
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 
 // Pick the "best" render for a given shot — prefer most-final column.
@@ -59,7 +99,7 @@ function pickBestRender(renders, shotId) {
 // blob into a `blob:` URL — which `<img src>` accepts. We do the same here.
 
 export default function DronePinEditor() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const projectId = searchParams.get("project");
@@ -149,6 +189,28 @@ export default function DronePinEditor() {
       });
       // invoke wraps the function's JSON body in `.data` to mirror Base44.
       return resp?.data || null;
+    },
+    enabled: Boolean(projectId),
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  // Project's drone_pois_cache row — feeds the "Detected POIs (AI)" virtual
+  // layer in the editor. Most recent non-expired row wins; if there is none
+  // we fall back to the most recently fetched (operator can refresh via
+  // drone-pois force-refresh from the swimlane).
+  const cachedPoisQ = useQuery({
+    queryKey: ["drone_pois_cache", "by-project", projectId],
+    queryFn: async () => {
+      if (!projectId) return [];
+      const rows = await api.entities.DronePoisCache.filter(
+        { project_id: projectId },
+        "-fetched_at",
+        1,
+      );
+      const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+      const pois = Array.isArray(row?.pois) ? row.pois : [];
+      return pois;
     },
     enabled: Boolean(projectId),
     staleTime: 60_000,
@@ -258,8 +320,15 @@ export default function DronePinEditor() {
 
   // Fetch as authenticated POST → blob URL (same pattern as DroneThumbnail).
   // <img src="…/?stream=…"> is 401'd by Supabase's gateway because <img>
-  // requests don't carry an Authorization header. mediaPerf.fetchMediaProxy
-  // does the POST and returns a `blob:` URL — which <img> happily renders.
+  // requests don't carry an Authorization header. We POST and turn the blob
+  // into an object URL.
+  //
+  // Important: write into an ISOLATED per-mount cache, not SHARED_THUMB_CACHE.
+  // PinEditor's previousImageUrlRef cleanup revokes URLs we hand it on shot
+  // change / unmount; if those URLs were owned by SHARED_THUMB_CACHE every
+  // other consumer would see broken images.
+  const pinEditorCacheRef = useRef(null);
+  if (pinEditorCacheRef.current === null) pinEditorCacheRef.current = new Map();
   const [imageUrl, setImageUrl] = useState(null);
   const [imageError, setImageError] = useState(null);
   useEffect(() => {
@@ -269,13 +338,31 @@ export default function DronePinEditor() {
       setImageUrl(null);
       return;
     }
-    enqueueFetch(() => fetchMediaProxy(SHARED_THUMB_CACHE, imageDropboxPath, "proxy"))
+    const cache = pinEditorCacheRef.current;
+    // Same-shot revisits: serve cached blob directly (avoid double-fetch).
+    if (cache.has(imageDropboxPath)) {
+      setImageUrl(cache.get(imageDropboxPath));
+      return;
+    }
+    enqueueFetch(() => _pinEditorFetchProxy(imageDropboxPath))
       .then((url) => {
-        if (cancelled) return;
+        if (cancelled) {
+          // We arrived after unmount or path-change — revoke the stray blob
+          // we just minted so it doesn't leak.
+          if (url && url.startsWith("blob:")) {
+            try {
+              URL.revokeObjectURL(url);
+            } catch {
+              /* ignore */
+            }
+          }
+          return;
+        }
         if (!url) {
           setImageError("Image not available — render may still be processing.");
           setImageUrl(null);
         } else {
+          cache.set(imageDropboxPath, url);
           setImageUrl(url);
         }
       })
@@ -288,6 +375,25 @@ export default function DronePinEditor() {
       cancelled = true;
     };
   }, [imageDropboxPath]);
+
+  // Unmount: revoke every blob this page created. PinEditor also revokes the
+  // current URL via its own cleanup — that's fine, double-revoke is a no-op.
+  useEffect(() => {
+    return () => {
+      const cache = pinEditorCacheRef.current;
+      if (!cache) return;
+      for (const url of cache.values()) {
+        if (typeof url === "string" && url.startsWith("blob:")) {
+          try {
+            URL.revokeObjectURL(url);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      cache.clear();
+    };
+  }, []);
 
   const projectCoord = useMemo(() => {
     const p = projectQ.data;
@@ -403,6 +509,39 @@ export default function DronePinEditor() {
   // most users. Revert to "only block on hard error". (Audit #11 softened.)
   const themeError = themeQ.error || null;
 
+  // Shot-strip click → update the URL `?shot=` so currentShotId / imageUrl
+  // re-derive against the new shot. Without this, clicking a thumbnail
+  // updated PinEditor's local activeShotId but the source image (driven by
+  // imageDropboxPath via currentShotId via the URL) never swapped — the
+  // canvas stayed locked on the first opened shot.
+  const handleShotChange = useCallback(
+    (newShotId) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("shot", newShotId);
+          // Clear the explicit ?render= pin so picking a new shot doesn't
+          // try to load the previous render's image on the new shot.
+          next.delete("render");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  // After save: refetch custom pins + renders so the editor reflects the
+  // server's authoritative state (incl. dbId for any newly-created rows).
+  const handleAfterSave = useCallback(() => {
+    queryClient.invalidateQueries({
+      queryKey: ["drone_custom_pins", "by-shoot", shootId],
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["drone_renders", "by-shoot", shootId],
+    });
+  }, [queryClient, shootId]);
+
   return (
     <PinEditor
       shoot={shootQ.data}
@@ -411,10 +550,13 @@ export default function DronePinEditor() {
       theme={themeQ.data}
       themeError={themeError}
       customPins={customPinsQ.data || []}
+      cachedPois={Array.isArray(cachedPoisQ.data) ? cachedPoisQ.data : []}
       projectCoord={projectCoord}
       imageUrl={imageUrl}
       imageError={imageError}
       poseAvailable={poseAvailable}
+      onShotChange={handleShotChange}
+      onAfterSave={handleAfterSave}
       onSave={goBackToProject}
       onCancel={goBackToProject}
     />
