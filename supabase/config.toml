@@ -799,3 +799,56 @@ verify_jwt = false
 
 [functions.writeCalendarEventToGoogle]
 verify_jwt = false
+
+# Drone module + Dropbox integration. All do their own auth (HMAC for the
+# webhook, getUserFromReq for the rest). Same ES256/JWT-algo reason as above.
+[functions.dropbox-webhook]
+verify_jwt = false
+
+[functions.dropbox-reconcile]
+verify_jwt = false
+
+[functions.dropboxTestHelper]
+verify_jwt = false
+
+[functions.drone-ingest]
+verify_jwt = false
+
+[functions.drone-render]
+verify_jwt = false
+
+[functions.drone-render-approve]
+verify_jwt = false
+
+[functions.drone-render-preview]
+verify_jwt = false
+
+[functions.drone-job-dispatcher]
+verify_jwt = false
+
+[functions.drone-shot-urls]
+verify_jwt = false
+
+[functions.drone-pois]
+verify_jwt = false
+
+[functions.drone-cadastral]
+verify_jwt = false
+
+[functions.drone-pins-save]
+verify_jwt = false
+
+[functions.drone-migrate-paths]
+verify_jwt = false
+
+[functions.getDroneTheme]
+verify_jwt = false
+
+[functions.setDroneTheme]
+verify_jwt = false
+
+[functions.provisionProjectFolders]
+verify_jwt = false
+
+[functions.backfillProjectFolders]
+verify_jwt = false
