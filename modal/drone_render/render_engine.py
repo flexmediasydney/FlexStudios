@@ -61,6 +61,36 @@ DEFAULT_FX_MM, DEFAULT_FY_MM = 12.29, 12.29  # focal length mm (M3P wide @ 24mm 
 DEFAULT_SENSOR_W_MM, DEFAULT_SENSOR_H_MM = 17.3, 13.0
 
 
+def _safe_float(
+    value, default: float, *, allow_zero: bool = False, allow_neg: bool = False
+) -> float:
+    """Coerce `value` to a finite float, falling back to `default`.
+
+    The previous `float(intr.get(k) or DEFAULT)` pattern is broken for two
+    reasons (QC2 finding #3):
+      1. `bool(NaN) is True`, so `float(NaN) or DEFAULT` returns NaN.
+      2. `bool(0.0) is False`, so a legitimate zero is silently swapped for
+         the default. (For optional principal point `cx`, `0` is invalid
+         anyway, but for things like `hue_shift_degrees` it isn't.)
+
+    This helper:
+      - returns `default` for None / non-numeric / NaN / inf
+      - returns `default` when the value is non-positive (unless allow_zero/
+        allow_neg explicitly permits it).
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if not math.isfinite(f):
+        return float(default)
+    if not allow_neg and f < 0:
+        return float(default)
+    if not allow_zero and f == 0:
+        return float(default)
+    return f
+
+
 def _resolve_intrinsics(scene: dict, image_w: int, image_h: int) -> tuple:
     """Pick camera intrinsics for projection.
 
@@ -79,12 +109,17 @@ def _resolve_intrinsics(scene: dict, image_w: int, image_h: int) -> tuple:
     """
     intr = (scene or {}).get("camera_intrinsics") or {}
 
-    intr_w = float(intr.get("width") or DEFAULT_W)
-    intr_h = float(intr.get("height") or DEFAULT_H)
-    fx_mm = float(intr.get("fx_mm") or DEFAULT_FX_MM)
-    fy_mm = float(intr.get("fy_mm") or fx_mm)
-    sensor_w_mm = float(intr.get("sensor_w_mm") or DEFAULT_SENSOR_W_MM)
-    sensor_h_mm = float(intr.get("sensor_h_mm") or DEFAULT_SENSOR_H_MM)
+    # Validate every numeric field via _safe_float — this defends against:
+    #   - JSON serialised NaN ("NaN" → float('nan') → bool=True passes `or`)
+    #   - explicit zero or negative values (focal length 0 → div-by-zero
+    #     downstream; sensor width 0 → infinite fx_px_intr)
+    #   - strings, None, missing keys
+    intr_w = _safe_float(intr.get("width"), DEFAULT_W)
+    intr_h = _safe_float(intr.get("height"), DEFAULT_H)
+    fx_mm = _safe_float(intr.get("fx_mm"), DEFAULT_FX_MM)
+    fy_mm = _safe_float(intr.get("fy_mm"), fx_mm)
+    sensor_w_mm = _safe_float(intr.get("sensor_w_mm"), DEFAULT_SENSOR_W_MM)
+    sensor_h_mm = _safe_float(intr.get("sensor_h_mm"), DEFAULT_SENSOR_H_MM)
 
     # Convert to focal-length-in-pixels at the *intrinsic* image size, then
     # rescale to the actual annotated image size (so downstream resampling
@@ -92,21 +127,27 @@ def _resolve_intrinsics(scene: dict, image_w: int, image_h: int) -> tuple:
     fx_px_intr = (fx_mm / sensor_w_mm) * intr_w
     fy_px_intr = (fy_mm / sensor_h_mm) * intr_h
 
-    sx = image_w / intr_w
-    sy = image_h / intr_h
+    # image_w / image_h come from cv2.imdecode shape — should always be
+    # positive and finite, but cheap to defend.
+    image_w_safe = _safe_float(image_w, DEFAULT_W)
+    image_h_safe = _safe_float(image_h, DEFAULT_H)
+    sx = image_w_safe / intr_w
+    sy = image_h_safe / intr_h
     fx_px = fx_px_intr * sx
     fy_px = fy_px_intr * sy
 
-    cx_px = intr.get("cx_px")
-    cy_px = intr.get("cy_px")
-    if cx_px is None:
-        cx_px = image_w / 2.0
+    # Principal point: 0 is invalid (centre is image_w/2, not 0). Negative
+    # values are also nonsense. _safe_float swaps both for default.
+    cx_raw = intr.get("cx_px")
+    cy_raw = intr.get("cy_px")
+    if cx_raw is None:
+        cx_px = image_w_safe / 2.0
     else:
-        cx_px = float(cx_px) * sx
-    if cy_px is None:
-        cy_px = image_h / 2.0
+        cx_px = _safe_float(cx_raw, image_w_safe / 2.0) * sx
+    if cy_raw is None:
+        cy_px = image_h_safe / 2.0
     else:
-        cy_px = float(cy_px) * sy
+        cy_px = _safe_float(cy_raw, image_h_safe / 2.0) * sy
 
     return (fx_px, fy_px, cx_px, cy_px)
 
@@ -253,10 +294,27 @@ def _gps_to_px(tlat, tlon, dlat, dlon, alt, heading, pitch, w, h, intrinsics=Non
 
     `intrinsics`: optional (fx_px, fy_px, cx_px, cy_px) tuple. When None we
     fall back to the legacy default Mavic 3 Pro intrinsics scaled to (w, h).
+
+    Defensive guards:
+      - Antimeridian wrap: when the drone and target straddle ±180°, naive
+        (tlon - dlon) yields a ~360° (≈40 000 km) error. Normalise the
+        difference into (-180, 180] so the projection stays correct anywhere
+        on the globe (was QC2 finding #1 — Sydney + Auckland test pair was
+        producing dE ≈ −40 000 000 m).
+      - Pole singularity: cos(89.999°) ≈ 1.7e-5, so dE explodes to ~1.8e16 m.
+        Clamp dlat to ±89.9° to keep the equirectangular approximation finite
+        (anything closer to the poles than that has worse problems than this
+        warning).
     """
-    cos_lat = math.cos(math.radians(dlat))
-    dE = (tlon - dlon) * 111319 * cos_lat
-    dN = (tlat - dlat) * 111319
+    if dlat > 89.9 or dlat < -89.9:
+        print(f"[_gps_to_px] WARN drone lat near pole ({dlat:.4f}); clamping to ±89.9 to avoid singularity")
+    dlat_clamped = max(-89.9, min(89.9, dlat))
+    cos_lat = math.cos(math.radians(dlat_clamped))
+    # Antimeridian-safe longitude difference. Without normalisation a -179.9 →
+    # 179.9 wrap reads as ~360°, mis-projecting POIs by ~40 000 km.
+    dlon_diff = ((tlon - dlon + 540.0) % 360.0) - 180.0
+    dE = dlon_diff * 111319 * cos_lat
+    dN = (tlat - dlat_clamped) * 111319
     dU = -alt
     hr, pr = math.radians(heading), math.radians(pitch)
     cam_z = (
@@ -282,6 +340,26 @@ def _gps_to_px(tlat, tlon, dlat, dlon, alt, heading, pitch, w, h, intrinsics=Non
     else:
         fx, fy, cx, cy = intrinsics
     return (fx * X_c / Z_c + cx, fy * Y_c / Z_c + cy)
+
+
+def _render_template(template: str, scene: dict) -> str:
+    """Substitute scene fields into a `{field}`-style template.
+
+    Used by `_draw_address_overlay` (boundary block) AND `pill_with_address`
+    (property pin) so both layers render the operator's typed address rather
+    than the literal "{address}" string. (QC2 finding #16.)
+
+    Supports: {address}, {street_number}, {street_name}, {suburb} (best-effort
+    — if the scene doesn't carry the key the placeholder is replaced with "").
+    """
+    if not template or not isinstance(template, str):
+        return template or ""
+    out = template
+    out = out.replace("{address}", str(scene.get("address") or ""))
+    out = out.replace("{street_number}", str(scene.get("street_number") or ""))
+    out = out.replace("{street_name}", str(scene.get("street_name") or ""))
+    out = out.replace("{suburb}", str(scene.get("suburb") or ""))
+    return out
 
 
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
@@ -529,8 +607,16 @@ def _draw_poi_label(
     draw.text((text_x - bbox_main[0], text_y - bbox_main[1]), text, font=font_main, fill=text_rgb + (255,))
 
     if secondary_text:
+        # Bug #18 — schema is `secondary_text.color` (nested) but historic
+        # render code only read `secondary_text_color` (flat). Read the
+        # nested form first so themes saved via the editor (which only
+        # writes the nested key) display correctly. Falls back through
+        # the flat form, then text_color, then black.
+        nested_sec_color = (label_style.get("secondary_text") or {}).get("color")
         sec_rgb = _hex_to_rgb(
-            label_style.get("secondary_text_color") or label_style.get("text_color", "#000000")
+            nested_sec_color
+            or label_style.get("secondary_text_color")
+            or label_style.get("text_color", "#000000")
         ) or (0, 0, 0)
         bbox_sec = font_sec.getbbox(secondary_text.upper())
         draw.text(
@@ -633,17 +719,59 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
                 )
 
     elif mode == "pill_with_address":
-        t = content.get("text", "ADDRESS")
+        # Substitute {address} / {street_number} / {street_name} like
+        # _draw_address_overlay does. Without this, themes that ship the
+        # template "{address}" had the literal string drawn on the pill.
+        # (QC2 finding #16.)
+        raw_text = content.get("text", "ADDRESS")
+        scene_for_pill = pin_style.get("__scene__") or {}
+        t = _render_template(raw_text, scene_for_pill)
+        if not t:
+            t = raw_text  # last-ditch fallback when scene didn't carry the address
         fs = int(content.get("text_size_px", 40))
         font = _get_font(_resolve_font_family(content.get("text_font"), bold=True), fs)
         tw, th = _measure_text(t, font)
-        pad = 22
+
+        # Optional size_px-proportional geometry. Default OFF (size_scale_legacy
+        # = true) so existing themes' visual output is byte-identical. New
+        # themes opt in by setting `size_scale_legacy=false` in pin_style;
+        # then pad / tip-offset / circle radius scale with size/120 so the
+        # pin actually responds to size_px on small variants.
+        # (QC2 finding #14 — without scaling the pill ignores size_px entirely.)
+        legacy_scale = bool(pin_style.get("size_scale_legacy", True))
+        if legacy_scale:
+            pad = 22
+            tip_offset = 40
+            tip_circle_r = 8
+        else:
+            scale = max(0.25, min(4.0, size / 120.0))
+            pad = max(8, int(round(22 * scale)))
+            tip_offset = max(12, int(round(40 * scale)))
+            tip_circle_r = max(3, int(round(8 * scale)))
         bw = tw + pad * 2
         bh = th + pad * 2
         bx1 = x - bw // 2
         bx2 = x + bw // 2
-        by2 = y - 40
+        by2 = y - tip_offset
         by1 = by2 - bh
+
+        # Clamp into frame (matching _draw_poi_label clamp logic — QC2 #17).
+        # If the pill would clip the right edge, push it left; if the top is
+        # cropped, drop the pill below the target instead of off-screen.
+        if bx1 < 20:
+            bx1 = 20
+            bx2 = bx1 + bw
+        if bx2 > w - 20:
+            bx2 = w - 20
+            bx1 = bx2 - bw
+        if by1 < 20:
+            # Flip below the target (mirroring _draw_poi_label flip-below)
+            by1 = y + tip_offset
+            by2 = by1 + bh
+            if by2 > h - 20:
+                by2 = h - 20
+                by1 = by2 - bh
+
         cv2.rectangle(canvas_bgr, (bx1, by1), (bx2, by2), fill, -1, cv2.LINE_AA)
         if sw > 0:
             cv2.rectangle(canvas_bgr, (bx1, by1), (bx2, by2), stroke, sw, cv2.LINE_AA)
@@ -659,18 +787,24 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
         )
         canvas_bgr = _composite_overlay_onto_bgr(canvas_bgr, overlay)
 
-        cv2.circle(canvas_bgr, (x, y), 8, fill, -1, cv2.LINE_AA)
+        cv2.circle(canvas_bgr, (x, y), tip_circle_r, fill, -1, cv2.LINE_AA)
         if sw > 0:
-            cv2.circle(canvas_bgr, (x, y), 8, stroke, max(2, sw), cv2.LINE_AA)
-        cv2.line(canvas_bgr, (x, by2), (x, y - 8), fill, 2, cv2.LINE_AA)
+            cv2.circle(canvas_bgr, (x, y), tip_circle_r, stroke, max(2, sw), cv2.LINE_AA)
+        # Connector line: from pill bottom (or top, if flipped) to the
+        # target circle. Pick the side closest to the target.
+        if by2 < y:
+            cv2.line(canvas_bgr, (x, by2), (x, y - tip_circle_r), fill, max(2, tip_circle_r // 4), cv2.LINE_AA)
+        else:
+            cv2.line(canvas_bgr, (x, by1), (x, y + tip_circle_r), fill, max(2, tip_circle_r // 4), cv2.LINE_AA)
 
     elif mode == "custom_svg":
-        # Rasterise an SVG. content_b64 is strongly preferred (no network
-        # call); content.url is a last-resort path that's restricted to a
-        # small allowlist of https hosts to defend against SSRF — otherwise
-        # urllib would happily fetch file:// or 169.254.169.254 (AWS IMDS).
-        # Rejected/failed URL fetches render a red 'X' placeholder rather
-        # than crashing the whole render.
+        # Rasterise an SVG. content_b64 is the ONLY supported source path —
+        # the previous content.url fallback opened an 8-second blocking HTTP
+        # fetch on every render, made the worker dependent on whichever CDN
+        # the theme author cribbed the SVG from, and (despite the SSRF
+        # allowlist) was a security-sensitive surface area we don't need.
+        # Rejected/missing sources render a red 'X' placeholder rather than
+        # crashing the whole render. (QC2 finding #18.)
         target_w = max(8, int(size))
         svg_bytes: Optional[bytes] = None
         placeholder_reason: Optional[str] = None
@@ -683,26 +817,13 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
             except Exception as e:
                 placeholder_reason = f"invalid content_b64 ({e})"
         elif content.get("url"):
-            url = content["url"]
-            if not _custom_svg_url_is_safe(url):
-                placeholder_reason = (
-                    f"url rejected by allowlist (must be https + on "
-                    f"flexmedia.sydney/flexstudios.app/cdn.flexmedia.sydney/"
-                    f"*.dropboxusercontent.com): {url[:120]}"
-                )
-            else:
-                try:
-                    import urllib.request
-                    req = urllib.request.Request(
-                        url,
-                        headers={"User-Agent": "flexstudios-drone-render/1.0"},
-                    )
-                    with urllib.request.urlopen(req, timeout=8) as r:
-                        svg_bytes = r.read()
-                except Exception as e:
-                    placeholder_reason = f"url fetch failed ({e})"
+            placeholder_reason = (
+                "custom_svg.url support has been removed — embed the SVG via "
+                "content_b64 (base64) instead. URL-fetch was a synchronous 8 s "
+                "blocking call inside the renderer."
+            )
         else:
-            placeholder_reason = "no svg source provided"
+            placeholder_reason = "no svg source provided (set content_b64)"
 
         if placeholder_reason or not svg_bytes:
             print(f"custom_svg: {placeholder_reason or 'empty svg bytes'}; rendering placeholder")
@@ -752,40 +873,56 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
         canvas_bgr = _composite_overlay_onto_bgr(canvas_bgr, overlay)
 
     elif mode == "line_up_with_house_icon":
-        line_top_y = y - 260
+        # Scale the connector length from a hardcoded 260 px (which clipped on
+        # 1080-tall variants) to size_px-proportional, then clamp so the icon
+        # box never sits more than h/4 from the target. (QC2 #15 + #17.)
+        line_offset = max(120, int(size * 2.2))
+        line_top_y = y - line_offset
+        # Clamp icon box into frame: keep at least h//4 between target and
+        # icon centre when room is tight, never let the icon clip the top.
+        box_size = max(40, int(size * 0.66))
+        if line_top_y - box_size // 2 < 20:
+            line_top_y = max(20 + box_size // 2, y - h // 4)
         color = fill
-        cv2.line(canvas_bgr, (x, y), (x, line_top_y + 40), color, 3, cv2.LINE_AA)
-        cv2.circle(canvas_bgr, (x, y), 8, color, -1, cv2.LINE_AA)
-        box_size = 80
+        cv2.line(canvas_bgr, (x, y), (x, line_top_y + box_size // 2), color, 3, cv2.LINE_AA)
+        cv2.circle(canvas_bgr, (x, y), max(4, box_size // 10), color, -1, cv2.LINE_AA)
         bx1 = x - box_size // 2
         bx2 = x + box_size // 2
         by1 = line_top_y - box_size // 2
         by2 = line_top_y + box_size // 2
+        # X-clamp: keep the icon box on-canvas (mirror _draw_poi_label).
+        if bx1 < 20:
+            bx1 = 20
+            bx2 = bx1 + box_size
+        if bx2 > w - 20:
+            bx2 = w - 20
+            bx1 = bx2 - box_size
         cv2.rectangle(canvas_bgr, (bx1, by1), (bx2, by2), fill, -1, cv2.LINE_AA)
         if sw > 0:
             cv2.rectangle(canvas_bgr, (bx1, by1), (bx2, by2), stroke, sw, cv2.LINE_AA)
         icon_color = _hex_to_bgr(content.get("icon_color", "#000000"))
-        icr = 24
+        icr = max(8, box_size // 3)
         cy_ic = (by1 + by2) // 2
+        cx_ic = (bx1 + bx2) // 2
         roof = np.array(
             [
-                (x - icr - 2, cy_ic - icr // 3 + 2),
-                (x + icr + 2, cy_ic - icr // 3 + 2),
-                (x, cy_ic - icr),
+                (cx_ic - icr - 2, cy_ic - icr // 3 + 2),
+                (cx_ic + icr + 2, cy_ic - icr // 3 + 2),
+                (cx_ic, cy_ic - icr),
             ],
             dtype=np.int32,
         )
         cv2.fillConvexPoly(canvas_bgr, roof, icon_color, cv2.LINE_AA)
         cv2.rectangle(
             canvas_bgr,
-            (x - icr + 2, cy_ic - icr // 3 + 2),
-            (x + icr - 2, cy_ic + icr - 2),
+            (cx_ic - icr + 2, cy_ic - icr // 3 + 2),
+            (cx_ic + icr - 2, cy_ic + icr - 2),
             icon_color,
             -1,
             cv2.LINE_AA,
         )
-        dw = 8
-        cv2.rectangle(canvas_bgr, (x - dw, cy_ic + 2), (x + dw, cy_ic + icr - 2), fill, -1)
+        dw = max(3, icr // 3)
+        cv2.rectangle(canvas_bgr, (cx_ic - dw, cy_ic + 2), (cx_ic + dw, cy_ic + icr - 2), fill, -1)
 
     return canvas_bgr
 
@@ -794,22 +931,131 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
 # Boundary layer pass
 # ─────────────────────────────────────────────────────────────────────────────
 def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[np.ndarray]:
-    """Project a list of [lat, lon] tuples to pixel coords. Returns Nx2 int32 or None."""
-    pts = []
-    for lat, lon in polygon_latlon:
-        px = _gps_to_px(
-            lat, lon, scene["lat"], scene["lon"], scene["alt"],
-            scene["yaw"], scene["pitch"], w, h,
-            intrinsics=intrinsics,
+    """Project a list of [lat, lon] tuples to pixel coords. Returns Nx2 int32 or None.
+
+    Performs Sutherland-Hodgman clipping against the camera near-plane (Z_c > 0)
+    in CAMERA SPACE before projecting to pixels. The previous behaviour
+    (return None if any single vertex was behind the camera) caused the entire
+    boundary to disappear when the drone was tilted such that one corner of
+    the polygon fell behind the focal plane — even though the visible portion
+    of the boundary covers most of the frame. (QC2 finding #2.)
+
+    Worst case: a triangle whose 1 visible vertex is in front of the camera
+    is clipped to a triangle (one vertex + two edge intersections).
+    """
+    if not polygon_latlon:
+        return None
+
+    # Resolve intrinsics + drone pose once (per-vertex re-derivation matched
+    # the legacy _gps_to_px signature, but for the clip we need the underlying
+    # camera-space coords).
+    dlat = scene["lat"]
+    dlon = scene["lon"]
+    if dlat > 89.9 or dlat < -89.9:
+        print(f"[_project_polygon] WARN drone lat near pole ({dlat:.4f}); clamping")
+    dlat_clamped = max(-89.9, min(89.9, dlat))
+    cos_lat = math.cos(math.radians(dlat_clamped))
+    alt = scene["alt"]
+    hr = math.radians(scene["yaw"])
+    pr = math.radians(scene["pitch"])
+    cam_z = (math.cos(pr) * math.sin(hr), math.cos(pr) * math.cos(hr), math.sin(pr))
+    cam_x = (math.cos(hr), -math.sin(hr), 0.0)
+    cam_y = (
+        cam_z[1] * cam_x[2] - cam_z[2] * cam_x[1],
+        cam_z[2] * cam_x[0] - cam_z[0] * cam_x[2],
+        cam_z[0] * cam_x[1] - cam_z[1] * cam_x[0],
+    )
+    if intrinsics is None:
+        fx = (DEFAULT_FX_MM / DEFAULT_SENSOR_W_MM) * w
+        fy = (DEFAULT_FY_MM / DEFAULT_SENSOR_H_MM) * h
+        cx, cy = w / 2, h / 2
+    else:
+        fx, fy, cx, cy = intrinsics
+
+    def latlon_to_cam(lat, lon):
+        # Antimeridian-safe lon difference (mirrors _gps_to_px).
+        dlon_diff = ((lon - dlon + 540.0) % 360.0) - 180.0
+        dE = dlon_diff * 111319 * cos_lat
+        dN = (lat - dlat_clamped) * 111319
+        dU = -alt
+        Xc = dE * cam_x[0] + dN * cam_x[1] + dU * cam_x[2]
+        Yc = dE * cam_y[0] + dN * cam_y[1] + dU * cam_y[2]
+        Zc = dE * cam_z[0] + dN * cam_z[1] + dU * cam_z[2]
+        return (Xc, Yc, Zc)
+
+    cam_pts = [latlon_to_cam(lat, lon) for lat, lon in polygon_latlon]
+
+    # Sutherland-Hodgman: keep vertices with Z > Z_NEAR; for an edge crossing
+    # the plane, append the interpolated intersection.
+    Z_NEAR = 0.1  # 10 cm in front of the camera; > 0 to avoid div-by-zero
+    n = len(cam_pts)
+    if n == 0:
+        return None
+    output = []
+    behind_count = 0
+    for i in range(n):
+        cur = cam_pts[i]
+        prev = cam_pts[(i - 1) % n]
+        cur_in = cur[2] > Z_NEAR
+        prev_in = prev[2] > Z_NEAR
+        if cur_in:
+            if not prev_in:
+                # Entering — append intersection of (prev → cur) with z=Z_NEAR
+                t = (Z_NEAR - prev[2]) / (cur[2] - prev[2])
+                ix = prev[0] + t * (cur[0] - prev[0])
+                iy = prev[1] + t * (cur[1] - prev[1])
+                output.append((ix, iy, Z_NEAR))
+            output.append(cur)
+        else:
+            behind_count += 1
+            if prev_in:
+                # Leaving — append intersection of (prev → cur) with z=Z_NEAR
+                t = (Z_NEAR - prev[2]) / (cur[2] - prev[2])
+                ix = prev[0] + t * (cur[0] - prev[0])
+                iy = prev[1] + t * (cur[1] - prev[1])
+                output.append((ix, iy, Z_NEAR))
+
+    if behind_count > 0:
+        print(
+            f"[_project_polygon] near-plane clip: {behind_count}/{n} vertices "
+            f"behind camera; clipped polygon has {len(output)} verts"
         )
-        if px is None:
-            return None
-        pts.append(px)
+
+    if len(output) < 3:
+        # Less than a triangle remaining — nothing to draw.
+        return None
+
+    pts = []
+    for Xc, Yc, Zc in output:
+        if Zc <= 0:
+            continue
+        pts.append((fx * Xc / Zc + cx, fy * Yc / Zc + cy))
+
+    if len(pts) < 3:
+        return None
     return np.array(pts, dtype=np.int32)
 
 
 def _apply_exterior_treatment(canvas_bgr: np.ndarray, polygon_px: np.ndarray, treatment: dict) -> np.ndarray:
-    """Blur/darken/desaturate/hue-shift everything OUTSIDE the polygon."""
+    """Blur/darken/desaturate/hue-shift everything OUTSIDE the polygon.
+
+    Early-returns the original canvas when EVERY treatment is a no-op
+    (blur disabled OR strength 0; all factors == 1.0; hue_shift == 0).
+    Without this guard, themes that ship with the block present-but-
+    inactive still trigger 80–150 ms per render of canvas copies + mask
+    fills + per-pixel writes for zero visual change. (QC2 finding #7.)
+    """
+    blur_strength = int(treatment.get("blur_strength_px", 0))
+    blur_active = bool(treatment.get("blur_enabled", False)) and blur_strength > 0
+    darken = float(treatment.get("darken_factor", 1.0))
+    sat = float(treatment.get("saturation_factor", 1.0))
+    light = float(treatment.get("lightness_factor", 1.0))
+    hue_shift = int(treatment.get("hue_shift_degrees", 0))
+    color_active = (darken != 1.0) or (sat != 1.0) or (light != 1.0) or (hue_shift != 0)
+
+    if not blur_active and not color_active:
+        return canvas_bgr  # no-op short-circuit
+
     h, w = canvas_bgr.shape[:2]
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.fillPoly(mask, [polygon_px], 255)
@@ -817,17 +1063,11 @@ def _apply_exterior_treatment(canvas_bgr: np.ndarray, polygon_px: np.ndarray, tr
 
     treated = canvas_bgr.copy()
 
-    blur_strength = int(treatment.get("blur_strength_px", 0))
-    if treatment.get("blur_enabled", False) and blur_strength > 0:
+    if blur_active:
         k = blur_strength | 1  # must be odd
         treated = cv2.GaussianBlur(treated, (k, k), 0)
 
-    darken = float(treatment.get("darken_factor", 1.0))
-    sat = float(treatment.get("saturation_factor", 1.0))
-    light = float(treatment.get("lightness_factor", 1.0))
-    hue_shift = int(treatment.get("hue_shift_degrees", 0))
-
-    if darken != 1.0 or sat != 1.0 or light != 1.0 or hue_shift != 0:
+    if color_active:
         hsv = cv2.cvtColor(treated, cv2.COLOR_BGR2HSV).astype(np.float32)
         if hue_shift != 0:
             # OpenCV hue is 0..179 (180 = full circle)
@@ -957,19 +1197,20 @@ def _draw_side_measurements(
         anchor_x = tx - tw_px // 2 - bbox[0]
         anchor_y = ty - th_px // 2 - bbox[1]
 
-        # Outline: render text in outline color shifted N/E/S/W and corners
+        # Single draw.text call with stroke_width/stroke_fill (PIL ≥9.2.0).
+        # The previous N×N loop was 49 calls per side at outline_w=3, so a
+        # 4-side polygon = 196 PIL text renders. (QC2 finding #13.)
         if outline_w > 0:
-            for dx in range(-outline_w, outline_w + 1):
-                for dy in range(-outline_w, outline_w + 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    draw.text(
-                        (anchor_x + dx, anchor_y + dy),
-                        label,
-                        font=font,
-                        fill=outline_rgb + (255,),
-                    )
-        draw.text((anchor_x, anchor_y), label, font=font, fill=text_rgb + (255,))
+            draw.text(
+                (anchor_x, anchor_y),
+                label,
+                font=font,
+                fill=text_rgb + (255,),
+                stroke_width=outline_w,
+                stroke_fill=outline_rgb + (255,),
+            )
+        else:
+            draw.text((anchor_x, anchor_y), label, font=font, fill=text_rgb + (255,))
 
     return _composite_overlay_onto_bgr(canvas_bgr, overlay)
 
@@ -1073,10 +1314,7 @@ def _draw_address_overlay(
         return canvas_bgr
 
     template = cfg.get("text_template", "{address}")
-    address = scene.get("address", "")
-    text = template.replace("{address}", address).replace(
-        "{street_number}", scene.get("street_number", "")
-    ).replace("{street_name}", scene.get("street_name", ""))
+    text = _render_template(template, scene)
 
     if not text.strip():
         return canvas_bgr
@@ -1224,43 +1462,28 @@ def list_seed_themes() -> list[str]:
     return out
 
 
-def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
+def encode_jpeg(canvas_bgr: np.ndarray, quality: int = 92) -> bytes:
+    """Encode a BGR numpy canvas as JPEG bytes.
+
+    Centralised so callers (render() + render_http variants loop) all use the
+    same flag set, and so the variants loop can encode-once instead of
+    decode-then-encode after `render()`. (QC2 finding #12.)
+    """
+    q = max(1, min(100, int(quality)))
+    ok, buf = cv2.imencode(".jpg", canvas_bgr, [cv2.IMWRITE_JPEG_QUALITY, q])
+    if not ok:
+        raise RuntimeError("Failed to encode JPEG")
+    return bytes(buf)
+
+
+def render_canvas(image_bytes: bytes, theme_config: dict, scene: dict) -> np.ndarray:
     """
     Render an annotated drone image with the given theme + scene.
+    Returns the BGR numpy canvas — caller is responsible for encoding.
 
-    Args:
-        image_bytes:  raw bytes of the drone JPG/PNG
-        theme_config: theme dict (validated against the v1 schema)
-        scene: {
-            "lat": float,           # drone shot latitude
-            "lon": float,           # drone shot longitude
-            "alt": float,           # drone altitude AGL
-            "yaw": float,           # flight yaw (heading) degrees
-            "pitch": float,         # gimbal pitch degrees (negative = down)
-            "property_lat": float,  # target property latitude
-            "property_lon": float,  # target property longitude
-            "pois": [               # optional list of POIs
-                {"name": str, "lat": float, "lon": float, "distance_m": float, "type": str}
-            ],
-            "polygon_latlon":       # optional list of [lat, lon] tuples for boundary
-                [[lat,lon], ...],
-            "address": str,         # optional, used by boundary.address_overlay
-            "street_number": str,   # optional
-            "street_name": str,     # optional
-            "camera_intrinsics": {  # optional — when present, used in place of the
-                "width": int,       # M3P defaults so non-M3P drones project correctly.
-                "height": int,      # Should be threaded through by the drone-render
-                "fx_mm": float,     # Edge Function from drone_shots.exif (#18).
-                "fy_mm": float,         # optional, defaults to fx_mm
-                "sensor_w_mm": float,   # optional, defaults to 17.3 (M3P)
-                "sensor_h_mm": float,   # optional, defaults to 13.0 (M3P)
-                "cx_px": float,         # optional principal point x (default w/2)
-                "cy_px": float,         # optional principal point y (default h/2)
-            },
-        }
-
-    Returns:
-        Rendered image bytes (JPEG, quality 92).
+    The variants pipeline calls this directly to avoid the wasted JPEG
+    encode → cv2.imdecode round trip that `render()` -> bytes -> imdecode
+    forced. (QC2 finding #12.)
     """
     _validate_theme(theme_config)
 
@@ -1298,22 +1521,49 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
         max_pins = int(theme_config.get("poi_selection", {}).get("max_pins_per_shot", 6))
         max_pins = max(0, min(50, max_pins))
         for poi in pois[:max_pins]:
-            px = _gps_to_px(
-                poi["lat"], poi["lon"],
-                scene["lat"], scene["lon"], scene["alt"],
-                scene["yaw"], scene["pitch"], w, h,
-                intrinsics=intrinsics,
-            )
-            if px is None:
+            # Wrap the entire per-POI body so one bad input (string distance,
+            # missing lat/lon, missing name, etc.) skips that POI instead of
+            # aborting the whole render. (QC2 findings #4 + #5.)
+            try:
+                # Coerce lat/lon — JSON sometimes carries them as strings when
+                # the POI source is a third-party API.
+                try:
+                    poi_lat = float(poi["lat"])
+                    poi_lon = float(poi["lon"])
+                except (KeyError, TypeError, ValueError) as e:
+                    print(f"[poi] skip {poi.get('name', '?')}: missing/invalid lat/lon ({e})")
+                    continue
+
+                px = _gps_to_px(
+                    poi_lat, poi_lon,
+                    scene["lat"], scene["lon"], scene["alt"],
+                    scene["yaw"], scene["pitch"], w, h,
+                    intrinsics=intrinsics,
+                )
+                if px is None:
+                    continue
+                if not (-200 < px[0] < w + 200 and -200 < px[1] < h + 200):
+                    continue
+                x, y = int(px[0]), int(px[1])
+                secondary = None
+                if show_dist and "distance_m" in poi:
+                    # Distance arrives as a string surprisingly often (Google
+                    # Places returns it stringly-typed in some response shapes).
+                    # Coerce + fall back to skipping the secondary label.
+                    try:
+                        d = float(poi.get("distance_m") or 0)
+                        secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
+                    except (TypeError, ValueError) as e:
+                        print(f"[poi] {poi.get('name', '?')}: bad distance_m {poi.get('distance_m')!r} ({e}); rendering without secondary")
+                        secondary = None
+                name = poi.get("name")
+                if not name or not isinstance(name, str):
+                    print(f"[poi] skip: missing/invalid name (poi={poi!r})")
+                    continue
+                canvas = _draw_poi_label(canvas, x, y, name, label_style, anchor_style, secondary, w, h)
+            except Exception as e:
+                print(f"[poi] skip {poi.get('name', '?') if isinstance(poi, dict) else '?'}: {e}")
                 continue
-            if not (-200 < px[0] < w + 200 and -200 < px[1] < h + 200):
-                continue
-            x, y = int(px[0]), int(px[1])
-            secondary = None
-            if show_dist and "distance_m" in poi:
-                d = poi["distance_m"]
-                secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
-            canvas = _draw_poi_label(canvas, x, y, poi["name"], label_style, anchor_style, secondary, w, h)
 
     # ───── Custom pins (operator-saved via Pin Editor) ─────
     # Read from drone_custom_pins (loaded by drone-render). Each entry is
@@ -1396,10 +1646,24 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
             intrinsics=intrinsics,
         )
         if pp and 0 < pp[0] < w and 0 < pp[1] < h:
-            canvas = _draw_property_pin(canvas, int(pp[0]), int(pp[1]), property_pin_cfg, w, h)
+            # Pass scene through inside pin_style under the dunder key
+            # `__scene__` so pill_with_address can substitute {address} via
+            # _render_template. We keep this as a sentinel field instead of
+            # changing _draw_property_pin's signature so older theme configs
+            # (and the test suite) keep working unchanged.
+            pin_cfg_with_scene = {**property_pin_cfg, "__scene__": scene}
+            canvas = _draw_property_pin(canvas, int(pp[0]), int(pp[1]), pin_cfg_with_scene, w, h)
 
-    # ───── Encode JPEG ─────
-    ok, buf = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])
-    if not ok:
-        raise RuntimeError("Failed to encode JPEG")
-    return bytes(buf)
+    return canvas
+
+
+def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
+    """
+    Public API: render an annotated drone image and return JPEG bytes.
+
+    For variants pipelines that need the BGR ndarray (to slice/resize without
+    a JPEG round-trip), call `render_canvas()` directly and encode each
+    variant via `encode_jpeg()`.
+    """
+    canvas = render_canvas(image_bytes, theme_config, scene)
+    return encode_jpeg(canvas, quality=92)

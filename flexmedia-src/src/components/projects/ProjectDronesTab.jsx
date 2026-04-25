@@ -171,14 +171,19 @@ export default function ProjectDronesTab({ project }) {
   });
 
   // Realtime: any DroneShoot insert/update for this project → refresh list
+  // (QC3 #1) DELETE events have evt.data === null, so the previous "if data
+  // present and project_id mismatched, skip" condition fail-opened: every
+  // drone_shoot delete app-wide invalidated this project's list. We now
+  // require evt.data to be present AND scope to our project_id; bare
+  // deletes for unrelated projects are correctly ignored. (Local deletes
+  // initiated from this UI use queryClient.invalidateQueries directly, so
+  // we don't lose the refresh path for our own actions.)
   useEffect(() => {
     if (!projectId) return;
     let active = true;
     const unsubscribe = api.entities.DroneShoot.subscribe((evt) => {
       if (!active) return;
-      // For inserts/updates, payload data has project_id; for deletes, may
-      // be missing (old.id only) — invalidate either way for safety.
-      if (evt.data && evt.data.project_id && evt.data.project_id !== projectId) return;
+      if (!evt.data?.project_id || evt.data.project_id !== projectId) return;
       queryClient.invalidateQueries({ queryKey: ["drone_shoots", projectId] });
     });
     return () => {

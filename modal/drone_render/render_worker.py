@@ -93,24 +93,20 @@ def run_render_with_variants(
     If theme has no `output_variants`, returns { "default": <full-size> }.
     """
     sys.path.insert(0, "/root/drone_render")
-    from render_engine import render  # type: ignore  # noqa: E402
+    from render_engine import render_canvas, encode_jpeg  # type: ignore  # noqa: E402
     import io
     import cv2  # type: ignore
     import numpy as np  # type: ignore
 
-    # First: render at full source resolution (gets the cleanest annotation)
-    full_bytes = render(image_bytes, theme_config, scene)
+    # Render once into a BGR ndarray; encode-on-demand per variant.
+    # (QC2 finding #12 — was previously double-encoding for every variant.)
+    full_img = render_canvas(image_bytes, theme_config, scene)
 
     variants_cfg = theme_config.get("output_variants", [])
     if not variants_cfg:
-        return {"default": full_bytes}
+        return {"default": encode_jpeg(full_img, quality=92)}
 
     out: Dict[str, bytes] = {}
-
-    arr = np.frombuffer(full_bytes, dtype=np.uint8)
-    full_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if full_img is None:
-        return {"default": full_bytes}
 
     src_h, src_w = full_img.shape[:2]
 
@@ -189,7 +185,7 @@ def run_render_with_variants(
             print(f"variant {v.get('name', '?')} failed: {e}")
 
     if not out:
-        out["default"] = full_bytes
+        out["default"] = encode_jpeg(full_img, quality=92)
     return out
 
 
@@ -268,44 +264,48 @@ def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
     if not isinstance(scene, dict):
         raise HTTPException(status_code=400, detail="scene required (dict)")
 
+    # Hard cap on b64 payload size. The Modal worker is provisioned with 2 GB
+    # memory and a 25 MB JPEG decodes to ~33 MB raw + 4× peak during the BGR
+    # → RGBA composite + variant resize. A 60 MB b64 ceiling caps decoded
+    # bytes at ~45 MB, leaving headroom for renderer working memory. (QC2 #6.)
+    MAX_BYTES_B64 = 60 * 1024 * 1024  # 60 MiB base64
+    if len(image_b64) > MAX_BYTES_B64:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"image_b64 payload {len(image_b64):,} bytes exceeds limit "
+                f"{MAX_BYTES_B64:,} — downsize the source image before sending"
+            ),
+        )
+
     try:
         image_bytes = base64.b64decode(image_b64)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"image_b64 invalid: {e}")
 
     sys.path.insert(0, "/root/drone_render")
-    from render_engine import render  # type: ignore  # noqa: E402
+    from render_engine import render_canvas, encode_jpeg  # type: ignore  # noqa: E402
 
     try:
-        # First: render at full source resolution (single high-quality pass)
-        full_bytes = render(image_bytes, theme, scene)
+        # Render once into a BGR ndarray. Variants slice the same Mat instead
+        # of decoding+re-encoding for every variant. (QC2 finding #12.)
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+
+        full_img = render_canvas(image_bytes, theme, scene)
 
         variants_cfg = theme.get("output_variants") if want_variants else None
         if not want_variants or not variants_cfg:
             # Single-variant path — preserve legacy response shape
+            full_bytes = encode_jpeg(full_img, quality=92)
             return {
                 "image_b64": base64.b64encode(full_bytes).decode("ascii"),
                 "format": "JPEG",
             }
 
-        # Multi-variant: mirror run_render_with_variants() logic
-        import cv2  # type: ignore
-        import numpy as np  # type: ignore
-
-        arr = np.frombuffer(full_bytes, dtype=np.uint8)
-        full_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if full_img is None:
-            # Fallback to single-variant if decode fails
-            return {
-                "image_b64": base64.b64encode(full_bytes).decode("ascii"),
-                "format": "JPEG",
-                "variants": {
-                    "default": {
-                        "image_b64": base64.b64encode(full_bytes).decode("ascii"),
-                        "format": "JPEG",
-                    }
-                },
-            }
+        # Multi-variant: encode the full canvas only if a variant needs it
+        # (we no longer eagerly encode→decode the whole image).
+        full_bytes = encode_jpeg(full_img, quality=92)
 
         src_h, src_w = full_img.shape[:2]
         variants_out: Dict[str, Dict[str, Any]] = {}

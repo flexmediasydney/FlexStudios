@@ -82,14 +82,24 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // they still produce file_added events. Without this, files uploaded BEFORE
   // a project's webhook starts watching would never trigger ingest.
   // (#55 audit fix — B3 case.)
+  //
+  // QC8 D-10 fix: previously the post-delta helpers each used a fixed 60s
+  // lookback. processDropboxDelta can take >60s on a large initial reconcile
+  // (saw ~120s on a fresh project with thousands of pre-existing files), so
+  // events emitted near the start of the delta would be older than 60s by the
+  // time linkRecentEditorDrops / enqueueIngestForRecentRawDrones queried —
+  // and they'd be silently missed. Capture the webhook start timestamp BEFORE
+  // we kick off the delta and pass it through, so the helpers see "everything
+  // since this webhook started" no matter how long the delta takes.
+  const webhookStartIso = new Date().toISOString();
   const work = processDropboxDelta(WATCH_PATH, 'webhook', { forceEmitOnSeed: true })
     .then(async (r) => {
       console.log(`[${GENERATOR}] processed: emitted=${r.emitted} skipped=${r.skipped} errors=${r.errors.length}`);
-      // After the delta lands, scan project_folder_events for any raw_drones
-      // file_added events emitted in the last 60 seconds (this run + buffer)
+      // After the delta lands, scan project_folder_events for raw_drones
+      // file_added events emitted since this webhook started (was: last 60s)
       // and enqueue debounced ingest jobs per distinct project_id.
       try {
-        const queued = await enqueueIngestForRecentRawDrones();
+        const queued = await enqueueIngestForRecentRawDrones(webhookStartIso);
         if (queued > 0) {
           console.log(`[${GENERATOR}] enqueued ingest for ${queued} project(s)`);
         }
@@ -99,9 +109,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       }
       // Editor-folder watcher: link Edited Post Production drops to the
       // matching drone_shots row and (when all raw_accepted shots are
-      // covered) enqueue a render job.
+      // covered) enqueue a render job. Same start-timestamp window.
       try {
-        const linked = await linkRecentEditorDrops();
+        const linked = await linkRecentEditorDrops(webhookStartIso);
         if (linked > 0) {
           console.log(`[${GENERATOR}] linked ${linked} editor file(s) to drone_shots`);
         }
@@ -138,9 +148,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
  * `scheduled_for` is ratcheted forward by 2 minutes from the latest webhook
  * invocation — i.e. ingest fires once, ~2 minutes after the last file lands.
  */
-async function enqueueIngestForRecentRawDrones(): Promise<number> {
+async function enqueueIngestForRecentRawDrones(sinceIso: string): Promise<number> {
   const admin = getAdminClient();
-  const since = new Date(Date.now() - 60_000).toISOString();
+  // Window: events created at or after the webhook started (was: last 60s).
+  // QC8 D-10 — see top of handler for rationale.
+  const since = sinceIso;
   const { data, error } = await admin
     .from('project_folder_events')
     .select('project_id')
@@ -183,9 +195,11 @@ async function enqueueIngestForRecentRawDrones(): Promise<number> {
  * don't match a known shot — they may be a NEW shot the editor introduced
  * (out of scope for v1).
  */
-async function linkRecentEditorDrops(): Promise<number> {
+async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
   const admin = getAdminClient();
-  const since = new Date(Date.now() - 60_000).toISOString();
+  // Window: events created at or after the webhook started (was: last 60s).
+  // QC8 D-10 — see top of handler for rationale.
+  const since = sinceIso;
   const { data: events, error } = await admin
     .from('project_folder_events')
     .select('project_id, file_name, metadata, event_type, created_at')

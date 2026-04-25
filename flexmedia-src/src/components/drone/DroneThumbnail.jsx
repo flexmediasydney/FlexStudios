@@ -83,6 +83,13 @@ export default function DroneThumbnail({
   const mountedRef = useRef(true);
   const lastPathRef = useRef(blobUrl ? dropboxPath : null);
   const inViewRef = useRef(Boolean(blobUrl));
+  // (QC7 F4) Single-shot retry counter per (path, mode, size) tuple. The
+  // swimlane Raw-Accepted column intermittently shows empty placeholders for
+  // 2nd/3rd cards even when dropbox_path is valid — likely a transient
+  // mediaPerf concurrency / dedup race or a Dropbox 429. We retry once after
+  // 1s; if that also fails, we surrender to the icon placeholder rather than
+  // keep retrying (a real bad path shouldn't loop forever).
+  const retryAttemptedRef = useRef(false);
 
   // Track mount state so async setStates after unmount are a no-op
   useEffect(() => {
@@ -100,6 +107,9 @@ export default function DroneThumbnail({
     setLoading(false);
     setError(false);
     setImgLoaded(false);
+    // (QC7 F4) Reset the retry budget on path change — a fresh path deserves
+    // a fresh attempt regardless of the previous path's outcome.
+    retryAttemptedRef.current = false;
     // If we already have a cached blob for the new path, surface it instantly
     if (dropboxPath) {
       const cached = blobCache.get(cacheKey(dropboxPath, mode, size));
@@ -160,10 +170,27 @@ export default function DroneThumbnail({
               /* ignore */
             }
           }
+          setLoading(false);
+        } else if (!retryAttemptedRef.current) {
+          // (QC7 F4) First failure: retry once after 1s. The most common
+          // miss is a transient mediaPerf concurrency race or a Dropbox
+          // 429 — both clear quickly. We unset lastPathRef so the kickFetch
+          // guard lets the retry through, and keep the loading spinner up
+          // so the operator doesn't see an "error" flash.
+          retryAttemptedRef.current = true;
+          setTimeout(() => {
+            if (!mountedRef.current) return;
+            // Only retry if nothing else has filled the slot meanwhile.
+            if (lastPathRef.current === dropboxPath) {
+              lastPathRef.current = null;
+              kickFetch();
+            }
+          }, 1000);
         } else {
+          // Second failure: surrender to the icon placeholder.
           setError(true);
+          setLoading(false);
         }
-        setLoading(false);
       });
     }
   }, [dropboxPath, mode, size, blobUrl, onLoaded]);
@@ -185,7 +212,40 @@ export default function DroneThumbnail({
           decoding="async"
           draggable={false}
           onLoad={() => setImgLoaded(true)}
-          onError={() => setError(true)}
+          onError={() => {
+            // (QC7 F4) <img> decode failure (corrupt blob, revoked URL).
+            // If we haven't retried yet, drop the blob so the kickFetch
+            // path can re-pull from the proxy; otherwise show the
+            // placeholder.
+            if (!retryAttemptedRef.current) {
+              retryAttemptedRef.current = true;
+              setBlobUrl(null);
+              setImgLoaded(false);
+              lastPathRef.current = null;
+              setTimeout(() => {
+                if (!mountedRef.current) return;
+                // Re-trigger the IO/fetch path by nudging the ref.
+                if (containerRef.current) {
+                  // Touch the existing observer's blobUrl-gated fetch
+                  // by triggering a dummy state — easiest is to set
+                  // loading true so the next render path will re-fetch.
+                  setLoading(true);
+                  fetchThumb(dropboxPath, mode).then((url) => {
+                    if (!mountedRef.current) return;
+                    if (url) {
+                      setBlobUrl(url);
+                      setError(false);
+                    } else {
+                      setError(true);
+                    }
+                    setLoading(false);
+                  });
+                }
+              }, 1000);
+            } else {
+              setError(true);
+            }
+          }}
           className={cn(
             "w-full h-full object-cover transition-opacity duration-200",
             imgLoaded ? "opacity-100" : "opacity-0",

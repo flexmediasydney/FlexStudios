@@ -29,13 +29,13 @@
  * pattern from the /FlexMedia → /Flex Media Team Folder root migration).
  */
 
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import {
   handleCors,
   getCorsHeaders,
   jsonResponse,
   getAdminClient,
   getUserFromReq,
+  serveWithAudit,
 } from "../_shared/supabase.ts";
 import {
   dropboxApi,
@@ -469,7 +469,11 @@ async function listFilesIfExists(path: string): Promise<Array<{ name: string }>>
   }
 }
 
-serve(async (req: Request) => {
+// Wrapped with serveWithAudit so every backfill run lands in audit_logs (QC1 #19).
+// Without this, operator-triggered backfills were invisible — only success/fail
+// of the response showed up in the function logs and there was no per-run trail
+// of who invoked it / how long it took / what the args were.
+serveWithAudit("drone-folder-backfill", async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
   if (req.method !== "POST") return err("POST only", 405, req);

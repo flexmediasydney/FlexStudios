@@ -12,8 +12,7 @@
  * remaining DB rows that still point at the old path.
  */
 
-import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { handleCors, getCorsHeaders, jsonResponse, getAdminClient, getUserFromReq } from "../_shared/supabase.ts";
+import { handleCors, getCorsHeaders, jsonResponse, getAdminClient, getUserFromReq, serveWithAudit } from "../_shared/supabase.ts";
 import { dropboxApi, getMetadata } from "../_shared/dropbox.ts";
 
 const OLD_PREFIX = "/FlexMedia/Projects/";
@@ -39,7 +38,8 @@ async function ensureFolder(path: string) {
   }
 }
 
-serve(async (req: Request) => {
+// Wrapped with serveWithAudit so every path-migration lands in audit_logs (QC1 #19).
+serveWithAudit("drone-migrate-paths", async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
   if (req.method !== "POST") return err("POST only", 405, req);

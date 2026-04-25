@@ -153,20 +153,23 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
       try {
         // No per-owner sample project for system themes — preview is N/A.
         if (isSystemOwner) return null;
+        // Bug #15 — Projects table has no `created_date` column (it's
+        // `created_at`). PostgREST silently fell back to default ordering
+        // so the "most recent project" was actually arbitrary.
         if (ownerKind === "organisation") {
           const rows = await api.entities.Project.filter(
-            { agency_id: ownerId }, "-created_date", 1,
+            { agency_id: ownerId }, "-created_at", 1,
           );
           return rows?.[0] || null;
         }
         // person — try primary_contact_person_id first
         const byPrimary = await api.entities.Project.filter(
-          { primary_contact_person_id: ownerId }, "-created_date", 1,
+          { primary_contact_person_id: ownerId }, "-created_at", 1,
         );
         if (byPrimary?.[0]) return byPrimary[0];
         // fall back to agent_id
         const byAgent = await api.entities.Project.filter(
-          { agent_id: ownerId }, "-created_date", 1,
+          { agent_id: ownerId }, "-created_at", 1,
         );
         return byAgent?.[0] || null;
       } catch {
@@ -233,11 +236,22 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
     if (!canEdit) return;
     const next = theme.status === "archived" ? "active" : "archived";
     try {
-      const patch = { status: next };
-      // If archiving the default, also clear is_default — otherwise the
-      // resolver continues picking it up.
-      if (next === "archived" && theme.is_default) patch.is_default = false;
-      await api.entities.DroneTheme.update(theme.id, patch);
+      // Bug #11 — route through setDroneTheme so validation + revision row
+      // are written. Previously a direct PATCH bypassed both. The Edge
+      // Function clears is_default automatically when status='archived'.
+      const result = await api.functions.invoke("setDroneTheme", {
+        theme_id: theme.id,
+        owner_kind: theme.owner_kind,
+        owner_id: theme.owner_id,
+        name: theme.name,
+        config: theme.config || {},
+        is_default: next === "archived" ? false : theme.is_default,
+        status: next,
+      });
+      const data = result?.data;
+      if (!data?.success) {
+        throw new Error(data?.error || "Archive/restore failed");
+      }
       toast.success(next === "archived" ? "Theme archived" : "Theme restored");
       refresh();
     } catch (e) {

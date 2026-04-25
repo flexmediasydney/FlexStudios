@@ -30,14 +30,22 @@ class EnuRef:
     alt: float
 
     def to_enu(self, lat: float, lon: float, alt: float) -> np.ndarray:
-        dE = (lon - self.lon) * EARTH_M_PER_DEG * math.cos(math.radians(self.lat))
+        # Antimeridian-safe longitude difference. Without normalisation a
+        # ref.lon=179.9 vs lon=-179.9 reads as ~-360° instead of ~+0.2°,
+        # mis-projecting points by ~40 000 km (QC2 finding #1).
+        dlon = ((lon - self.lon + 540.0) % 360.0) - 180.0
+        ref_lat_clamped = max(-89.9, min(89.9, self.lat))  # avoid pole singularity
+        dE = dlon * EARTH_M_PER_DEG * math.cos(math.radians(ref_lat_clamped))
         dN = (lat - self.lat) * EARTH_M_PER_DEG
         dU = alt - self.alt
         return np.array([dE, dN, dU], dtype=float)
 
     def from_enu(self, enu: np.ndarray) -> Tuple[float, float, float]:
         dE, dN, dU = float(enu[0]), float(enu[1]), float(enu[2])
-        lon = self.lon + dE / (EARTH_M_PER_DEG * math.cos(math.radians(self.lat)))
+        ref_lat_clamped = max(-89.9, min(89.9, self.lat))
+        lon = self.lon + dE / (EARTH_M_PER_DEG * math.cos(math.radians(ref_lat_clamped)))
+        # Wrap longitude back into (-180, 180]
+        lon = ((lon + 540.0) % 360.0) - 180.0
         lat = self.lat + dN / EARTH_M_PER_DEG
         alt = self.alt + dU
         return (lat, lon, alt)

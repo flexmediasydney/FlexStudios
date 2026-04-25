@@ -86,8 +86,18 @@ const STATUS_TONE = {
 // Per-column shoots cap (UI bound — keeps wide rows readable).
 const PER_COLUMN_LIMIT = 6;
 
-// Activity log limit (server-side fetch).
-const ACTIVITY_LIMIT = 100;
+// Activity log paging.
+//   ACTIVITY_PAGE_SIZE — server-side fetch per page.
+//   ACTIVITY_WINDOW_HOURS — server-side time-window so a single project that
+//     emits thousands of folder events can't blow past the page size and hide
+//     everything else. Today already had 5,000+ folder events for one project;
+//     a 100-row LIMIT showed only the last few minutes and made the rest
+//     invisible. (QC8 D-16) Operator can click "Load more" to extend the page
+//     count; very old data (>24h) is intentionally out of scope for the
+//     command center activity feed (use Project → Activity for that).
+const ACTIVITY_PAGE_SIZE = 100;
+const ACTIVITY_WINDOW_HOURS = 24;
+const ACTIVITY_MAX_PAGES = 10; // hard ceiling on Load-More clicks (1000 rows)
 
 // Alerts thresholds.
 // IMPLEMENTATION_PLAN_V2 §6.2 alerts: flag flight rolls >15° from horizontal —
@@ -320,7 +330,16 @@ const ACTIVITY_KIND_LABEL = {
   folder: "Files",
 };
 
-function ActivityLog({ events, projectsById, isLoading, onRefresh, isFetching }) {
+function ActivityLog({
+  events,
+  projectsById,
+  isLoading,
+  onRefresh,
+  isFetching,
+  hasMore,
+  onLoadMore,
+  windowHours,
+}) {
   const [search, setSearch] = useState("");
   const [kindFilter, setKindFilter] = useState("all");
   const [eventTypeFilter, setEventTypeFilter] = useState("all");
@@ -399,6 +418,11 @@ function ActivityLog({ events, projectsById, isLoading, onRefresh, isFetching })
           </Select>
         </div>
 
+        {windowHours ? (
+          <div className="text-[10px] text-muted-foreground">
+            Showing events from the last {windowHours}h ({filtered.length} of {events?.length || 0} loaded)
+          </div>
+        ) : null}
         {isLoading ? (
           <div className="space-y-2">
             {[...Array(5)].map((_, i) => <div key={i} className="h-12 rounded bg-muted/40 animate-pulse" />)}
@@ -450,6 +474,25 @@ function ActivityLog({ events, projectsById, isLoading, onRefresh, isFetching })
             })}
           </ul>
         )}
+        {hasMore && !isLoading ? (
+          <div className="flex justify-center pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onLoadMore}
+              disabled={isFetching}
+              className="h-8 text-xs"
+            >
+              {isFetching ? (
+                <>
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Loading…
+                </>
+              ) : (
+                "Load more"
+              )}
+            </Button>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -674,17 +717,36 @@ export default function DroneCommandCenter() {
   }, [progressQuery.data]);
 
   // ─── Activity log (drone_events ∪ project_folder_events) ────────────────
+  // QC8 D-16: server-side filter to last ACTIVITY_WINDOW_HOURS so a single
+  // project's 5,000+ folder events can't crowd out everything else. Operator
+  // can click "Load more" to grow the page count up to ACTIVITY_MAX_PAGES.
+  const [activityPageCount, setActivityPageCount] = useState(1);
+  const activitySinceIso = useMemo(
+    () => new Date(Date.now() - ACTIVITY_WINDOW_HOURS * 3600 * 1000).toISOString(),
+    // Recompute on each fresh mount, but stable within a session so
+    // pagination doesn't drift the window underneath the user.
+    [],
+  );
+  const activityRowLimit = ACTIVITY_PAGE_SIZE * activityPageCount;
   const droneEventsQuery = useQuery({
-    queryKey: ["drone_events_recent"],
+    queryKey: ["drone_events_recent", activityRowLimit],
     queryFn: () =>
-      api.entities.DroneEvent.filter({}, "-created_at", ACTIVITY_LIMIT),
+      api.entities.DroneEvent.filter(
+        { created_at: { $gte: activitySinceIso } },
+        "-created_at",
+        activityRowLimit,
+      ),
     staleTime: 5_000,
     enabled: adminGateOpen,
   });
   const folderEventsQuery = useQuery({
-    queryKey: ["project_folder_events_recent_global"],
+    queryKey: ["project_folder_events_recent_global", activityRowLimit],
     queryFn: () =>
-      api.entities.ProjectFolderEvent.filter({}, "-created_at", ACTIVITY_LIMIT),
+      api.entities.ProjectFolderEvent.filter(
+        { created_at: { $gte: activitySinceIso } },
+        "-created_at",
+        activityRowLimit,
+      ),
     staleTime: 5_000,
     enabled: adminGateOpen,
   });
@@ -694,8 +756,17 @@ export default function DroneCommandCenter() {
     const folder = (folderEventsQuery.data || []).map((e) => ({ ...e, _kind: "folder" }));
     return [...drone, ...folder].sort(
       (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime(),
-    ).slice(0, ACTIVITY_LIMIT);
-  }, [droneEventsQuery.data, folderEventsQuery.data]);
+    ).slice(0, activityRowLimit);
+  }, [droneEventsQuery.data, folderEventsQuery.data, activityRowLimit]);
+
+  // True iff EITHER source returned exactly the limit — a strong hint there
+  // are more rows we haven't loaded. (False negatives are tolerable; the
+  // user just doesn't see the Load-more button when there are exactly
+  // activityRowLimit rows total.)
+  const activityHasMore =
+    activityPageCount < ACTIVITY_MAX_PAGES &&
+    ((droneEventsQuery.data?.length ?? 0) >= activityRowLimit ||
+      (folderEventsQuery.data?.length ?? 0) >= activityRowLimit);
 
   // ─── Alerts ─────────────────────────────────────────────────────────────
   const sfmFailuresQuery = useQuery({
@@ -723,16 +794,30 @@ export default function DroneCommandCenter() {
   const highRollShotsQuery = useQuery({
     queryKey: ["drone_high_roll_shots"],
     queryFn: async () => {
-      // Shots with flight_roll above the danger threshold, in shoots that
+      // Shots with |flight_roll| above the danger threshold, in shoots that
       // haven't successfully run SfM yet (pre-SfM warning to operator).
-      const rows = await api.entities.DroneShot.filter(
-        { flight_roll: { $gte: FLIGHT_ROLL_DANGER_DEG } },
-        "-created_at",
-        100,
-      );
-      // Reduce to shoot level: max roll per shoot
+      //
+      // QC3 #13: previous filter only matched flight_roll >= 15, missing all
+      // negative rolls (banking the other direction is identically dangerous).
+      // The api.filter syntax doesn't support an OR predicate so we run the
+      // two boundary queries in parallel and merge client-side. De-dup on
+      // shot id is unnecessary because the gte/lte ranges are disjoint.
+      const [posRows, negRows] = await Promise.all([
+        api.entities.DroneShot.filter(
+          { flight_roll: { $gte: FLIGHT_ROLL_DANGER_DEG } },
+          "-created_at",
+          100,
+        ),
+        api.entities.DroneShot.filter(
+          { flight_roll: { $lte: -FLIGHT_ROLL_DANGER_DEG } },
+          "-created_at",
+          100,
+        ),
+      ]);
+      const rows = [...(posRows || []), ...(negRows || [])];
+      // Reduce to shoot level: max |roll| per shoot
       const byShoot = new Map();
-      for (const r of rows || []) {
+      for (const r of rows) {
         const cur = byShoot.get(r.shoot_id) || { count: 0, maxRoll: 0 };
         cur.count += 1;
         cur.maxRoll = Math.max(cur.maxRoll, Math.abs(Number(r.flight_roll) || 0));
@@ -1036,6 +1121,9 @@ export default function DroneCommandCenter() {
           projectsById={projectsById}
           isLoading={activityIsLoading}
           isFetching={activityIsFetching}
+          hasMore={activityHasMore}
+          windowHours={ACTIVITY_WINDOW_HOURS}
+          onLoadMore={() => setActivityPageCount((n) => Math.min(n + 1, ACTIVITY_MAX_PAGES))}
           onRefresh={() => {
             queryClient.invalidateQueries({ queryKey: ["drone_events_recent"] });
             queryClient.invalidateQueries({ queryKey: ["project_folder_events_recent_global"] });

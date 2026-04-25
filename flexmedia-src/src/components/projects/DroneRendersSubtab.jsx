@@ -44,7 +44,7 @@
  * Realtime: subscribes to DroneRender (filtered by shoot's shots).
  */
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
@@ -200,9 +200,13 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
 
   // Confirmation dialog state for reject (destructive)
   const [confirmReject, setConfirmReject] = useState(null); // { render }
-  // Lightbox state — stores { columnKey, index } so the viewer can flick
-  // through items in that column without leaving the page.
-  const [lightbox, setLightbox] = useState(null); // { columnKey, index }
+  // Lightbox state — stores { columnKey, index, itemId } so the viewer can
+  // flick through items in that column without leaving the page. itemId is
+  // tracked so we can detect when the currently-viewed item disappears from
+  // the column (e.g. operator approved a render in another tab) and close
+  // the lightbox with a toast (QC3 #15) rather than silently jump to a
+  // different image at the same index.
+  const [lightbox, setLightbox] = useState(null); // { columnKey, index, itemId }
   // Drag state — tracks which render is mid-drag so we can highlight valid
   // drop targets and ignore invalid drops without a network round-trip.
   const [dragRender, setDragRender] = useState(null); // { id, fromColumn }
@@ -255,11 +259,59 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // resubscribe is keyed off `shotsQuery.data?.length` so adding a shot
   // tears down the stale subscription and starts a fresh one with the
   // up-to-date set rather than capturing the closure's stale set.
+  //
+  // (QC3 #2) Throttle invalidations to a 2s window — bursts of 30 inserts
+  // during ingest used to trigger 30 refetches; now they coalesce into one
+  // immediate fire + one trailing fire at window-end. Pattern copied from
+  // DroneCommandCenter `throttledInvalidate`.
   const shotIdsSignature = useMemo(() => {
     const ids = (shotsQuery.data || []).map((s) => s.id);
     ids.sort();
     return ids.join(",");
   }, [shotsQuery.data]);
+
+  const INVALIDATE_WINDOW_MS = 2000;
+  const invalidateThrottleRef = useRef(new Map()); // keyStr → { last, timeout }
+  const throttledInvalidate = useCallback(
+    (keyArr) => {
+      const keyStr = JSON.stringify(keyArr);
+      const map = invalidateThrottleRef.current;
+      const now = Date.now();
+      const entry = map.get(keyStr) || { last: 0, timeout: null };
+      const elapsed = now - entry.last;
+      if (elapsed >= INVALIDATE_WINDOW_MS) {
+        if (entry.timeout) {
+          clearTimeout(entry.timeout);
+          entry.timeout = null;
+        }
+        entry.last = now;
+        map.set(keyStr, entry);
+        queryClient.invalidateQueries({ queryKey: keyArr });
+      } else if (!entry.timeout) {
+        const remaining = INVALIDATE_WINDOW_MS - elapsed;
+        entry.timeout = setTimeout(() => {
+          entry.last = Date.now();
+          entry.timeout = null;
+          map.set(keyStr, entry);
+          queryClient.invalidateQueries({ queryKey: keyArr });
+        }, remaining);
+        map.set(keyStr, entry);
+      }
+    },
+    [queryClient],
+  );
+
+  // Cleanup any pending throttle timers on unmount so trailing invalidates
+  // don't fire against an unmounted query client.
+  useEffect(() => {
+    return () => {
+      const map = invalidateThrottleRef.current;
+      for (const [, entry] of map) {
+        if (entry.timeout) clearTimeout(entry.timeout);
+      }
+      map.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (!shootId) return;
@@ -270,9 +322,13 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
 
     const unsubscribe = api.entities.DroneRender.subscribe((evt) => {
       if (!active) return;
-      // For inserts/updates, evt.data exists with shot_id; for deletes, only id.
-      if (evt.data?.shot_id && !shotIdSet.has(evt.data.shot_id)) return;
-      queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
+      // (QC3 #1) DELETE events have evt.data === null — the previous
+      // `if (evt.data?.shot_id && !set.has(...))` short-circuited to false on
+      // deletes, so EVERY drone_render delete app-wide invalidated this
+      // shoot's queries. Flip the guard so we only proceed when shot_id is
+      // present AND in our set.
+      if (!evt.data?.shot_id || !shotIdSet.has(evt.data.shot_id)) return;
+      throttledInvalidate(["drone_renders", shootId]);
     });
 
     return () => {
@@ -283,19 +339,22 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
         console.warn("[DroneRendersSubtab] DroneRender unsubscribe failed:", e);
       }
     };
-  }, [shootId, shotIdsSignature, queryClient]);
+  }, [shootId, shotIdsSignature, throttledInvalidate]);
 
   // Realtime: DroneShot updates (lifecycle_state changes from accept/reject/
   // restore actions, and inserts/updates from upstream ingest). Filter by
   // shoot_id client-side; the api wrapper does not expose Supabase's server
   // filter option (mirrors the DroneRender pattern above).
+  //
+  // (QC3 #1) Same DELETE-event guard fix as above — for deletes evt.data is
+  // null and the prior short-circuit fail-opened the shoot_id check.
   useEffect(() => {
     if (!shootId) return;
     let active = true;
     const unsubscribe = api.entities.DroneShot.subscribe((evt) => {
       if (!active) return;
-      if (evt.data?.shoot_id && evt.data.shoot_id !== shootId) return;
-      queryClient.invalidateQueries({ queryKey: ["drone_shots_for_renders", shootId] });
+      if (!evt.data?.shoot_id || evt.data.shoot_id !== shootId) return;
+      throttledInvalidate(["drone_shots_for_renders", shootId]);
     });
     return () => {
       active = false;
@@ -305,7 +364,7 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
         console.warn("[DroneRendersSubtab] DroneShot unsubscribe failed:", e);
       }
     };
-  }, [shootId, queryClient]);
+  }, [shootId, throttledInvalidate]);
 
   const shots = shotsQuery.data || [];
   const renders = rendersQuery.data || [];
@@ -327,6 +386,13 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // are derived from `drone_shots.lifecycle_state` (added in migration 242):
   //   raw_proposed | raw_accepted | rejected | sfm_only.
   // SfM-only shots (nadir grid) never appear in the swimlane.
+  //
+  // (QC3 #4) Optimistic overlays: `optimisticRenderColumns` and
+  // `optimisticShotStates` move cards into their target column visually
+  // before the server confirms — drag-drop feels instant instead of
+  // "stuck for 600ms then jumps". The overlay is cleared on server success
+  // (the realtime refetch then carries the authoritative truth) or on
+  // failure (rollback shows the card back in the source column).
   const grouped = useMemo(() => {
     const cols = {
       preview: new Map(),
@@ -339,7 +405,15 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     // Renders arrive newest-first (-created_at) so the first row encountered
     // for each shot in a bucket is the primary variant.
     for (const r of renders) {
-      const col = r.column_state || "proposed";
+      // Apply optimistic column override if this render is mid-transition.
+      // We DON'T mutate r — just route it into the target bucket. preview
+      // renders are skipped from the overlay (they're internal, not
+      // operator-driven). Same for r.column_state === overlay (no-op).
+      const overlayState = optimisticRenderColumns[r.id];
+      const col =
+        overlayState && r.column_state !== "preview"
+          ? overlayState
+          : (r.column_state || "proposed");
       const bucket = cols[col];
       if (!bucket) continue;
       if (!bucket.has(r.shot_id)) bucket.set(r.shot_id, []);
@@ -355,11 +429,16 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     // Shot columns: filter by lifecycle_state. Older rows that pre-date
     // migration 242 may have a NULL lifecycle_state — surface those as
     // raw_proposed so they're visible (the operator can act on them).
-    const rawProposed = shots.filter(
-      (s) => !s.lifecycle_state || s.lifecycle_state === "raw_proposed",
-    );
-    const rawAccepted = shots.filter((s) => s.lifecycle_state === "raw_accepted");
-    const shotRejected = shots.filter((s) => s.lifecycle_state === "rejected");
+    // (QC3 #4) optimisticShotStates wins over the persisted value so a
+    // pending Accept/Reject moves the card immediately.
+    const effectiveLifecycle = (s) =>
+      optimisticShotStates[s.id] ||
+      s.lifecycle_state ||
+      "raw_proposed";
+
+    const rawProposed = shots.filter((s) => effectiveLifecycle(s) === "raw_proposed");
+    const rawAccepted = shots.filter((s) => effectiveLifecycle(s) === "raw_accepted");
+    const shotRejected = shots.filter((s) => effectiveLifecycle(s) === "rejected");
 
     return {
       raw_proposed: rawProposed,
@@ -371,7 +450,7 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
       final: toGroups(cols.final),
       rejected: toGroups(cols.rejected),
     };
-  }, [renders, shots]);
+  }, [renders, shots, optimisticRenderColumns, optimisticShotStates]);
 
   // Map from shot_id → preview render's dropbox_path (newest variant). Used
   // by Raw Proposed / Raw Accepted cards to show the AI preview when one
@@ -469,6 +548,17 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // spinners ('approving' | 'rejecting' | 'moving' | 'restoring').
   const [pendingAction, setPendingAction] = useState({});
 
+  // (QC3 #4) Optimistic transitions for renders. Keyed by render id; value is
+  // the target column_state. Applied as a derived view layer on top of the
+  // server data so a drag-drop moves the card visually IMMEDIATELY rather
+  // than waiting ~600ms for the realtime event. Cleared on successful server
+  // confirmation OR on rollback (server failure).
+  const [optimisticRenderColumns, setOptimisticRenderColumns] = useState({});
+
+  // (QC3 #4) Same pattern for shot lifecycle flips. Keyed by shot id; value
+  // is the target lifecycle_state.
+  const [optimisticShotStates, setOptimisticShotStates] = useState({});
+
   const TOAST_FOR_TARGET = {
     proposed:    "Sent back to Proposed",
     adjustments: "Moved to Adjustments",
@@ -487,6 +577,12 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   const callTransition = useCallback(
     async (renderId, targetState) => {
       setPendingAction((p) => ({ ...p, [renderId]: VERB_FOR_TARGET[targetState] || "moving" }));
+      // Optimistic: immediately reflect the new column. 'restore' is special —
+      // we don't know the destination column until the server resolves it
+      // from the event log, so skip the optimistic write for that case.
+      if (targetState !== "restore") {
+        setOptimisticRenderColumns((p) => ({ ...p, [renderId]: targetState }));
+      }
       try {
         const data = await api.functions.invoke("drone-render-approve", {
           render_id: renderId,
@@ -497,7 +593,24 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
         }
         toast.success(TOAST_FOR_TARGET[targetState] || `Moved to ${targetState}`);
         queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
+        // Clear the optimistic mark on success — the realtime event +
+        // refetch will deliver the authoritative state. (We don't clear
+        // before invalidate because the refetch is async; the optimistic
+        // overlay lets the card stay in the new column until the server
+        // data catches up.)
+        setOptimisticRenderColumns((p) => {
+          const next = { ...p };
+          delete next[renderId];
+          return next;
+        });
       } catch (err) {
+        // Rollback the optimistic move so the card flips back to its source
+        // column and the operator sees the failure clearly.
+        setOptimisticRenderColumns((p) => {
+          const next = { ...p };
+          delete next[renderId];
+          return next;
+        });
         toast.error(err?.message || "Action failed");
       } finally {
         setPendingAction((p) => {
@@ -514,16 +627,46 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // Used by Raw Proposed / Raw Accepted card actions and the rejected popover
   // restore. We track per-shot pending state in `pendingShotAction` so a
   // sluggish flip doesn't make the entire column feel stuck.
+  //
+  // (QC3 #5) Routes through the `drone-shot-lifecycle` Edge Function instead
+  // of writing `drone_shots.lifecycle_state` directly via PostgREST. The
+  // Edge Function emits a `drone_events` audit row and enforces role gates
+  // server-side; direct updates skipped both. Physical Dropbox folder moves
+  // are still triggered by the explicit "Lock shortlist" button, NOT by
+  // each individual flip — per-click moves would thrash the file path.
   const [pendingShotAction, setPendingShotAction] = useState({});
 
   const mutateShotLifecycle = useCallback(
     async (shotId, nextState, label) => {
       setPendingShotAction((p) => ({ ...p, [shotId]: nextState }));
+      // (QC3 #4) Optimistic: immediately move the card to the destination
+      // column so the operator sees instant feedback. Rolled back on error.
+      setOptimisticShotStates((p) => ({ ...p, [shotId]: nextState }));
       try {
-        await api.entities.DroneShot.update(shotId, { lifecycle_state: nextState });
+        const resp = await api.functions.invoke("drone-shot-lifecycle", {
+          shot_id: shotId,
+          target: nextState,
+        });
+        // api.functions.invoke wraps the body as { data: serverBody } in
+        // some paths; accept either shape.
+        const result = resp?.data ?? resp ?? {};
+        if (result?.success === false) {
+          throw new Error(result?.error || `Failed to move to ${nextState}`);
+        }
         toast.success(label || `Moved to ${nextState}`);
         queryClient.invalidateQueries({ queryKey: ["drone_shots_for_renders", shootId] });
+        setOptimisticShotStates((p) => {
+          const next = { ...p };
+          delete next[shotId];
+          return next;
+        });
       } catch (err) {
+        // Rollback so the card flips back to its source column.
+        setOptimisticShotStates((p) => {
+          const next = { ...p };
+          delete next[shotId];
+          return next;
+        });
         toast.error(err?.message || "Action failed");
       } finally {
         setPendingShotAction((p) => {
@@ -588,6 +731,31 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
       setIsLocking(false);
     }
   }, [shootId, queryClient]);
+
+  // ── Lightbox safety: close on item-removed (QC3 #15, #16) ────────────────
+  // If the operator is staring at index 7 of 'proposed' and an Approve action
+  // (in this tab or another) transitions that render OUT of the column, the
+  // lightbox would silently jump to a different item at the same index.
+  // Detect "the itemId I was viewing is no longer in the column" and close
+  // the lightbox with a brief toast so the operator isn't confused.
+  useEffect(() => {
+    if (!lightbox || !lightbox.itemId) return;
+    const items = lightboxItemsByColumn[lightbox.columnKey] || [];
+    if (items.length === 0) {
+      // Whole column emptied — close silently (probably a fresh load or the
+      // operator drained the column themselves).
+      setLightbox(null);
+      return;
+    }
+    const stillThere = items.some((it) => it.id === lightbox.itemId);
+    if (!stillThere) {
+      const colLabel =
+        COLUMNS.find((c) => c.key === lightbox.columnKey)?.label ||
+        lightbox.columnKey;
+      toast.info(`Item moved out of ${colLabel}`);
+      setLightbox(null);
+    }
+  }, [lightbox, lightboxItemsByColumn]);
 
   // ── Re-analyse edited folder ──────────────────────────────────────────────
   // After the team uploads to Editors/Edited Post Production/, re-running the
@@ -732,6 +900,32 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
       <Card>
         <CardContent className="p-6 text-center text-sm text-muted-foreground">
           No shots indexed yet — renders will appear once shots arrive.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // (QC3 #16) sfm_only-only shoots: a shoot with only nadir_grid frames
+  // (used for camera alignment) ends up with every shot's lifecycle_state
+  // set to 'sfm_only' — those are filtered out of every column. The
+  // operator would otherwise see a "rendered" page with NOTHING and no
+  // header buttons. Surface a clear explanation instead.
+  const allShotsAreSfmOnly =
+    shots.length > 0 &&
+    shots.every((s) => s.lifecycle_state === "sfm_only");
+  if (allShotsAreSfmOnly) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-center text-sm text-muted-foreground">
+          <p className="font-medium text-foreground/80 mb-1">
+            All shots in this shoot are SfM-only.
+          </p>
+          <p className="text-xs">
+            Nadir-grid frames are used for camera alignment, not delivery —
+            they don't appear in the swimlane. If you expected operator-
+            facing renders, check that the shoot has hero / orbital /
+            oblique frames in its source folder.
+          </p>
         </CardContent>
       </Card>
     );
@@ -915,7 +1109,7 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
               onPreview={({ columnKey, itemId }) => {
                 const items = lightboxItemsByColumn[columnKey] || [];
                 const idx = items.findIndex((it) => it.id === itemId);
-                if (idx >= 0) setLightbox({ columnKey, index: idx });
+                if (idx >= 0) setLightbox({ columnKey, index: idx, itemId });
               }}
               dragRender={dragRender}
               setDragRender={setDragRender}
@@ -995,7 +1189,7 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
                     onPreview={({ itemId }) => {
                       const items = lightboxItemsByColumn.rejected || [];
                       const idx = items.findIndex((it) => it.id === itemId);
-                      if (idx >= 0) setLightbox({ columnKey: "rejected", index: idx });
+                      if (idx >= 0) setLightbox({ columnKey: "rejected", index: idx, itemId });
                     }}
                     staleByRenderId={staleByRenderId}
                     onReRenderShot={reRenderShot}
@@ -1428,13 +1622,43 @@ function RenderCard({
     orderedVariants[0]?.id || null,
   );
 
-  // If the variant set changes (realtime update), keep the selection valid.
+  // (QC3 #9) If the variant set changes (realtime update), keep the
+  // selection valid — but ONLY reset when the previously-selected variant is
+  // genuinely no longer in the set. The prior implementation reset on every
+  // re-render because `orderedVariants` was a new array reference each parent
+  // render and the effect ran every render; if the renderCard stayed mounted
+  // through a realtime tick where the parent's grouped data changed, the
+  // selection silently flipped back to variants[0]. Now we narrow the
+  // dependency to a stable signature (sorted variant ids) so the effect
+  // only runs when the underlying ID set actually changes, and we emit a
+  // console.warn when we have to reset so debugging post-mortems can spot
+  // the cause.
+  const variantIdSig = useMemo(
+    () => orderedVariants.map((v) => v.id).sort().join(","),
+    [orderedVariants],
+  );
   useEffect(() => {
     if (!orderedVariants.length) return;
-    if (!orderedVariants.find((v) => v.id === selectedVariantId)) {
+    const stillExists = orderedVariants.some((v) => v.id === selectedVariantId);
+    if (!stillExists) {
+      // Selection target genuinely vanished (variant deleted, moved column,
+      // or this is the first render with no prior selection). Fall back to
+      // the primary (newest) variant. Surface a warn so operators noticing
+      // a downloaded-wrong-variant complaint have a breadcrumb.
+      if (selectedVariantId != null) {
+        console.warn(
+          "[RenderCard] selected variant",
+          selectedVariantId,
+          "no longer exists; falling back to",
+          orderedVariants[0].id,
+        );
+      }
       setSelectedVariantId(orderedVariants[0].id);
     }
-  }, [orderedVariants, selectedVariantId]);
+    // Intentionally narrow deps: only re-run when the set of variant ids
+    // actually changes, not when the array reference changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variantIdSig]);
 
   // Hooks must be called before any early return (rules-of-hooks).
   // #71: Replace the dropbox.com/home URL (which respects permissions

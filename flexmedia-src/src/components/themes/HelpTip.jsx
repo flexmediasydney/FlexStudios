@@ -15,11 +15,11 @@
  * liberally without crashing the editor when help text is still being
  * authored.
  *
- * Reuses the shadcn Tooltip primitive. We wrap each HelpTip in its own
- * TooltipProvider — the app does not mount a global provider, so any
- * unwrapped <Tooltip> throws "Tooltip must be used within TooltipProvider"
- * at render time and the entire Theme Editor crashes. Local providers nest
- * safely (Radix supports it) and the cost is negligible.
+ * Reuses the shadcn Tooltip primitive. The editor MUST mount one
+ * `<HelpTipProvider>` at its root — we no longer wrap each HelpTip in its
+ * own TooltipProvider (Bug #16 — ~100 instances per editor render is
+ * wasteful). For backward compatibility we still nest a TooltipProvider
+ * here as a fallback so a stray HelpTip outside the editor doesn't crash.
  */
 
 import { Info } from "lucide-react";
@@ -27,11 +27,18 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { cn } from "@/lib/utils";
 import { THEME_HELP_TEXT } from "./themeHelpText";
 
+/**
+ * Mount once at the editor root. All `<HelpTip>` instances inside it
+ * share this provider rather than each spinning up their own. (Bug #16)
+ */
+export function HelpTipProvider({ children }) {
+  return <TooltipProvider delayDuration={150}>{children}</TooltipProvider>;
+}
+
 export function HelpTip({ fieldKey, className, side = "right" }) {
   const help = THEME_HELP_TEXT[fieldKey];
   if (!help) return null;
   return (
-    <TooltipProvider delayDuration={150}>
     <Tooltip>
       <TooltipTrigger asChild>
         <button
@@ -60,7 +67,6 @@ export function HelpTip({ fieldKey, className, side = "right" }) {
         )}
       </TooltipContent>
     </Tooltip>
-    </TooltipProvider>
   );
 }
 

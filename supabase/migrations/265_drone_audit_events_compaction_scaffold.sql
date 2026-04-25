@@ -1,0 +1,73 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- Migration 264: _AUDIT/events/ Dropbox compaction — scaffold + plan
+-- ───────────────────────────────────────────────────────────────────────────
+-- QC8 D-17 (Dropbox _AUDIT folder file growth):
+--   Every project_folder_events row creates one Dropbox JSON file under
+--   <project>/_AUDIT/events/<unix-ms>_<event-id>.json. Today's 5,000 events
+--   for a single project = 5,000 tiny files in one folder. Dropbox UI lags
+--   noticeably above ~10k files per folder.
+--
+-- Design:
+--   Run a nightly cron at ~03:00 Sydney time that, for each project's
+--   _AUDIT/events/ folder:
+--     1. List all files (via dropbox-app /files/list_folder, paged).
+--     2. Group by date (parse YYYYMMDD from the unix-ms prefix).
+--     3. For each CLOSED day (>= 1 day older than today, Sydney TZ):
+--        a. Download every file in the day's group.
+--        b. Concat into a single JSONL stream (one event per line).
+--        c. Gzip (Deno's CompressionStream) → bytes.
+--        d. Upload to <project>/_AUDIT/events_YYYYMMDD.jsonl.gz
+--           (overwrite mode — idempotent on retry).
+--        e. Delete the originals (delete_batch_v2; up to 1000 per call).
+--   Compacted archive lives alongside the per-event tree so historical
+--   forensics still work — operators just download one .gz per day instead
+--   of paging 5,000 individual JSONs.
+--
+-- This migration:
+--   - DOES NOT install the cron yet (Edge Function `drone-audit-compact`
+--     not implemented in this PR).
+--   - DOCUMENTS the cron command shape so a follow-up PR can wire it.
+--
+-- Follow-up PR scope:
+--   1. Implement supabase/functions/drone-audit-compact/index.ts (uses the
+--      same Dropbox helpers as drone-folder-backfill and the
+--      auditEvent/mirrorEventToDropbox pair in _shared/projectFolders.ts).
+--      Iterate over projects with non-archived status and a
+--      dropbox_root_path; for each, do the per-day compaction described
+--      above.
+--   2. Uncomment the cron block at the bottom of THIS migration to install
+--      it (or write a fresh migration; both are fine).
+--   3. Add an audit_log entry per compacted day for traceability.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- No DDL changes in this migration; everything below is commented for the
+-- follow-up to enable.
+--
+-- DO $$
+-- BEGIN
+--   IF NOT EXISTS (
+--     SELECT 1 FROM vault.decrypted_secrets WHERE name = 'pulse_cron_jwt'
+--   ) THEN
+--     RAISE EXCEPTION 'pulse_cron_jwt missing from vault — refusing to install cron';
+--   END IF;
+--   PERFORM cron.unschedule('drone-audit-compact')
+--     WHERE EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'drone-audit-compact');
+--   PERFORM cron.schedule(
+--     'drone-audit-compact',
+--     '15 16 * * *',  -- 03:15 Australia/Sydney (UTC offset varies w/ DST; ~16:15 UTC year-round close enough)
+--     $job$
+--       SELECT net.http_post(
+--         url := 'https://rjzdznwkxnzfekgcdkei.supabase.co/functions/v1/drone-audit-compact',
+--         headers := jsonb_build_object(
+--           'Authorization',    'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'pulse_cron_jwt' LIMIT 1),
+--           'Content-Type',     'application/json',
+--           'x-caller-context', 'cron:drone-audit-compact'
+--         ),
+--         body := '{}'::jsonb,
+--         timeout_milliseconds := 290000
+--       );
+--     $job$
+--   );
+-- END$$;
+
+SELECT 1;  -- no-op so the migration parses cleanly when applied.

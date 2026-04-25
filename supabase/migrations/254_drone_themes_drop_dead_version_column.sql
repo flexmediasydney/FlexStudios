@@ -1,0 +1,26 @@
+-- ════════════════════════════════════════════════════════════════════════
+-- Migration 254 — DEFERRED: drone_themes.version drop (QC6 #6)
+--
+-- Goal: drop the dead `version INT DEFAULT 1` column added in mig 225, kept
+-- only as decorative carry-over after mig 244 introduced `version_int BIGINT`
+-- as the canonical content-version field (which is what the
+-- trg_drone_themes_bump_version trigger actually maintains).
+--
+-- DEFERRED: the frontend Theme editor (`flexmedia-src/src/components/themes/
+-- ThemeBrandingSubtab.jsx`, `ThemeEditor.jsx`) still reads `theme.version`
+-- in 4 spots (badge "v{theme.version || 1}", `setVersion(initialTheme.version)`,
+-- `if (typeof data.version === "number") setVersion(...)`). Dropping the column
+-- without first migrating those reads to `version_int` would break the theme
+-- list/editor UI.
+--
+-- The orchestrator instructed this migration explicitly NOT to touch the
+-- frontend / theme editor (out of scope for this wave). Moving the drop into a
+-- follow-up wave that owns both halves: (a) frontend reads switch to
+-- `version_int` (with `|| 1` fallback for old rows), (b) DROP COLUMN.
+--
+-- This migration is intentionally a NO-OP placeholder so the numbering stays
+-- consistent and the audit trail records why we skipped.
+-- ════════════════════════════════════════════════════════════════════════
+
+-- No-op. See migration body comment for deferred-work rationale.
+SELECT 1;

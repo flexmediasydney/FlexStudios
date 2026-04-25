@@ -61,7 +61,10 @@ async function fetchDefaultTheme(
   // `.maybeSingle()` so we never error on >1 rows (defence in depth).
   let q = admin
     .from('drone_themes')
-    .select('id, name, owner_kind, owner_id, config, version, is_default, status')
+    // Bug #9 — include version_int so the resolved theme carries the
+    // current per-theme version into source_chain entries (drives stale-
+    // render detection in the swimlane).
+    .select('id, name, owner_kind, owner_id, config, version, version_int, is_default, status')
     .eq('owner_kind', ownerKind)
     .eq('is_default', true)
     .eq('status', 'active')

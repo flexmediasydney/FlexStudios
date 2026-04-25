@@ -88,6 +88,7 @@ const sysTheme: ThemeRow = {
     property_pin: { mode: 'line_up_with_house_icon' },
   },
   version: 1,
+  version_int: 1,
   is_default: true,
   status: 'active',
 };
@@ -101,6 +102,7 @@ const orgTheme: ThemeRow = {
     property_pin: { mode: 'teardrop_with_logo' },
   },
   version: 1,
+  version_int: 1,
   is_default: true,
   status: 'active',
 };
@@ -113,6 +115,7 @@ const personTheme: ThemeRow = {
     poi_label: { fill: '#FF0000' }, // override only fill
   },
   version: 1,
+  version_int: 1,
   is_default: true,
   status: 'active',
 };

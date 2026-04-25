@@ -8,7 +8,11 @@
  *   2. Fetches POIs (drone-pois) + cadastral polygon (drone-cadastral)
  *   3. Downloads source image from Dropbox
  *   4. Calls Modal render worker via HTTP endpoint with theme + scene
- *   5. Uploads rendered output to `06_ENRICHMENT/drone_renders_proposed/`
+ *   5. Uploads rendered output to `Drones/Editors/AI Proposed Enriched/`
+ *      (or `Drones/Raws/Shortlist Proposed/Previews/` for the preview lane).
+ *      Migrated 2026-04-25 off the legacy `06_ENRICHMENT/drone_renders_*`
+ *      folders as part of the W2-β cleanup; both proposed and adjustments
+ *      now share the AI Proposed Enriched bucket — column_state distinguishes.
  *   6. Inserts `drone_renders` row with column_state='proposed'
  *
  * Inputs:
@@ -113,7 +117,29 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     );
   }
 
-  const kind: RenderKind = body.kind || "poi_plus_boundary";
+  // ── Resolve render kind ───────────────────────────────────────────
+  // `drone_renders.kind` only allows poi|boundary|poi_plus_boundary (CHECK
+  // constraint from migration 225). The body type used to allow `kind:
+  // 'preview'` to flow through, but writing 'preview' to drone_renders.kind
+  // would violate the CHECK and abort the whole render with no partial
+  // results. Map the preview signal into kind=poi_plus_boundary +
+  // isPreviewRun=true, then validate against the allowed enum so any other
+  // junk (typos, future kinds before migration) fails fast with 400 instead
+  // of after the Modal call. (QC2 #19.)
+  const ALLOWED_KINDS: RenderKind[] = ["poi", "boundary", "poi_plus_boundary"];
+  const rawKindRequest = (body as { kind?: string }).kind;
+  let kind: RenderKind;
+  if (rawKindRequest === "preview" || !rawKindRequest) {
+    kind = "poi_plus_boundary";
+  } else if (ALLOWED_KINDS.includes(rawKindRequest as RenderKind)) {
+    kind = rawKindRequest as RenderKind;
+  } else {
+    return errorResponse(
+      `kind '${rawKindRequest}' is not allowed (allowed: ${ALLOWED_KINDS.join(", ")} or 'preview')`,
+      400,
+      req,
+    );
+  }
 
   const admin = getAdminClient();
 
@@ -340,9 +366,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Cap per-invocation work to avoid OOM. Each shot's source download (~10MB),
   // base64-encode (~13MB string), Modal request (~13MB body), Modal response
   // (~4MB for 2 variants), and upload buffers each occupy memory simultaneously
-  // in flight. Even with concurrency=1, V8's GC can lag behind, so a hard cap
-  // of 2 shots per invocation is the safest. Continuation jobs handle the rest.
-  const PER_INVOCATION_CAP = 2;
+  // in flight. With concurrency=1 (sequential below) only ONE shot's footprint
+  // is live at any time, so the cap here is wall-clock-bound, not memory-bound.
+  // QC1 #18: bumped 2 → 4 so a 16-shot shoot finishes in 4 dispatcher ticks
+  // rather than 8. Each shot averages ~25-40s with the new 120s Modal timeout
+  // ceiling, so 4 × 40s = 160s in the worst case (slightly over the 145s
+  // wall-clock cap). When the Edge Function gets killed mid-loop the
+  // continuation job re-enqueued below picks up where we left off (the
+  // existing-renders pre-filter is what makes this safe). If we observe OOM
+  // or a noticeable rise in mid-batch timeouts in prod, revert to 2.
+  const PER_INVOCATION_CAP = 4;
   const shotsCapped = shots.slice(0, PER_INVOCATION_CAP);
   const moreRemaining = shots.length - shotsCapped.length;
 
@@ -389,21 +422,28 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   //                     informational (excluded from the active-per-variant
   //                     uniqueness scope by migration 243).
   //   - 'adjustments' → Pin-Editor save (legacy alias: `reason='pin_edit_saved'`).
-  //                     Writes to drone_renders_adjusted/ + adjustments lane.
+  //                     Writes to Drones/Editors/AI Proposed Enriched/ —
+  //                     same lane as 'proposed' since both AI and adjustment
+  //                     outputs land alongside each other in the editor's
+  //                     enriched bucket; the column_state distinguishes the row.
   //   - 'proposed'    → default AI render after ingest. Writes to
-  //                     drone_renders_proposed/.
+  //                     Drones/Editors/AI Proposed Enriched/.
   // Reuse `isPreviewRun` (defined above near source resolution) so we have a
   // single source of truth for "are we in the preview lane". `isPreviewRender`
   // is the local alias for the column-state slice of that decision.
+  //
+  // 2026-04-25: migrated off the legacy `enrichment_drone_renders_*` folder
+  // kinds (Wave 1 dropped raw_drones / final_delivery_drones; W2-β consolidates
+  // the enrichment outputs onto the `drones_editors_ai_proposed_enriched`
+  // top-level folder). Once all writers are off the legacy kinds, the
+  // corresponding project_folders rows can be dropped.
   const isPreviewRender = isPreviewRun;
   const isAdjustedRender =
     !isPreviewRender &&
     (body?.reason === "pin_edit_saved" || body?.column_state === "adjustments");
   const outFolderKind = isPreviewRender
     ? "drones_raws_shortlist_proposed_previews"
-    : isAdjustedRender
-      ? "enrichment_drone_renders_adjusted"
-      : "enrichment_drone_renders_proposed";
+    : "drones_editors_ai_proposed_enriched";
   const initialColumnState = isPreviewRender
     ? "preview"
     : isAdjustedRender
@@ -603,6 +643,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       // (_token) is retained for backward compat with the deployed Modal worker.
       // TODO: drop the body _token field once the Modal render_http endpoint
       // accepts header-only auth. (#7 audit fix)
+      //
+      // QC8 D-07 fix: previously this fetch had no timeout. If Modal hangs the
+      // Edge Function would spin until its 145s wall-clock cap, then return a
+      // generic gateway error and waste the entire invocation budget for the
+      // remaining shots in the batch. 120s is comfortably below the wall-clock
+      // cap and slightly above the p99 Modal render latency observed in prod
+      // (~25-40s for orbital + boundary). Sister function callModalSfm already
+      // does this (15min there because SfM is genuinely long-running).
+      const MODAL_RENDER_TIMEOUT_MS = 120_000;
       const modalResp = await fetch(MODAL_RENDER_URL, {
         method: "POST",
         headers: {
@@ -616,6 +665,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           scene,
           variants: wantVariants,
         }),
+        signal: AbortSignal.timeout(MODAL_RENDER_TIMEOUT_MS),
       });
 
       if (!modalResp.ok) {
@@ -905,7 +955,12 @@ function applyKindToTheme(theme: any, kind: RenderKind): any {
     if (t.boundary) t.boundary.enabled = false;
   }
   if (kind === "boundary") {
-    // keep boundary.enabled as is
+    // FORCE boundary.enabled = true. Without this, kind='boundary' silently
+    // produces a no-op render whenever the theme ships with boundary.enabled
+    // = false (which most themes do, since most renders are POI-only). The
+    // operator pressed the boundary-only render button and got a render
+    // identical to the source image with no boundary lines. (QC2 #20.)
+    t.boundary = { ...(t.boundary || {}), enabled: true };
     t.poi_selection = { ...(t.poi_selection || {}), max_pins_per_shot: 0 };
   }
   if (kind === "poi_plus_boundary") {

@@ -42,8 +42,14 @@ interface SetThemeBody {
   name?: string;
   config?: Record<string, unknown>;
   is_default?: boolean;
+  // Bug #11 — archive/restore was previously a direct PATCH that bypassed
+  // validation + revision history. Route through here with status so
+  // every state change is auditable.
+  status?: 'active' | 'archived';
   _health_check?: boolean;
 }
+
+const VALID_STATUSES = new Set(['active', 'archived']);
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
@@ -102,6 +108,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Without this, garbage like { primary: "totally not a hex" } reaches Modal
   // and crashes (or silently produces broken renders). The Theme Editor adds
   // client-side validation but a direct API caller can bypass it. (#B2 audit fix)
+  //
+  // Bug #7 — `null` and the literal string "transparent" are valid: the
+  // editor uses `transparent` for sqm_total.bg_color and similar, and
+  // border colours allow `null` for "no border". Reject everything else
+  // that isn't a 6 or 8-char hex.
   const COLOR_KEY_RE = /color|fill|stroke|background/i;
   const HEX_RE = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$/;
   const badColors: string[] = [];
@@ -109,8 +120,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (node && typeof node === 'object' && !Array.isArray(node)) {
       for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
         const here = path ? `${path}.${k}` : k;
-        if (typeof v === 'string' && COLOR_KEY_RE.test(k)) {
-          if (!HEX_RE.test(v)) badColors.push(`${here}=${JSON.stringify(v)}`);
+        if (COLOR_KEY_RE.test(k)) {
+          // Allow nullish (= "no colour") and literal "transparent" for
+          // bg_color / fill fields. Otherwise must be a 6/8-char hex.
+          if (v === null || v === undefined || v === '' || v === 'transparent') {
+            // permissible
+          } else if (typeof v === 'string') {
+            if (!HEX_RE.test(v)) badColors.push(`${here}=${JSON.stringify(v)}`);
+          } else if (typeof v === 'object') {
+            walkColors(v, here);
+          }
         } else if (v && typeof v === 'object') {
           walkColors(v, here);
         }
@@ -125,6 +144,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       `config has invalid hex colour(s): ${badColors.slice(0, 5).join(', ')}${badColors.length > 5 ? ` (+${badColors.length - 5} more)` : ''}`,
       400,
       req,
+    );
+  }
+
+  // Bug #11 — validate status if supplied (archive/restore path).
+  if (body.status !== undefined && !VALID_STATUSES.has(body.status)) {
+    return errorResponse(
+      `status must be one of: ${[...VALID_STATUSES].join(', ')}`,
+      400, req,
     );
   }
 
@@ -213,7 +240,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (body.theme_id) {
     const { data: priorTheme, error: fetchErr } = await admin
       .from('drone_themes')
-      .select('id, owner_kind, owner_id, config, version')
+      .select('id, owner_kind, owner_id, config, version, version_int, status')
       .eq('id', body.theme_id)
       .maybeSingle();
 
@@ -239,20 +266,33 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
     // If this save flips is_default ON, clear it on every sibling first so
     // the resolver continues to see exactly one default per level.
-    if (body.is_default === true) {
+    // Bug #11 — also clear is_default if archiving the default theme,
+    // matching what the legacy direct-PATCH path did.
+    const isArchiving = body.status === 'archived';
+    const effectiveIsDefault = isArchiving ? false : (body.is_default ?? false);
+    if (effectiveIsDefault === true) {
       await clearOtherDefaults(body.theme_id);
     }
 
-    const { error: updErr } = await admin
+    // Build update set — include status only if caller supplied it (so a
+    // plain edit doesn't accidentally restore an archived theme).
+    const updateSet: Record<string, unknown> = {
+      name: body.name,
+      config: serialisedConfig,
+      is_default: effectiveIsDefault,
+      version: newVersion,
+      updated_at: new Date().toISOString(),
+    };
+    if (body.status !== undefined) {
+      updateSet.status = body.status;
+    }
+
+    const { data: updated, error: updErr } = await admin
       .from('drone_themes')
-      .update({
-        name: body.name,
-        config: serialisedConfig,
-        is_default: body.is_default ?? false,
-        version: newVersion,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', body.theme_id);
+      .update(updateSet)
+      .eq('id', body.theme_id)
+      .select('id, version, version_int')
+      .single();
 
     if (updErr) {
       console.error(`[${GENERATOR}] update failed:`, updErr);
@@ -275,10 +315,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       console.warn(`[${GENERATOR}] revision insert failed: ${revErr.message}`);
     }
 
+    // Bug #14 — return version_int so the client uses authoritative value
+    // rather than optimistically bumping (which can drift if the trigger
+    // didn't fire because nothing actually changed).
     return jsonResponse({
       success: true,
       theme_id: body.theme_id,
       version: newVersion,
+      version_int: updated?.version_int ?? null,
+      status: body.status ?? priorTheme.status,
     }, 200, req);
   }
 
@@ -297,11 +342,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       owner_id: body.owner_id ?? null,
       config: serialisedConfig,
       is_default: body.is_default ?? false,
-      status: 'active',
+      // Bug #11 — honour caller-supplied status (defaults to 'active').
+      status: body.status ?? 'active',
       version: 1,
       created_by: user.id === '__service_role__' ? null : user.id,
     })
-    .select('id, version')
+    .select('id, version, version_int, status')
     .single();
 
   if (insErr) {
@@ -309,9 +355,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`Failed to create theme: ${insErr.message}`, 500, req);
   }
 
+  // Bug #14 — return version_int so the client mirrors authoritative state.
   return jsonResponse({
     success: true,
     theme_id: inserted.id,
     version: inserted.version,
+    version_int: inserted.version_int ?? 1,
+    status: inserted.status ?? 'active',
   }, 200, req);
 });

@@ -99,12 +99,16 @@ export default function DroneShotsSubtab({ shoot }) {
   });
 
   // Realtime updates for this shoot's shots
+  // (QC3 #1) Guard for DELETE events: evt.data is null on deletes. Previous
+  // `if (evt.data?.shoot_id && ...)` short-circuited to false → invalidate
+  // fired for every drone_shot delete app-wide, not just ones in our shoot.
+  // Flip to "skip when shoot_id missing OR mismatched".
   useEffect(() => {
     if (!shootId) return;
     let active = true;
     const unsubscribe = api.entities.DroneShot.subscribe((evt) => {
       if (!active) return;
-      if (evt.data?.shoot_id && evt.data.shoot_id !== shootId) return;
+      if (!evt.data?.shoot_id || evt.data.shoot_id !== shootId) return;
       queryClient.invalidateQueries({ queryKey: ["drone_shots", shootId] });
     });
     return () => {

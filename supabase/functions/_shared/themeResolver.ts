@@ -29,6 +29,10 @@ export interface ThemeRow {
   owner_id: string | null;
   config: Record<string, unknown>;
   version: number;
+  // Bug #9 — version_int is the auto-bumping integer used by frontend
+  // stale-detection (mig 244). Resolver must surface it on every chain
+  // entry so the joined render row can compare against the current value.
+  version_int: number | null;
   is_default: boolean;
   status: string;
 }
@@ -37,6 +41,9 @@ export interface SourceChainEntry {
   owner_kind: OwnerKind;
   theme_id: string;
   theme_name: string;
+  // Bug #9 — surface version_int per-chain so the editor can drive
+  // stale-detection without re-querying the themes table.
+  version_int: number | null;
 }
 
 export interface ResolveResult {
@@ -155,6 +162,7 @@ export function resolveFromChain(themes: ThemeRow[]): ResolveResult {
     owner_kind: t.owner_kind,
     theme_id: t.id,
     theme_name: t.name,
+    version_int: t.version_int ?? null,
   }));
   const inheritance_diff = buildInheritanceDiff(
     resolved,

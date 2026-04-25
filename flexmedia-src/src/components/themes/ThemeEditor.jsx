@@ -77,7 +77,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { HelpTip } from "./HelpTip";
+import { HelpTip, HelpTipProvider } from "./HelpTip";
 
 // ── Defaults: derived from modal/drone_render/themes/flexmedia_default.json ──
 const DEFAULT_CONFIG = {
@@ -103,6 +103,7 @@ const DEFAULT_CONFIG = {
   },
 
   poi_label: {
+    enabled: true,
     shape: "rectangle",
     corner_radius_px: 0,
     fill: "#FFFFFF",
@@ -115,7 +116,7 @@ const DEFAULT_CONFIG = {
     letter_spacing: 0,
     line_height: 1.2,
     text_template: "{name}",
-    secondary_text: { enabled: false, template: "{distance}", color: "#666666" },
+    secondary_text: { enabled: true, template: "{distance}", color: "#666666" },
   },
 
   property_pin: {
@@ -258,7 +259,11 @@ const SECTIONS_BY_GROUP = {
     { id: "poi_selection", label: "POI selection (which POIs to fetch)" },
     { id: "anchor_line", label: "Anchor line (POI → label connector)" },
     { id: "poi_label", label: "POI label (style)" },
-    { id: "poi_label_foreground", label: "POI label foreground (advanced)" },
+    // Renamed from "POI label foreground (advanced)" — that title implied
+    // the section bound to `poi_label_foreground.*` keys, but every field
+    // here is `poi_label.*` (typography knobs). The actual
+    // poi_label_foreground.* outlined-text style is Wave 3. (Bug #6)
+    { id: "poi_label_foreground", label: "POI label typography (advanced)" },
   ],
   render: [
     { id: "property_pin", label: "Property pin" },
@@ -269,9 +274,13 @@ const SECTIONS_BY_GROUP = {
   ],
 };
 
+// Bug #10 — `teardrop_with_logo` requires a logo asset upload UI which
+// doesn't ship until Wave 3 (the `content.type='logo'` branch only
+// renders a plain text input + a disabled file picker button). Hiding
+// it here so operators don't pick a mode that silently has no asset
+// path. Re-add once the asset picker lands.
 const PROPERTY_PIN_MODES = [
   { value: "pill_with_address", label: "Pill with address" },
-  { value: "teardrop_with_logo", label: "Teardrop with logo" },
   { value: "teardrop_with_monogram", label: "Teardrop with monogram" },
   { value: "teardrop_with_icon", label: "Teardrop with icon" },
   { value: "teardrop_plain", label: "Teardrop plain" },
@@ -329,6 +338,12 @@ const isPlainObject = (v) =>
 // `poi_selection.type_quotas`) still hydrates with all of DEFAULT_CONFIG's
 // nested fields. Arrays from `saved` replace wholly; paths in
 // REPLACE_WHOLLY_PATHS replace wholly; explicit `null` in saved is kept.
+//
+// IMPORTANT: This function is used at HYDRATE time only (loading from DB
+// into editor state). Saving must use `computeSparseDelta` so we don't
+// bloat the JSONB with every default value (mig 225 line 70: "Sparse
+// JSONB — only non-default fields stored"; without sparse delta, person
+// themes effectively erase org/system at every level).
 const mergeWithDefaults = (defaults, saved, path = "") => {
   if (saved === undefined) {
     return defaults === undefined
@@ -358,7 +373,52 @@ const mergeWithDefaults = (defaults, saved, path = "") => {
   return out;
 };
 
-const isHex = (v) => typeof v === "string" && /^#([0-9a-fA-F]{3}){1,2}$/.test(v);
+// Compute the SPARSE delta of `current` vs `defaults`. Only fields that
+// differ from the default are emitted; everything else is omitted so the
+// resolver continues to inherit from system / organisation. Arrays and
+// REPLACE_WHOLLY_PATHS get whole-list comparison (only included if the
+// JSON shapes differ). Used at SAVE time only — the inverse of
+// mergeWithDefaults.
+//
+// Spec: mig 225 line 70 — "Sparse JSONB — only non-default fields
+// stored". Effect: a person-level theme that only overrides
+// boundary.line.color persists as `{ boundary: { line: { color: "..." } } }`,
+// not a copy of every default. The resolver's deep-merge then
+// continues inheriting every other field from org/system.
+const computeSparseDelta = (defaults, current, path = "") => {
+  // Treat both null and undefined symmetrically — if current matches
+  // defaults (both nullish), drop it.
+  if (current === undefined) return undefined;
+  // Whole-replace paths and arrays compare via JSON equality.
+  const isReplaceWholly =
+    REPLACE_WHOLLY_PATHS.has(path) || Array.isArray(current) || Array.isArray(defaults);
+  if (isReplaceWholly) {
+    if (JSON.stringify(current) === JSON.stringify(defaults)) return undefined;
+    return JSON.parse(JSON.stringify(current));
+  }
+  if (!isPlainObject(defaults) || !isPlainObject(current)) {
+    if (current === defaults) return undefined;
+    return current;
+  }
+  const out = {};
+  const allKeys = new Set([...Object.keys(defaults), ...Object.keys(current)]);
+  for (const k of allKeys) {
+    const sub = computeSparseDelta(
+      defaults[k],
+      current[k],
+      path ? `${path}.${k}` : k,
+    );
+    if (sub !== undefined) out[k] = sub;
+  }
+  if (Object.keys(out).length === 0) return undefined;
+  return out;
+};
+
+// Tighten 6/8-char only — server's HEX_RE rejects 3-char (#FFF). We
+// previously accepted #FFF client-side which led to silent save failures
+// with a generic toast. Standardise on 6 (#RRGGBB) or 8 (#RRGGBBAA) char
+// hex client-side so the editor blocks before save.
+const isHex = (v) => typeof v === "string" && /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(v);
 
 const countInvalidColors = (obj, path = "") => {
   if (obj == null || typeof obj !== "object") return 0;
@@ -973,6 +1033,9 @@ export default function ThemeEditor({
   const [loading, setLoading] = useState(!!themeId);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState(null);
+  // Snapshot of the hydrated state (name + config + is_default) used to
+  // detect unsaved changes when Cancel is clicked. (Bug #12)
+  const baselineRef = useRef({ name: "", config: DEFAULT_CONFIG, isDefault: false });
 
   // Save-confirmation dialog state (only fires when versionInt > 1).
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -996,26 +1059,50 @@ export default function ThemeEditor({
     let cancelled = false;
     async function hydrate() {
       if (initialTheme) {
-        setName(initialTheme.name || "");
-        setConfig(mergeWithDefaults(DEFAULT_CONFIG, initialTheme.config || {}));
-        setIsDefault(!!initialTheme.is_default);
+        const hydratedName = initialTheme.name || "";
+        const hydratedConfig = mergeWithDefaults(DEFAULT_CONFIG, initialTheme.config || {});
+        const hydratedIsDefault = !!initialTheme.is_default;
+        setName(hydratedName);
+        setConfig(hydratedConfig);
+        setIsDefault(hydratedIsDefault);
         setVersion(initialTheme.version || null);
         setVersionInt(initialTheme.version_int ?? null);
         setStatus(initialTheme.status || "active");
+        baselineRef.current = {
+          name: hydratedName,
+          config: hydratedConfig,
+          isDefault: hydratedIsDefault,
+        };
         return;
       }
-      if (!themeId) return;
+      if (!themeId) {
+        // New theme — baseline is the empty starting state.
+        baselineRef.current = {
+          name: "",
+          config: DEFAULT_CONFIG,
+          isDefault: false,
+        };
+        return;
+      }
       setLoading(true);
       setLoadError(null);
       try {
         const row = await api.entities.DroneTheme.get(themeId);
         if (cancelled) return;
-        setName(row.name || "");
-        setConfig(mergeWithDefaults(DEFAULT_CONFIG, row.config || {}));
-        setIsDefault(!!row.is_default);
+        const hydratedName = row.name || "";
+        const hydratedConfig = mergeWithDefaults(DEFAULT_CONFIG, row.config || {});
+        const hydratedIsDefault = !!row.is_default;
+        setName(hydratedName);
+        setConfig(hydratedConfig);
+        setIsDefault(hydratedIsDefault);
         setVersion(row.version || null);
         setVersionInt(row.version_int ?? null);
         setStatus(row.status || "active");
+        baselineRef.current = {
+          name: hydratedName,
+          config: hydratedConfig,
+          isDefault: hydratedIsDefault,
+        };
       } catch (e) {
         if (!cancelled) setLoadError(e?.message || "Failed to load theme");
       } finally {
@@ -1027,6 +1114,28 @@ export default function ThemeEditor({
       cancelled = true;
     };
   }, [themeId, initialTheme]);
+
+  // Bug #12 — guarded Cancel: prompt before discarding unsaved edits. We
+  // compare the current state to the baseline snapshot taken at hydrate.
+  // JSON.stringify is deep-equality enough for this config tree (no
+  // functions, no Maps, no Dates).
+  const hasUnsavedChanges = useCallback(() => {
+    const b = baselineRef.current;
+    if (b.name !== name) return true;
+    if (b.isDefault !== isDefault) return true;
+    return JSON.stringify(b.config) !== JSON.stringify(config);
+  }, [name, config, isDefault]);
+
+  const handleCancelClick = useCallback(() => {
+    if (
+      hasUnsavedChanges() &&
+      typeof window !== "undefined" &&
+      !window.confirm("Discard unsaved theme changes?")
+    ) {
+      return;
+    }
+    onCancel?.();
+  }, [hasUnsavedChanges, onCancel]);
 
   const update = useCallback((path, value) => {
     setConfig((prev) => setDeep(prev, path, value));
@@ -1080,11 +1189,20 @@ export default function ThemeEditor({
       }
       setSaving(true);
       try {
+        // Sparse-delta save: only persist fields that differ from
+        // DEFAULT_CONFIG so the resolver still inherits everything else
+        // from org/system. Without this, person themes would override
+        // every default value at every level, defeating the point of
+        // inheritance. (Bug #1 — sparse-merge inversion)
+        const sparseConfig = computeSparseDelta(DEFAULT_CONFIG, config) || {};
+        // Always echo theme_name into the saved config so DB readers
+        // (RPCs, audit) can identify the theme without joining.
+        sparseConfig.theme_name = name.trim();
         const payload = {
           owner_kind: ownerKind,
           owner_id: ownerId,
           name: name.trim(),
-          config: { ...config, theme_name: name.trim() },
+          config: sparseConfig,
           is_default: isDefault,
         };
         if (themeId && !saveAsNew) {
@@ -1098,10 +1216,13 @@ export default function ThemeEditor({
         // Mirror server state locally (so the version badge updates without a
         // round-trip and a follow-up Save doesn't reuse a stale version).
         if (typeof data.version === "number") setVersion(data.version);
-        // The server doesn't echo version_int; bump optimistically so the
-        // dialog logic on the next Save uses the new value. Parent will
-        // refetch on close anyway.
-        setVersionInt((v) => (v == null ? 1 : v + 1));
+        // Use the authoritative version_int from the server when echoed —
+        // otherwise bump optimistically. Parent will refetch on close.
+        if (typeof data.version_int === "number") {
+          setVersionInt(data.version_int);
+        } else {
+          setVersionInt((v) => (v == null ? 1 : v + 1));
+        }
         toast.success(saveAsNew ? "Theme created" : "Theme saved");
         return {
           theme_id: data.theme_id,
@@ -1120,6 +1241,9 @@ export default function ThemeEditor({
   );
 
   // Fan out drone-render with wipe_existing for each impacted shoot.
+  // Bug #13 — previously serial-awaited each invoke, so a 50-shoot save
+  // sat in `for await` for several minutes. Cap concurrency to 5 (chunk
+  // + Promise.allSettled) so a typical fan-out completes in seconds.
   const reRenderImpactedShoots = useCallback(async () => {
     if (impactRows.length === 0) return { ok: 0, failed: 0 };
     setRerendering(true);
@@ -1128,20 +1252,27 @@ export default function ThemeEditor({
     // Deduplicate shoot_ids first — multiple rows per shoot if there are
     // many renders, but we only need one drone-render call per shoot.
     const shootIds = Array.from(new Set(impactRows.map((r) => r.shoot_id).filter(Boolean)));
-    for (const sid of shootIds) {
-      try {
-        const result = await api.functions.invoke("drone-render", {
-          shoot_id: sid,
-          wipe_existing: true,
-        });
-        if (result?.data?.success === false) {
-          failed += 1;
-        } else {
+    const CONCURRENCY = 5;
+    for (let i = 0; i < shootIds.length; i += CONCURRENCY) {
+      const chunk = shootIds.slice(i, i + CONCURRENCY);
+      const results = await Promise.allSettled(
+        chunk.map((sid) =>
+          api.functions.invoke("drone-render", {
+            shoot_id: sid,
+            wipe_existing: true,
+          }),
+        ),
+      );
+      for (let j = 0; j < results.length; j++) {
+        const res = results[j];
+        if (res.status === "fulfilled" && res.value?.data?.success !== false) {
           ok += 1;
+        } else {
+          if (res.status === "rejected") {
+            console.warn("[ThemeEditor] re-render failed for shoot", chunk[j], res.reason?.message);
+          }
+          failed += 1;
         }
-      } catch (e) {
-        console.warn("[ThemeEditor] re-render failed for shoot", sid, e?.message);
-        failed += 1;
       }
     }
     setRerendering(false);
@@ -1470,6 +1601,35 @@ export default function ThemeEditor({
                 step={0.05}
               />
             </FieldRow>
+            {/* Bug #5 — length budget fields were in DEFAULT_CONFIG but
+                never wired to UI. Help dictionary already has tooltips. */}
+            <FieldRow label="Min length" fieldKey="anchor_line.min_length_px">
+              <NumberField
+                value={config.anchor_line?.min_length_px}
+                onChange={(v) => update(["anchor_line", "min_length_px"], v)}
+                min={0}
+                max={1000}
+                suffix="px"
+              />
+            </FieldRow>
+            <FieldRow label="Max length" fieldKey="anchor_line.max_length_px">
+              <NumberField
+                value={config.anchor_line?.max_length_px}
+                onChange={(v) => update(["anchor_line", "max_length_px"], v)}
+                min={0}
+                max={2000}
+                suffix="px"
+              />
+            </FieldRow>
+            <FieldRow label="Flip-below threshold" fieldKey="anchor_line.flip_below_target_threshold_px">
+              <NumberField
+                value={config.anchor_line?.flip_below_target_threshold_px}
+                onChange={(v) => update(["anchor_line", "flip_below_target_threshold_px"], v)}
+                min={0}
+                max={1000}
+                suffix="px"
+              />
+            </FieldRow>
 
             <div className="mt-3 pt-2 border-t border-dashed border-muted">
               <p className="text-xs font-semibold text-muted-foreground mb-1">End marker</p>
@@ -1523,7 +1683,17 @@ export default function ThemeEditor({
             onToggle={setOpenSection}
             canReset={canEdit}
             onReset={() => resetSection("poi_label")}
+            badge={config.poi_label?.enabled !== false ? "On" : "Off"}
           >
+            {/* Master toggle (mig 239) — when off, NO POI labels render
+                regardless of how many POIs are in the data. Mirrors the
+                property_pin pattern. (Bug #2) */}
+            <FieldRow label="Enabled" hint="Master switch — turn off to hide all POI labels" fieldKey="poi_label.enabled">
+              <SwitchField
+                value={config.poi_label?.enabled !== false}
+                onChange={(v) => update(["poi_label", "enabled"], v)}
+              />
+            </FieldRow>
             <FieldRow label="Shape" fieldKey="poi_label.shape">
               <SelectField
                 value={config.poi_label?.shape}
@@ -1662,12 +1832,16 @@ export default function ThemeEditor({
         );
 
       case "poi_label_foreground":
-        // Advanced text-rendering knobs (font family, line height, letter
-        // spacing, primary template). Most operators won't touch these.
+        // Advanced text-rendering knobs for the standard boxed POI label
+        // (font family, line height, letter spacing, primary template).
+        // Bound to `poi_label.*` keys — NOT `poi_label_foreground.*`,
+        // despite the section id. Renamed from "foreground" → "typography"
+        // because foreground (outlined-text) styling is Wave 3 (the
+        // poi_label_foreground.* schema keys aren't surfaced anywhere yet).
         return (
           <SectionAccordion
             id="poi_label_foreground"
-            label="POI label foreground (advanced)"
+            label="POI label typography (advanced)"
             openId={openSection}
             onToggle={setOpenSection}
             canReset={canEdit}
@@ -2175,6 +2349,55 @@ export default function ThemeEditor({
                           options={["outside", "inside"]}
                         />
                       </FieldRow>
+                      {/* Bug #3 — text styling fields were unreachable. */}
+                      <FieldRow label="Text color" fieldKey="boundary.side_measurements.text_color">
+                        <ColorField
+                          value={config.boundary?.side_measurements?.text_color}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "text_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Text outline color" fieldKey="boundary.side_measurements.text_outline_color">
+                        <ColorField
+                          value={config.boundary?.side_measurements?.text_outline_color}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "text_outline_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Text outline width" fieldKey="boundary.side_measurements.text_outline_width_px">
+                        <NumberField
+                          value={config.boundary?.side_measurements?.text_outline_width_px}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "text_outline_width_px"], v)
+                          }
+                          min={0}
+                          max={20}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Font size" fieldKey="boundary.side_measurements.font_size_px">
+                        <NumberField
+                          value={config.boundary?.side_measurements?.font_size_px}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "font_size_px"], v)
+                          }
+                          min={6}
+                          max={200}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Font family" hint="must exist on render server" fieldKey="boundary.side_measurements.font_family">
+                        <TextField
+                          value={config.boundary?.side_measurements?.font_family}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "font_family"], v)
+                          }
+                          placeholder="DejaVu Sans"
+                          mono
+                        />
+                      </FieldRow>
                     </>
                   )}
                 </div>
@@ -2189,6 +2412,116 @@ export default function ThemeEditor({
                       onChange={(v) => update(["boundary", "sqm_total", "enabled"], v)}
                     />
                   </FieldRow>
+                  {/* Bug #3 — sqm_total text/template/font/colors/shadow were unreachable. */}
+                  {config.boundary?.sqm_total?.enabled && (
+                    <>
+                      <FieldRow label="Template" hint="{sqm} → e.g. '1,250'" fieldKey="boundary.sqm_total.text_template">
+                        <TextField
+                          value={config.boundary?.sqm_total?.text_template}
+                          onChange={(v) =>
+                            update(["boundary", "sqm_total", "text_template"], v)
+                          }
+                          placeholder="{sqm} sqm approx"
+                          mono
+                        />
+                      </FieldRow>
+                      <FieldRow label="Position" fieldKey="boundary.sqm_total.position">
+                        <SelectField
+                          value={config.boundary?.sqm_total?.position}
+                          onChange={(v) =>
+                            update(["boundary", "sqm_total", "position"], v)
+                          }
+                          options={[
+                            { value: "centroid", label: "Centroid" },
+                            { value: "top_left", label: "Top left" },
+                            { value: "top_right", label: "Top right" },
+                            { value: "bottom_left", label: "Bottom left" },
+                            { value: "bottom_right", label: "Bottom right" },
+                          ]}
+                        />
+                      </FieldRow>
+                      <FieldRow label="Text color" fieldKey="boundary.sqm_total.text_color">
+                        <ColorField
+                          value={config.boundary?.sqm_total?.text_color}
+                          onChange={(v) =>
+                            update(["boundary", "sqm_total", "text_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Background" hint='hex or "transparent"' fieldKey="boundary.sqm_total.bg_color">
+                        <ColorField
+                          value={config.boundary?.sqm_total?.bg_color}
+                          onChange={(v) =>
+                            update(["boundary", "sqm_total", "bg_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Font size" fieldKey="boundary.sqm_total.font_size_px">
+                        <NumberField
+                          value={config.boundary?.sqm_total?.font_size_px}
+                          onChange={(v) =>
+                            update(["boundary", "sqm_total", "font_size_px"], v)
+                          }
+                          min={6}
+                          max={400}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Shadow" fieldKey="boundary.sqm_total.shadow.enabled">
+                        <SwitchField
+                          value={config.boundary?.sqm_total?.shadow?.enabled}
+                          onChange={(v) =>
+                            update(["boundary", "sqm_total", "shadow", "enabled"], v)
+                          }
+                        />
+                      </FieldRow>
+                      {config.boundary?.sqm_total?.shadow?.enabled && (
+                        <>
+                          <FieldRow label="Shadow color" fieldKey="boundary.sqm_total.shadow.color">
+                            <ColorField
+                              value={config.boundary?.sqm_total?.shadow?.color}
+                              onChange={(v) =>
+                                update(["boundary", "sqm_total", "shadow", "color"], v)
+                              }
+                            />
+                          </FieldRow>
+                          <FieldRow label="Shadow offset X" fieldKey="boundary.sqm_total.shadow.offset_x_px">
+                            <NumberField
+                              value={config.boundary?.sqm_total?.shadow?.offset_x_px}
+                              onChange={(v) =>
+                                update(["boundary", "sqm_total", "shadow", "offset_x_px"], v)
+                              }
+                              min={-40}
+                              max={40}
+                              suffix="px"
+                            />
+                          </FieldRow>
+                          <FieldRow label="Shadow offset Y" fieldKey="boundary.sqm_total.shadow.offset_y_px">
+                            <NumberField
+                              value={config.boundary?.sqm_total?.shadow?.offset_y_px}
+                              onChange={(v) =>
+                                update(["boundary", "sqm_total", "shadow", "offset_y_px"], v)
+                              }
+                              min={-40}
+                              max={40}
+                              suffix="px"
+                            />
+                          </FieldRow>
+                          <FieldRow label="Shadow blur" fieldKey="boundary.sqm_total.shadow.blur_px">
+                            <NumberField
+                              value={config.boundary?.sqm_total?.shadow?.blur_px}
+                              onChange={(v) =>
+                                update(["boundary", "sqm_total", "shadow", "blur_px"], v)
+                              }
+                              min={0}
+                              max={40}
+                              suffix="px"
+                            />
+                          </FieldRow>
+                        </>
+                      )}
+                    </>
+                  )}
                 </div>
 
                 <div className="mt-3 pt-2 border-t border-dashed border-muted">
@@ -2203,6 +2536,61 @@ export default function ThemeEditor({
                       }
                     />
                   </FieldRow>
+                  {/* Bug #3 — address_overlay position/template/colors/shadow were unreachable. */}
+                  {config.boundary?.address_overlay?.enabled && (
+                    <>
+                      <FieldRow label="Position" fieldKey="boundary.address_overlay.position">
+                        <SelectField
+                          value={config.boundary?.address_overlay?.position}
+                          onChange={(v) =>
+                            update(["boundary", "address_overlay", "position"], v)
+                          }
+                          options={[
+                            { value: "below_sqm", label: "Below sqm" },
+                            { value: "above_sqm", label: "Above sqm" },
+                            { value: "centroid", label: "Centroid" },
+                          ]}
+                        />
+                      </FieldRow>
+                      <FieldRow label="Template" hint="{address}, {street_number}, {street_name}" fieldKey="boundary.address_overlay.text_template">
+                        <TextField
+                          value={config.boundary?.address_overlay?.text_template}
+                          onChange={(v) =>
+                            update(["boundary", "address_overlay", "text_template"], v)
+                          }
+                          placeholder="{street_number} {street_name}"
+                          mono
+                        />
+                      </FieldRow>
+                      <FieldRow label="Text color" fieldKey="boundary.address_overlay.text_color">
+                        <ColorField
+                          value={config.boundary?.address_overlay?.text_color}
+                          onChange={(v) =>
+                            update(["boundary", "address_overlay", "text_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Font size" fieldKey="boundary.address_overlay.font_size_px">
+                        <NumberField
+                          value={config.boundary?.address_overlay?.font_size_px}
+                          onChange={(v) =>
+                            update(["boundary", "address_overlay", "font_size_px"], v)
+                          }
+                          min={6}
+                          max={200}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Shadow" fieldKey="boundary.address_overlay.shadow_enabled">
+                        <SwitchField
+                          value={config.boundary?.address_overlay?.shadow_enabled}
+                          onChange={(v) =>
+                            update(["boundary", "address_overlay", "shadow_enabled"], v)
+                          }
+                        />
+                      </FieldRow>
+                    </>
+                  )}
                 </div>
               </>
             )}
@@ -2263,27 +2651,49 @@ export default function ThemeEditor({
                   />
                 </FieldRow>
                 {config.branding_ribbon?.show_org_logo && (
-                  <FieldRow label="Logo asset" hint="Dropbox path (placeholder)" fieldKey="branding_ribbon.logo_asset_ref">
-                    <div className="flex items-center gap-2 w-full">
-                      <Input
-                        value={config.branding_ribbon?.logo_asset_ref ?? ""}
-                        onChange={(e) =>
-                          update(["branding_ribbon", "logo_asset_ref"], e.target.value)
-                        }
-                        placeholder="/FlexMedia/Brands/.../logo.png"
-                        className="h-8 text-xs font-mono"
+                  <>
+                    <FieldRow label="Logo asset" hint="Dropbox path (placeholder)" fieldKey="branding_ribbon.logo_asset_ref">
+                      <div className="flex items-center gap-2 w-full">
+                        <Input
+                          value={config.branding_ribbon?.logo_asset_ref ?? ""}
+                          onChange={(e) =>
+                            update(["branding_ribbon", "logo_asset_ref"], e.target.value)
+                          }
+                          placeholder="/FlexMedia/Brands/.../logo.png"
+                          className="h-8 text-xs font-mono"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled
+                          title="File picker integration: Wave 3"
+                        >
+                          <ImageIcon className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </FieldRow>
+                    {/* Bug #4 — logo_position + logo_height_px were unreachable. */}
+                    <FieldRow label="Logo position" fieldKey="branding_ribbon.logo_position">
+                      <SelectField
+                        value={config.branding_ribbon?.logo_position}
+                        onChange={(v) => update(["branding_ribbon", "logo_position"], v)}
+                        options={[
+                          { value: "left", label: "Left" },
+                          { value: "right", label: "Right" },
+                        ]}
                       />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled
-                        title="File picker integration: Wave 3"
-                      >
-                        <ImageIcon className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </FieldRow>
+                    </FieldRow>
+                    <FieldRow label="Logo height" fieldKey="branding_ribbon.logo_height_px">
+                      <NumberField
+                        value={config.branding_ribbon?.logo_height_px}
+                        onChange={(v) => update(["branding_ribbon", "logo_height_px"], v)}
+                        min={10}
+                        max={400}
+                        suffix="px"
+                      />
+                    </FieldRow>
+                  </>
                 )}
                 <FieldRow label="Show address" fieldKey="branding_ribbon.show_address">
                   <SwitchField
@@ -2291,6 +2701,18 @@ export default function ThemeEditor({
                     onChange={(v) => update(["branding_ribbon", "show_address"], v)}
                   />
                 </FieldRow>
+                {/* Bug #4 — address_font_size_px was unreachable. */}
+                {config.branding_ribbon?.show_address && (
+                  <FieldRow label="Address font size" fieldKey="branding_ribbon.address_font_size_px">
+                    <NumberField
+                      value={config.branding_ribbon?.address_font_size_px}
+                      onChange={(v) => update(["branding_ribbon", "address_font_size_px"], v)}
+                      min={6}
+                      max={200}
+                      suffix="px"
+                    />
+                  </FieldRow>
+                )}
                 <FieldRow label="Show shot ID" fieldKey="branding_ribbon.show_shot_id">
                   <SwitchField
                     value={config.branding_ribbon?.show_shot_id}
@@ -2479,6 +2901,9 @@ export default function ThemeEditor({
   }
 
   return (
+    // Bug #16 — single TooltipProvider for all HelpTips in this editor.
+    // Previously every HelpTip mounted its own (~100 instances per render).
+    <HelpTipProvider>
     <div className="space-y-3">
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <Card>
@@ -2521,7 +2946,7 @@ export default function ThemeEditor({
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={onCancel} disabled={saving}>
+            <Button variant="outline" size="sm" onClick={handleCancelClick} disabled={saving}>
               Cancel
             </Button>
             {themeId && canEdit && (
@@ -2889,6 +3314,7 @@ export default function ThemeEditor({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+    </HelpTipProvider>
   );
 }
 

@@ -260,9 +260,13 @@ export default function DronePinEditor() {
     try {
       unsubscribe = api.entities.DroneRender.subscribe((evt) => {
         if (!active) return;
-        // Filter to renders whose shot belongs to this shoot.
+        // (QC3 #1) Filter to renders whose shot belongs to this shoot.
+        // For DELETE events evt.data is null and the prior `if (sid && !has(sid))`
+        // short-circuit fail-opened the guard — every drone_render delete
+        // app-wide queued an invalidation. Now we skip when shot_id is
+        // missing OR not in our set.
         const sid = evt?.data?.shot_id;
-        if (sid && !shotIds.has(sid)) return;
+        if (!sid || !shotIds.has(sid)) return;
         throttled();
       });
     } catch (e) {

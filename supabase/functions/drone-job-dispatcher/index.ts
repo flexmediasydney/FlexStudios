@@ -344,12 +344,31 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // Release deferred SfM jobs back to 'pending' so the next dispatcher tick
   // can claim them (otherwise they'd be stuck in 'running' from the claim).
+  //
+  // W1-γ pre-existing fix: previously this batched all deferred ids into a
+  // single UPDATE that wrote `deferred[0].attempt_count - 1` to every row.
+  // Heterogeneous attempts (e.g. one fresh job at attempt=1 and one previously-
+  // failed job at attempt=2) got clobbered to the same value, undermining the
+  // dead-letter cutoff. claim_drone_jobs() incremented their attempt_count when
+  // it claimed them, so the correct release writes EACH job's `attempt_count - 1`
+  // to undo the increment. Loop one-by-one — there's typically zero or one
+  // deferred per tick (MAX_SFM_PER_TICK=1) so the cost is negligible.
   if (deferred.length > 0) {
-    const ids = deferred.map((j) => j.id);
-    await admin
-      .from("drone_jobs")
-      .update({ status: "pending", started_at: null, attempt_count: deferred[0].attempt_count - 1 })
-      .in("id", ids);
+    for (const j of deferred) {
+      const { error: relErr } = await admin
+        .from("drone_jobs")
+        .update({
+          status: "pending",
+          started_at: null,
+          attempt_count: Math.max(0, (j.attempt_count || 1) - 1),
+        })
+        .eq("id", j.id);
+      if (relErr) {
+        console.warn(
+          `[${GENERATOR}] failed to release deferred job ${j.id}: ${relErr.message}`,
+        );
+      }
+    }
   }
 
   return jsonResponse(
@@ -441,6 +460,18 @@ async function dispatchOne(
       return await callEdgeFunction("drone-raw-preview", {
         shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
       });
+    case "cadastral_fetch":
+      // QC8 D-11: cadastral cache was cold for everyone because no kind=
+      // cadastral_fetch job was ever enqueued. drone-cadastral itself is the
+      // existing handler — it's also called inline by drone-render's
+      // fetchCadastral but that bypasses the cache-warming path on the
+      // dispatcher's service-role JWT (TODO #8 in drone-render). Enqueueing
+      // explicitly here from the chain (alongside raw_preview_render) makes
+      // sure the cache row exists by the time drone-render fires.
+      return await callEdgeFunction("drone-cadastral", {
+        project_id:
+          (job.payload?.project_id as string | undefined) || job.project_id,
+      });
     default:
       return { ok: false, error: `unknown kind: ${job.kind}` };
   }
@@ -517,6 +548,32 @@ async function enqueueRawPreviewAfterPois(
     console.warn(
       `[${GENERATOR}] failed to chain raw_preview_render job after poi_fetch ${args.chainedFrom}: ${error.message}`,
     );
+  }
+
+  // QC8 D-11: ALSO enqueue cadastral_fetch alongside raw_preview_render so
+  // the per-project cadastral cache row gets warmed before drone-render's
+  // inline fetchCadastral runs. cadastral_fetch is independent of the
+  // raw-preview render (parallel, not blocking) — both consume the warm POI
+  // cache and the cadastral fetch is itself an independent NSW DCDB call.
+  // Skip if no project_id (drone-cadastral takes project_id, not shoot_id).
+  if (args.projectId) {
+    const { error: cadErr } = await admin.from("drone_jobs").insert({
+      project_id: args.projectId,
+      shoot_id: args.shootId,
+      kind: "cadastral_fetch",
+      status: "pending",
+      payload: {
+        project_id: args.projectId,
+        shoot_id: args.shootId,
+        chained_from: args.chainedFrom,
+      },
+      scheduled_for: scheduled,
+    });
+    if (cadErr) {
+      console.warn(
+        `[${GENERATOR}] failed to chain cadastral_fetch job after poi_fetch ${args.chainedFrom}: ${cadErr.message}`,
+      );
+    }
   }
 }
 
