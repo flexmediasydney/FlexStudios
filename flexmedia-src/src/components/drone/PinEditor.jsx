@@ -291,6 +291,43 @@ export default function PinEditor({
   const poisEnabled = resolvedTheme?.poi_label?.enabled !== false;
   const pinEnabled = resolvedTheme?.property_pin?.enabled !== false;
 
+  // Read-only "Detected POIs" layer items derived from drone_pois_cache.
+  // These are NOT persisted in drone_custom_pins — they're informational so
+  // the operator can see what the AI ingested. Clicking one (TODO Wave 4)
+  // would promote it into an editable custom pin.
+  //
+  // CRITICAL: declared above `projectedItems` (line below) which reads it.
+  // Was previously down at line ~1100 → TDZ violation → minified runtime
+  // error "Cannot access 'Ce' before initialization" on every Pin Editor
+  // mount. Don't move it back down. (Companion to the W3-CASCADE TDZ fix
+  // for `optimisticRenderColumns` in DroneRendersSubtab.)
+  const cachedPoiItems = useMemo(() => {
+    if (!Array.isArray(cachedPois) || cachedPois.length === 0) return [];
+    const out = [];
+    for (const p of cachedPois) {
+      if (!p) continue;
+      const lat = Number(p.lat);
+      const lng = Number(p.lng ?? p.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      out.push({
+        id: `cached_poi_${p.place_id || `${lat}_${lng}`}`,
+        kind: "world",
+        kindLabel: "Detected POI",
+        label: p.name || p.label || "POI",
+        color: "#10B981", // emerald — distinct from theme POIs (indigo)
+        world: { lat, lng },
+        virtual: "cached_poi",
+        readOnly: true,
+        meta: {
+          type: p.type || null,
+          distance_m: p.distance_m ?? null,
+          rating: p.rating ?? null,
+        },
+      });
+    }
+    return out;
+  }, [cachedPois]);
+
   // Items that should be visible on the active shot (after world→pixel projection).
   const projectedItems = useMemo(() => {
     if (!activeShot) return [];
@@ -1095,36 +1132,7 @@ export default function PinEditor({
 
   const dirtyCount = items.filter(isItemDirty).length;
 
-  // Read-only "Detected POIs" layer items derived from drone_pois_cache.
-  // These are NOT persisted in drone_custom_pins — they're informational so
-  // the operator can see what the AI ingested. Clicking one (TODO Wave 4)
-  // would promote it into an editable custom pin.
-  const cachedPoiItems = useMemo(() => {
-    if (!Array.isArray(cachedPois) || cachedPois.length === 0) return [];
-    const out = [];
-    for (const p of cachedPois) {
-      if (!p) continue;
-      const lat = Number(p.lat);
-      const lng = Number(p.lng ?? p.lon);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      out.push({
-        id: `cached_poi_${p.place_id || `${lat}_${lng}`}`,
-        kind: "world",
-        kindLabel: "Detected POI",
-        label: p.name || p.label || "POI",
-        color: "#10B981", // emerald — distinct from theme POIs (indigo)
-        world: { lat, lng },
-        virtual: "cached_poi",
-        readOnly: true,
-        meta: {
-          type: p.type || null,
-          distance_m: p.distance_m ?? null,
-          rating: p.rating ?? null,
-        },
-      });
-    }
-    return out;
-  }, [cachedPois]);
+  // (cachedPoiItems was declared above — see hoisted block near line 295.)
 
   // Layer groups for the tree.
   const layerGroups = useMemo(() => {
