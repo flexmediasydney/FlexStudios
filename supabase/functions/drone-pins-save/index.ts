@@ -537,6 +537,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // those. Tracked in PinEditor.
   let jobId: string | null = null;
   let cascadedShootCount = 0;
+  let debouncedShootCount = 0;
   const cascadedShootIds: string[] = [];
 
   // Resolve the list of shoots to enqueue against. World-anchored ⇒ all
@@ -566,55 +567,81 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // even if no world pins were touched (it already is, above).
   void touchedPixel;
 
-  for (const ts of targetShoots) {
-    const isActive = ts.id === shoot.id;
-    const { data: jobRow, error: jobErr } = await admin
-      .from('drone_jobs')
-      .insert({
-        project_id: ts.project_id,
-        shoot_id: ts.id,
-        kind: 'render',
-        status: 'pending',
-        payload: {
-          reason: cascadeReason,
-          changes_count: creates + updates + deletes,
-          source_shoot_id: shoot.id,
-          // Force the dispatched render to wipe the prior 'adjustments'
-          // lane rows before re-rendering. Without this, the existing-
-          // renders pre-filter in drone-render skips every shot that
-          // already has an adjustments row → renderer is a no-op and the
-          // operator's new pins never make it into a delivered file.
-          // (Pin Editor write-only-sandbox repair.)
-          wipe_existing: true,
-        },
-      })
-      .select('id')
-      .maybeSingle();
-    if (jobErr) {
-      // 23505 = unique_violation — a pending/running render for this shoot
-      // already exists. Treat as a successful debounce: log and count the
-      // shoot as cascaded so the toast still tells the truth (a render is
-      // queued for it, just not by us).
-      const code = (jobErr as { code?: string }).code;
-      if (code === '23505') {
-        console.info(
-          `[${GENERATOR}] render job debounced (existing pending/running render for shoot ${ts.id})`,
-        );
+  // Wave 4: parallelise the cascade INSERTs in chunks (capped concurrency)
+  // so a 50-shoot project no longer sits in a serial `for await` loop. We
+  // mirror ThemeEditor.reRenderImpactedShoots: chunk + Promise.allSettled,
+  // 23505 (unique_violation, dedupe debounce) treated as success.
+  const CHUNK = 10;
+  for (let i = 0; i < targetShoots.length; i += CHUNK) {
+    const chunk = targetShoots.slice(i, i + CHUNK);
+    const results = await Promise.allSettled(
+      chunk.map((ts) =>
+        admin
+          .from('drone_jobs')
+          .insert({
+            project_id: ts.project_id,
+            shoot_id: ts.id,
+            kind: 'render',
+            status: 'pending',
+            payload: {
+              reason: cascadeReason,
+              changes_count: creates + updates + deletes,
+              source_shoot_id: shoot.id,
+              // Force the dispatched render to wipe the prior 'adjustments'
+              // lane rows before re-rendering. Without this, the existing-
+              // renders pre-filter in drone-render skips every shot that
+              // already has an adjustments row → renderer is a no-op and the
+              // operator's new pins never make it into a delivered file.
+              // (Pin Editor write-only-sandbox repair.)
+              wipe_existing: true,
+            },
+          })
+          .select('id')
+          .maybeSingle()
+          .then((res) => ({ ts, res })),
+      ),
+    );
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        console.warn(`[${GENERATOR}] cascade insert promise rejected (non-fatal):`, r.reason);
+        continue;
+      }
+      const { ts, res } = r.value;
+      const isActive = ts.id === shoot.id;
+      const { data: jobRow, error: jobErr } = res;
+      if (jobErr) {
+        const code = (jobErr as { code?: string }).code;
+        if (code === '23505') {
+          // 23505 = unique_violation — a pending/running render for this
+          // shoot already exists. Treat as a successful debounce: log and
+          // count the shoot as cascaded so the toast still tells the truth
+          // (a render is queued for it, just not by us).
+          console.info(
+            `[${GENERATOR}] render job debounced (existing pending/running render for shoot ${ts.id})`,
+          );
+          cascadedShootCount += 1;
+          debouncedShootCount += 1;
+          cascadedShootIds.push(ts.id);
+        } else {
+          console.warn(
+            `[${GENERATOR}] job enqueue failed for shoot ${ts.id} (non-fatal):`,
+            jobErr,
+          );
+        }
+        continue;
+      }
+      if (jobRow) {
         cascadedShootCount += 1;
         cascadedShootIds.push(ts.id);
-      } else {
-        console.warn(
-          `[${GENERATOR}] job enqueue failed for shoot ${ts.id} (non-fatal):`,
-          jobErr,
-        );
+        if (isActive) jobId = (jobRow as { id: string }).id;
       }
-      continue;
     }
-    if (jobRow) {
-      cascadedShootCount += 1;
-      cascadedShootIds.push(ts.id);
-      if (isActive) jobId = (jobRow as { id: string }).id;
-    }
+  }
+  if (targetShoots.length > 1) {
+    const insertedCount = cascadedShootCount - debouncedShootCount;
+    console.info(
+      `[${GENERATOR}] cascade fan-out complete: ${insertedCount} inserted, ${debouncedShootCount} debounced (target=${targetShoots.length})`,
+    );
   }
 
   // Audit #48: standardise partial-failure response shape so the frontend

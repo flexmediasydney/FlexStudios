@@ -147,6 +147,7 @@ export default function PinEditor({
   // parent owns the `?shot=` URL param and the imageUrl pipeline; if the
   // URL changes externally (back/forward, deep-link) we need to update
   // local state so the Inspector + projection use the right shot.
+  const [selectedItemId, setSelectedItemId] = useState(null);
   useEffect(() => {
     if (currentShotId && currentShotId !== activeShotId) {
       setActiveShotId(currentShotId);
@@ -154,7 +155,6 @@ export default function PinEditor({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentShotId]);
-  const [selectedItemId, setSelectedItemId] = useState(null);
   const [hiddenIds, setHiddenIds] = useState(new Set());
   const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
   const [isSaving, setIsSaving] = useState(false);
@@ -749,6 +749,7 @@ export default function PinEditor({
         case "delete":
         case "backspace":
           if (selectedItemId) {
+            // eslint-disable-next-line no-use-before-define -- keypress fires after render; handleDelete is initialised by then
             handleDelete(selectedItemId);
             e.preventDefault();
           }
@@ -763,6 +764,7 @@ export default function PinEditor({
               e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
             const dy =
               e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+            // eslint-disable-next-line no-use-before-define -- keypress fires after render; nudgeSelected is initialised by then
             nudgeSelected(dx, dy);
             e.preventDefault();
           }

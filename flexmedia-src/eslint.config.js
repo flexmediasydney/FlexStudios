@@ -57,4 +57,30 @@ export default [
       "react-hooks/rules-of-hooks": "error",
     },
   },
+  // ── TDZ guard for drone-related modules ──────────────────────────────────
+  // Two TDZ regressions shipped to prod (DroneRendersSubtab
+  // `optimisticRenderColumns` and PinEditor `cachedPoiItems`) — both useMemo
+  // deps referencing const variables declared 100+ lines later. Vite
+  // production build doesn't catch these; only runtime does. This rule
+  // surfaces them at lint time. Scoped to drone + themes files (cascade
+  // surface) to avoid waking pre-existing TDZ patterns elsewhere.
+  {
+    files: [
+      "src/components/drone/**/*.{js,mjs,cjs,jsx}",
+      "src/components/projects/Drone*.{js,mjs,cjs,jsx}",
+      "src/components/themes/**/*.{js,mjs,cjs,jsx}",
+      "src/pages/Drone*.{js,mjs,cjs,jsx}",
+    ],
+    rules: {
+      "no-use-before-define": [
+        "error",
+        {
+          functions: false, // function declarations are hoisted, OK
+          classes: true,
+          variables: true, // const/let TDZ
+          allowNamedExports: false,
+        },
+      ],
+    },
+  },
 ];
