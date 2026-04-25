@@ -190,7 +190,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       }
       const srcBytes = new Uint8Array(await dlRes.arrayBuffer());
 
-      // Build scene
+      // Build scene. Skip shots whose GPS is missing/unparseable — Number(null)
+      // is NaN, which would silently cascade through to Modal and produce a
+      // visually-broken render with POIs landing at frame center. (#B4 audit fix)
       const scene: Record<string, unknown> = {
         lat: Number(shot.gps_lat),
         lon: Number(shot.gps_lon),
@@ -201,6 +203,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         property_lon: projectCoord.lng,
         address: [project.property_address, project.property_suburb].filter(Boolean).join(", "),
       };
+      if (!Number.isFinite(scene.lat as number) || !Number.isFinite(scene.lon as number)) {
+        renderResults.push({
+          shot_id: shot.id,
+          filename: shot.filename,
+          ok: false,
+          error: "shot has missing or unparseable GPS — cannot render",
+        });
+        continue;
+      }
       if (pois && pois.length > 0) scene.pois = pois;
       if (cadastral && Array.isArray(cadastral.polygon)) {
         scene.polygon_latlon = cadastral.polygon.map((v: { lat: number; lng: number }) => [v.lat, v.lng]);

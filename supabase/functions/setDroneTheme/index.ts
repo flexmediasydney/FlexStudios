@@ -98,6 +98,36 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse('config is not valid JSON', 400, req);
   }
 
+  // Walk the config and reject any non-hex value at a key that names a colour.
+  // Without this, garbage like { primary: "totally not a hex" } reaches Modal
+  // and crashes (or silently produces broken renders). The Theme Editor adds
+  // client-side validation but a direct API caller can bypass it. (#B2 audit fix)
+  const COLOR_KEY_RE = /color|fill|stroke|background/i;
+  const HEX_RE = /^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$/;
+  const badColors: string[] = [];
+  function walkColors(node: unknown, path: string) {
+    if (node && typeof node === 'object' && !Array.isArray(node)) {
+      for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+        const here = path ? `${path}.${k}` : k;
+        if (typeof v === 'string' && COLOR_KEY_RE.test(k)) {
+          if (!HEX_RE.test(v)) badColors.push(`${here}=${JSON.stringify(v)}`);
+        } else if (v && typeof v === 'object') {
+          walkColors(v, here);
+        }
+      }
+    } else if (Array.isArray(node)) {
+      node.forEach((item, i) => walkColors(item, `${path}[${i}]`));
+    }
+  }
+  walkColors(serialisedConfig, '');
+  if (badColors.length > 0) {
+    return errorResponse(
+      `config has invalid hex colour(s): ${badColors.slice(0, 5).join(', ')}${badColors.length > 5 ? ` (+${badColors.length - 5} more)` : ''}`,
+      400,
+      req,
+    );
+  }
+
   // owner_id consistency with the schema CHECK:
   //   system → owner_id IS NULL
   //   others → owner_id required

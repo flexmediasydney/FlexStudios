@@ -101,7 +101,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Load the render ────────────────────────────────────────────────────────
   const { data: render, error: fetchErr } = await admin
     .from('drone_renders')
-    .select('id, shot_id, column_state, kind, dropbox_path')
+    .select('id, shot_id, column_state, kind, dropbox_path, output_variant')
     .eq('id', body.render_id)
     .maybeSingle();
 
@@ -173,6 +173,33 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .eq('id', shotRow.shoot_id)
       .maybeSingle();
     projectId = shootRow?.project_id ?? null;
+  }
+
+  // ── Auto-supersede prior occupant of the target slot ─────────────────────
+  // The uniq_drone_renders_active_per_variant index (migration 233) prevents
+  // two active rows sharing (shot_id, kind, variant, column_state). If a Pin-
+  // Editor re-render already filled the 'adjustments' slot for this shot/
+  // kind/variant, then trying to move a 'proposed' row to 'adjustments' would
+  // hit the unique constraint and 500. Pre-emptively kick the prior occupant
+  // to 'rejected' (preserving its history) so the move can proceed. (#B1 audit fix)
+  if (['proposed', 'adjustments', 'final'].includes(toState as string)) {
+    const targetVariant = (render as { output_variant?: string | null }).output_variant ?? null;
+    const { data: priorOccupants } = await admin
+      .from('drone_renders')
+      .select('id, output_variant')
+      .eq('shot_id', render.shot_id)
+      .eq('kind', render.kind)
+      .eq('column_state', toState)
+      .neq('id', body.render_id);
+    const sameVariantIds = (priorOccupants || [])
+      .filter((r) => (r.output_variant ?? null) === targetVariant)
+      .map((r) => r.id);
+    if (sameVariantIds.length > 0) {
+      await admin
+        .from('drone_renders')
+        .update({ column_state: 'rejected' })
+        .in('id', sameVariantIds);
+    }
   }
 
   // ── Update column_state ────────────────────────────────────────────────────
