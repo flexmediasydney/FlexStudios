@@ -36,6 +36,17 @@
  * pixel pin is intrinsically per-shot), so the field was removed. Re-introduce
  * if real fan-out semantics (e.g. cloning a pixel pin across N shots) are
  * implemented in the future.
+ *
+ * Project-wide cascade (W3): world-anchored pins (lat/lng) are inherently
+ * project-scoped — they project to pixels in EVERY shot of EVERY shoot in the
+ * project (orbital, building_hero, nadir_hero, etc.) at render time. So when
+ * an operator edits a world-anchored pin on shoot A, ALL sibling shoots in
+ * the same project must also re-render to pick up the change. Today we fan
+ * out one render job per shoot in the project. The partial unique index from
+ * migration 257 (idx_drone_jobs_unique_pending_render on (shoot_id, kind))
+ * dedupes — repeated saves coalesce to one queued render per shoot. We treat
+ * 23505 as success. Pixel-anchored pins are intrinsically shoot-scoped so
+ * the legacy single-shoot enqueue path still applies.
  */
 
 import {
@@ -51,7 +62,11 @@ import {
 const GENERATOR = 'drone-pins-save';
 
 interface BaseEdit {
-  action: 'create' | 'update' | 'delete';
+  // W3-PINS (mig 268): added 'suppress' (set lifecycle='suppressed') and
+  // 'reset_to_ai' (restore world coords + content from latest_ai_snapshot,
+  // clear updated_by). Both are first-class operations the editor exposes
+  // for AI pins; manual pins still use create/update/delete.
+  action: 'create' | 'update' | 'delete' | 'suppress' | 'reset_to_ai';
   pin_id?: string;
   pin_type?: 'poi_manual' | 'text' | 'line' | 'measurement';
   world_lat?: number | null;
@@ -223,12 +238,23 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let creates = 0;
   let updates = 0;
   let deletes = 0;
+  let suppresses = 0;
+  let resets = 0;
   const errors: string[] = [];
+  const actorId = user.id === '__service_role__' ? null : user.id;
   // Collect IDs of newly inserted rows so the frontend can populate the
   // local item.dbId on its in-memory _new entries — without this, a second
   // save in the same session would re-issue create actions for pins that
   // already exist server-side, causing duplicates.
   const created_ids: string[] = [];
+  // Track whether the batch touched any world-anchored or pixel-anchored
+  // pins. World-anchored = project-scoped (cascade across all shoots);
+  // pixel-anchored = shoot-scoped (legacy per-shoot enqueue only).
+  // Deletes are conservatively treated as world-anchored: we can't cheaply
+  // know the anchor of a deleted pin row without a pre-fetch and a deletion
+  // is a strong signal the operator wants the change reflected everywhere.
+  let touchedWorld = false;
+  let touchedPixel = false;
 
   // (Code archaeology: a prior version of this function rejected the
   // combination pixel-anchored + scope='all_shots' here. The `scope` field
@@ -242,16 +268,115 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         errors.push('delete edit missing pin_id');
         continue;
       }
-      const { error } = await admin
+      // Classify the anchor of the pin BEFORE deleting so we know whether
+      // to fan out the cascade. We can't read the row after the delete.
+      let deletedAnchor: 'world' | 'pixel' | 'unknown' = 'unknown';
+      // W3-PINS: drop the shoot_id filter so project-scoped AI pins
+      // (shoot_id IS NULL) can also be deleted from a shoot session.
+      const { data: anchorRow } = await admin
         .from('drone_custom_pins')
-        .delete()
+        .select('world_lat, pixel_anchored_shot_id, source')
         .eq('id', e.pin_id)
-        .eq('shoot_id', shootId);
+        .maybeSingle();
+      if (anchorRow) {
+        const r = anchorRow as { world_lat: number | null; pixel_anchored_shot_id: string | null };
+        if (r.world_lat !== null && r.world_lat !== undefined) deletedAnchor = 'world';
+        else if (r.pixel_anchored_shot_id) deletedAnchor = 'pixel';
+      }
+      // W3-PINS: AI pins soft-delete (lifecycle='deleted') so a future
+      // drone-pois refresh can recreate the place_id row cleanly. Manual
+      // pins still hard-delete.
+      const aiSoftDelete = (anchorRow as { source?: string } | null)?.source === 'ai';
+      const { error } = aiSoftDelete
+        ? await admin
+            .from('drone_custom_pins')
+            .update({ lifecycle: 'deleted', updated_by: actorId })
+            .eq('id', e.pin_id)
+        : await admin
+            .from('drone_custom_pins')
+            .delete()
+            .eq('id', e.pin_id);
       if (error) {
         console.error(`[${GENERATOR}] delete failed:`, error);
         errors.push(`delete ${e.pin_id}: ${error.message}`);
       } else {
         deletes += 1;
+        // Conservatively treat unknown anchor (row already gone, pre-fetch
+        // missed) as world: a stale-row save shouldn't silently skip the
+        // cascade if the next save has nothing pixel-only to mark.
+        if (deletedAnchor === 'world' || deletedAnchor === 'unknown') {
+          touchedWorld = true;
+        } else {
+          touchedPixel = true;
+        }
+      }
+      continue;
+    }
+
+    if (e.action === 'suppress') {
+      if (!e.pin_id) {
+        errors.push('suppress edit missing pin_id');
+        continue;
+      }
+      const { error } = await admin
+        .from('drone_custom_pins')
+        .update({ lifecycle: 'suppressed', updated_by: actorId })
+        .eq('id', e.pin_id);
+      if (error) {
+        errors.push(`suppress ${e.pin_id}: ${error.message}`);
+      } else {
+        suppresses += 1;
+        // Suppressing a project-scoped pin should cascade across the
+        // project; conservatively mark the world flag so the cascade
+        // block below picks it up.
+        touchedWorld = true;
+      }
+      continue;
+    }
+
+    if (e.action === 'reset_to_ai') {
+      if (!e.pin_id) {
+        errors.push('reset_to_ai edit missing pin_id');
+        continue;
+      }
+      const { data: pin } = await admin
+        .from('drone_custom_pins')
+        .select('id, source, latest_ai_snapshot')
+        .eq('id', e.pin_id)
+        .maybeSingle();
+      if (!pin || (pin as { source: string }).source !== 'ai') {
+        errors.push(`reset_to_ai ${e.pin_id}: only valid on AI-source pins`);
+        continue;
+      }
+      const snap = (pin as { latest_ai_snapshot: Record<string, unknown> | null }).latest_ai_snapshot;
+      if (!snap) {
+        errors.push(`reset_to_ai ${e.pin_id}: no AI snapshot to restore`);
+        continue;
+      }
+      const restoredContent = {
+        label: snap.name,
+        type: snap.type,
+        distance_m: snap.distance_m,
+        rating: snap.rating,
+        user_ratings_total: snap.user_ratings_total,
+        place_id: snap.place_id,
+      };
+      const { error } = await admin
+        .from('drone_custom_pins')
+        .update({
+          world_lat: snap.lat as number,
+          world_lng: snap.lng as number,
+          content: restoredContent,
+          style_overrides: null,
+          lifecycle: 'active',
+          updated_by: null,
+        })
+        .eq('id', e.pin_id);
+      if (error) {
+        errors.push(`reset_to_ai ${e.pin_id}: ${error.message}`);
+      } else {
+        resets += 1;
+        touchedWorld = true;
       }
       continue;
     }
@@ -284,6 +409,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       }
     }
 
+    const isWorldPayload = payload.world_lat !== null;
+
     if (e.action === 'create') {
       const { data: insRow, error } = await admin
         .from('drone_custom_pins')
@@ -300,6 +427,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         errors.push(`create: ${error.message}`);
       } else {
         creates += 1;
+        if (isWorldPayload) touchedWorld = true;
+        else touchedPixel = true;
         if (insRow && (insRow as { id?: string }).id) {
           created_ids.push((insRow as { id: string }).id);
         }
@@ -310,16 +439,40 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       // the XOR constraint.
       const { shoot_id: _drop, ...updPayload } = payload;
       void _drop;
+      // Update may swap anchor (pixel→world etc.). Mark BOTH the prior
+      // anchor (read pre-update) and the new anchor (from payload) so a
+      // pixel→world flip cascades AND the original shoot rerenders.
+      let priorAnchor: 'world' | 'pixel' | 'unknown' = 'unknown';
+      // W3-PINS: drop the shoot_id filter — project-scoped AI pins have
+      // shoot_id IS NULL and the editor needs to be able to update them
+      // from any shoot's session. Pin-level RLS still gates access.
+      const { data: priorRow } = await admin
+        .from('drone_custom_pins')
+        .select('world_lat, pixel_anchored_shot_id')
+        .eq('id', e.pin_id)
+        .maybeSingle();
+      if (priorRow) {
+        const r = priorRow as { world_lat: number | null; pixel_anchored_shot_id: string | null };
+        if (r.world_lat !== null && r.world_lat !== undefined) priorAnchor = 'world';
+        else if (r.pixel_anchored_shot_id) priorAnchor = 'pixel';
+      }
+      // W3-PINS: stamp updated_by so drone-pois smart-merge knows this row
+      // was operator-edited and won't overwrite world coords on next refresh.
       const { error } = await admin
         .from('drone_custom_pins')
-        .update(updPayload)
-        .eq('id', e.pin_id)
-        .eq('shoot_id', shootId);
+        .update({ ...updPayload, updated_by: actorId })
+        .eq('id', e.pin_id);
       if (error) {
         console.error(`[${GENERATOR}] update failed:`, error);
         errors.push(`update ${e.pin_id}: ${error.message}`);
       } else {
         updates += 1;
+        if (isWorldPayload || priorAnchor === 'world' || priorAnchor === 'unknown') {
+          touchedWorld = true;
+        }
+        if (!isWorldPayload || priorAnchor === 'pixel') {
+          touchedPixel = true;
+        }
       }
     }
   }
@@ -363,34 +516,75 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
-  // Enqueue a re-render job. Stream I picks this up.
+  // Enqueue re-render job(s). Stream I picks them up.
+  //
   // Audit #4: migration 240 added a partial unique index
-  // idx_drone_jobs_unique_pending_render on (shoot_id) WHERE status IN
-  // ('pending','running') AND kind='render'. If the operator hammers Save,
-  // the second insert raises 23505; we treat that as success (debounced) —
-  // the already-queued render will pick up the latest pin state when it
-  // runs.
-  // TODO(audit #1): drone-pins-save returns 5xx from the admin client on
-  // transient Postgres errors above; the frontend's directEntityFallback
-  // path could auto-retry idempotent inserts on those. Tracked in PinEditor.
+  // idx_drone_jobs_unique_pending_render on (shoot_id, kind) WHERE status
+  // IN ('pending','running') AND kind IN ('render','render_preview',
+  // 'raw_preview_render') (broadened by migration 257). If the operator
+  // hammers Save, the second insert raises 23505; we treat that as success
+  // (debounced) — the already-queued render will pick up the latest pin
+  // state when it runs.
+  //
+  // W3 cascade: world-anchored pins are project-scoped (every shot in
+  // every shoot projects the same lat/lng to its own pixel space). When a
+  // world-anchored pin is touched we fan out one render job per sibling
+  // shoot in the project; pixel-only edit batches stay shoot-local.
+  //
+  // TODO Wave 4 (audit #1): drone-pins-save returns 5xx from the admin
+  // client on transient Postgres errors above; the frontend's
+  // directEntityFallback path could auto-retry idempotent inserts on
+  // those. Tracked in PinEditor.
   let jobId: string | null = null;
-  {
+  let cascadedShootCount = 0;
+  const cascadedShootIds: string[] = [];
+
+  // Resolve the list of shoots to enqueue against. World-anchored ⇒ all
+  // shoots in the project (cascade). Pixel-only or no-op ⇒ just the active
+  // shoot (legacy behaviour).
+  let targetShoots: { id: string; project_id: string }[] = [
+    { id: shoot.id, project_id: shoot.project_id },
+  ];
+  let cascadeReason: 'pin_edit_saved' | 'pin_edit_cascade' = 'pin_edit_saved';
+  if (touchedWorld) {
+    cascadeReason = 'pin_edit_cascade';
+    const { data: siblingShoots, error: siblingErr } = await admin
+      .from('drone_shoots')
+      .select('id, project_id')
+      .eq('project_id', shoot.project_id);
+    if (siblingErr || !siblingShoots) {
+      console.warn(
+        `[${GENERATOR}] sibling shoot lookup failed; falling back to single-shoot enqueue:`,
+        siblingErr,
+      );
+    } else {
+      targetShoots = siblingShoots as { id: string; project_id: string }[];
+    }
+  }
+
+  // Pixel-only changes mean the active shoot must be in the target list
+  // even if no world pins were touched (it already is, above).
+  void touchedPixel;
+
+  for (const ts of targetShoots) {
+    const isActive = ts.id === shoot.id;
     const { data: jobRow, error: jobErr } = await admin
       .from('drone_jobs')
       .insert({
-        project_id: shoot.project_id,
-        shoot_id: shoot.id,
+        project_id: ts.project_id,
+        shoot_id: ts.id,
         kind: 'render',
         status: 'pending',
         payload: {
-          reason: 'pin_edit_saved',
+          reason: cascadeReason,
           changes_count: creates + updates + deletes,
+          source_shoot_id: shoot.id,
           // Force the dispatched render to wipe the prior 'adjustments'
-          // lane rows for this shoot before re-rendering. Without this,
-          // the existing-renders pre-filter in drone-render skips every
-          // shot that already has an adjustments row → renderer is a
-          // no-op and the operator's new pins never make it into a
-          // delivered file. (Pin Editor write-only-sandbox repair.)
+          // lane rows before re-rendering. Without this, the existing-
+          // renders pre-filter in drone-render skips every shot that
+          // already has an adjustments row → renderer is a no-op and the
+          // operator's new pins never make it into a delivered file.
+          // (Pin Editor write-only-sandbox repair.)
           wipe_existing: true,
         },
       })
@@ -398,17 +592,28 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .maybeSingle();
     if (jobErr) {
       // 23505 = unique_violation — a pending/running render for this shoot
-      // already exists. Treat as a successful debounce: log and move on.
+      // already exists. Treat as a successful debounce: log and count the
+      // shoot as cascaded so the toast still tells the truth (a render is
+      // queued for it, just not by us).
       const code = (jobErr as { code?: string }).code;
       if (code === '23505') {
         console.info(
-          `[${GENERATOR}] render job debounced (existing pending/running render for shoot ${shoot.id})`,
+          `[${GENERATOR}] render job debounced (existing pending/running render for shoot ${ts.id})`,
         );
+        cascadedShootCount += 1;
+        cascadedShootIds.push(ts.id);
       } else {
-        console.warn(`[${GENERATOR}] job enqueue failed (non-fatal):`, jobErr);
+        console.warn(
+          `[${GENERATOR}] job enqueue failed for shoot ${ts.id} (non-fatal):`,
+          jobErr,
+        );
       }
-    } else if (jobRow) {
-      jobId = (jobRow as { id: string }).id;
+      continue;
+    }
+    if (jobRow) {
+      cascadedShootCount += 1;
+      cascadedShootIds.push(ts.id);
+      if (isActive) jobId = (jobRow as { id: string }).id;
     }
   }
 
@@ -418,7 +623,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // was applied; partial failures are surfaced via partial_failures[]. Pure
   // total-failure (no edits applied AND errors present) returns success:
   // false to keep the failure path obvious.
-  const totalApplied = creates + updates + deletes;
+  const totalApplied = creates + updates + deletes + suppresses + resets;
   const hasErrors = errors.length > 0;
   const isPartial = hasErrors && totalApplied > 0;
   const isTotalFail = hasErrors && totalApplied === 0;
@@ -426,7 +631,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   return jsonResponse(
     {
       success: !isTotalFail,
-      applied: { creates, updates, deletes },
+      applied: { creates, updates, deletes, suppresses, resets },
       // created_ids is the list of NEW pin row IDs (in insertion order).
       // The frontend uses this to populate item.dbId on its in-memory _new
       // entries so a second save in the same session updates rather than
@@ -436,6 +641,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       errors: isTotalFail ? errors : undefined,
       job_id: jobId,
       event_id: eventId,
+      // Cascade telemetry: how many shoots got a render queued (or already
+      // had one). The frontend uses this to show "Re-rendering N shoots"
+      // when N > 1 (world-anchored edit). When pixel-only, N == 1 and the
+      // toast falls back to the single-shoot copy.
+      cascade: {
+        reason: cascadeReason,
+        cascaded_shoot_count: cascadedShootCount,
+        cascaded_shoot_ids: cascadedShootIds,
+      },
     },
     status,
     req,

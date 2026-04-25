@@ -66,6 +66,7 @@ import {
   ChevronDown,
   ChevronRight,
   AlertCircle,
+  AlertTriangle,
   ImageIcon,
   Trash2,
   ShieldAlert,
@@ -1041,7 +1042,15 @@ export default function ThemeEditor({
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveAsNewPending, setSaveAsNewPending] = useState(false);
   const [impactLoading, setImpactLoading] = useState(false);
-  const [impactRows, setImpactRows] = useState([]); // [{ project_id, project_address, shoot_id, shoot_status, renders_count, in_flight }]
+  const [impactRows, setImpactRows] = useState([]); // [{ project_id, project_address, shoot_id, shoot_status, renders_count, in_flight, is_truncated }]
+  // QC6 #25: drone_theme_impacted_projects() caps the impact list at 200
+  // rows. Until migration 273 the function gave no signal that the cap had
+  // been hit, so the operator could believe the impact was contained. This
+  // ref captures the new is_truncated flag from any row and surfaces a
+  // warning under the visible list. Boolean is sticky per fetch — if any
+  // row reports truncation we show the banner regardless of in_flight
+  // filtering (since the truncation happened *before* the filter).
+  const [impactTruncated, setImpactTruncated] = useState(false);
   const [impactRpcAvailable, setImpactRpcAvailable] = useState(true);
   const [autoRerender, setAutoRerender] = useState(false);
   const [rerendering, setRerendering] = useState(false);
@@ -1149,12 +1158,18 @@ export default function ThemeEditor({
   const fetchImpactList = useCallback(async (tid) => {
     if (!tid) {
       setImpactRows([]);
+      setImpactTruncated(false);
       return;
     }
     setImpactLoading(true);
     try {
       const rows = await api.rpc("drone_theme_impacted_projects", { p_theme_id: tid });
-      setImpactRows(Array.isArray(rows) ? rows.filter((r) => r.in_flight === true) : []);
+      const arr = Array.isArray(rows) ? rows : [];
+      setImpactRows(arr.filter((r) => r.in_flight === true));
+      // QC6 #25: any row stamped is_truncated=true means the underlying
+      // 200-row cap was hit. Pre-migration 273 servers won't include the
+      // column at all → fall back to false (no banner shown).
+      setImpactTruncated(arr.some((r) => r?.is_truncated === true));
       setImpactRpcAvailable(true);
     } catch (e) {
       // If the RPC doesn't exist (404 / function not found), disable the impact
@@ -1162,6 +1177,7 @@ export default function ThemeEditor({
       console.warn("[ThemeEditor] drone_theme_impacted_projects unavailable:", e?.message);
       setImpactRpcAvailable(false);
       setImpactRows([]);
+      setImpactTruncated(false);
     } finally {
       setImpactLoading(false);
     }
@@ -3247,6 +3263,21 @@ export default function ThemeEditor({
                         </li>
                       )}
                     </ul>
+                    {/* QC6 #25: server-side cap hit at 200 rows. Surface
+                        the truncation explicitly so the operator can't
+                        believe the listed shoots are the entirety of the
+                        impact. (The server still caps; client side just
+                        reflects the flag.) */}
+                    {impactTruncated && (
+                      <div className="mt-2 border-t border-amber-300 dark:border-amber-700 pt-1.5 text-[10px] text-amber-700 dark:text-amber-300 flex items-start gap-1">
+                        <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+                        <span>
+                          Impact list truncated at 200 shoots — additional
+                          shoots use this theme but are not shown. Re-render
+                          covers only the listed shoots.
+                        </span>
+                      </div>
+                    )}
                   </div>
                 )}
 

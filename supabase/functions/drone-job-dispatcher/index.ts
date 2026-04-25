@@ -759,6 +759,13 @@ async function markFailed(
         // job stuck in 'running' forever. (#32 audit fix)
         status: "dead_letter",
         finished_at: new Date().toISOString(),
+        // QC7 F27 (Wave 4): error_message is a single text column so a
+        // multi-shot batch render that fails on shots [3,7,12] only
+        // surfaces ONE message (the last one to land before dead-letter).
+        // Schema upgrade tracked: add `errors jsonb` (array of
+        // {shot_id, attempt, message, ts}) and migrate this writer +
+        // AlertsPanel reader together. Until then, operators must
+        // cross-reference the function logs to see all failures.
         error_message: errMsg.slice(0, 1000),
       })
       .eq("id", job.id);

@@ -243,7 +243,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // POST to Modal render_http endpoint. RENDER_TOKEN goes in the Authorization
   // header to keep it out of Modal's request-body error logs. The body field
   // is retained for backward compat with the deployed Modal worker.
-  // TODO: drop the body _token once Modal accepts header-only auth. (#7 audit)
+  // TODO Wave 4: drop the body _token once Modal accepts header-only auth. (#7 audit)
   let modalResp: Response;
   try {
     modalResp = await fetch(MODAL_RENDER_URL, {

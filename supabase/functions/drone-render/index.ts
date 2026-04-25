@@ -162,20 +162,24 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (projErr || !project)
     return errorResponse(`project lookup failed: ${projErr?.message || "missing"}`, 500, req);
 
-  // ── Load drone_custom_pins for this shoot ──────────────────────────
-  // The Pin Editor persists operator-saved pins (text labels, manual POIs,
-  // pixel-anchored ribbons) into drone_custom_pins. Each row is either:
-  //   - World-anchored: world_lat/world_lng populated, applies to every
-  //     shot in the shoot (projected per-shot via _gps_to_px in Modal).
-  //   - Pixel-anchored: pixel_anchored_shot_id + pixel_x/pixel_y populated,
-  //     applies ONLY to that one shot (drawn at exact stored coords).
+  // ── Load drone_custom_pins (UNIFIED model, mig 268) ────────────────
+  // After W3-PINS the table holds BOTH operator-created pins (source='manual',
+  // shoot- or project-scoped) AND AI-fetched POIs (source='ai',
+  // project-scoped, materialised by drone-pois). One query covers both.
   //
-  // We load the full set once per drone-render invocation and partition
-  // per-shot inside the renderOneShot closure below. Without this query
-  // saved pins NEVER reach Modal — historic bug where the Pin Editor
-  // appeared to save successfully but renders never reflected the edits.
+  // Filters:
+  //   - lifecycle='active' (skip suppressed/superseded/deleted)
+  //   - scope = THIS shoot OR THIS project (project-scoped pins fan out
+  //     across every shoot in the project)
+  //
+  // Ordering: priority DESC so when max_pins truncates, manual edits beat
+  // AI proposals (manual default priority=20, ai default=10).
   type CustomPinRow = {
+    id: string;
     pin_type: 'poi_manual' | 'text' | 'line' | 'measurement';
+    source: 'manual' | 'ai';
+    subsource: string | null;
+    external_ref: string | null;
     world_lat: number | null;
     world_lng: number | null;
     pixel_anchored_shot_id: string | null;
@@ -183,13 +187,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     pixel_y: number | null;
     content: Record<string, unknown> | null;
     style_overrides: Record<string, unknown> | null;
+    priority: number;
   };
   const { data: customPinsRaw, error: pinsErr } = await admin
     .from("drone_custom_pins")
     .select(
-      "pin_type, world_lat, world_lng, pixel_anchored_shot_id, pixel_x, pixel_y, content, style_overrides",
+      "id, pin_type, source, subsource, external_ref, world_lat, world_lng, pixel_anchored_shot_id, pixel_x, pixel_y, content, style_overrides, priority",
     )
-    .eq("shoot_id", shoot.id);
+    .eq("lifecycle", "active")
+    .or(`shoot_id.eq.${shoot.id},project_id.eq.${project.id}`)
+    .order("priority", { ascending: false });
   if (pinsErr) {
     console.warn(`[${GENERATOR}] drone_custom_pins lookup failed (non-fatal): ${pinsErr.message}`);
   }
@@ -401,6 +408,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse("project has no usable coordinates (confirmed or geocoded)", 400, req);
   }
 
+  // ── POIs (W3-PINS): no longer fetched from drone-pois cache JSONB ──────
+  // After mig 268 + drone-pois rewrite, AI POIs live as drone_custom_pins
+  // rows with source='ai'. They're already in `allCustomPins` above (loaded
+  // via the unified pins query) and reach Modal via scene.custom_pins, NOT
+  // scene.pois. The legacy fetchPois sub-call is retained ONLY for renders
+  // against projects whose drone-pois has not yet been re-run post-mig 268
+  // (so the unified table is empty). When `worldCustomPins` already contains
+  // ai-source rows for this project, skip fetchPois entirely.
+  const haveAiPinsAlready = worldCustomPins.some((p) => p.source === 'ai');
   const themeRadius = Number(themeForKind?.poi_selection?.radius_m);
   const radiusToUse = Number.isFinite(themeRadius) && themeRadius > 0 ? themeRadius : undefined;
   // Forward the resolved theme's poi_selection.type_quotas to drone-pois so
@@ -410,7 +426,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // different theme selections don't collide. (Stream J — type-quotas wiring.)
   const themeQuotas = themeForKind?.poi_selection?.type_quotas;
   const [pois, cadastral] = await Promise.all([
-    needsPois(kind) ? fetchPois(req, project.id, radiusToUse, themeQuotas) : Promise.resolve([]),
+    needsPois(kind) && !haveAiPinsAlready
+      ? fetchPois(req, project.id, radiusToUse, themeQuotas)
+      : Promise.resolve([]),
     needsBoundary(kind) ? fetchCadastral(req, project.id) : Promise.resolve(null),
   ]);
 
@@ -595,13 +613,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         scene.polygon_latlon = cadastral.polygon.map((v: { lat: number; lng: number }) => [v.lat, v.lng]);
       }
 
-      // ── Operator-saved custom pins (drone_custom_pins) ───────────
-      // World-anchored pins fan out across every shot in the shoot;
+      // ── Custom pins (UNIFIED — operator + AI, mig 268) ───────────
+      // World-anchored pins fan out across every shot in the project/shoot;
       // pixel-anchored pins are scoped to their specific shot. Modal's
-      // render_engine reads scene.custom_pins and projects/draws each
-      // entry alongside the theme POIs + property pin.
+      // render_engine reads scene.custom_pins and projects/draws each.
+      //
+      // POI-only roles: only orbital frames carry POI labels (per the
+      // poisAllowedForRole gate above). Project-scoped AI pins still get
+      // suppressed on building/oblique heroes, etc.
       const pinsForThisShot: Array<{
         pin_type: string;
+        source?: string;
+        external_ref?: string | null;
         world_lat?: number;
         world_lng?: number;
         pixel_x?: number;
@@ -610,8 +633,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         style_overrides?: Record<string, unknown> | null;
       }> = [];
       for (const wp of worldCustomPins) {
+        // AI pins are POI labels — gate by role like the legacy POI loop.
+        if (wp.source === 'ai' && !poisAllowedForRole) continue;
         pinsForThisShot.push({
           pin_type: wp.pin_type,
+          source: wp.source,
+          external_ref: wp.external_ref,
           world_lat: wp.world_lat as number,
           world_lng: wp.world_lng as number,
           content: wp.content,
@@ -622,14 +649,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       for (const pp of myPixelPins) {
         pinsForThisShot.push({
           pin_type: pp.pin_type,
+          source: pp.source,
+          external_ref: pp.external_ref,
           pixel_x: pp.pixel_x as number,
           pixel_y: pp.pixel_y as number,
           content: pp.content,
           style_overrides: pp.style_overrides,
         });
       }
-      if (pinsForThisShot.length > 0) {
-        scene.custom_pins = pinsForThisShot;
+      // Apply max_pins_per_shot truncation (theme-driven). Already sorted
+      // by priority DESC at query time so manual edits beat AI proposals.
+      const maxPins = Number(themeForKind?.poi_selection?.max_pins_per_shot);
+      const cap = Number.isFinite(maxPins) && maxPins > 0 ? Math.floor(maxPins) : null;
+      const cappedPins = cap !== null ? pinsForThisShot.slice(0, cap) : pinsForThisShot;
+      if (cappedPins.length > 0) {
+        scene.custom_pins = cappedPins;
       }
 
       // Determine if this theme requested multi-variant output
@@ -641,8 +675,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       // POST to Modal HTTP endpoint. RENDER_TOKEN is sent as a Bearer header to
       // avoid leaking it through Modal's request-body error logs. The body field
       // (_token) is retained for backward compat with the deployed Modal worker.
-      // TODO: drop the body _token field once the Modal render_http endpoint
-      // accepts header-only auth. (#7 audit fix)
+      // TODO Wave 4: drop the body _token field once the Modal render_http
+      // endpoint accepts header-only auth. (#7 audit fix)
       //
       // QC8 D-07 fix: previously this fetch had no timeout. If Modal hangs the
       // Edge Function would spin until its 145s wall-clock cap, then return a
@@ -1040,14 +1074,15 @@ async function loadThemeChain(
   return chain;
 }
 
-// TODO (#8 audit): when this function is called from the drone-job-dispatcher
-// the forwarded Authorization header carries a service-role JWT. drone-pois /
-// drone-cadastral both gate via getUserClient(req) which doesn't recognise the
-// service-role principal → the sub-call returns 0 POIs / null cadastral and
-// the chained render comes out blank. Fix is owned by the drone-pois /
-// drone-cadastral team (Z2): they need to detect the service-role JWT and skip
-// the per-user RLS check (e.g. accept ?internal=1 + service-role JWT). Until
-// that lands, dispatcher-chained renders won't show POIs/boundary even when
+// TODO Wave 4 (#8 audit): when this function is called from the
+// drone-job-dispatcher the forwarded Authorization header carries a
+// service-role JWT. drone-pois / drone-cadastral both gate via
+// getUserClient(req) which doesn't recognise the service-role principal →
+// the sub-call returns 0 POIs / null cadastral and the chained render
+// comes out blank. Fix is owned by the drone-pois / drone-cadastral team
+// (Z2): they need to detect the service-role JWT and skip the per-user
+// RLS check (e.g. accept ?internal=1 + service-role JWT). Until that
+// lands, dispatcher-chained renders won't show POIs/boundary even when
 // the data exists. Tracking: see audit finding #8.
 // Stash the most recent sub-call telemetry so we can surface it in the
 // per-shot RenderResult (see RenderResult.pois_subcall_*). Process-global is
@@ -1105,9 +1140,10 @@ async function fetchPois(
   return (j.pois as any[]) || [];
 }
 
-// TODO (#8 audit): same caveat as fetchPois — when invoked via the dispatcher's
-// service-role JWT, drone-cadastral's getUserClient doesn't recognise the
-// principal so we get null back. Fix is owned by drone-cadastral (Z2).
+// TODO Wave 4 (#8 audit): same caveat as fetchPois — when invoked via the
+// dispatcher's service-role JWT, drone-cadastral's getUserClient doesn't
+// recognise the principal so we get null back. Fix is owned by
+// drone-cadastral (Z2).
 async function fetchCadastral(req: Request, projectId: string): Promise<any | null> {
   // Same fix as fetchPois — req.url is the internal route, missing the
   // /functions/v1/ prefix. Use the public Supabase URL.

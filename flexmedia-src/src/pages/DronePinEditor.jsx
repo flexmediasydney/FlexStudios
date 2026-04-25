@@ -131,16 +131,38 @@ export default function DronePinEditor() {
     staleTime: 30_000,
   });
 
+  // W3-PINS (mig 268): the editor now loads BOTH shoot-scoped manual pins
+  // AND project-scoped AI pins (source='ai', shoot_id IS NULL) in a single
+  // query. The OR clause is implemented via two filtered fetches merged
+  // client-side because the entity helper doesn't expose Postgrest .or().
   const customPinsQ = useQuery({
-    queryKey: ["drone_custom_pins", "by-shoot", shootId],
-    queryFn: () =>
-      shootId
-        ? api.entities.DroneCustomPin.filter(
-            { shoot_id: shootId },
-            "-created_at",
-            500,
-          )
-        : [],
+    queryKey: ["drone_custom_pins", "by-shoot-or-project", shootId, projectId],
+    queryFn: async () => {
+      if (!shootId) return [];
+      const [shootPins, projectPins] = await Promise.all([
+        api.entities.DroneCustomPin.filter(
+          { shoot_id: shootId, lifecycle: "active" },
+          "-created_at",
+          500,
+        ),
+        projectId
+          ? api.entities.DroneCustomPin.filter(
+              { project_id: projectId, source: "ai", lifecycle: "active" },
+              "-created_at",
+              500,
+            )
+          : [],
+      ]);
+      // Dedupe by id (a pin row can satisfy both filters in theory).
+      const seen = new Set();
+      const merged = [];
+      for (const p of [...(shootPins || []), ...(projectPins || [])]) {
+        if (!p?.id || seen.has(p.id)) continue;
+        seen.add(p.id);
+        merged.push(p);
+      }
+      return merged;
+    },
     enabled: Boolean(shootId),
     staleTime: 30_000,
   });
@@ -195,27 +217,10 @@ export default function DronePinEditor() {
     retry: 1,
   });
 
-  // Project's drone_pois_cache row — feeds the "Detected POIs (AI)" virtual
-  // layer in the editor. Most recent non-expired row wins; if there is none
-  // we fall back to the most recently fetched (operator can refresh via
-  // drone-pois force-refresh from the swimlane).
-  const cachedPoisQ = useQuery({
-    queryKey: ["drone_pois_cache", "by-project", projectId],
-    queryFn: async () => {
-      if (!projectId) return [];
-      const rows = await api.entities.DronePoisCache.filter(
-        { project_id: projectId },
-        "-fetched_at",
-        1,
-      );
-      const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
-      const pois = Array.isArray(row?.pois) ? row.pois : [];
-      return pois;
-    },
-    enabled: Boolean(projectId),
-    staleTime: 60_000,
-    retry: 1,
-  });
+  // W3-PINS: cached POIs are now first-class drone_custom_pins rows
+  // (source='ai'), loaded via customPinsQ above. No separate query needed.
+  // The legacy drone_pois_cache table is a raw audit log only.
+  const cachedPoisQ = { data: [] };
 
   // ── Realtime: refresh renders when a re-render completes ─────────────────
   // (Audit finding #8.) Uses the same throttle pattern as DroneCommandCenter

@@ -114,6 +114,17 @@ export default function DroneLightbox({
   const safeIndex = total > 0 ? Math.max(0, Math.min(index, total - 1)) : 0;
   const item = total > 0 ? items[safeIndex] : null;
 
+  // QC3 #8 a11y: capture the element that opened the lightbox so we can
+  // restore focus on close (without this, AT users — and any keyboard user
+  // — get dumped at <body> after Esc). Saved on mount because that's the
+  // only frame where document.activeElement is still the launcher button.
+  const previousFocusRef = useRef(null);
+  // Focus-trap target — the close button inside the dialog. We focus this
+  // on mount (so ⇥-Tab cycles inside the modal, not into background
+  // content) and use it as the wrap-around landing pad for the trap.
+  const closeButtonRef = useRef(null);
+  const dialogRef = useRef(null);
+
   // Per-instance blob cache + fetcher. Lifetime is bounded by this lightbox's
   // mount; on unmount we revoke every blob in the map (see effect below).
   const cacheRef = useRef(null);
@@ -255,6 +266,75 @@ export default function DroneLightbox({
     };
   }, []);
 
+  // QC3 #8: Focus management — on mount, capture launcher + focus close
+  // button; on unmount, restore focus to launcher. Without this the
+  // keyboard user is stranded with no visible focus ring after Esc.
+  useEffect(() => {
+    previousFocusRef.current =
+      typeof document !== "undefined" ? document.activeElement : null;
+    // Defer focus to the next tick so the portal has actually mounted in
+    // the DOM (focus on an unmounted ref is a silent no-op in React 18+).
+    const id = setTimeout(() => {
+      try {
+        closeButtonRef.current?.focus();
+      } catch {
+        /* ignore */
+      }
+    }, 0);
+    return () => {
+      clearTimeout(id);
+      const prev = previousFocusRef.current;
+      if (
+        prev &&
+        typeof prev.focus === "function" &&
+        document.contains(prev)
+      ) {
+        try {
+          prev.focus();
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, []);
+
+  // QC3 #8: Focus trap — keep Tab within the dialog. Without this, ⇥-Tab
+  // skips into the background page (which is also scroll-locked, so the
+  // user may not even see where focus went). Find every tabbable element
+  // inside the dialog on each Tab and wrap from last↔first.
+  useEffect(() => {
+    const onTab = (e) => {
+      if (e.key !== "Tab") return;
+      const root = dialogRef.current;
+      if (!root) return;
+      const focusables = Array.from(
+        root.querySelectorAll(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter(
+        (el) =>
+          el.offsetParent !== null ||
+          el.getClientRects().length > 0 /* visible */,
+      );
+      if (focusables.length === 0) {
+        e.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onTab);
+    return () => window.removeEventListener("keydown", onTab);
+  }, []);
+
   // Touch swipe (mobile/tablet). Horizontal swipe past threshold = nav;
   // anything else falls through (no scroll: we lock the body anyway).
   const handleTouchStart = (e) => {
@@ -287,6 +367,18 @@ export default function DroneLightbox({
 
   return createPortal(
     <div
+      ref={dialogRef}
+      // QC3 #8: aria-modal/role tell AT this is a modal dialog so the rest
+      // of the page is treated as inert. aria-labelledby points at the
+      // counter/filename pair so screen readers announce context on open.
+      role="dialog"
+      aria-modal="true"
+      aria-label={
+        item?.filename
+          ? `Lightbox — ${item.filename}`
+          : "Drone media lightbox"
+      }
+      tabIndex={-1}
       className="fixed inset-0 z-50 flex flex-col bg-black/95 select-none"
       onClick={handleOverlayClick}
       onTouchStart={handleTouchStart}
@@ -298,6 +390,7 @@ export default function DroneLightbox({
           {counter}
         </div>
         <button
+          ref={closeButtonRef}
           type="button"
           onClick={onClose}
           className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
@@ -393,14 +486,23 @@ export default function DroneLightbox({
                 </span>
               )}
               {item.ai_recommended && (
+                // QC3 #29 a11y: tooltip-only "title" attribute is keyboard-
+                // inaccessible — sighted-mouse users see it on hover, but
+                // keyboard-only / AT users get no exposition. Promote to a
+                // proper label-bearing element with explicit aria-label so
+                // the rationale ("Suggested by AI based on …") is read out
+                // when the badge receives focus or is announced inline.
                 <span
                   className={cn(
                     "text-[10px] px-1.5 py-0.5 rounded inline-flex items-center gap-0.5",
                     "bg-blue-600/90 text-white",
                   )}
-                  title="Suggested by AI"
+                  role="img"
+                  aria-label="AI recommended — suggested by AI based on dedup, flight roll, and POI coverage"
+                  title="AI recommended — suggested by AI based on dedup, flight roll, and POI coverage"
+                  tabIndex={0}
                 >
-                  <Sparkles className="h-2.5 w-2.5" />
+                  <Sparkles className="h-2.5 w-2.5" aria-hidden="true" />
                   AI Recommended
                 </span>
               )}

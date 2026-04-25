@@ -175,11 +175,12 @@ export default function PinEditor({
   // rendered/displayed image space. When the displayed image is downscaled,
   // the projected pin coords overshoot the displayed image extent and pins
   // appear in the wrong place on screen.
-  // TODO(#22): proper fix requires either (a) always rendering against the
-  // ORIGINAL drone shot resolution (CSS-scale to fit), or (b) scaling pixel
-  // coords from camera-native space → rendered-image space using the ratio
-  // (imageNatural.w / pose.w). Option (b) is cheaper but requires every
-  // gpsToPixel/pixelToGroundGps call site to scale-and-unscale consistently.
+  // TODO Wave 4 (#22): proper fix requires either (a) always rendering
+  // against the ORIGINAL drone shot resolution (CSS-scale to fit), or (b)
+  // scaling pixel coords from camera-native space → rendered-image space
+  // using the ratio (imageNatural.w / pose.w). Option (b) is cheaper but
+  // requires every gpsToPixel/pixelToGroundGps call site to scale-and-
+  // unscale consistently.
   const [imageNatural, setImageNatural] = useState({
     w: CAMERA_DEFAULTS.w,
     h: CAMERA_DEFAULTS.h,
@@ -244,6 +245,17 @@ export default function PinEditor({
       return next;
     });
   }, [pushHistory, clearHistory]);
+
+  // QC4 F17: keep a ref to the latest committed items so handleSave can
+  // read post-flush state without waiting for a React render. Inspector's
+  // label/color drafts only commit on blur — when the operator clicks Save
+  // we force-blur the focused input so the on-blur handler fires + state
+  // is scheduled, but the surrounding handleSave closure still sees the
+  // pre-blur items unless we read through this ref.
+  const itemsRef = useRef(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   const undo = useCallback(() => {
     _setItems((current) => {
@@ -614,7 +626,15 @@ export default function PinEditor({
       e.preventDefault();
       const rect = stageRef.current?.getBoundingClientRect();
       if (!rect) return;
-      const delta = -e.deltaY * 0.0015;
+      // QC4 #28: Magic Mouse / trackpad pinch fires the wheel event with the
+      // dominant axis on either deltaY (vertical scroll) OR deltaX (horizontal
+      // scroll, common when the gesture is rotated). Take whichever has the
+      // larger magnitude so a sideways pinch still zooms instead of being
+      // ignored. Sign is inverted so scrolling "up" / pinching out zooms in.
+      const dy = e.deltaY || 0;
+      const dx = e.deltaX || 0;
+      const dominant = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+      const delta = -dominant * 0.0015;
       const nextZoom = Math.max(0.1, Math.min(8, view.zoom * (1 + delta)));
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -747,6 +767,44 @@ export default function PinEditor({
     [setItems],
   );
 
+  // W3-PINS: Suppress — soft-hide a persisted pin via lifecycle='suppressed'.
+  const handleSuppress = useCallback(
+    (id) => {
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === id && it.dbId
+            ? { ...it, _suppress: true, _dirty: true }
+            : it,
+        ),
+      );
+    },
+    [setItems],
+  );
+
+  // W3-PINS: Reset to AI — restore world coords + label from latest_ai_snapshot.
+  // We just stamp _reset_to_ai; the server reloads the snapshot from the row.
+  const handleResetToAi = useCallback(
+    (id) => {
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.id !== id) return it;
+          if (!it.isAi || !it.aiSnapshot) return it;
+          const snap = it.aiSnapshot;
+          const restoredLabel = snap.name || it.label;
+          return {
+            ...it,
+            label: restoredLabel,
+            world: { lat: Number(snap.lat), lng: Number(snap.lng) },
+            color: '#10B981',
+            _reset_to_ai: true,
+            _dirty: true,
+          };
+        }),
+      );
+    },
+    [setItems],
+  );
+
   const nudgeSelected = useCallback(
     (dx, dy) => {
       const item = items.find((i) => i.id === selectedItemId);
@@ -809,10 +867,30 @@ export default function PinEditor({
         toast.error("Missing shoot id — cannot save");
         return;
       }
+      // QC4 F17: Inspector's `labelDraft` / `colorDraft` only commit
+      // upstream on blur. If the operator clicks Save while still focused
+      // in the Label or Color text input, the most recent keystrokes never
+      // reach `items` and silently vanish. Force-blur the active element so
+      // the on-blur handler fires before we read items. We then wait two
+      // animation frames for React to (a) commit the on-blur setState and
+      // (b) refresh itemsRef via the syncing useEffect. Reading from the
+      // ref (not the closure-captured `items`) lets us pick up the just-
+      // flushed draft without restructuring handleSave around state.
+      const ae = document.activeElement;
+      if (ae && typeof ae.blur === "function" && ae !== document.body) {
+        try {
+          ae.blur();
+        } catch {
+          /* ignore */
+        }
+        await new Promise((r) => requestAnimationFrame(() => r()));
+        await new Promise((r) => requestAnimationFrame(() => r()));
+      }
       setIsSaving(true);
       try {
+        const latestItems = itemsRef.current || items;
         const edits = computeSaveEdits({
-          items,
+          items: latestItems,
           shootId: shoot.id,
           imageNatural,
         });
@@ -858,17 +936,26 @@ export default function PinEditor({
           (result?.applied?.updates ?? result?.updates ?? 0) +
           (result?.applied?.deletes ?? result?.deletes ?? 0);
 
+        // W3 cascade telemetry: when a world-anchored pin is touched the
+        // server fans out one render per shoot in the project (POIs and the
+        // property pin project to every shot). The toast surfaces the count
+        // so the operator sees that sibling shoots are also re-rendering.
+        const cascadeCount = Number(result?.cascade?.cascaded_shoot_count ?? 0);
+        const cascadeReason = result?.cascade?.reason;
+        const isCascade = cascadeReason === "pin_edit_cascade" && cascadeCount > 1;
+
         toast.success(
           `Saved ${totalApplied || edits.length} pin${
             (totalApplied || edits.length) === 1 ? "" : "s"
           }`,
           {
-            description:
-              !usedFallback && result?.job_id
-                ? "Re-render queued — your renders will refresh shortly."
-                : usedFallback
-                ? "Edge function unavailable — saved direct (no re-render queued)."
-                : undefined,
+            description: usedFallback
+              ? "Edge function unavailable — saved direct (no re-render queued)."
+              : isCascade
+              ? `Re-rendering ${cascadeCount} shoots — project-wide pin update.`
+              : result?.job_id || cascadeCount > 0
+              ? "Re-render queued — your renders will refresh shortly."
+              : undefined,
           },
         );
         // #7: clear local dirty markers and history stacks after a successful
@@ -890,8 +977,12 @@ export default function PinEditor({
           : [];
         // Reconstruct the order of create-emitting items from computeSaveEdits:
         // any item that was _dirty or _new and had no dbId became a create.
+        // Use the same `latestItems` snapshot as computeSaveEdits so the
+        // create-order list lines up with the server's created_ids array
+        // (we'd otherwise zip the server response against the closure's
+        // pre-blur `items` and stamp dbId on the wrong row).
         const createOrderItemIds = [];
-        for (const it of items) {
+        for (const it of latestItems) {
           if (it._delete) continue;
           if (it.virtual === "property") continue;
           if (!it._dirty && !it._new) continue;
@@ -992,8 +1083,9 @@ export default function PinEditor({
   // crashed the editor on mount. The editor still has beforeunload above
   // for full-reload / tab-close, and the explicit Cancel button via
   // requestCancel for in-editor navigation. In-app navigation away (e.g.
-  // clicking project breadcrumb) is unguarded for now. TODO: migrate the
-  // app to a Data Router and reinstate useBlocker.
+  // clicking project breadcrumb) is unguarded for now.
+  // TODO Wave 4: migrate the app to a Data Router and reinstate useBlocker
+  // so internal navigation honours the unsaved-changes guard too.
 
   // ── UI ──────────────────────────────────────────────────────────────────
   const selectedItem = useMemo(
@@ -1005,8 +1097,8 @@ export default function PinEditor({
 
   // Read-only "Detected POIs" layer items derived from drone_pois_cache.
   // These are NOT persisted in drone_custom_pins — they're informational so
-  // the operator can see what the AI ingested. Clicking one (TODO) would
-  // promote it into an editable custom pin.
+  // the operator can see what the AI ingested. Clicking one (TODO Wave 4)
+  // would promote it into an editable custom pin.
   const cachedPoiItems = useMemo(() => {
     if (!Array.isArray(cachedPois) || cachedPois.length === 0) return [];
     const out = [];
@@ -1254,6 +1346,9 @@ export default function PinEditor({
                               }}
                               className="opacity-50 hover:opacity-100 shrink-0"
                               title={isHidden ? "Show" : "Hide"}
+                              aria-label={`${isHidden ? "Show" : "Hide"} ${
+                                it.label || it.kindLabel || "layer"
+                              }`}
                             >
                               {isHidden ? (
                                 <EyeOff className="h-3 w-3" />
@@ -1375,8 +1470,12 @@ export default function PinEditor({
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-7 w-7"
+                    // QC7 F21/iPad polish: same min-44px-on-mobile pattern as
+                    // ToolButton; aria-label gives the action to AT users
+                    // (icon alone reads as "button").
+                    className="h-11 w-11 md:h-7 md:w-7"
                     onClick={fitToFrame}
+                    aria-label="Fit to frame"
                   >
                     <ZoomIn className="h-3.5 w-3.5" />
                   </Button>
@@ -1388,9 +1487,10 @@ export default function PinEditor({
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-7 w-7"
+                    className="h-11 w-11 md:h-7 md:w-7"
                     onClick={undo}
                     disabled={undoSize === 0}
+                    aria-label="Undo"
                   >
                     <Undo2 className="h-3.5 w-3.5" />
                   </Button>
@@ -1402,9 +1502,10 @@ export default function PinEditor({
                   <Button
                     size="icon"
                     variant="ghost"
-                    className="h-7 w-7"
+                    className="h-11 w-11 md:h-7 md:w-7"
                     onClick={redo}
                     disabled={redoSize === 0}
+                    aria-label="Redo"
                   >
                     <Redo2 className="h-3.5 w-3.5" />
                   </Button>
@@ -1429,9 +1530,10 @@ export default function PinEditor({
               // capture guarantees pointermove/pointerup fire on the stage
               // even if the finger leaves it mid-drag, which removes the
               // need for an onPointerLeave fallback.
-              // TODO: convert pin-marker handlers to Pointer Events too if
-              // we ever attach drag handlers directly to PinMarker (today
-              // all hit-testing happens on the stage, so this is a no-op).
+              // TODO Wave 4: convert pin-marker handlers to Pointer Events
+              // too if we ever attach drag handlers directly to PinMarker
+              // (today all hit-testing happens on the stage, so this is a
+              // no-op).
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
@@ -1513,6 +1615,8 @@ export default function PinEditor({
                 onDelete={() => handleDelete(selectedItem.id)}
                 onResetTheme={() => resetToTheme(selectedItem.id)}
                 onApplyAll={() => setConfirm("apply_all")}
+                onSuppress={() => handleSuppress(selectedItem.id)}
+                onResetToAi={() => handleResetToAi(selectedItem.id)}
                 resolvedTheme={resolvedTheme}
                 disabled={isSaving}
               />
@@ -1704,9 +1808,19 @@ function ToolButton({ tool, value, setTool, Icon, label, disabled = false }) {
         <Button
           size="icon"
           variant={active ? "secondary" : "ghost"}
-          className="h-7 w-7"
+          // QC7 F21 a11y: aria-label so screen-readers and keyboard users
+          // get the tool name (icon-only buttons otherwise render as
+          // "button"). aria-pressed mirrors the active-tool state so AT users
+          // hear "pressed" / "not pressed" instead of inferring from style.
+          // QC7 iPad polish: min-h/w 44px enforces the WCAG / Apple HIG touch
+          // target on tablets while keeping the tighter 28px visual on
+          // desktop. The icon stays the same size — only the hit area grows
+          // via padding from the min-* utilities at >=md breakpoints.
+          className="h-11 w-11 md:h-7 md:w-7"
           onClick={() => setTool(value)}
           disabled={disabled}
+          aria-label={label}
+          aria-pressed={active}
         >
           <Icon className="h-3.5 w-3.5" />
         </Button>
@@ -1770,6 +1884,8 @@ function Inspector({
   onDelete,
   onResetTheme,
   onApplyAll,
+  onSuppress,
+  onResetToAi,
   resolvedTheme,
   disabled,
 }) {
@@ -1795,6 +1911,61 @@ function Inspector({
   const PARTIAL_HEX_RE = /^#[0-9A-Fa-f]{0,6}$/;
   const FULL_HEX_RE = /^#[0-9A-Fa-f]{6}$/;
   const colorFullValid = FULL_HEX_RE.test(colorDraft);
+
+  // QC4 F16: <input type="color"> fires onChange on every step of the
+  // native colour-picker drag. Each call hit setItems → pushHistory, so a
+  // single "drag the saturation slider once" produced 50+ identical undo
+  // entries (cap = 50 → undoing back was almost a no-op). Throttle so we
+  // commit at most once per 250ms window during the drag, then a final
+  // commit on `onBlur` (covers the close-the-picker case). The local
+  // state still updates immediately so the UI feels live.
+  const colorChangeRafRef = useRef(null);
+  const lastColorCommitRef = useRef(0);
+  const pendingColorRef = useRef(null);
+  const COLOR_THROTTLE_MS = 250;
+  const flushPendingColor = useCallback(() => {
+    if (colorChangeRafRef.current) {
+      clearTimeout(colorChangeRafRef.current);
+      colorChangeRafRef.current = null;
+    }
+    if (pendingColorRef.current != null) {
+      const v = pendingColorRef.current;
+      pendingColorRef.current = null;
+      lastColorCommitRef.current = Date.now();
+      onChange({ color: v });
+    }
+  }, [onChange]);
+  const queueColorCommit = useCallback(
+    (next) => {
+      pendingColorRef.current = next;
+      const elapsed = Date.now() - lastColorCommitRef.current;
+      if (elapsed >= COLOR_THROTTLE_MS) {
+        flushPendingColor();
+      } else if (!colorChangeRafRef.current) {
+        colorChangeRafRef.current = setTimeout(
+          () => {
+            colorChangeRafRef.current = null;
+            flushPendingColor();
+          },
+          COLOR_THROTTLE_MS - elapsed,
+        );
+      }
+    },
+    [flushPendingColor],
+  );
+  // Always flush on unmount or item change so a pending colour doesn't
+  // get dropped (the next paint won't re-trigger the timer).
+  useEffect(() => {
+    return () => flushPendingColor();
+  }, [flushPendingColor]);
+  useEffect(() => {
+    return () => {
+      if (colorChangeRafRef.current) {
+        clearTimeout(colorChangeRafRef.current);
+        colorChangeRafRef.current = null;
+      }
+    };
+  }, []);
 
   // Compute current pixel position for read-only display
   const px = useMemo(() => {
@@ -1852,13 +2023,21 @@ function Inspector({
           <input
             id="pin-color"
             type="color"
-            value={item.color || "#3B82F6"}
+            value={colorDraft || item.color || "#3B82F6"}
+            // QC4 F16: native colour picker fires onChange continuously
+            // during drag. Throttle the upstream commit to 250ms so we
+            // don't spam the undo stack (was: 50+ entries per drag); local
+            // draft updates immediately for live feedback. onBlur (close
+            // picker) flushes any pending value.
             onChange={(e) => {
-              onChange({ color: e.target.value });
-              setColorDraft(e.target.value);
+              const next = e.target.value;
+              setColorDraft(next);
+              queueColorCommit(next);
             }}
+            onBlur={flushPendingColor}
             className="h-8 w-10 rounded border border-input bg-background disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={inputsDisabled}
+            aria-label="Pick colour"
           />
           <Input
             value={colorDraft}
@@ -1934,6 +2113,30 @@ function Inspector({
       )}
 
       <div className="border-t border-border pt-2 space-y-1">
+        {/* W3-PINS: AI POI badge + per-pin metadata when available. */}
+        {item.isAi && (
+          <div className="rounded border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-700 px-2 py-1.5 text-[11px] text-emerald-800 dark:text-emerald-200 space-y-0.5">
+            <div className="flex items-center gap-1 font-medium">
+              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-400 text-emerald-700 dark:text-emerald-300">
+                AI
+              </Badge>
+              {item.subsource === 'google_places' ? 'Google Places' : (item.subsource || 'AI-detected')}
+            </div>
+            {item.meta?.distance_m != null && (
+              <div className="font-mono">
+                {item.meta.distance_m > 999
+                  ? `${(item.meta.distance_m / 1000).toFixed(1)} km away`
+                  : `${Math.round(item.meta.distance_m)} m away`}
+              </div>
+            )}
+            {item.meta?.type && (
+              <div className="capitalize">{String(item.meta.type).replace(/_/g, ' ')}</div>
+            )}
+            {item.aiOperatorEdited && (
+              <div className="italic opacity-80">Operator-edited (snapshot preserved)</div>
+            )}
+          </div>
+        )}
         {item.themeDefaults && (
           <Button
             size="sm"
@@ -1943,6 +2146,37 @@ function Inspector({
             disabled={inputsDisabled}
           >
             Reset to theme
+          </Button>
+        )}
+        {/* W3-PINS: Reset-to-AI restores world coords + content from the
+            latest_ai_snapshot. Only meaningful for AI pins that have been
+            operator-edited. */}
+        {item.isAi && item.aiOperatorEdited && item.aiSnapshot && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            onClick={onResetToAi}
+            disabled={inputsDisabled}
+            title="Discard your edits and restore Google Places' original position + label"
+          >
+            Reset to AI
+          </Button>
+        )}
+        {/* W3-PINS: Suppress — soft-hide the pin without deleting. Re-shows
+            when the operator clears the suppression (not yet wired in this
+            slice; for v1 the only way back is the next drone-pois refresh). */}
+        {item.dbId && !isPropertyPin && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-full"
+            onClick={onSuppress}
+            disabled={inputsDisabled}
+            title="Hide this pin from renders without deleting it"
+          >
+            <EyeOff className="h-3.5 w-3.5 mr-1" />
+            Suppress
           </Button>
         )}
         {/*
@@ -2057,14 +2291,27 @@ function adaptCustomPinRow(row) {
   const style = row.style_overrides || {};
   const content = row.content || {};
   const label = content.label || content.text || "";
+  // W3-PINS (mig 268): rows now carry source/subsource/external_ref
+  // /lifecycle/latest_ai_snapshot. Surface them so the editor can show
+  // the AI badge, suppress + reset-to-AI affordances.
+  const source = row.source || 'manual';
+  const isAi = source === 'ai';
   return {
     id: row.id,
     dbId: row.id,
     kind: isWorld ? "world" : "pixel",
-    kindLabel: row.pin_type === "text" ? "Text" : "Custom pin",
+    kindLabel: isAi ? "AI POI" : (row.pin_type === "text" ? "Text" : "Custom pin"),
     subtype: row.pin_type,
     label,
-    color: style.color || (row.pin_type === "text" ? "#FFFFFF" : "#3B82F6"),
+    // AI pins keep the emerald colour; manual pins blue/white. Style
+    // overrides (operator colour pick) still win.
+    color:
+      style.color ||
+      (isAi
+        ? "#10B981"
+        : row.pin_type === "text"
+          ? "#FFFFFF"
+          : "#3B82F6"),
     world: isWorld
       ? { lat: Number(row.world_lat), lng: Number(row.world_lng) }
       : null,
@@ -2074,6 +2321,24 @@ function adaptCustomPinRow(row) {
     shot_id: isWorld ? null : row.pixel_anchored_shot_id,
     raw_content: content,
     raw_style: style,
+    // ── W3-PINS metadata ───────────────────────────────────────────────
+    source,
+    subsource: row.subsource || null,
+    external_ref: row.external_ref || null,
+    lifecycle: row.lifecycle || 'active',
+    aiSnapshot: row.latest_ai_snapshot || null,
+    updatedBy: row.updated_by || null,
+    isAi,
+    // True when the operator has touched this AI pin (drag, rename, etc).
+    // The "Reset to AI" affordance only makes sense when this is true.
+    aiOperatorEdited: isAi && row.updated_by != null,
+    meta: isAi
+      ? {
+          type: content.type || null,
+          distance_m: content.distance_m ?? null,
+          rating: content.rating ?? null,
+        }
+      : null,
   };
 }
 
@@ -2144,6 +2409,15 @@ function computeSaveEdits({ items, shootId, imageNatural }) {
   for (const it of items) {
     if (it._delete && it.dbId) {
       edits.push({ action: "delete", pin_id: it.dbId });
+      continue;
+    }
+    // W3-PINS: suppress + reset_to_ai are first-class action types.
+    if (it._suppress && it.dbId) {
+      edits.push({ action: "suppress", pin_id: it.dbId });
+      continue;
+    }
+    if (it._reset_to_ai && it.dbId) {
+      edits.push({ action: "reset_to_ai", pin_id: it.dbId });
       continue;
     }
     if (!it._dirty && !it._new) continue;

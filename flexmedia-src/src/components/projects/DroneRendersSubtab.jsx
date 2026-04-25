@@ -1470,12 +1470,21 @@ function ShotLifecycleCard({
           aspectRatio="aspect-[4/3]"
           overlay={
             isAiRecommended ? (
+              // QC3 #29 a11y: tabIndex=0 + aria-label make the AI badge
+              // discoverable via keyboard. shadcn Tooltip already opens on
+              // pointer hover and on keyboard focus, so adding tabIndex=0
+              // is enough to surface the rationale to keyboard / AT users.
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-blue-600 text-white pointer-events-auto cursor-help">
-                    <Sparkles className="h-2.5 w-2.5" />
+                  <span
+                    className="absolute top-1 right-1 inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-blue-600 text-white pointer-events-auto cursor-help focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    role="img"
+                    tabIndex={0}
+                    aria-label="AI recommended — suggested by AI based on dedup, flight roll, and POI coverage"
+                  >
+                    <Sparkles className="h-2.5 w-2.5" aria-hidden="true" />
                     AI
-                    <Check className="h-2.5 w-2.5" />
+                    <Check className="h-2.5 w-2.5" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-[200px]">
@@ -1828,19 +1837,35 @@ function RenderCard({
             <label className="sr-only" htmlFor={`variant-${r.shot_id}-${column}`}>
               Output variant
             </label>
-            <select
-              id={`variant-${r.shot_id}-${column}`}
-              className="w-full h-6 text-[10px] rounded border border-input bg-background px-1.5 py-0 focus:outline-none focus:ring-1 focus:ring-ring"
+            {/* QC3 #31: native <select> styling clashes hard with the dark
+                theme — the OS dropdown ignores our colour tokens, so the
+                option list pops as a bright-white panel on a dark card
+                surface. shadcn Select wraps Radix and inherits our
+                `bg-popover/text-popover-foreground` tokens, so the panel
+                renders correctly in both modes. */}
+            <Select
               value={selectedVariantId || ""}
-              onChange={(e) => setSelectedVariantId(e.target.value)}
-              aria-label="Select output variant"
+              onValueChange={(v) => setSelectedVariantId(v)}
             >
-              {orderedVariants.map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.output_variant || "default"}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger
+                id={`variant-${r.shot_id}-${column}`}
+                className="w-full h-6 text-[10px] px-1.5 py-0"
+                aria-label="Select output variant"
+              >
+                <SelectValue placeholder="default" />
+              </SelectTrigger>
+              <SelectContent>
+                {orderedVariants.map((v) => (
+                  <SelectItem
+                    key={v.id}
+                    value={v.id}
+                    className="text-[10px]"
+                  >
+                    {v.output_variant || "default"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
 
@@ -1868,13 +1893,20 @@ function RenderCard({
               the operator knows the render is behind the current theme; the
               tooltip explains the next step (Re-render button below). */}
           {isStale && (
+            // QC3 #29 a11y: shadcn Tooltip surfaces on focus when its
+            // trigger is keyboard-reachable; tabIndex=0 + role=img +
+            // aria-label give keyboard / AT users the rationale without
+            // requiring hover.
             <Tooltip>
               <TooltipTrigger asChild>
                 <Badge
                   variant="outline"
-                  className="border-amber-400 text-amber-700 bg-amber-50 dark:border-amber-600 dark:text-amber-300 dark:bg-amber-950/40 text-[9px] h-4 px-1 gap-0.5 cursor-help"
+                  className="border-amber-400 text-amber-700 bg-amber-50 dark:border-amber-600 dark:text-amber-300 dark:bg-amber-950/40 text-[9px] h-4 px-1 gap-0.5 cursor-help focus:outline-none focus:ring-2 focus:ring-amber-300"
+                  role="img"
+                  tabIndex={0}
+                  aria-label={`Stale theme — render is theme v${stale.theme_version_int_at_render}, current is v${stale.current_theme_version_int}. Re-render to apply the latest styling.`}
                 >
-                  <RefreshCw className="h-2.5 w-2.5" />
+                  <RefreshCw className="h-2.5 w-2.5" aria-hidden="true" />
                   theme v{stale.current_theme_version_int} (this v{stale.theme_version_int_at_render})
                 </Badge>
               </TooltipTrigger>

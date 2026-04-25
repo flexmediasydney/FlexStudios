@@ -1621,8 +1621,23 @@ def render_canvas(image_bytes: bytes, theme_config: dict, scene: dict) -> np.nda
             elif pin_type == "poi_manual":
                 label = content.get("label") or content.get("name") or content.get("text") or ""
                 if label:
+                    # W3-PINS: AI-source pins (drone-pois materialised) carry
+                    # distance_m in content. When the theme exposes the
+                    # secondary-text slot, render the distance below the label
+                    # like the legacy POI loop did. Operator pins (source
+                    # absent or 'manual') still render label-only unless
+                    # content explicitly carries distance_m.
+                    secondary = None
+                    if show_dist:
+                        try:
+                            d_raw = content.get("distance_m")
+                            if d_raw is not None:
+                                d = float(d_raw)
+                                secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
+                        except (TypeError, ValueError):
+                            secondary = None
                     canvas = _draw_poi_label(
-                        canvas, x, y, label, merged_style, anchor_style, None, w, h,
+                        canvas, x, y, label, merged_style, anchor_style, secondary, w, h,
                     )
             else:
                 # 'line' and 'measurement' pin types are reserved for Wave 2;

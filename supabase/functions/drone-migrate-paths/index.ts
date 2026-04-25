@@ -224,8 +224,9 @@ serveWithAudit("drone-migrate-paths", async (req: Request) => {
   // step partially failed above, surface a clear "PARTIAL MIGRATION" log
   // line + a flag in the result so an operator can rerun this idempotent
   // migrator (it's safe — startsWith() check skips already-migrated rows).
-  // TODO: when a stored procedure approach is acceptable, wrap steps 2-6 in
-  // a single transaction via an RPC and replace this best-effort path.
+  // TODO Wave 4: when a stored procedure approach is acceptable, wrap
+  // steps 2-6 in a single transaction via an RPC and replace this best-
+  // effort path.
   if (shotsFailed > 0 || rendersFailed > 0 || foldersFailed > 0) {
     result.partial_migration = true;
     console.error(
