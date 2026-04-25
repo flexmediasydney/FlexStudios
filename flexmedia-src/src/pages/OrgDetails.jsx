@@ -4,6 +4,7 @@ import { useSmartEntityData } from "@/components/hooks/useSmartEntityData";
 import { useEntityList, refetchEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
 import { ArrowLeft, AlertCircle, Plus, MessageSquare, Mail, AtSign, Paperclip, DollarSign, Calendar, Network, Palette, Loader2, UserPlus, Search, Shield, Activity, Rss, BarChart3 } from "lucide-react";
 import BrandingPreferencesModule from "@/components/agencies/BrandingPreferencesModule";
+import ThemeBrandingSubtab from "@/components/themes/ThemeBrandingSubtab";
 import AgencyEmailDomainsModule from "@/components/agencies/AgencyEmailDomainsModule";
 import { createPageUrl } from "@/utils";
 import { Button } from "@/components/ui/button";
@@ -735,8 +736,17 @@ export default function OrgDetails() {
             )}
 
             {activeTab === 'branding' && (
-              <div className="h-full overflow-y-auto p-6">
-                <BrandingPreferencesModule agency={agency} />
+              <div className="h-full overflow-y-auto">
+                <div className="p-6">
+                  <BrandingPreferencesModule agency={agency} />
+                </div>
+                <div className="border-t border-border">
+                  <ThemeBrandingSubtab
+                    ownerKind="organisation"
+                    ownerId={agency.id}
+                    ownerName={agency.name || 'Organisation'}
+                  />
+                </div>
               </div>
             )}
 

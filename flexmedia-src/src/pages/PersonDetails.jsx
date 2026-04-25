@@ -11,7 +11,7 @@ import { fmtDate, fmtTimestampCustom, fixTimestamp } from '@/components/utils/da
 import {
   ArrowLeft, ChevronDown, ChevronRight, Mail, Phone, Building2, Calendar,
   DollarSign, MessageSquare, FileText, Activity, Info, AlertCircle, Plus, Trash2, User, Copy, Check,
-  Bell, AlertTriangle, Clock, Tag, X, Hash, Star, Users, Paperclip, Pencil, Shield, Rss
+  Bell, AlertTriangle, Clock, Tag, X, Hash, Star, Users, Paperclip, Pencil, Shield, Rss, Palette
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +32,7 @@ import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
 import AgentMarketShareSection from '@/components/marketshare/AgentMarketShareSection';
 import NurturingSequences from '@/components/nurturing/NurturingSequences';
+import ThemeBrandingSubtab from '@/components/themes/ThemeBrandingSubtab';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { toast } from 'sonner';
@@ -544,6 +545,7 @@ const TABS = [
   { id: 'files', label: 'Files', icon: Paperclip },
   { id: 'pricing', label: 'Pricing', icon: DollarSign },
   { id: 'calendar', label: 'Activities', icon: Calendar },
+  { id: 'branding', label: 'Branding', icon: Palette },
   { id: 'touchpoints', label: 'Touchpoints', icon: Activity },
   { id: 'retention', label: 'Retention', icon: Shield },
   { id: 'intelligence', label: 'Intelligence', icon: Rss },
@@ -1460,6 +1462,17 @@ export default function PersonDetails() {
                   entityType="agent"
                   entityId={agent?.id}
                   entityLabel={agent?.name || 'Person'}
+                />
+              </div>
+            )}
+
+            {/* ── Branding tab — Drone theme editor ───────────────── */}
+            {activeTab === 'branding' && (
+              <div className="h-full overflow-y-auto">
+                <ThemeBrandingSubtab
+                  ownerKind="person"
+                  ownerId={agent.id}
+                  ownerName={agent.name || agent.full_name || 'Person'}
                 />
               </div>
             )}
