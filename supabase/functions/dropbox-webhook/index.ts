@@ -97,6 +97,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[${GENERATOR}] ingest enqueue failed: ${msg}`);
       }
+      // Editor-folder watcher: link Edited Post Production drops to the
+      // matching drone_shots row and (when all raw_accepted shots are
+      // covered) enqueue a render job.
+      try {
+        const linked = await linkRecentEditorDrops();
+        if (linked > 0) {
+          console.log(`[${GENERATOR}] linked ${linked} editor file(s) to drone_shots`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] editor-link failed: ${msg}`);
+      }
     })
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -148,6 +160,174 @@ async function enqueueIngestForRecentRawDrones(): Promise<number> {
     }
   }
   return projectIds.length;
+}
+
+/**
+ * Editor-folder watcher.
+ *
+ * After every webhook delta, scan project_folder_events for `file_added` /
+ * `file_modified` rows in `drones_editors_edited_post_production` emitted in
+ * the last 60 seconds and:
+ *
+ *   1. Look up the matching `drone_shots` row in the same project by exact
+ *      filename (basename match). v1 only does exact match — _edited / (1)
+ *      suffix stripping is out of scope.
+ *   2. UPDATE drone_shots.edited_dropbox_path = '<full path>'.
+ *   3. Insert `drone_events` row (event_type='editor_file_added').
+ *   4. After the link, check whether ALL `lifecycle_state='raw_accepted'`
+ *      shots in the shoot now have edited_dropbox_path. If yes, enqueue a
+ *      `kind='render'` drone_jobs row (deduped via the partial unique index
+ *      from migration 240).
+ *
+ * Returns count of linked files. Logs warnings (no throw) for files that
+ * don't match a known shot — they may be a NEW shot the editor introduced
+ * (out of scope for v1).
+ */
+async function linkRecentEditorDrops(): Promise<number> {
+  const admin = getAdminClient();
+  const since = new Date(Date.now() - 60_000).toISOString();
+  const { data: events, error } = await admin
+    .from('project_folder_events')
+    .select('project_id, file_name, metadata, event_type, created_at')
+    .eq('folder_kind', 'drones_editors_edited_post_production')
+    .in('event_type', ['file_added', 'file_modified'])
+    .gte('created_at', since);
+  if (error) throw error;
+  if (!events || events.length === 0) return 0;
+
+  let linkedCount = 0;
+  // De-dup: a single file modified twice in the same window should only
+  // produce one update + one drone_event. Key on (project_id, basename).
+  const seen = new Set<string>();
+  // Track which shoots got a link this pass so we only re-evaluate the
+  // "all shots ready?" gate once per shoot.
+  const touchedShoots = new Set<string>();
+
+  for (const ev of events) {
+    const projectId = ev.project_id as string | null;
+    const fileName = ev.file_name as string | null;
+    const metadata = (ev.metadata || {}) as Record<string, unknown>;
+    const fullPath = (metadata.path as string | undefined) || null;
+    if (!projectId || !fileName || !fullPath) continue;
+
+    // Skip non-image entries that may have crept in (e.g. .DS_Store).
+    if (!/\.(jpe?g|png|tiff?)$/i.test(fileName)) continue;
+
+    const dedupKey = `${projectId}|${fileName.toLowerCase()}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
+
+    // Look up the matching raw shot via shoot.project_id JOIN. v1 = exact
+    // match on filename. We need shot_id + shoot_id for the audit row +
+    // downstream render-gate check.
+    const { data: candidates, error: shotErr } = await admin
+      .from('drone_shots')
+      .select('id, filename, shoot_id, drone_shoots!inner(project_id)')
+      .eq('drone_shoots.project_id', projectId)
+      .eq('filename', fileName);
+    if (shotErr) {
+      console.warn(`[${GENERATOR}] editor-link shot lookup failed for ${fileName}: ${shotErr.message}`);
+      continue;
+    }
+    if (!candidates || candidates.length === 0) {
+      console.warn(`[${GENERATOR}] editor file '${fileName}' (project ${projectId}) has no matching raw shot — likely a new shot introduced by editor (out of scope for v1).`);
+      continue;
+    }
+    if (candidates.length > 1) {
+      console.warn(`[${GENERATOR}] editor file '${fileName}' (project ${projectId}) matched ${candidates.length} shots — using first.`);
+    }
+    const shot = candidates[0] as { id: string; shoot_id: string };
+
+    // Update the raw shot's edited_dropbox_path. Idempotent — if the value
+    // is already set to fullPath this is a no-op write.
+    const { error: updErr } = await admin
+      .from('drone_shots')
+      .update({ edited_dropbox_path: fullPath })
+      .eq('id', shot.id);
+    if (updErr) {
+      console.warn(`[${GENERATOR}] edited_dropbox_path update failed for shot ${shot.id}: ${updErr.message}`);
+      continue;
+    }
+
+    await admin.from('drone_events').insert({
+      project_id: projectId,
+      shoot_id: shot.shoot_id,
+      shot_id: shot.id,
+      event_type: 'editor_file_added',
+      actor_type: 'system',
+      actor_id: null,
+      payload: {
+        shot_id: shot.id,
+        raw_filename: fileName,
+        edited_path: fullPath,
+      },
+    });
+
+    linkedCount++;
+    touchedShoots.add(shot.shoot_id);
+  }
+
+  // ── Per-shoot render-readiness gate ─────────────────────────────────
+  // For each shoot we touched, count raw_accepted shots that still have NO
+  // edited_dropbox_path. If zero → all editor work is in → enqueue render.
+  // Use the partial unique index from migration 240 to dedupe.
+  for (const shootId of touchedShoots) {
+    try {
+      const { count: missing, error: cntErr } = await admin
+        .from('drone_shots')
+        .select('id', { count: 'exact', head: true })
+        .eq('shoot_id', shootId)
+        .eq('lifecycle_state', 'raw_accepted')
+        .is('edited_dropbox_path', null);
+      if (cntErr) {
+        console.warn(`[${GENERATOR}] render-gate count failed for shoot ${shootId}: ${cntErr.message}`);
+        continue;
+      }
+      if ((missing || 0) > 0) continue;
+
+      // Need project_id for the drone_jobs row.
+      const { data: shootRow } = await admin
+        .from('drone_shoots')
+        .select('id, project_id')
+        .eq('id', shootId)
+        .maybeSingle();
+      if (!shootRow?.project_id) continue;
+
+      // Insert a render job. The partial unique index
+      // idx_drone_jobs_unique_pending_render (migration 240) covers
+      // (shoot_id) WHERE status IN (pending,running) AND kind='render'; a
+      // duplicate insert raises 23505 which we treat as a successful debounce
+      // (same pattern as drone-pins-save).
+      const { error: jobErr } = await admin
+        .from('drone_jobs')
+        .insert({
+          project_id: shootRow.project_id,
+          shoot_id: shootId,
+          kind: 'render',
+          status: 'pending',
+          payload: {
+            shoot_id: shootId,
+            kind: 'poi_plus_boundary',
+            reason: 'edited_files_complete',
+          },
+        });
+      if (jobErr) {
+        const code = (jobErr as { code?: string }).code;
+        if (code === '23505') {
+          console.info(`[${GENERATOR}] render job debounced for shoot ${shootId} (existing pending/running)`);
+        } else {
+          console.warn(`[${GENERATOR}] render enqueue failed for shoot ${shootId}: ${jobErr.message}`);
+        }
+        continue;
+      }
+      console.log(`[${GENERATOR}] all editor files complete for shoot ${shootId} — render enqueued`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[${GENERATOR}] render-gate failed for shoot ${shootId}: ${msg}`);
+    }
+  }
+
+  return linkedCount;
 }
 
 // ─── HMAC helpers ────────────────────────────────────────────────────────────

@@ -3,18 +3,25 @@
  * ────────────────────
  * Pulls pending `drone_jobs` and dispatches them to the appropriate handler:
  *
- *   kind='ingest'    → POST to drone-ingest  payload: { project_id }
- *   kind='render'    → POST to drone-render  payload: { shoot_id, kind?, fallback? }
- *   kind='sfm'       → POST to Modal sfm_http payload: { _token, shoot_id }
- *   kind='poi_fetch' → POST to drone-pois    payload: { project_id }
+ *   kind='ingest'             → POST to drone-ingest      payload: { project_id }
+ *   kind='render'             → POST to drone-render      payload: { shoot_id, kind?, fallback? }
+ *   kind='sfm'                → POST to Modal sfm_http    payload: { _token, shoot_id }
+ *   kind='poi_fetch'          → POST to drone-pois        payload: { project_id }
+ *   kind='raw_preview_render' → POST to drone-raw-preview payload: { shoot_id }
  *
- *     Chain: ingest → sfm → poi_fetch → render
+ *     Chain: ingest → sfm → poi_fetch → raw_preview_render
  *
  *     On SfM success the dispatcher chains a follow-up `kind='poi_fetch'` job
- *     (debounced ~10s). On poi_fetch success it chains the `kind='render'` job
- *     so the renderer's inline fetchPois() finds a warm drone_pois_cache row.
- *     If poi_fetch FAILS (Google Places quota, missing project coords, etc.)
- *     we still chain the render — POIs are nice-to-have, not blocking.
+ *     (debounced ~10s). On poi_fetch success it chains a
+ *     `kind='raw_preview_render'` job so the operator can see what each raw
+ *     candidate would look like as a deliverable AND so the smart-shortlist
+ *     algorithm flags is_ai_recommended.
+ *
+ *     Production-deliverable renders (kind='render') are NO LONGER auto-chained
+ *     after poi_fetch — they are explicitly enqueued by the swimlane Lock
+ *     action (drone-shortlist-lock, separate stream) so the operator must
+ *     curate the raws first. Manual / Pin-Editor / Re-analyse paths still
+ *     enqueue kind='render' directly, which is unaffected by this change.
  *
  *     Chained at the dispatcher layer rather than inside the Modal/POI
  *     endpoints to keep all queue logic in one place (and so retries of the
@@ -162,8 +169,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
         // Chain: on a successful SfM dispatch where Modal also reported a
         // valid reconstruction, enqueue a follow-up poi_fetch job for the
-        // project. poi_fetch success will in turn chain the render job, so
-        // the renderer's inline fetchPois() finds a warm drone_pois_cache row.
+        // project. poi_fetch success will in turn chain the raw_preview_render
+        // job, so drone-raw-preview's chained drone-render call finds a warm
+        // drone_pois_cache row when it draws POIs over the previews.
         // Shoots that exit cleanly with too few images (Modal returns
         // ok=false but HTTP 200) do NOT trigger chaining — they remain at
         // status='sfm_failed' for review.
@@ -171,7 +179,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         // Pin-edit guard (#33 audit): if the user kicked off a pin_edit_saved
         // render between SfM start and SfM success, the existing pending /
         // running render will pick up the new SfM pose itself. Skip the
-        // chained poi_fetch+render so we don't clobber that work.
+        // chained poi_fetch+raw_preview_render so we don't clobber that work.
         if (isSfmKind && ok.sfm_ok === true) {
           const shootId =
             (job.payload?.shoot_id as string | undefined) || job.shoot_id;
@@ -189,7 +197,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
               .maybeSingle();
             if (priorRender) {
               console.log(
-                `[${GENERATOR}] sfm ${job.id} succeeded but render job ${priorRender.id} is already pending/running for shoot ${shootId} — skipping chained poi_fetch+render (will pick up new SfM pose)`,
+                `[${GENERATOR}] sfm ${job.id} succeeded but render job ${priorRender.id} is already pending/running for shoot ${shootId} — skipping chained poi_fetch+raw_preview_render (will pick up new SfM pose)`,
               );
             } else {
               // Resolve project_id: SfM payload only carries shoot_id, and
@@ -212,9 +220,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
                 });
                 if (enqErr) {
                   console.warn(
-                    `[${GENERATOR}] failed to chain poi_fetch job after sfm ${job.id}: ${enqErr.message} — falling back to direct render`,
+                    `[${GENERATOR}] failed to chain poi_fetch job after sfm ${job.id}: ${enqErr.message} — falling back to direct raw_preview_render`,
                   );
-                  await enqueueRenderAfterPois(admin, {
+                  await enqueueRawPreviewAfterPois(admin, {
                     projectId,
                     shootId,
                     chainedFrom: job.id,
@@ -223,11 +231,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
                 }
               } else {
                 // No project_id resolvable — skip POI step, go straight to
-                // render so the user still gets output.
+                // raw_preview_render so the operator still gets previews.
                 console.warn(
-                  `[${GENERATOR}] sfm ${job.id} succeeded but project_id unresolvable for shoot ${shootId} — skipping poi_fetch, enqueueing render directly`,
+                  `[${GENERATOR}] sfm ${job.id} succeeded but project_id unresolvable for shoot ${shootId} — skipping poi_fetch, enqueueing raw_preview_render directly`,
                 );
-                await enqueueRenderAfterPois(admin, {
+                await enqueueRawPreviewAfterPois(admin, {
                   projectId: null,
                   shootId,
                   chainedFrom: job.id,
@@ -238,15 +246,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           }
         }
 
-        // Chain: on a successful poi_fetch dispatch, enqueue the render. The
-        // cache is now warm so the renderer's inline fetchPois() will return
-        // pins to draw. Same shoot+payload shape as the prior sfm→render path.
+        // Chain: on a successful poi_fetch dispatch, enqueue the
+        // raw_preview_render. The cache is now warm so drone-raw-preview's
+        // chained drone-render call (column_state='preview') will draw pins.
+        // Production-deliverable renders (kind='render') are gated on the
+        // operator's swimlane Lock action — they are NOT auto-chained here.
         if (job.kind === "poi_fetch") {
           const shootId =
             (job.payload?.shoot_id as string | undefined) || job.shoot_id;
           const projectId = (job.payload?.project_id as string | undefined) ?? null;
           if (shootId) {
-            await enqueueRenderAfterPois(admin, {
+            await enqueueRawPreviewAfterPois(admin, {
               projectId,
               shootId,
               chainedFrom: job.id,
@@ -254,7 +264,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             });
           } else {
             console.warn(
-              `[${GENERATOR}] poi_fetch ${job.id} succeeded but shoot_id missing — cannot chain render`,
+              `[${GENERATOR}] poi_fetch ${job.id} succeeded but shoot_id missing — cannot chain raw_preview_render`,
             );
           }
         }
@@ -342,6 +352,14 @@ async function dispatchOne(
         project_id:
           (job.payload?.project_id as string | undefined) || job.project_id,
       });
+    case "raw_preview_render":
+      // Hand to drone-raw-preview, which renders every raw_proposed
+      // non-SfM shot through the engine (POI + boundary overlay) so the
+      // operator can SEE each candidate before locking the shortlist. Also
+      // runs the smart-shortlist algorithm to flag is_ai_recommended.
+      return await callEdgeFunction("drone-raw-preview", {
+        shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
+      });
     default:
       return { ok: false, error: `unknown kind: ${job.kind}` };
   }
@@ -377,11 +395,20 @@ async function resolveProjectIdForShoot(
   }
 }
 
-// enqueueRenderAfterPois: insert the chained render job that consumes a now-
-// warm POI cache. Used both by the poi_fetch-success branch and by the
-// fallback paths (project_id unresolvable / poi_fetch enqueue failed) where
-// we want the operator to still get a render even without POIs drawn.
-async function enqueueRenderAfterPois(
+// enqueueRawPreviewAfterPois: insert the chained raw_preview_render job that
+// consumes a now-warm POI cache. Used both by the poi_fetch-success branch
+// and by the fallback paths (project_id unresolvable / poi_fetch enqueue
+// failed) where we want the operator to still get previews even without POIs
+// drawn.
+//
+// This REPLACED the prior `enqueueRawPreviewAfterPois` — production-deliverable
+// renders (kind='render') are no longer auto-chained. The operator must
+// explicitly Lock the curated shortlist (drone-shortlist-lock, separate
+// stream) which is responsible for enqueueing the kind='render' job that
+// produces customer-facing output. Preview rows (column_state='preview') are
+// excluded from the active-per-variant uniqueness scope (migration 243) so
+// they coexist freely with whatever the Lock action produces later.
+async function enqueueRawPreviewAfterPois(
   admin: ReturnType<typeof getAdminClient>,
   args: {
     projectId: string | null;
@@ -394,11 +421,10 @@ async function enqueueRenderAfterPois(
   const { error } = await admin.from("drone_jobs").insert({
     project_id: args.projectId,
     shoot_id: args.shootId,
-    kind: "render",
+    kind: "raw_preview_render",
     status: "pending",
     payload: {
       shoot_id: args.shootId,
-      kind: "poi_plus_boundary",
       chained_from: args.chainedFrom,
       ...(args.poiFetchSkipped
         ? { poi_fetch_skipped: args.poiFetchSkipped }
@@ -408,7 +434,7 @@ async function enqueueRenderAfterPois(
   });
   if (error) {
     console.warn(
-      `[${GENERATOR}] failed to chain render job after poi_fetch ${args.chainedFrom}: ${error.message}`,
+      `[${GENERATOR}] failed to chain raw_preview_render job after poi_fetch ${args.chainedFrom}: ${error.message}`,
     );
   }
 }

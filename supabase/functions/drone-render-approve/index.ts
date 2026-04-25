@@ -281,43 +281,107 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`Failed to update render: ${updErr.message}`, 500, req);
   }
 
-  // ── On final transition: copy file from proposed/ to final delivery ────────
-  let finalDropboxPath: string | null = null;
+  // ── On final transition: copy file to Final Enriched/ AND Drones/Finals/ ──
+  // Two-step delivery copy:
+  //   1. Copy from current location (typically `Drones/Editors/AI Proposed
+  //      Enriched/...`) → `Drones/Editors/Final Enriched/<filename>`. This
+  //      is the primary "approved" location editors and downstream consumers
+  //      of `drone_renders.dropbox_path` watch.
+  //   2. ALSO copy → `Drones/Finals/<filename>`. The Finals/ folder is the
+  //      operator-facing top-level deliverable bucket. Per orchestrator's
+  //      decision, we record the Finals path on the drone_events row instead
+  //      of adding a `drone_renders.finals_dropbox_path` column (less schema
+  //      churn).
+  //
+  // Backward-compat: if the project hasn't been backfilled yet (legacy
+  // structure with `final_delivery_drones` only), fall back to that single
+  // path — `final_delivery_drones` was rewritten by the drone-folder-backfill
+  // to point at `Drones/Finals` already, so legacy projects still get the
+  // file in the right place.
+  let finalEnrichedPath: string | null = null;
+  let finalsCopyPath: string | null = null;
   let finalCopyError: string | null = null;
+  let finalsCopyError: string | null = null;
   if (toState === 'final' && projectId && render.dropbox_path) {
-    try {
-      const { copyFile } = await import('../_shared/dropbox.ts');
-      const { getFolderPath } = await import('../_shared/projectFolders.ts');
+    const filename = render.dropbox_path.split('/').pop() as string;
+    const { copyFile } = await import('../_shared/dropbox.ts');
+    const { getFolderPath } = await import('../_shared/projectFolders.ts');
 
-      const finalFolder = await getFolderPath(projectId, 'final_delivery_drones');
-      // Strip the proposed-folder filename from the source path so we can
-      // re-mount it. The render row always has a dropbox_path (NOT NULL in
-      // the schema), so the trailing fallback in the prior code was dead. (#26 audit)
-      const filename = render.dropbox_path.split('/').pop() as string;
-      const targetPath = `${finalFolder}/${filename}`;
-      const meta = await copyFile(render.dropbox_path, targetPath);
-      finalDropboxPath = meta.path_lower ?? targetPath.toLowerCase();
-    } catch (copyErr) {
-      // Don't reject the approval if the copy fails — log + flag.
-      finalCopyError = copyErr instanceof Error ? copyErr.message : String(copyErr);
-      console.error(`[${GENERATOR}] final-delivery copy failed: ${finalCopyError}`);
+    // Step 1: copy → Final Enriched (preferred new path), with legacy fallback.
+    let finalEnrichedFolder: string | null = null;
+    try {
+      finalEnrichedFolder = await getFolderPath(projectId, 'drones_editors_final_enriched');
+    } catch {
+      // Project hasn't been backfilled. Use the legacy slot which points at
+      // Drones/Finals after the backfill rewrite.
+      try {
+        finalEnrichedFolder = await getFolderPath(projectId, 'final_delivery_drones');
+      } catch (legacyErr) {
+        finalCopyError = legacyErr instanceof Error ? legacyErr.message : String(legacyErr);
+        console.error(`[${GENERATOR}] no final-delivery folder for project ${projectId}: ${finalCopyError}`);
+      }
+    }
+
+    if (finalEnrichedFolder) {
+      try {
+        const targetPath = `${finalEnrichedFolder}/${filename}`;
+        const meta = await copyFile(render.dropbox_path, targetPath);
+        finalEnrichedPath = meta.path_lower ?? targetPath.toLowerCase();
+      } catch (copyErr) {
+        // Don't reject the approval if the copy fails — log + flag.
+        finalCopyError = copyErr instanceof Error ? copyErr.message : String(copyErr);
+        console.error(`[${GENERATOR}] Final Enriched copy failed: ${finalCopyError}`);
+      }
+    }
+
+    // Step 2: ALSO copy → Drones/Finals/<filename>. This step is independent
+    // of step 1 — even if Final Enriched is missing (legacy project), the
+    // operator-facing Finals bucket should still receive the deliverable. Use
+    // the Final Enriched copy as source if available (avoids re-pulling from
+    // the proposed folder), else fall back to the original render path.
+    try {
+      const finalsFolder = await getFolderPath(projectId, 'drones_finals');
+      const finalsTarget = `${finalsFolder}/${filename}`;
+      // Skip if Final Enriched and Drones/Finals resolved to the same path
+      // (some legacy backfill scenarios remap final_delivery_drones to
+      // Drones/Finals — copying file-to-itself raises Dropbox conflict).
+      if (finalEnrichedPath && finalEnrichedPath.toLowerCase() === finalsTarget.toLowerCase()) {
+        finalsCopyPath = finalEnrichedPath;
+      } else {
+        const sourceForFinals = finalEnrichedPath || render.dropbox_path;
+        const meta2 = await copyFile(sourceForFinals, finalsTarget);
+        finalsCopyPath = meta2.path_lower ?? finalsTarget.toLowerCase();
+      }
+    } catch (finalsErr) {
+      // Don't reject the approval if the Finals copy fails — log + flag.
+      // This may happen on legacy projects that haven't been backfilled and
+      // therefore have no `drones_finals` project_folders row.
+      finalsCopyError = finalsErr instanceof Error ? finalsErr.message : String(finalsErr);
+      console.error(`[${GENERATOR}] Drones/Finals copy failed: ${finalsCopyError}`);
     }
   }
 
   // ── On un-approve (final → adjustments): delete the orphaned final-delivery
-  // copy. Without this, a Final approval that gets rolled back leaves a stale
-  // file in 07_FINAL_DELIVERY/drones/ that downstream delivery would treat as
-  // approved. Idempotent — deleteFile swallows path/not_found.
+  // copies in BOTH locations. Without this, a Final approval that gets rolled
+  // back leaves stale files in Final Enriched and Drones/Finals. Idempotent —
+  // deleteFile swallows path/not_found.
   let finalDeleteError: string | null = null;
   if (fromState === 'final' && toState === 'adjustments' && projectId && render.dropbox_path) {
     try {
       const { deleteFile } = await import('../_shared/dropbox.ts');
       const { getFolderPath } = await import('../_shared/projectFolders.ts');
-      const finalFolder = await getFolderPath(projectId, 'final_delivery_drones');
       // dropbox_path is NOT NULL — drop the dead `??` fallback. (#26 audit)
       const filename = render.dropbox_path.split('/').pop() as string;
-      const targetPath = `${finalFolder}/${filename}`;
-      await deleteFile(targetPath);
+      // Try every finals-side folder in priority order; ignore individual
+      // misses since the file may only live in one.
+      for (const kind of ['drones_editors_final_enriched', 'drones_finals', 'final_delivery_drones'] as const) {
+        try {
+          const folder = await getFolderPath(projectId, kind);
+          await deleteFile(`${folder}/${filename}`);
+        } catch {
+          // Folder not provisioned for this project; skip.
+        }
+      }
     } catch (delErr) {
       // Don't reject the rollback if cleanup fails — flag in audit so an
       // operator can manually delete from Dropbox.
@@ -347,8 +411,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           from_state: fromState,
           to_state: toState,
           kind: render.kind,
-          ...(finalDropboxPath ? { final_dropbox_path: finalDropboxPath } : {}),
+          // final_dropbox_path is the Final Enriched location (primary) —
+          // kept under the same key for backward-compat with downstream
+          // readers that already grep for it.
+          ...(finalEnrichedPath ? { final_dropbox_path: finalEnrichedPath } : {}),
+          // finals_dropbox_path is the operator-facing Drones/Finals copy.
+          // We record it on the event rather than on the drone_renders row
+          // (orchestrator decision: less schema churn).
+          ...(finalsCopyPath ? { finals_dropbox_path: finalsCopyPath } : {}),
           ...(finalCopyError ? { final_copy_error: finalCopyError } : {}),
+          ...(finalsCopyError ? { finals_copy_error: finalsCopyError } : {}),
           ...(finalDeleteError ? { final_delete_error: finalDeleteError } : {}),
         },
       });

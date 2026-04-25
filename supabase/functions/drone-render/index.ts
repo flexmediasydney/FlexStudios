@@ -56,7 +56,44 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
-  let body: { shoot_id?: string; shot_id?: string; kind?: RenderKind; _health_check?: boolean } = {};
+  let body: {
+    shoot_id?: string;
+    shot_id?: string;
+    kind?: RenderKind;
+    /**
+     * When true, allow the renderer to source from `drone_shots.dropbox_path`
+     * (raw drone JPG) even when the shot has no `edited_dropbox_path` set.
+     * Used by drone-raw-preview (which by design renders from raws to give the
+     * operator a preview before the editor pass) and as an explicit safety
+     * hatch for ad-hoc previews. Without this flag, non-`nadir_hero` shots
+     * with NULL edited_dropbox_path are hard-failed because the post-prod
+     * edited version is what gets enriched, not the raw.
+     */
+    allow_raw_source?: boolean;
+    /**
+     * Caller-requested column_state for the resulting drone_renders row.
+     * Currently honoured values:
+     *   - 'adjustments' → Pin-Editor save path (legacy `reason: pin_edit_saved`
+     *                     also routes here). Output goes to drone_renders_adjusted/.
+     *   - 'preview'     → drone-raw-preview path. Output goes to
+     *                     Drones/Raws/Shortlist Proposed/Previews/, the row is
+     *                     informational and excluded from the active-per-variant
+     *                     uniqueness scope (migration 243).
+     *   - undefined / 'proposed' → default; standard AI render lane.
+     */
+    column_state?: 'proposed' | 'adjustments' | 'preview';
+    /**
+     * When true, DELETE existing renders for this shoot in column_state
+     * 'proposed' BEFORE rendering. Used by the swimlane Re-analyse action so
+     * a fresh render run replaces the AI's prior proposals rather than piling
+     * up alongside them. Adjustments / final / rejected rows are preserved —
+     * we only wipe the proposed slot.
+     */
+    wipe_existing?: boolean;
+    /** Pin-Editor flag — also routes to adjustments lane (legacy alias). */
+    reason?: string;
+    _health_check?: boolean;
+  } = {};
   try {
     body = await req.json();
   } catch {
@@ -103,7 +140,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let shotQ = admin
     .from("drone_shots")
     .select(
-      "id, shoot_id, dropbox_path, filename, gps_lat, gps_lon, relative_altitude, flight_yaw, gimbal_pitch, gimbal_roll, flight_roll, shot_role, sfm_pose, registered_in_sfm",
+      "id, shoot_id, dropbox_path, edited_dropbox_path, filename, gps_lat, gps_lon, relative_altitude, flight_yaw, gimbal_pitch, gimbal_roll, flight_roll, shot_role, sfm_pose, registered_in_sfm",
     )
     .eq("shoot_id", shoot.id);
   if (body.shot_id) shotQ = shotQ.eq("id", body.shot_id);
@@ -130,16 +167,91 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse("no eligible shots found for shoot", 400, req);
   }
 
+  // ── Per-shot source resolution ──────────────────────────────────
+  // The post-edit workflow: editors drop polished JPGs in
+  // Drones/Editors/Edited Post Production/, the dropbox-webhook links them
+  // to drone_shots.edited_dropbox_path, and the renderer pulls THAT for the
+  // delivered roles. Source-resolution rules (applied per-shot, not per-batch):
+  //
+  //   - shot_role='nadir_grid' OR 'nadir_hero'              → always use shot.dropbox_path
+  //     (nadir_grid is SfM-only and never edited; nadir_hero may not have an
+  //     editor pass either — operators sometimes deliver the raw MLS top-down)
+  //   - everything else (orbital/oblique_hero/building_hero/unclassified) →
+  //     prefer shot.edited_dropbox_path. If NULL → SKIP the shot (add to
+  //     errors[]) and KEEP rendering the others. Don't fail the whole batch.
+  //
+  // Override flags (bypass the edited-path requirement entirely):
+  //   - body.allow_raw_source: true        → drone-raw-preview / ad-hoc
+  //   - body.column_state === 'preview'     → Stream E preview pipeline
+  //   - body.kind === 'preview'             → alt preview signal
+  //
+  // Previews always render from raws (they show operators what raws look like
+  // PRE-editing). Both the new edited-path requirement and Stream E's preview
+  // path coexist additively.
+  const isPreviewRun =
+    body?.column_state === "preview" ||
+    (body as { kind?: string }).kind === "preview";
+  const allowRawSource = body.allow_raw_source === true || isPreviewRun;
+
+  function resolveSourcePath(
+    shot: { id: string; filename: string; dropbox_path: string; edited_dropbox_path: string | null; shot_role: string },
+  ): { path: string | null; error?: string } {
+    if (allowRawSource) {
+      return { path: shot.dropbox_path };
+    }
+    if (shot.shot_role === "nadir_grid" || shot.shot_role === "nadir_hero") {
+      return { path: shot.dropbox_path };
+    }
+    if (shot.edited_dropbox_path) {
+      return { path: shot.edited_dropbox_path };
+    }
+    return {
+      path: null,
+      error: `shot ${shot.id} (${shot.shot_role}) has no edited_dropbox_path — needs editor upload before render`,
+    };
+  }
+
+  // ── Optional wipe of prior 'proposed' renders (Re-analyse action) ──
+  // Stream D's swimlane Re-analyse calls drone-render with wipe_existing=true
+  // so a fresh AI render replaces the prior proposals rather than colliding
+  // with them. Adjustments/final/rejected slots are preserved — only the
+  // 'proposed' lane is cleared, which lets the existing-renders pre-filter
+  // below treat the shoot as if it had never been rendered.
+  if (body.wipe_existing === true) {
+    const shotIds = shotsAll.map((s) => s.id);
+    const { error: wipeErr } = await admin
+      .from("drone_renders")
+      .delete()
+      .eq("kind", kind)
+      .eq("column_state", "proposed")
+      .in("shot_id", shotIds);
+    if (wipeErr) {
+      return errorResponse(`wipe_existing failed: ${wipeErr.message}`, 500, req);
+    }
+  }
+
   // Skip shots that ALREADY have an active render row for this kind. The
   // unique partial index from migration 233 covers (shot_id,kind,variant,state)
   // so duplicates would 500 the insert anyway — pre-filter saves the work +
   // lets us split a 34-shot ingest across multiple Edge Function invocations
   // (each capped at 145s wall-clock).
+  //
+  // For preview lane: previews are excluded from the unique partial index so
+  // they CAN stack — but we still skip shots that have a preview render to
+  // make drone-raw-preview idempotent (the dispatcher chains it once after
+  // SfM+poi_fetch; re-runs shouldn't re-render every shot). We pre-filter
+  // against preview rows ONLY, ignoring proposed/adjustments/final since the
+  // Edited Post Production source is different from the raw source used here.
+  // Note: use isPreviewRun here directly. isPreviewRender (an alias for the
+  // same value) is declared further down in the output-folder block.
+  const skipStates = isPreviewRun
+    ? ["preview"]
+    : ["proposed", "adjustments", "final"];
   const { data: existingRenders } = await admin
     .from("drone_renders")
     .select("shot_id")
     .eq("kind", kind)
-    .in("column_state", ["proposed", "adjustments", "final"])
+    .in("column_state", skipStates)
     .in("shot_id", shotsAll.map((s) => s.id));
   const alreadyRenderedSet = new Set((existingRenders || []).map((r) => r.shot_id));
   const shots = shotsAll.filter((s) => !alreadyRenderedSet.has(s.id));
@@ -193,26 +305,48 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   ]);
 
   // ── Output folder path + initial column_state ─────────────────────
-  // When the render is triggered by a Pin Editor save, write to the
-  // adjustments folder and seed the row at column_state='adjustments' so the
-  // operator's edits show up in the right swimlane column directly. All other
-  // triggers (auto-render after ingest, manual re-render) go to proposed/.
-  const isAdjustedRender = body?.reason === "pin_edit_saved" || body?.column_state === "adjustments";
-  const outFolderKind = isAdjustedRender
-    ? "enrichment_drone_renders_adjusted"
-    : "enrichment_drone_renders_proposed";
-  const initialColumnState = isAdjustedRender ? "adjustments" : "proposed";
+  // Three render lanes share this code path:
+  //   - 'preview'     → drone-raw-preview pipeline. Sources from raw drone
+  //                     JPGs (allow_raw_source=true), writes to
+  //                     Drones/Raws/Shortlist Proposed/Previews/, row is
+  //                     informational (excluded from the active-per-variant
+  //                     uniqueness scope by migration 243).
+  //   - 'adjustments' → Pin-Editor save (legacy alias: `reason='pin_edit_saved'`).
+  //                     Writes to drone_renders_adjusted/ + adjustments lane.
+  //   - 'proposed'    → default AI render after ingest. Writes to
+  //                     drone_renders_proposed/.
+  // Reuse `isPreviewRun` (defined above near source resolution) so we have a
+  // single source of truth for "are we in the preview lane". `isPreviewRender`
+  // is the local alias for the column-state slice of that decision.
+  const isPreviewRender = isPreviewRun;
+  const isAdjustedRender =
+    !isPreviewRender &&
+    (body?.reason === "pin_edit_saved" || body?.column_state === "adjustments");
+  const outFolderKind = isPreviewRender
+    ? "drones_raws_shortlist_proposed_previews"
+    : isAdjustedRender
+      ? "enrichment_drone_renders_adjusted"
+      : "enrichment_drone_renders_proposed";
+  const initialColumnState = isPreviewRender
+    ? "preview"
+    : isAdjustedRender
+      ? "adjustments"
+      : "proposed";
   const outFolder = await getFolderPath(project.id, outFolderKind);
 
   // ── Update shoot status to 'rendering' ───────────────────────────
   // Optimistic update — only flip if not already in a terminal state. Without
   // this, a render kicked off concurrently with an SfM job would clobber
   // status='sfm_running'. (#4 audit fix)
-  await admin
-    .from("drone_shoots")
-    .update({ status: "rendering" })
-    .eq("id", shoot.id)
-    .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
+  // Preview renders skip the status flip — they're informational and
+  // shouldn't move the production-lane shoot status.
+  if (!isPreviewRender) {
+    await admin
+      .from("drone_shoots")
+      .update({ status: "rendering" })
+      .eq("id", shoot.id)
+      .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
+  }
 
   // ── Render each shot in parallel chunks ──────────────────────────────
   // Modal has soft caps on concurrent worker invocations; 3 shots in flight
@@ -224,6 +358,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     ok: boolean;
     out_path?: string;
     error?: string;
+    /**
+     * True when the shot was skipped because it has no edited_dropbox_path
+     * and the render context requires the edited source. Surfaced separately
+     * from generic failures so the caller (UI / dispatcher) can distinguish
+     * "editor team owes us a file" from "render genuinely failed".
+     */
+    skipped_no_edit?: boolean;
     variants?: Array<{ variant: string; out_path: string }>;
   };
   const renderResults: RenderResult[] = [];
@@ -246,8 +387,22 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Single-shot render fn (closes over scene/theme deps).
   const renderOneShot = async (shot: typeof shots[number]): Promise<RenderResult> => {
     try {
+      // Resolve source path per shot — see resolveSourcePath comment.
+      // For preview / nadir / explicit-raw flows: shot.dropbox_path.
+      // For everything else: shot.edited_dropbox_path; SKIP if NULL.
+      const srcResolved = resolveSourcePath(shot);
+      if (!srcResolved.path) {
+        return {
+          shot_id: shot.id,
+          filename: shot.filename,
+          ok: false,
+          error: srcResolved.error || "no source path resolved",
+          skipped_no_edit: true,
+        };
+      }
+
       // Download source image
-      const dlRes = await downloadFile(shot.dropbox_path);
+      const dlRes = await downloadFile(srcResolved.path);
       if (!dlRes.ok) {
         return {
           shot_id: shot.id,
@@ -409,12 +564,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             continue;
           }
 
-          // Per-variant audit event
+          // Per-variant audit event. Use a distinct event_type per lane so
+          // operators can filter the audit feed (preview renders are
+          // informational; proposed/adjustments are operator-facing).
+          const eventType = isPreviewRender
+            ? "render_preview"
+            : isAdjustedRender
+              ? "render_adjusted"
+              : "render_proposed";
           await admin.from("drone_events").insert({
             project_id: project.id,
             shoot_id: shot.shoot_id,
             shot_id: shot.id,
-            event_type: "render_proposed",
+            event_type: eventType,
             actor_type: isService ? "system" : "user",
             actor_id: isService ? null : user?.id,
             payload: {
@@ -422,6 +584,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
               dropbox_path: uploadRes.path_lower,
               theme_chain_levels: themeChain.length,
               output_variant: v.name,
+              column_state: initialColumnState,
             },
           });
 
@@ -505,25 +668,41 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // render job so the dispatcher picks it up next tick. Without this, a
   // 34-shot shoot would only get 6 rendered before drone-render returned
   // 'success' and the operator would think the rest had failed.
+  //
+  // Preview lane: enqueue `kind='raw_preview_render'` so the continuation
+  // re-enters via drone-raw-preview (which is itself idempotent — already-
+  // rendered preview shots are skipped via the skipStates filter above). This
+  // keeps the preview pipeline self-contained: we never promote a preview run
+  // into the production proposed lane.
   if (moreRemaining > 0) {
+    const continuationKind = isPreviewRender ? "raw_preview_render" : "render";
+    const continuationPayload = isPreviewRender
+      ? { shoot_id: shoot.id, reason: "raw_preview_continuation" }
+      : { shoot_id: shoot.id, kind, reason: "render_continuation" };
     await admin.from("drone_jobs").insert({
       project_id: project.id,
       shoot_id: shoot.id,
-      kind: "render",
+      kind: continuationKind,
       status: "pending",
-      payload: { shoot_id: shoot.id, kind, reason: "render_continuation" },
+      payload: continuationPayload,
       scheduled_for: new Date(Date.now() + 5_000).toISOString(),
     });
   }
 
   // Update shoot status. Move to 'proposed_ready' only when ALL shots are done
   // (partial progress keeps it at 'rendering' so the UI shows a spinner).
-  let nextStatus = shoot.status;
-  if (moreRemaining === 0 && successCount > 0) nextStatus = "proposed_ready";
-  else if (moreRemaining === 0 && successCount === 0) nextStatus = "render_failed";
-  // else leave at 'rendering' — there's still more to do
+  // Preview renders are informational — they don't drive shoot status (which
+  // tracks the production-deliverable lane).
+  if (!isPreviewRender) {
+    let nextStatus = shoot.status;
+    if (moreRemaining === 0 && successCount > 0) nextStatus = "proposed_ready";
+    else if (moreRemaining === 0 && successCount === 0) nextStatus = "render_failed";
+    // else leave at 'rendering' — there's still more to do
 
-  await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
+    await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
+  }
+
+  const skippedNoEditCount = renderResults.filter((r) => r.skipped_no_edit === true).length;
 
   return jsonResponse(
     {
@@ -531,9 +710,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       shoot_id: shoot.id,
       kind,
       shots_total: shotsAll.length,
+      shots_rendered: successCount,
       shots_rendered_this_run: successCount,
       shots_already_rendered: shotsAll.length - shots.length,
       shots_failed_this_run: shotsCapped.length - successCount,
+      shots_skipped_no_edit: skippedNoEditCount,
       shots_remaining: moreRemaining,
       results: renderResults,
     },

@@ -1,21 +1,34 @@
 /**
- * DroneRendersSubtab — Drone Phase 2 Stream K
+ * DroneRendersSubtab — Drone Phase 2 Stream K (curate-then-edit-then-render)
  *
- * The Raw → Proposed → Adjustments → Final pipeline UI for one drone shoot.
+ * The 5-column swimlane for one drone shoot:
+ *
+ *   ┌ RAW PROPOSED ─┬ RAW ACCEPTED ─┬ AI PROPOSED ─┬ ADJUSTMENTS ─┬ FINAL ─┐
+ *   │ shots         │ shots         │ renders       │ renders       │ renders│
+ *   │ accept/reject │ send-back     │ Edit/Approve  │ Approve/Back  │ Down…  │
+ *   └───────────────┴───────────────┴───────────────┴───────────────┴────────┘
+ *
+ * Shot columns (Raw Proposed / Raw Accepted) are derived from
+ * `drone_shots.lifecycle_state` (raw_proposed | raw_accepted | rejected |
+ * sfm_only — migration 242). SfM-only nadirs never appear here.
+ *
+ * Render columns (AI Proposed / Adjustments / Final) are derived from
+ * `drone_renders.column_state` (proposed | adjustments | final | rejected),
+ * unchanged from the prior version.
+ *
+ * Header actions:
+ *   • "Lock shortlist" — orchestrator-built `drone-shortlist-lock` Edge Fn.
+ *     Visible only when there's at least one Raw Accepted AND at least one
+ *     Raw Proposed remaining to triage.
+ *   • "Re-analyse edited folder" — re-runs `drone-render` to wipe & regenerate
+ *     AI Proposed cards from the team's post-prod edits. Visible after lock
+ *     (Raw Proposed empty) once anything was accepted.
+ *   • "Show rejected (N)" — popover listing rejected raw shots with Restore.
+ *
+ * Card thumbnail: Raw Proposed / Raw Accepted prefer the AI preview render
+ * (drone_renders.column_state='preview') and fall back to the raw shot.
  *
  * Props: { shoot, projectId }
- *
- * Layout (per IMPLEMENTATION_PLAN_V2.md §6.1):
- *   ┌ RAW ──────┬ PROPOSED ────┬ ADJUSTMENTS ──┬ FINAL ────────┐
- *   │ N shots   │ N rendered   │ N in editor   │ N approved    │
- *   │ [cards]   │ [cards]      │ [cards]       │ [cards]        │
- *   └───────────┴──────────────┴────────────────┴────────────────┘
- *
- * Cards = `drone_renders` rows grouped by `column_state`
- *   ('raw' | 'proposed' | 'adjustments' | 'final' | 'rejected').
- * The RAW column is special: it shows shots that don't yet have any render row
- * (since render workers create the first 'proposed' row directly — there's no
- * literal 'raw' state ever stored).
  *
  * Actions:
  *   RAW          → no action (auto-progressed by render worker)
@@ -38,7 +51,17 @@ import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -58,6 +81,10 @@ import {
   Loader2,
   AlertCircle,
   Layers,
+  Sparkles,
+  Lock,
+  RefreshCw,
+  ThumbsDown,
 } from "lucide-react";
 import { createPageUrl } from "@/utils";
 import { format, formatDistanceToNow } from "date-fns";
@@ -68,18 +95,24 @@ import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
 
 const COLUMNS = [
-  { key: "raw",          label: "Raw",          tone: "border-slate-300 dark:border-slate-700" },
-  { key: "proposed",     label: "Proposed",     tone: "border-purple-300 dark:border-purple-800" },
+  { key: "raw_proposed", label: "Raw Proposed", tone: "border-slate-300 dark:border-slate-700" },
+  { key: "raw_accepted", label: "Raw Accepted", tone: "border-amber-300 dark:border-amber-800" },
+  { key: "proposed",     label: "AI Proposed",  tone: "border-purple-300 dark:border-purple-800" },
   { key: "adjustments",  label: "Adjustments",  tone: "border-indigo-300 dark:border-indigo-800" },
   { key: "final",        label: "Final",        tone: "border-emerald-300 dark:border-emerald-800" },
 ];
 
 const COLUMN_HEADER_TONE = {
-  raw:          "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+  raw_proposed: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+  raw_accepted: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
   proposed:     "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
   adjustments:  "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
   final:        "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
 };
+
+// Shot columns (Raw Proposed / Raw Accepted) render shot cards instead of
+// render cards. Used to switch the column body branch and to suppress drag.
+const SHOT_COLUMNS = new Set(["raw_proposed", "raw_accepted"]);
 
 // Mirrors ALLOWED_TRANSITIONS in drone-render-approve. RAW is not a real
 // column_state (RAW shows shots without renders), so it can't be a drag source
@@ -190,6 +223,28 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     };
   }, [shootId, shotIdsSignature, queryClient]);
 
+  // Realtime: DroneShot updates (lifecycle_state changes from accept/reject/
+  // restore actions, and inserts/updates from upstream ingest). Filter by
+  // shoot_id client-side; the api wrapper does not expose Supabase's server
+  // filter option (mirrors the DroneRender pattern above).
+  useEffect(() => {
+    if (!shootId) return;
+    let active = true;
+    const unsubscribe = api.entities.DroneShot.subscribe((evt) => {
+      if (!active) return;
+      if (evt.data?.shoot_id && evt.data.shoot_id !== shootId) return;
+      queryClient.invalidateQueries({ queryKey: ["drone_shots_for_renders", shootId] });
+    });
+    return () => {
+      active = false;
+      try {
+        if (typeof unsubscribe === "function") unsubscribe();
+      } catch (e) {
+        console.warn("[DroneRendersSubtab] DroneShot unsubscribe failed:", e);
+      }
+    };
+  }, [shootId, queryClient]);
+
   const shots = shotsQuery.data || [];
   const renders = rendersQuery.data || [];
 
@@ -205,14 +260,19 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // (shot, column_state) pair (one per output_variant). The UI shows ONE
   // card per shot per column with a variant selector — primary variant is
   // the most-recently-created within the group.
+  //
+  // The new shot-level columns (raw_proposed / raw_accepted / shot_rejected)
+  // are derived from `drone_shots.lifecycle_state` (added in migration 242):
+  //   raw_proposed | raw_accepted | rejected | sfm_only.
+  // SfM-only shots (nadir grid) never appear in the swimlane.
   const grouped = useMemo(() => {
     const cols = {
+      preview: new Map(),
       proposed: new Map(),
       adjustments: new Map(),
       final: new Map(),
       rejected: new Map(),
     };
-    const shotsWithRender = new Set();
 
     // Renders arrive newest-first (-created_at) so the first row encountered
     // for each shot in a bucket is the primary variant.
@@ -222,7 +282,6 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
       if (!bucket) continue;
       if (!bucket.has(r.shot_id)) bucket.set(r.shot_id, []);
       bucket.get(r.shot_id).push(r);
-      if (col !== "rejected") shotsWithRender.add(r.shot_id);
     }
 
     const toGroups = (m) =>
@@ -231,14 +290,38 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
         variants,
       }));
 
+    // Shot columns: filter by lifecycle_state. Older rows that pre-date
+    // migration 242 may have a NULL lifecycle_state — surface those as
+    // raw_proposed so they're visible (the operator can act on them).
+    const rawProposed = shots.filter(
+      (s) => !s.lifecycle_state || s.lifecycle_state === "raw_proposed",
+    );
+    const rawAccepted = shots.filter((s) => s.lifecycle_state === "raw_accepted");
+    const shotRejected = shots.filter((s) => s.lifecycle_state === "rejected");
+
     return {
-      raw: shots.filter((s) => !shotsWithRender.has(s.id)),
+      raw_proposed: rawProposed,
+      raw_accepted: rawAccepted,
+      shot_rejected: shotRejected,
+      preview: cols.preview, // Map<shot_id, variants> for thumbnail lookup
       proposed: toGroups(cols.proposed),
       adjustments: toGroups(cols.adjustments),
       final: toGroups(cols.final),
       rejected: toGroups(cols.rejected),
     };
   }, [renders, shots]);
+
+  // Map from shot_id → preview render's dropbox_path (newest variant). Used
+  // by Raw Proposed / Raw Accepted cards to show the AI preview when one
+  // exists; falls back to the raw shot's dropbox_path otherwise.
+  const previewPathByShotId = useMemo(() => {
+    const m = new Map();
+    for (const [shotId, variants] of grouped.preview) {
+      const top = variants[0];
+      if (top?.dropbox_path) m.set(shotId, top.dropbox_path);
+    }
+    return m;
+  }, [grouped.preview]);
 
   // ── Transition action (generalised) ───────────────────────────────────────
   // pendingAction map values are short verbs the buttons read to render their
@@ -286,10 +369,86 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     [queryClient, shootId],
   );
 
+  // ── Shot lifecycle_state mutation ─────────────────────────────────────────
+  // Used by Raw Proposed / Raw Accepted card actions and the rejected popover
+  // restore. We track per-shot pending state in `pendingShotAction` so a
+  // sluggish flip doesn't make the entire column feel stuck.
+  const [pendingShotAction, setPendingShotAction] = useState({});
+
+  const mutateShotLifecycle = useCallback(
+    async (shotId, nextState, label) => {
+      setPendingShotAction((p) => ({ ...p, [shotId]: nextState }));
+      try {
+        await api.entities.DroneShot.update(shotId, { lifecycle_state: nextState });
+        toast.success(label || `Moved to ${nextState}`);
+        queryClient.invalidateQueries({ queryKey: ["drone_shots_for_renders", shootId] });
+      } catch (err) {
+        toast.error(err?.message || "Action failed");
+      } finally {
+        setPendingShotAction((p) => {
+          const next = { ...p };
+          delete next[shotId];
+          return next;
+        });
+      }
+    },
+    [queryClient, shootId],
+  );
+
+  // ── Lock shortlist ────────────────────────────────────────────────────────
+  // Calls the orchestrator-built `drone-shortlist-lock` Edge Function. Until
+  // that function exists, the call will fail with a non-2xx — we surface that
+  // as a friendly toast so it's discoverable, not silent.
+  const [isLocking, setIsLocking] = useState(false);
+  const lockShortlist = useCallback(async () => {
+    if (!shootId) return;
+    setIsLocking(true);
+    try {
+      const data = await api.functions.invoke("drone-shortlist-lock", {
+        shoot_id: shootId,
+      });
+      if (data?.success === false) {
+        throw new Error(data?.error || "Lock failed");
+      }
+      toast.success("Shortlist locked — files moved into Final Shortlist / Rejected / Others.");
+      queryClient.invalidateQueries({ queryKey: ["drone_shots_for_renders", shootId] });
+      queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
+    } catch (err) {
+      toast.error(err?.message || "Lock shortlist failed");
+    } finally {
+      setIsLocking(false);
+    }
+  }, [shootId, queryClient]);
+
+  // ── Re-analyse edited folder ──────────────────────────────────────────────
+  // After the team uploads to Editors/Edited Post Production/, re-running the
+  // renderer wipes & regenerates the AI Proposed cards from those edits.
+  const [isReanalysing, setIsReanalysing] = useState(false);
+  const reanalyseEdited = useCallback(async () => {
+    if (!shootId) return;
+    setIsReanalysing(true);
+    try {
+      const data = await api.functions.invoke("drone-render", {
+        shoot_id: shootId,
+        kind: "poi_plus_boundary",
+        reason: "reanalyse",
+      });
+      if (data?.success === false) {
+        throw new Error(data?.error || "Re-analyse failed");
+      }
+      toast.success("Re-analysing edited folder — new renders will appear shortly.");
+      queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
+    } catch (err) {
+      toast.error(err?.message || "Re-analyse failed");
+    } finally {
+      setIsReanalysing(false);
+    }
+  }, [shootId, queryClient]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   if (shotsQuery.isLoading || rendersQuery.isLoading) {
     return (
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 animate-pulse">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 animate-pulse">
         {COLUMNS.map((c) => (
           <div key={c.key} className="space-y-2">
             <div className="h-8 bg-muted rounded" />
@@ -324,23 +483,149 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     );
   }
 
+  // Header-button visibility:
+  //   Lock shortlist → at least one Raw Accepted AND at least one Raw Proposed
+  //                    still pending decision (locking would be premature
+  //                    otherwise, but also pointless if nothing's left to lock).
+  //   Re-analyse     → no Raw Proposed remaining (curation done) AND there are
+  //                    edited files to re-analyse. The "edited files exist"
+  //                    check is delegated to the function (it'll return a
+  //                    polite error if there's nothing to do); we surface the
+  //                    button as soon as curation is closed out.
+  const hasRawProposed = grouped.raw_proposed.length > 0;
+  const hasRawAccepted = grouped.raw_accepted.length > 0;
+  const showLockBtn = isManagerOrAbove && hasRawAccepted && hasRawProposed;
+  const showReanalyseBtn = isManagerOrAbove && !hasRawProposed && hasRawAccepted;
+  const rejectedShotCount = grouped.shot_rejected.length;
+
   return (
     <TooltipProvider delayDuration={200}>
       <div className="space-y-3">
+        {/* Header actions: Lock shortlist / Re-analyse / Show rejected */}
+        {(showLockBtn || showReanalyseBtn || rejectedShotCount > 0) && (
+          <div className="flex items-center gap-2 flex-wrap">
+            {showLockBtn && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-7 text-xs"
+                    onClick={lockShortlist}
+                    disabled={isLocking}
+                  >
+                    {isLocking ? (
+                      <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                    ) : (
+                      <Lock className="h-3 w-3 mr-1.5" />
+                    )}
+                    Lock shortlist
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Move accepted files to Final Shortlist, rejected to Rejected, SfM nadirs to Others.
+                  After this, the team can drop edited files into Editors/Edited Post Production/.
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {showReanalyseBtn && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs"
+                    onClick={reanalyseEdited}
+                    disabled={isReanalysing}
+                  >
+                    {isReanalysing ? (
+                      <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3 mr-1.5" />
+                    )}
+                    Re-analyse edited folder
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Wipe and regenerate AI Proposed renders from the post-production edits in
+                  Editors/Edited Post Production/.
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {rejectedShotCount > 0 && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs">
+                    <ThumbsDown className="h-3 w-3 mr-1.5" />
+                    Show rejected ({rejectedShotCount})
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 p-2" align="start">
+                  <div className="text-xs font-semibold mb-2 px-1">
+                    Rejected raws
+                  </div>
+                  <div className="max-h-72 overflow-y-auto space-y-1">
+                    {grouped.shot_rejected.map((shot) => {
+                      const pendingState = pendingShotAction[shot.id];
+                      return (
+                        <div
+                          key={shot.id}
+                          className="flex items-center justify-between gap-2 rounded px-1.5 py-1 hover:bg-muted/60"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-[11px] font-medium truncate">
+                              {shot.filename || "—"}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground truncate">
+                              {shot.dji_index != null ? `#${shot.dji_index}` : ""}
+                              {shot.shot_role ? ` · ${SHOT_ROLE_LABEL[shot.shot_role] || shot.shot_role}` : ""}
+                            </div>
+                          </div>
+                          {isManagerOrAbove && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 text-[10px] px-2 flex-shrink-0"
+                              onClick={() =>
+                                mutateShotLifecycle(shot.id, "raw_proposed", "Restored")
+                              }
+                              disabled={Boolean(pendingState)}
+                            >
+                              {pendingState === "raw_proposed" ? (
+                                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                              ) : (
+                                <RotateCcw className="h-2.5 w-2.5 mr-1" />
+                              )}
+                              Restore
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
+        )}
+
         {/* Pipeline columns */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           {COLUMNS.map((col) => (
             <PipelineColumn
               key={col.key}
               column={col}
               items={grouped[col.key] || []}
-              isRaw={col.key === "raw"}
+              isShotColumn={SHOT_COLUMNS.has(col.key)}
               shotsById={shotsById}
+              previewPathByShotId={previewPathByShotId}
               projectId={projectId}
               shootId={shootId}
               canEdit={isManagerOrAbove}
               pendingAction={pendingAction}
+              pendingShotAction={pendingShotAction}
               onTransition={callTransition}
+              onMutateShot={mutateShotLifecycle}
               onConfirmReject={(render) => setConfirmReject({ render })}
               onPreview={(info) => setPreview(info)}
               dragRender={dragRender}
@@ -455,13 +740,16 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
 function PipelineColumn({
   column,
   items,
-  isRaw,
+  isShotColumn,
   shotsById,
+  previewPathByShotId,
   projectId,
   shootId,
   canEdit,
   pendingAction,
+  pendingShotAction,
   onTransition,
+  onMutateShot,
   onConfirmReject,
   onPreview,
   dragRender,
@@ -469,12 +757,14 @@ function PipelineColumn({
 }) {
   // A column is a valid drop target only if there's an active drag from a
   // different column AND the transition (fromCol → thisCol) is allowed by the
-  // backend's transition rules.
+  // backend's transition rules. Shot columns (Raw Proposed / Raw Accepted)
+  // are never drop targets — their cards aren't draggable either, and the
+  // render-side transitions don't cross over into the shot lifecycle.
   const validTargets = dragRender ? VALID_DROP_TARGETS[dragRender.fromColumn] : null;
   const isValidDropTarget = Boolean(
     canEdit &&
     dragRender &&
-    !isRaw &&
+    !isShotColumn &&
     column.key !== dragRender.fromColumn &&
     validTargets?.has(column.key)
   );
@@ -503,13 +793,22 @@ function PipelineColumn({
     setDragRender(null);
   };
 
+  const emptyLabel =
+    column.key === "raw_proposed"
+      ? "No raws to triage"
+      : column.key === "raw_accepted"
+      ? "Accept raws to stage them here"
+      : isOver
+      ? "Drop here"
+      : "Empty";
+
   return (
     <div
       className={cn(
         "rounded-md border-2 bg-card transition-colors",
         column.tone,
         isOver && "ring-2 ring-primary/60 border-primary/40",
-        dragRender && !isValidDropTarget && !isRaw && column.key !== dragRender.fromColumn && "opacity-60",
+        dragRender && !isValidDropTarget && !isShotColumn && column.key !== dragRender.fromColumn && "opacity-60",
       )}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -527,12 +826,21 @@ function PipelineColumn({
       <div className="p-2 space-y-2 min-h-[120px] max-h-[480px] overflow-y-auto">
         {items.length === 0 ? (
           <div className="text-center py-6 text-[11px] text-muted-foreground">
-            {isRaw ? "All shots have renders" : isOver ? "Drop here" : "Empty"}
+            {emptyLabel}
           </div>
-        ) : isRaw ? (
-          // RAW column: items are shots, not renders
+        ) : isShotColumn ? (
+          // Raw Proposed / Raw Accepted: items are drone_shots rows
           items.map((shot) => (
-            <RawShotCard key={shot.id} shot={shot} onPreview={onPreview} />
+            <ShotLifecycleCard
+              key={shot.id}
+              shot={shot}
+              column={column.key}
+              previewPath={previewPathByShotId.get(shot.id) || null}
+              canEdit={canEdit}
+              pendingShotAction={pendingShotAction}
+              onMutateShot={onMutateShot}
+              onPreview={onPreview}
+            />
           ))
         ) : (
           items.map((g) => (
@@ -557,26 +865,70 @@ function PipelineColumn({
   );
 }
 
-// ── RawShotCard (in RAW column — no render row yet) ──────────────────────────
-function RawShotCard({ shot, onPreview }) {
-  const clickable = Boolean(shot?.dropbox_path && onPreview);
-  const Tag = clickable ? "button" : "div";
+// ── ShotLifecycleCard (Raw Proposed / Raw Accepted) ──────────────────────────
+//
+// Renders a drone_shot in the curate-then-edit pre-render columns. Shows the
+// AI preview render thumbnail when one exists (drone_renders row with
+// column_state='preview' for this shot) — falls back to the raw image. The
+// thumbnail itself isn't a button (we want the action buttons to dominate UX
+// for triage); preview opens via a small "expand" icon if useful later.
+function ShotLifecycleCard({
+  shot,
+  column,
+  previewPath,
+  canEdit,
+  pendingShotAction,
+  onMutateShot,
+  onPreview,
+}) {
+  // Prefer the AI preview render path when one exists; this is what the
+  // operator should be triaging on (shows the would-be deliverable look).
+  // DroneThumbnail's media-proxy fetch will gracefully fall back to the icon
+  // placeholder if the preview path is invalid; we additionally fall back to
+  // the raw shot path for thumbnail purposes.
+  const thumbPath = previewPath || shot?.dropbox_path || null;
+  const clickPath = thumbPath;
+  const isAccepted = column === "raw_accepted";
+  const pendingState = pendingShotAction?.[shot.id];
+  const isAiRecommended = Boolean(shot?.is_ai_recommended);
+
   return (
-    <Tag
-      type={clickable ? "button" : undefined}
-      onClick={clickable ? () => onPreview({ path: shot.dropbox_path, label: shot.filename }) : undefined}
-      className={cn(
-        "rounded-md border bg-card overflow-hidden w-full text-left",
-        clickable && "hover:border-primary/40 transition-colors",
-      )}
-    >
-      <DroneThumbnail
-        dropboxPath={shot.dropbox_path}
-        mode="thumb"
-        alt={shot.filename || "raw drone shot"}
-        aspectRatio="aspect-[4/3]"
-      />
-      <div className="p-2">
+    <div className="rounded-md border bg-card overflow-hidden">
+      <button
+        type="button"
+        onClick={() => {
+          if (clickPath && onPreview) {
+            onPreview({ path: clickPath, label: shot.filename });
+          }
+        }}
+        disabled={!clickPath}
+        className="block w-full text-left disabled:cursor-default hover:opacity-95 transition-opacity"
+        aria-label={`Preview ${shot.filename || "shot"}`}
+      >
+        <DroneThumbnail
+          dropboxPath={thumbPath}
+          mode="thumb"
+          alt={shot.filename || "raw drone shot"}
+          aspectRatio="aspect-[4/3]"
+          overlay={
+            isAiRecommended ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 text-[9px] px-1 py-0.5 rounded bg-blue-600 text-white pointer-events-auto cursor-help">
+                    <Sparkles className="h-2.5 w-2.5" />
+                    AI
+                    <Check className="h-2.5 w-2.5" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-[200px]">
+                  Suggested by AI based on dedup, flight roll, and POI coverage.
+                </TooltipContent>
+              </Tooltip>
+            ) : null
+          }
+        />
+      </button>
+      <div className="p-2 space-y-1">
         <div className="text-[11px] font-medium truncate" title={shot.filename}>
           {shot.filename || "—"}
         </div>
@@ -584,8 +936,79 @@ function RawShotCard({ shot, onPreview }) {
           {shot.dji_index != null ? `#${shot.dji_index}` : ""}
           {shot.shot_role ? ` · ${SHOT_ROLE_LABEL[shot.shot_role] || shot.shot_role}` : ""}
         </div>
+
+        {/* Triage actions */}
+        {canEdit && (
+          <div className="flex items-center gap-1 flex-wrap pt-1">
+            {!isAccepted ? (
+              <>
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="h-6 text-[10px] px-2"
+                  onClick={() => onMutateShot(shot.id, "raw_accepted", "Accepted")}
+                  disabled={Boolean(pendingState)}
+                  title="Accept this raw — moves to Raw Accepted"
+                >
+                  {pendingState === "raw_accepted" ? (
+                    <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                  ) : (
+                    <Check className="h-2.5 w-2.5 mr-1" />
+                  )}
+                  Accept
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-[10px] px-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                  onClick={() => onMutateShot(shot.id, "rejected", "Rejected")}
+                  disabled={Boolean(pendingState)}
+                  title="Reject this raw"
+                >
+                  {pendingState === "rejected" ? (
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  ) : (
+                    <X className="h-2.5 w-2.5" />
+                  )}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-[10px] px-1.5"
+                  onClick={() => onMutateShot(shot.id, "raw_proposed", "Sent back to Proposed")}
+                  disabled={Boolean(pendingState)}
+                  title="Send back to Raw Proposed"
+                >
+                  {pendingState === "raw_proposed" ? (
+                    <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                  ) : (
+                    <ChevronLeft className="h-2.5 w-2.5 mr-1" />
+                  )}
+                  Send back
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-[10px] px-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                  onClick={() => onMutateShot(shot.id, "rejected", "Rejected")}
+                  disabled={Boolean(pendingState)}
+                  title="Reject this raw"
+                >
+                  {pendingState === "rejected" ? (
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  ) : (
+                    <X className="h-2.5 w-2.5" />
+                  )}
+                </Button>
+              </>
+            )}
+          </div>
+        )}
       </div>
-    </Tag>
+    </div>
   );
 }
 
