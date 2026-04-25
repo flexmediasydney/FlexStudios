@@ -1,0 +1,281 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://flexstudios.app/schemas/drone_theme.v1.json",
+  "title": "FlexStudios Drone Theme Config",
+  "description": "v1 schema for drone render themes — anchor line, POI label, property pin, boundary block, branding ribbon, output variants. See IMPLEMENTATION_PLAN_V2.md §3.3.",
+  "type": "object",
+  "required": ["theme_name"],
+  "properties": {
+    "theme_name": { "type": "string" },
+    "version": { "type": "string", "default": "1.0" },
+    "inherits_from": { "type": ["string", "null"] },
+
+    "anchor_line": {
+      "type": "object",
+      "properties": {
+        "shape": { "type": "string", "enum": ["thin", "thick_bar", "dashed"] },
+        "width_px": { "type": "integer", "minimum": 1 },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0 },
+        "min_length_px": { "type": "integer", "default": 40 },
+        "max_length_px": { "type": "integer", "default": 220 },
+        "flip_below_target_threshold_px": { "type": "integer", "default": 80 },
+        "end_marker": {
+          "type": "object",
+          "properties": {
+            "shape": { "type": "string", "enum": ["none", "dot", "diamond", "circle", "cross"] },
+            "size_px": { "type": "integer" },
+            "fill_color": { "type": "string" },
+            "stroke_color": { "type": "string" },
+            "stroke_width_px": { "type": "integer" }
+          }
+        }
+      }
+    },
+
+    "poi_label": {
+      "type": "object",
+      "properties": {
+        "shape": { "type": "string", "enum": ["rectangle", "rounded_rectangle", "pill"] },
+        "corner_radius_px": { "type": "integer", "default": 0 },
+        "fill": { "type": ["string", "null"] },
+        "border": {
+          "type": "object",
+          "properties": {
+            "color": { "type": ["string", "null"] },
+            "width_px": { "type": "integer" }
+          }
+        },
+        "padding_px": {
+          "type": "object",
+          "properties": {
+            "top": { "type": "integer" },
+            "right": { "type": "integer" },
+            "bottom": { "type": "integer" },
+            "left": { "type": "integer" }
+          }
+        },
+        "text_color": { "type": "string" },
+        "secondary_text_color": { "type": "string" },
+        "text_case": { "type": "string", "enum": ["asis", "uppercase", "titlecase"] },
+        "font_family": { "type": "string", "default": "DejaVu Sans" },
+        "font_size_px": { "type": "integer", "minimum": 8 },
+        "letter_spacing": { "type": "number", "default": 0 },
+        "line_height": { "type": "number", "default": 1.2 },
+        "text_template": { "type": "string", "default": "{name}" },
+        "secondary_text": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "template": { "type": "string" },
+            "color": { "type": "string" }
+          }
+        },
+        "show_distance_as_secondary": { "type": "boolean" }
+      }
+    },
+
+    "poi_label_foreground": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "style": { "type": "string", "enum": ["outlined_text", "label_box_same"] },
+        "text_color": { "type": "string" },
+        "text_outline_color": { "type": "string" },
+        "text_outline_width_px": { "type": "integer" },
+        "font_size_px": { "type": "integer" },
+        "anchor_line": { "type": "string", "enum": ["none", "mini"] }
+      }
+    },
+
+    "property_pin": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "pill_with_address",
+            "teardrop_with_logo",
+            "teardrop_with_monogram",
+            "teardrop_with_icon",
+            "teardrop_plain",
+            "line_up_with_house_icon",
+            "custom_svg"
+          ]
+        },
+        "size_px": { "type": "integer" },
+        "fill_color": { "type": "string" },
+        "stroke_color": { "type": "string" },
+        "stroke_width_px": { "type": "integer" },
+        "content": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string", "enum": ["none", "text", "logo", "monogram", "icon"] },
+            "text": { "type": "string" },
+            "monogram": { "type": "string" },
+            "icon_name": { "type": "string" },
+            "logo_asset_ref": { "type": "string" },
+            "text_color": { "type": "string" },
+            "text_font": { "type": "string" },
+            "text_size_px": { "type": "integer" },
+            "icon_color": { "type": "string" }
+          }
+        },
+        "address_label": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "position": { "type": "string", "enum": ["below", "above", "none"] },
+            "text_color": { "type": "string" },
+            "bg_color": { "type": "string" },
+            "font_size_px": { "type": "integer" }
+          }
+        }
+      }
+    },
+
+    "boundary": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "line": {
+          "type": "object",
+          "properties": {
+            "style": { "type": "string", "enum": ["solid", "dashed", "dotted"] },
+            "width_px": { "type": "integer" },
+            "color": { "type": "string" },
+            "corner_radius_px": { "type": "integer" },
+            "shadow": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "color": { "type": "string" },
+                "offset_x_px": { "type": "integer" },
+                "offset_y_px": { "type": "integer" },
+                "blur_px": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "exterior_treatment": {
+          "type": "object",
+          "properties": {
+            "blur_enabled": { "type": "boolean" },
+            "blur_strength_px": { "type": "integer" },
+            "darken_factor": { "type": "number" },
+            "hue_shift_degrees": { "type": "integer" },
+            "saturation_factor": { "type": "number" },
+            "lightness_factor": { "type": "number" }
+          }
+        },
+        "side_measurements": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "unit": { "type": "string", "enum": ["metres", "feet"] },
+            "decimals": { "type": "integer" },
+            "position": { "type": "string", "enum": ["outside", "inside"] },
+            "text_color": { "type": "string" },
+            "text_outline_color": { "type": "string" },
+            "text_outline_width_px": { "type": "integer" },
+            "font_size_px": { "type": "integer" },
+            "font_family": { "type": "string" }
+          }
+        },
+        "sqm_total": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "text_template": { "type": "string" },
+            "position": {
+              "type": "string",
+              "enum": ["centroid", "top_left", "top_right", "bottom_left", "bottom_right"]
+            },
+            "text_color": { "type": "string" },
+            "bg_color": { "type": "string" },
+            "font_size_px": { "type": "integer" },
+            "shadow": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "color": { "type": "string" },
+                "offset_x_px": { "type": "integer" },
+                "offset_y_px": { "type": "integer" },
+                "blur_px": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "address_overlay": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "position": { "type": "string", "enum": ["centroid", "below_sqm", "above_sqm"] },
+            "text_template": { "type": "string" },
+            "text_color": { "type": "string" },
+            "font_size_px": { "type": "integer" },
+            "shadow_enabled": { "type": "boolean" }
+          }
+        }
+      }
+    },
+
+    "poi_selection": {
+      "type": "object",
+      "properties": {
+        "radius_m": { "type": "integer" },
+        "max_pins_per_shot": { "type": "integer" },
+        "min_separation_px": { "type": "integer" },
+        "curation": { "type": "string", "enum": ["auto", "manual_only"] },
+        "type_quotas": { "type": "object" }
+      }
+    },
+
+    "branding_ribbon": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "position": { "type": "string", "enum": ["top", "bottom", "none"] },
+        "height_px": { "type": "integer" },
+        "bg_color": { "type": "string" },
+        "text_color": { "type": "string" },
+        "show_org_logo": { "type": "boolean" },
+        "logo_asset_ref": { "type": "string" },
+        "logo_position": { "type": "string", "enum": ["left", "right"] },
+        "logo_height_px": { "type": "integer" },
+        "show_address": { "type": "boolean" },
+        "address_font_size_px": { "type": "integer" },
+        "show_shot_id": { "type": "boolean" }
+      }
+    },
+
+    "safety_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "message": { "type": "string" },
+          "expression": { "type": "string" },
+          "enforcement": { "type": "string", "enum": ["warning", "error"] }
+        }
+      }
+    },
+
+    "output_variants": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "format": { "type": "string", "enum": ["JPEG", "TIFF", "PNG"] },
+          "quality": { "type": "integer" },
+          "target_width_px": { "type": "integer" },
+          "aspect": { "type": "string", "enum": ["preserve", "crop_1_1", "crop_16_9", "crop_4_5"] },
+          "max_bytes": { "type": "integer" },
+          "color_profile": { "type": "string", "enum": ["sRGB", "Adobe_RGB"] }
+        }
+      }
+    }
+  }
+}

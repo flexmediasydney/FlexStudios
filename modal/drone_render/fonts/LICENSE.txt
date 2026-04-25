@@ -1,0 +1,13 @@
+Bundled fonts: DejaVu Sans (DejaVuSans.ttf) and DejaVu Sans Bold
+(DejaVuSans-Bold.ttf), version 2.37+.
+
+Source: https://dejavu-fonts.github.io/
+
+License: Bitstream Vera Fonts License + Arev Fonts License (free for any
+use including commercial redistribution; both licenses are permissive).
+
+Original Bitstream Vera Fonts License:
+  https://dejavu-fonts.github.io/License.html
+
+Bundling these files in a repo + Modal worker image is permitted under
+both source licenses with attribution as above.

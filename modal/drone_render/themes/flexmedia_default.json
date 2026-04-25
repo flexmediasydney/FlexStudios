@@ -1,0 +1,101 @@
+{
+  "theme_name": "FlexMedia Default",
+  "version": "1.0",
+  "inherits_from": null,
+
+  "anchor_line": {
+    "shape": "thin",
+    "width_px": 3,
+    "color": "#FFFFFF",
+    "opacity": 1.0,
+    "min_length_px": 40,
+    "max_length_px": 220,
+    "flip_below_target_threshold_px": 80,
+    "end_marker": {
+      "shape": "dot",
+      "size_px": 14,
+      "fill_color": "#FFFFFF",
+      "stroke_color": "#FFFFFF",
+      "stroke_width_px": 0
+    }
+  },
+
+  "poi_label": {
+    "shape": "rectangle",
+    "corner_radius_px": 0,
+    "fill": "#FFFFFF",
+    "border": { "color": null, "width_px": 0 },
+    "padding_px": { "top": 12, "right": 24, "bottom": 12, "left": 24 },
+    "text_color": "#000000",
+    "text_case": "uppercase",
+    "font_family": "DejaVu Sans",
+    "font_size_px": 36,
+    "letter_spacing": 0,
+    "line_height": 1.2,
+    "text_template": "{name}",
+    "secondary_text": { "enabled": false, "template": "{distance}", "color": "#666666" },
+    "show_distance_as_secondary": false
+  },
+
+  "property_pin": {
+    "mode": "line_up_with_house_icon",
+    "size_px": 120,
+    "fill_color": "#FFFFFF",
+    "stroke_color": "#000000",
+    "stroke_width_px": 3,
+    "content": {
+      "type": "icon",
+      "icon_name": "home",
+      "icon_color": "#000000",
+      "text_color": "#000000"
+    },
+    "address_label": { "enabled": false, "position": "none" }
+  },
+
+  "boundary": {
+    "enabled": false,
+    "line": {
+      "style": "solid", "width_px": 6, "color": "#FFFFFF", "corner_radius_px": 0,
+      "shadow": { "enabled": true, "color": "#000000", "offset_x_px": 0, "offset_y_px": 4, "blur_px": 6 }
+    },
+    "exterior_treatment": {
+      "blur_enabled": false, "blur_strength_px": 0,
+      "darken_factor": 1.0, "hue_shift_degrees": 0,
+      "saturation_factor": 1.0, "lightness_factor": 1.0
+    },
+    "side_measurements": {
+      "enabled": true, "unit": "metres", "decimals": 1, "position": "outside",
+      "text_color": "#FFFFFF", "text_outline_color": "#000000", "text_outline_width_px": 3,
+      "font_size_px": 28, "font_family": "DejaVu Sans"
+    },
+    "sqm_total": {
+      "enabled": true, "text_template": "{sqm} sqm approx", "position": "centroid",
+      "text_color": "#FFFFFF", "bg_color": "transparent", "font_size_px": 64,
+      "shadow": { "enabled": true, "color": "#000000", "offset_x_px": 2, "offset_y_px": 4, "blur_px": 8 }
+    },
+    "address_overlay": {
+      "enabled": false, "position": "below_sqm",
+      "text_template": "{address}", "text_color": "#FFFFFF",
+      "font_size_px": 36, "shadow_enabled": true
+    }
+  },
+
+  "poi_selection": {
+    "radius_m": 1500, "max_pins_per_shot": 6, "min_separation_px": 220,
+    "curation": "auto",
+    "type_quotas": {
+      "beach": { "priority": 1, "max": 1 },
+      "shopping": { "priority": 2, "max": 1 },
+      "school": { "priority": 3, "max": 2 },
+      "train": { "priority": 4, "max": 2 },
+      "hospital": { "priority": 5, "max": 1 }
+    }
+  },
+
+  "branding_ribbon": { "enabled": false, "position": "none" },
+
+  "output_variants": [
+    { "name": "mls_web", "format": "JPEG", "quality": 88, "target_width_px": 2400,
+      "aspect": "preserve", "max_bytes": 4000000, "color_profile": "sRGB" }
+  ]
+}
