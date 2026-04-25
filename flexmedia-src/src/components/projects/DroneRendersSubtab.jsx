@@ -91,6 +91,19 @@ const VALID_DROP_TARGETS = {
   // 'rejected' restores via dedicated button — not via drag (no destination column).
 };
 
+// Mirror of DroneShotsSubtab.ROLE_LABEL — kept duplicated rather than shared
+// because the swimlane uses these in tight inline JSX where importing a
+// 6-entry map would be more friction than benefit. Update both when adding
+// a new shot_role.
+const SHOT_ROLE_LABEL = {
+  nadir_grid: "Nadir grid",
+  orbital: "Orbital",
+  oblique_hero: "Oblique hero",
+  building_hero: "Building hero",
+  ground_level: "Ground",
+  unclassified: "Unclassified",
+};
+
 // projectId threads through to RenderCard so the Edit-Pin link can build a
 // /DronePinEditor URL.
 export default function DroneRendersSubtab({ shoot, projectId }) {
@@ -568,7 +581,7 @@ function RawShotCard({ shot, onPreview }) {
         </div>
         <div className="text-[10px] text-muted-foreground">
           {shot.dji_index != null ? `#${shot.dji_index}` : ""}
-          {shot.shot_role ? ` · ${shot.shot_role}` : ""}
+          {shot.shot_role ? ` · ${SHOT_ROLE_LABEL[shot.shot_role] || shot.shot_role}` : ""}
         </div>
       </div>
     </Tag>
