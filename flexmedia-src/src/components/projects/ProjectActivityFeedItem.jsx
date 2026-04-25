@@ -183,14 +183,11 @@ export default function ProjectActivityFeedItem({
                 </button>
               )}
 
-              {/* Expand/collapse for emails and notes with content that may exceed
-                  the line-clamp. Trigger on either total length OR newline count —
-                  short notes with paragraph breaks can clip past line-clamp-6 even
-                  under 200 chars, which is what users see as "truncated". */}
-              {(item.type === 'email' || (item.type === 'note' && (
-                (item._raw?.content_html || '').length > 200 ||
-                (item._raw?.content || '').split('\n').length > 6
-              ))) && (
+              {/* Expand/collapse for emails. Notes always render in full now —
+                  the activity feed is allowed to grow vertically; truncating
+                  multi-paragraph notes was causing real content loss
+                  (24 Carrington's 12-line note clipped to 6). */}
+              {item.type === 'email' && (
                 <button onClick={() => setExpanded(e => !e)} className="p-1 rounded text-muted-foreground hover:bg-muted/60 transition-colors">
                   {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                 </button>
@@ -234,11 +231,7 @@ export default function ProjectActivityFeedItem({
           {/* Content preview / body */}
           {item.type === 'note' && (
             <div className={`mt-1.5 rounded-lg p-2.5 ${config.bgColor} border ${config.borderColor}`}>
-              {item._raw?.content_html && !expanded ? (
-                <p className="text-sm text-foreground/80 line-clamp-6 whitespace-pre-wrap">
-                  {item._raw.content || item._raw.content_html?.replace(/<[^>]*>/g, '')}
-                </p>
-              ) : item._raw?.content_html && expanded ? (
+              {item._raw?.content_html ? (
                 <div
                   className="text-sm text-foreground/80 prose prose-sm max-w-none"
                   dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(item._raw.content_html) }}
