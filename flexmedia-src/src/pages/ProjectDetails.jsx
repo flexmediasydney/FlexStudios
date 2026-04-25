@@ -1121,6 +1121,21 @@ export default function ProjectDetails() {
               {project?.property_address || ''}
               <ExternalLink className="h-3 w-3 inline ml-1 opacity-0 group-hover:opacity-50" />
             </button>
+            {project?.id && (
+              <Link
+                to={createPageUrl('ProjectLocation') + `?id=${project.id}`}
+                title={project.confirmed_lat && project.confirmed_lng ? 'View / adjust confirmed location' : 'Set confirmed location pin'}
+                className={cn(
+                  'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors flex-shrink-0',
+                  project.confirmed_lat && project.confirmed_lng
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800'
+                    : 'bg-muted text-muted-foreground border-border hover:bg-muted/70'
+                )}
+              >
+                <MapPin className="h-2.5 w-2.5" />
+                {project.confirmed_lat && project.confirmed_lng ? 'Pinned' : 'Set pin'}
+              </Link>
+            )}
           </div>
           {project.calendar_auto_linked && (
             <div className="flex items-center gap-1 mt-0.5">

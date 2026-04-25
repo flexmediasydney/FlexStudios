@@ -23,10 +23,14 @@ export const ROUTE_ACCESS = {
   // ── PROJECTS (all levels) ─────────────────────────────────
   Projects: ALL_LEVELS,
   ProjectDetails: ALL_LEVELS,
+  ProjectLocation: ALL_LEVELS, // view: any project member; edit gated inside the page
   DronePinEditor: EMPLOYEE_AND_ABOVE,
   Tasks: ALL_LEVELS,
   Goals: ALL_LEVELS,
   GoalDetails: ALL_LEVELS,
+
+  // ── DRONE MODULE ──────────────────────────────────────────
+  DroneCommandCenter: ADMIN_AND_ABOVE,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,
