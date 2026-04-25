@@ -310,6 +310,54 @@ const setDeep = (obj, path, value) => {
   return next;
 };
 
+// Paths whose value is a map/list keyed by user choice rather than a fixed
+// schema — saved value must replace defaults wholly, never deep-merge.
+// Otherwise an operator who de-selected an entry would see it resurrected
+// from defaults on next load. `output_variants` is an array (also replaced
+// wholly), but is listed here for documentation; arrays are handled by
+// type below regardless of path.
+const REPLACE_WHOLLY_PATHS = new Set([
+  "poi_selection.type_quotas",
+  "output_variants",
+]);
+
+const isPlainObject = (v) =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+
+// Deep-merge `saved` config on top of `defaults`, filling in any missing
+// scalars from defaults so a sparse saved config (e.g. only
+// `poi_selection.type_quotas`) still hydrates with all of DEFAULT_CONFIG's
+// nested fields. Arrays from `saved` replace wholly; paths in
+// REPLACE_WHOLLY_PATHS replace wholly; explicit `null` in saved is kept.
+const mergeWithDefaults = (defaults, saved, path = "") => {
+  if (saved === undefined) {
+    return defaults === undefined
+      ? undefined
+      : JSON.parse(JSON.stringify(defaults));
+  }
+  if (Array.isArray(saved) || Array.isArray(defaults)) {
+    return JSON.parse(JSON.stringify(saved));
+  }
+  if (!isPlainObject(defaults) || !isPlainObject(saved)) {
+    return saved;
+  }
+  if (REPLACE_WHOLLY_PATHS.has(path)) {
+    return JSON.parse(JSON.stringify(saved));
+  }
+  const out = {};
+  for (const k of Object.keys(defaults)) {
+    out[k] = mergeWithDefaults(
+      defaults[k],
+      saved[k],
+      path ? `${path}.${k}` : k,
+    );
+  }
+  for (const k of Object.keys(saved)) {
+    if (!(k in out)) out[k] = saved[k];
+  }
+  return out;
+};
+
 const isHex = (v) => typeof v === "string" && /^#([0-9a-fA-F]{3}){1,2}$/.test(v);
 
 const countInvalidColors = (obj, path = "") => {
@@ -949,7 +997,7 @@ export default function ThemeEditor({
     async function hydrate() {
       if (initialTheme) {
         setName(initialTheme.name || "");
-        setConfig({ ...DEFAULT_CONFIG, ...(initialTheme.config || {}) });
+        setConfig(mergeWithDefaults(DEFAULT_CONFIG, initialTheme.config || {}));
         setIsDefault(!!initialTheme.is_default);
         setVersion(initialTheme.version || null);
         setVersionInt(initialTheme.version_int ?? null);
@@ -963,7 +1011,7 @@ export default function ThemeEditor({
         const row = await api.entities.DroneTheme.get(themeId);
         if (cancelled) return;
         setName(row.name || "");
-        setConfig({ ...DEFAULT_CONFIG, ...(row.config || {}) });
+        setConfig(mergeWithDefaults(DEFAULT_CONFIG, row.config || {}));
         setIsDefault(!!row.is_default);
         setVersion(row.version || null);
         setVersionInt(row.version_int ?? null);
