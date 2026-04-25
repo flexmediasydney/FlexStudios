@@ -146,7 +146,46 @@ function StatCard({ icon: Icon, label, value, suffix, hint, tone }) {
 }
 
 // ── Pipeline kanban ─────────────────────────────────────────────────────────
-function PipelineKanban({ shoots, projectsById }) {
+//
+// Live-progress sub-line on each tile.
+// The base shoot row only carries image_count + residual + nadir, so a shoot
+// that's been "rendering" for 5 minutes looks identical to one that's 90%
+// done. The Command Center now calls get_drone_shoot_live_progress() for
+// the visible shoots and renders e.g. "23/34 rendered · 2 running · 1 failed"
+// inline. Without this an operator has no signal that a shoot is stuck or
+// progressing without leaving the page.
+function progressLineFor(shoot, prog) {
+  if (!prog) return null;
+  const { shots_total, shots_rendered, jobs_pending, jobs_running, jobs_failed_24h, sfm_images_registered } = prog;
+  const parts = [];
+  switch (shoot.status) {
+    case "sfm_running":
+      if (sfm_images_registered != null && shots_total) {
+        parts.push(`${sfm_images_registered}/${shots_total} registered`);
+      }
+      break;
+    case "rendering":
+    case "proposed_ready":
+    case "adjustments_ready":
+    case "final_ready":
+      if (shots_total) parts.push(`${shots_rendered}/${shots_total} rendered`);
+      break;
+    case "ingested":
+    case "analysing":
+    case "sfm_complete":
+    default:
+      // Job badges still apply (pending render queued, etc.)
+      break;
+  }
+  if (jobs_running > 0) parts.push(`${jobs_running} running`);
+  if (jobs_pending > 0 && shoot.status !== "rendering" && shoot.status !== "sfm_running") {
+    // Don't double-count: rendering/sfm tiles already imply queued work.
+    parts.push(`${jobs_pending} queued`);
+  }
+  return { line: parts.join(" · "), failed: jobs_failed_24h };
+}
+
+function PipelineKanban({ shoots, projectsById, progressByShoot }) {
   const navigate = useNavigate();
   const grouped = useMemo(() => {
     const byCol = new Map(PIPELINE_COLUMNS.map((c) => [c.key, []]));
@@ -245,6 +284,20 @@ function PipelineKanban({ shoots, projectsById }) {
                               <span className="tabular-nums">{shoot.sfm_residual_median_m.toFixed(2)}m</span>
                             )}
                           </div>
+                          {(() => {
+                            const p = progressLineFor(shoot, progressByShoot?.get?.(shoot.id));
+                            if (!p) return null;
+                            return (
+                              <div className="flex items-center gap-1.5 text-[10px] tabular-nums">
+                                {p.line && <span className="text-muted-foreground">{p.line}</span>}
+                                {p.failed > 0 && (
+                                  <span className="text-red-600 dark:text-red-400 font-medium">
+                                    {p.failed} failed
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                           <div className="text-[10px] text-muted-foreground">{fmtTime(shoot.flight_started_at || shoot.created_at)}</div>
                         </button>
                       );
@@ -560,6 +613,45 @@ export default function DroneCommandCenter() {
     return m;
   }, [projectsQuery.data]);
 
+  // ─── Per-shoot live progress (renders done, jobs in flight, etc.) ────────
+  // The base shoots query above has nothing about render counts or job state.
+  // Without this RPC the kanban tile could only show "34 imgs" — we need
+  // "23/34 rendered · 2 running" to make the dashboard actually useful as
+  // an ops monitor. Cache shorter than the shoots themselves (15s vs 30s)
+  // so progress moves between manual refreshes; realtime invalidations
+  // (drone_jobs writes via the existing DroneShoot subscription, plus the
+  // new drone_jobs sub below) close the rest of the latency.
+  const visibleShootIds = useMemo(() => {
+    const ids = new Set();
+    const active = new Set([
+      "ingested", "analysing", "sfm_running", "sfm_complete",
+      "rendering", "proposed_ready", "adjustments_ready", "final_ready",
+    ]);
+    for (const s of shootsQuery.data || []) {
+      if (active.has(s.status)) ids.add(s.id);
+    }
+    return Array.from(ids).sort();
+  }, [shootsQuery.data]);
+
+  const progressQuery = useQuery({
+    queryKey: ["drone_shoot_live_progress", visibleShootIds.join(",")],
+    queryFn: async () => {
+      if (visibleShootIds.length === 0) return [];
+      return await api.rpc("get_drone_shoot_live_progress", {
+        p_shoot_ids: visibleShootIds,
+      });
+    },
+    enabled: adminGateOpen && visibleShootIds.length > 0,
+    staleTime: 15 * 1000,
+    refetchInterval: 20 * 1000,
+  });
+
+  const progressByShoot = useMemo(() => {
+    const m = new Map();
+    for (const row of progressQuery.data || []) m.set(row.shoot_id, row);
+    return m;
+  }, [progressQuery.data]);
+
   // ─── Activity log (drone_events ∪ project_folder_events) ────────────────
   const droneEventsQuery = useQuery({
     queryKey: ["drone_events_recent"],
@@ -713,9 +805,31 @@ export default function DroneCommandCenter() {
           throttledInvalidate(["drone_command_center_shoots"]);
           throttledInvalidate(["drone_dashboard_stats"]);
           throttledInvalidate(["drone_missing_nadir"]);
+          // Tile sub-line shows render counts — refresh when shoot rows
+          // move (status flips often coincide with render completion).
+          queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
         }),
       );
     } catch (e) { console.warn("[DroneCommandCenter] DroneShoot subscribe failed:", e); }
+    try {
+      // drone_jobs realtime — primary signal for "X running" / "K failed"
+      // updating live without waiting on the 20s polling fallback.
+      unsubs.push(
+        api.entities.DroneJob.subscribe(() => {
+          throttledInvalidate(["drone_dashboard_stats"]);
+          queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
+        }),
+      );
+    } catch (e) { console.warn("[DroneCommandCenter] DroneJob subscribe failed:", e); }
+    try {
+      // drone_renders realtime — render row inserts are the most direct
+      // signal that "X/Y rendered" should tick up.
+      unsubs.push(
+        api.entities.DroneRender.subscribe(() => {
+          queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
+        }),
+      );
+    } catch (e) { console.warn("[DroneCommandCenter] DroneRender subscribe failed:", e); }
     try {
       unsubs.push(
         api.entities.ProjectFolderEvent.subscribe(() => {
@@ -754,6 +868,7 @@ export default function DroneCommandCenter() {
   const refreshAll = () => {
     queryClient.invalidateQueries({ queryKey: ["drone_dashboard_stats"] });
     queryClient.invalidateQueries({ queryKey: ["drone_command_center_shoots"] });
+    queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
     queryClient.invalidateQueries({ queryKey: ["drone_events_recent"] });
     queryClient.invalidateQueries({ queryKey: ["project_folder_events_recent_global"] });
     queryClient.invalidateQueries({ queryKey: ["drone_sfm_failures_7d"] });
@@ -867,7 +982,7 @@ export default function DroneCommandCenter() {
           </CardContent>
         </Card>
       ) : (
-        <PipelineKanban shoots={shootsQuery.data || []} projectsById={projectsById} />
+        <PipelineKanban shoots={shootsQuery.data || []} projectsById={projectsById} progressByShoot={progressByShoot} />
       )}
 
       {/* Activity + Alerts side by side on wide */}
