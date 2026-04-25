@@ -19,8 +19,9 @@
  * trusts its caller. Save is also gated server-side by setDroneTheme.
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { api } from "@/api/supabaseClient";
+import debounce from "lodash/debounce";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ import {
   ImageIcon,
   Trash2,
   ShieldAlert,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -443,6 +445,15 @@ export default function ThemeEditor({
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState(null);
 
+  // ── Live preview state (right column) ────────────────────────────────────
+  // Wired to drone-render-preview Edge Function. Debounced 800ms after the
+  // last config edit. Each fetch increments `previewSeq` and only the most
+  // recent reply is shown (older late responses are dropped).
+  const [previewImg, setPreviewImg] = useState(null); // data URL string
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(null);
+  const previewSeqRef = useRef(0);
+
   // ── Hydrate from existing theme (edit) or from initialTheme prop (duplicate) ──
   useEffect(() => {
     let cancelled = false;
@@ -525,6 +536,57 @@ export default function ThemeEditor({
     },
     [name, config, isDefault, themeId, ownerKind, ownerId, canEdit, onSaved],
   );
+
+  // ── Live preview fetch ───────────────────────────────────────────────────
+  // Single-shot preview call. Uses sequence numbering so that if a slower
+  // response races a fresher one, the older one is ignored.
+  const fetchPreview = useCallback(async (cfg) => {
+    const mySeq = ++previewSeqRef.current;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const result = await api.functions.invoke("drone-render-preview", {
+        theme_config: { ...cfg, theme_name: cfg?.theme_name || "preview" },
+      });
+      // Drop late responses
+      if (mySeq !== previewSeqRef.current) return;
+      const data = result?.data;
+      if (!data?.success || !data?.image_b64) {
+        throw new Error(data?.error || "Preview render failed");
+      }
+      setPreviewImg(`data:image/jpeg;base64,${data.image_b64}`);
+    } catch (e) {
+      if (mySeq !== previewSeqRef.current) return;
+      setPreviewError(e?.message || "Preview render failed");
+    } finally {
+      if (mySeq === previewSeqRef.current) {
+        setPreviewLoading(false);
+      }
+    }
+  }, []);
+
+  // Debounced wrapper. 800 ms after the last edit before re-rendering, so
+  // dragging a colour-picker/number-input doesn't fire a render per keystroke.
+  // useMemo keeps the same debounced fn instance for the component's lifetime;
+  // the effect below cancels pending calls on unmount.
+  const debouncedFetchPreview = useMemo(
+    () => debounce((cfg) => fetchPreview(cfg), 800),
+    [fetchPreview],
+  );
+  useEffect(() => () => debouncedFetchPreview.cancel(), [debouncedFetchPreview]);
+
+  // Re-fetch preview whenever `config` changes (after initial hydration).
+  // Skip while still loading the existing theme — otherwise we'd preview the
+  // DEFAULT_CONFIG before the user's saved values arrive.
+  useEffect(() => {
+    if (loading) return;
+    debouncedFetchPreview(config);
+  }, [config, loading, debouncedFetchPreview]);
+
+  const refreshPreview = useCallback(() => {
+    debouncedFetchPreview.cancel();
+    fetchPreview(config);
+  }, [config, debouncedFetchPreview, fetchPreview]);
 
   // ── Output variants helpers ──────────────────────────────────────────────
   const variants = config.output_variants || [];
@@ -1672,29 +1734,94 @@ export default function ThemeEditor({
           </CardContent>
         </Card>
 
-        {/* Preview placeholder column */}
+        {/* Live preview column ─ renders the in-progress theme on a bundled
+            DJI sample via the drone-render-preview Edge Function. */}
         <Card className="self-start lg:sticky lg:top-3 bg-muted/20">
           <CardContent className="p-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Live preview
-              </p>
-              <Badge variant="outline" className="text-[9px] font-normal">
-                Wave 3
-              </Badge>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Live preview
+                </p>
+                {previewLoading && (
+                  <Badge variant="outline" className="text-[9px] font-normal gap-1">
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                    Rendering
+                  </Badge>
+                )}
+              </div>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={refreshPreview}
+                disabled={previewLoading}
+                title="Re-render preview now"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              >
+                <RefreshCw
+                  className={cn("h-3.5 w-3.5", previewLoading && "animate-spin")}
+                />
+              </Button>
             </div>
-            <div className="aspect-video rounded-md border border-dashed border-muted-foreground/30 flex items-center justify-center text-center px-3">
-              <p className="text-[11px] text-muted-foreground">
-                Live preview will load when you save once.
-              </p>
+
+            {/* Image area: aspect-video frame holds the rendered fixture.
+                Loading overlay shows over the previous image so operators
+                see continuity of edits rather than blank flicker. */}
+            <div className="relative aspect-video rounded-md border border-input bg-muted/40 overflow-hidden">
+              {previewImg ? (
+                <img
+                  src={previewImg}
+                  alt="Theme preview"
+                  className="w-full h-full object-contain bg-black"
+                  draggable={false}
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-center px-3">
+                  {previewError ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      No preview yet.
+                    </p>
+                  ) : (
+                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Generating first preview…
+                    </div>
+                  )}
+                </div>
+              )}
+              {previewImg && previewLoading && (
+                <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                  <Loader2 className="h-6 w-6 animate-spin text-white/90" />
+                </div>
+              )}
             </div>
+
+            {previewError && (
+              <div
+                role="alert"
+                className="rounded-md border border-red-200 bg-red-50/80 dark:border-red-900/50 dark:bg-red-950/30 px-2.5 py-2 flex items-start gap-2"
+              >
+                <AlertCircle className="h-3.5 w-3.5 text-red-600 mt-0.5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium text-red-800 dark:text-red-200">
+                    Preview failed
+                  </p>
+                  <p className="text-[10px] text-red-700 dark:text-red-300 mt-0.5 break-words">
+                    {previewError}
+                  </p>
+                </div>
+              </div>
+            )}
+
             <div className="text-[10px] text-muted-foreground space-y-0.5">
               <p>
-                Preview rendering on three sample drone shots (nadir / oblique / orbital)
-                will be wired up after this Wave's render-engine integration lands.
+                Updates ~1 s after edits stop. Renders against a bundled DJI fixture
+                with three sample POIs; not your project's actual shots.
               </p>
               <p className="font-mono mt-2">
-                {SECTIONS.length} sections · {variants.length} variant{variants.length === 1 ? "" : "s"}
+                {SECTIONS.length} sections · {variants.length} variant
+                {variants.length === 1 ? "" : "s"}
               </p>
             </div>
           </CardContent>
