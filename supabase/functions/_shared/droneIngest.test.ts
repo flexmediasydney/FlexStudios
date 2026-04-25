@@ -168,18 +168,38 @@ Deno.test('groupShotsIntoShoots: empty input → empty array', () => {
 
 // ─── refineNadirClassifications ──────────────────────────────────────────────
 
-Deno.test('refineNadirClassifications: 3+ nadirs within 30s all stay nadir_grid', () => {
-  // 4 nadirs spaced ~5s apart — every one has >=3 neighbors in ±30s → cluster.
+Deno.test('refineNadirClassifications: 3-nadir hero cluster stays as nadir_hero (not SfM grid)', () => {
+  // Joseph clarification 2026-04-25: a top-down hero/border-outline shot
+  // typically has 1-7 nadirs (operator manually frames altitude/yaw
+  // variations to give visual padding around the property edge). Threshold
+  // bumped to >=8 neighbors within ±60s to keep these out of nadir_grid.
+  const shots = [
+    { captured_at: '2026-04-20T09:00:00.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:05.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:10.000Z', shot_role: 'nadir_grid' as const },
+  ];
+  const out = refineNadirClassifications(shots);
+  assertEquals(out.map((s) => s.shot_role), [
+    'nadir_hero', 'nadir_hero', 'nadir_hero',
+  ]);
+});
+
+Deno.test('refineNadirClassifications: 9+ nadirs within 60s all stay nadir_grid (SfM mission)', () => {
+  // 9 nadirs spaced ~5s apart — every one has >=8 neighbors in ±60s →
+  // genuine SfM mission, lock as nadir_grid.
   const shots = [
     { captured_at: '2026-04-20T09:00:00.000Z', shot_role: 'nadir_grid' as const },
     { captured_at: '2026-04-20T09:00:05.000Z', shot_role: 'nadir_grid' as const },
     { captured_at: '2026-04-20T09:00:10.000Z', shot_role: 'nadir_grid' as const },
     { captured_at: '2026-04-20T09:00:15.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:20.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:25.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:30.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:35.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:40.000Z', shot_role: 'nadir_grid' as const },
   ];
   const out = refineNadirClassifications(shots);
-  assertEquals(out.map((s) => s.shot_role), [
-    'nadir_grid', 'nadir_grid', 'nadir_grid', 'nadir_grid',
-  ]);
+  assertEquals(out.every((s) => s.shot_role === 'nadir_grid'), true);
 });
 
 Deno.test('refineNadirClassifications: 1 isolated nadir + 0 neighbors → nadir_hero', () => {
@@ -190,21 +210,23 @@ Deno.test('refineNadirClassifications: 1 isolated nadir + 0 neighbors → nadir_
   assertEquals(out[0].shot_role, 'nadir_hero');
 });
 
-Deno.test('refineNadirClassifications: 5 grid + 1 isolated 5min later → 5 grid + 1 hero', () => {
+Deno.test('refineNadirClassifications: 9 grid + 1 isolated 5min later → 9 grid + 1 hero', () => {
   const shots = [
     { captured_at: '2026-04-20T09:00:00.000Z', shot_role: 'nadir_grid' as const },
     { captured_at: '2026-04-20T09:00:05.000Z', shot_role: 'nadir_grid' as const },
     { captured_at: '2026-04-20T09:00:10.000Z', shot_role: 'nadir_grid' as const },
     { captured_at: '2026-04-20T09:00:15.000Z', shot_role: 'nadir_grid' as const },
     { captured_at: '2026-04-20T09:00:20.000Z', shot_role: 'nadir_grid' as const },
-    // 5 minutes after the burst — outside the 30s window, no neighbors.
-    { captured_at: '2026-04-20T09:05:20.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:25.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:30.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:35.000Z', shot_role: 'nadir_grid' as const },
+    { captured_at: '2026-04-20T09:00:40.000Z', shot_role: 'nadir_grid' as const },
+    // 5 minutes after the burst — outside the 60s window, no neighbors.
+    { captured_at: '2026-04-20T09:05:40.000Z', shot_role: 'nadir_grid' as const },
   ];
   const out = refineNadirClassifications(shots);
-  assertEquals(out.map((s) => s.shot_role), [
-    'nadir_grid', 'nadir_grid', 'nadir_grid', 'nadir_grid', 'nadir_grid',
-    'nadir_hero',
-  ]);
+  assertEquals(out[9].shot_role, 'nadir_hero');
+  assertEquals(out.slice(0, 9).every((s) => s.shot_role === 'nadir_grid'), true);
 });
 
 Deno.test('refineNadirClassifications: empty input → empty output', () => {

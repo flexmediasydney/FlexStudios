@@ -445,6 +445,91 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     }
   }, [shootId, queryClient]);
 
+  // ── Stale-render detection (migration 244) ────────────────────────────────
+  // Calls the `drone_renders_stale_against_theme` RPC for the current shoot
+  // and returns one row per operator-facing render with is_stale flagged when
+  // the underlying theme has been edited since the render was produced. Used
+  // by RenderCard to amber-badge stale cards and by the header to surface a
+  // "Re-render all stale (N)" affordance. Refetched on a 30s stale window so
+  // theme edits in another tab become visible without manual refresh.
+  const staleQ = useQuery({
+    queryKey: ["drone_renders_stale", shootId],
+    queryFn: () => api.rpc("drone_renders_stale_against_theme", { p_shoot_id: shootId }),
+    enabled: Boolean(shootId),
+    staleTime: 30_000,
+  });
+  const staleByRenderId = useMemo(() => {
+    const m = new Map();
+    for (const r of staleQ.data || []) m.set(r.render_id, r);
+    return m;
+  }, [staleQ.data]);
+  const staleRenderIds = useMemo(
+    () => (staleQ.data || []).filter((r) => r.is_stale).map((r) => r.render_id),
+    [staleQ.data],
+  );
+
+  // ── Re-render with current theme (per shot OR for all stale) ─────────────
+  // Calls drone-render with wipe_existing=true so the prior 'proposed' row
+  // for the matched shot(s) is cleared before the fresh render lands. We
+  // invalidate both renders + stale queries so the badge disappears and the
+  // new card appears once the dispatcher picks it up.
+  //
+  // Per-card path: pass shot_id to scope the wipe + re-render to one shot.
+  // Header path: omit shot_id so the whole shoot's stale renders are
+  // re-generated. Either way kind is poi_plus_boundary (the default lane).
+  const [pendingRerenderShotId, setPendingRerenderShotId] = useState(null);
+  const [isRerenderingAll, setIsRerenderingAll] = useState(false);
+
+  const reRenderShot = useCallback(
+    async (shotId) => {
+      if (!shootId || !shotId) return;
+      setPendingRerenderShotId(shotId);
+      try {
+        const data = await api.functions.invoke("drone-render", {
+          shoot_id: shootId,
+          shot_id: shotId,
+          kind: "poi_plus_boundary",
+          wipe_existing: true,
+          reason: "stale_theme_rerender",
+        });
+        if (data?.success === false) {
+          throw new Error(data?.error || "Re-render failed");
+        }
+        toast.success("Re-rendering with current theme — new render will appear shortly.");
+        queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
+        queryClient.invalidateQueries({ queryKey: ["drone_renders_stale", shootId] });
+      } catch (err) {
+        toast.error(err?.message || "Re-render failed");
+      } finally {
+        setPendingRerenderShotId(null);
+      }
+    },
+    [shootId, queryClient],
+  );
+
+  const reRenderAllStale = useCallback(async () => {
+    if (!shootId) return;
+    setIsRerenderingAll(true);
+    try {
+      const data = await api.functions.invoke("drone-render", {
+        shoot_id: shootId,
+        kind: "poi_plus_boundary",
+        wipe_existing: true,
+        reason: "stale_theme_rerender_all",
+      });
+      if (data?.success === false) {
+        throw new Error(data?.error || "Re-render failed");
+      }
+      toast.success("Re-rendering all stale cards — they'll refresh once the worker completes.");
+      queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
+      queryClient.invalidateQueries({ queryKey: ["drone_renders_stale", shootId] });
+    } catch (err) {
+      toast.error(err?.message || "Re-render failed");
+    } finally {
+      setIsRerenderingAll(false);
+    }
+  }, [shootId, queryClient]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   if (shotsQuery.isLoading || rendersQuery.isLoading) {
     return (
@@ -497,12 +582,14 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   const showLockBtn = isManagerOrAbove && hasRawAccepted && hasRawProposed;
   const showReanalyseBtn = isManagerOrAbove && !hasRawProposed && hasRawAccepted;
   const rejectedShotCount = grouped.shot_rejected.length;
+  const staleCount = staleRenderIds.length;
+  const showRerenderAllBtn = isManagerOrAbove && staleCount > 0;
 
   return (
     <TooltipProvider delayDuration={200}>
       <div className="space-y-3">
-        {/* Header actions: Lock shortlist / Re-analyse / Show rejected */}
-        {(showLockBtn || showReanalyseBtn || rejectedShotCount > 0) && (
+        {/* Header actions: Lock shortlist / Re-analyse / Re-render stale / Show rejected */}
+        {(showLockBtn || showReanalyseBtn || showRerenderAllBtn || rejectedShotCount > 0) && (
           <div className="flex items-center gap-2 flex-wrap">
             {showLockBtn && (
               <Tooltip>
@@ -549,6 +636,30 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
                 <TooltipContent className="max-w-xs">
                   Wipe and regenerate AI Proposed renders from the post-production edits in
                   Editors/Edited Post Production/.
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {showRerenderAllBtn && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/40"
+                    onClick={reRenderAllStale}
+                    disabled={isRerenderingAll}
+                  >
+                    {isRerenderingAll ? (
+                      <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3 mr-1.5" />
+                    )}
+                    Re-render all stale ({staleCount})
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  The drone theme has been edited since these renders were produced. Click to
+                  wipe the stale Proposed cards and regenerate them with the current theme.
                 </TooltipContent>
               </Tooltip>
             )}
@@ -630,6 +741,9 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
               onPreview={(info) => setPreview(info)}
               dragRender={dragRender}
               setDragRender={setDragRender}
+              staleByRenderId={staleByRenderId}
+              onReRenderShot={reRenderShot}
+              pendingRerenderShotId={pendingRerenderShotId}
             />
           ))}
         </div>
@@ -658,6 +772,9 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
                     onTransition={callTransition}
                     onConfirmReject={() => {}}
                     onPreview={(info) => setPreview(info)}
+                    staleByRenderId={staleByRenderId}
+                    onReRenderShot={reRenderShot}
+                    pendingRerenderShotId={pendingRerenderShotId}
                   />
                 ))}
               </div>
@@ -754,6 +871,9 @@ function PipelineColumn({
   onPreview,
   dragRender,
   setDragRender,
+  staleByRenderId,
+  onReRenderShot,
+  pendingRerenderShotId,
 }) {
   // A column is a valid drop target only if there's an active drag from a
   // different column AND the transition (fromCol → thisCol) is allowed by the
@@ -857,6 +977,9 @@ function PipelineColumn({
               onConfirmReject={onConfirmReject}
               onPreview={onPreview}
               setDragRender={setDragRender}
+              staleByRenderId={staleByRenderId}
+              onReRenderShot={onReRenderShot}
+              pendingRerenderShotId={pendingRerenderShotId}
             />
           ))
         )}
@@ -1030,6 +1153,9 @@ function RenderCard({
   onConfirmReject,
   onPreview,
   setDragRender,
+  staleByRenderId,
+  onReRenderShot,
+  pendingRerenderShotId,
 }) {
   const orderedVariants = useMemo(() => variants || [], [variants]);
   const [selectedVariantId, setSelectedVariantId] = useState(
@@ -1102,6 +1228,19 @@ function RenderCard({
   const isAdjustments = column === "adjustments";
   const isProposed = column === "proposed";
   const isRejected = column === "rejected";
+
+  // Stale detection (migration 244): the swimlane's
+  // drone_renders_stale_against_theme RPC returns one row per operator-facing
+  // render with the stamped + current theme version_int. We badge cards where
+  // is_stale=TRUE and let managers click "Re-render" to wipe the prior
+  // proposed render and regenerate from the current theme. Stale lookup is
+  // keyed by the SELECTED variant's id (the swimlane RPC returns a row per
+  // render id; multi-variant cards' non-selected variants are still tracked
+  // but we only badge based on the visible one). Rejected cards are skipped
+  // server-side so .get() returns undefined → no badge, which is correct.
+  const stale = staleByRenderId?.get(r.id);
+  const isStale = Boolean(stale?.is_stale);
+  const isRerendering = pendingRerenderShotId === r.shot_id;
 
   // Cards in the rejected drawer aren't draggable — they only restore via the
   // dedicated Restore button (drag has no meaningful destination column).
@@ -1206,6 +1345,26 @@ function RenderCard({
             >
               {formatDistanceToNow(new Date(r.created_at), { addSuffix: true })}
             </span>
+          )}
+          {/* Stale-theme badge (migration 244). Surfaces the version skew so
+              the operator knows the render is behind the current theme; the
+              tooltip explains the next step (Re-render button below). */}
+          {isStale && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Badge
+                  variant="outline"
+                  className="border-amber-400 text-amber-700 bg-amber-50 dark:border-amber-600 dark:text-amber-300 dark:bg-amber-950/40 text-[9px] h-4 px-1 gap-0.5 cursor-help"
+                >
+                  <RefreshCw className="h-2.5 w-2.5" />
+                  theme v{stale.current_theme_version_int} (this v{stale.theme_version_int_at_render})
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                The drone theme has been updated since this render was produced.
+                Click "Re-render" to apply the latest styling.
+              </TooltipContent>
+            </Tooltip>
           )}
         </div>
 
@@ -1351,6 +1510,30 @@ function RenderCard({
                 <Download className="h-2.5 w-2.5 mr-1" />
               )}
               Download
+            </Button>
+          )}
+
+          {/* Stale-theme per-card re-render (migration 244). Routes through
+              drone-render with wipe_existing=true scoped to this shot — the
+              prior 'proposed' row is cleared and a fresh render is enqueued
+              from the current theme. Hidden in the Rejected drawer (the RPC
+              already excludes 'rejected' so isStale won't be true there) but
+              we extra-guard with !isRejected for clarity. */}
+          {isStale && canEdit && !isRejected && onReRenderShot && r.shot_id && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] px-2 border-amber-400 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-950/40"
+              onClick={() => onReRenderShot(r.shot_id)}
+              disabled={isRerendering || Boolean(action)}
+              title="Re-render this shot with the current theme"
+            >
+              {isRerendering ? (
+                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+              ) : (
+                <RefreshCw className="h-2.5 w-2.5 mr-1" />
+              )}
+              Re-render
             </Button>
           )}
         </div>

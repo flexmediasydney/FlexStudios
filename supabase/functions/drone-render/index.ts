@@ -445,7 +445,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           error: "shot has missing relative_altitude (AGL) — cannot render",
         };
       }
-      if (pois && pois.length > 0) scene.pois = pois;
+      // POIs only render on ORBITAL shots. Building hero / oblique hero /
+      // nadir hero / unclassified are framing-driven deliverables — POIs at
+      // façade level or top-down nadir framing add visual clutter without
+      // useful context. Operators surface POIs only on the wide aerial
+      // orbital, where the city/POI context is the whole point of the shot.
+      // (Per Joseph's call 2026-04-25 spot-checking Everton previews.)
+      //
+      // Also normalises the POI field shape: drone-pois (Google Places)
+      // returns `lng`; Modal render_engine.py reads `poi["lon"]`. Map both.
+      const poisAllowedForRole = shot.shot_role === 'orbital';
+      if (poisAllowedForRole && pois && pois.length > 0) {
+        scene.pois = pois.map((p) => ({ ...p, lon: p.lng ?? p.lon }));
+      }
       if (cadastral && Array.isArray(cadastral.polygon)) {
         scene.polygon_latlon = cadastral.polygon.map((v: { lat: number; lng: number }) => [v.lat, v.lng]);
       }
@@ -539,6 +551,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           const themeIdForRow = themeChain[0]?.theme_id || null;
           const themeVersion = (themeForKind as { _version?: string | number } | null | undefined)
             ?._version ?? null;
+          // Migration 244: stamp the most-specific theme's id + version_int so
+          // the swimlane can amber-badge any render that's behind the theme's
+          // current version. themeChain[0] is the highest-priority theme
+          // (person → org → system), which is the one that visually drove this
+          // render. A null id/version (e.g. ad-hoc preview with no canonical
+          // theme) is fine — the stale-detection RPC treats NULL as "unknown
+          // baseline" → never stale.
+          const themeIdAtRender = themeChain[0]?.theme_id || null;
+          const themeVersionAtRender = themeChain[0]?.version_int ?? null;
           const renderRow: Record<string, unknown> = {
             shot_id: shot.id,
             column_state: initialColumnState,
@@ -547,6 +568,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             theme_id: themeIdForRow,
             // Only inline-snapshot when we have no canonical theme to point at.
             theme_snapshot: themeIdForRow ? null : themeForKind,
+            theme_id_at_render: themeIdAtRender,
+            theme_version_int_at_render: themeVersionAtRender,
             property_coord_used: {
               source: project.confirmed_lat ? "confirmed" : "geocoded",
               ...projectCoord,
@@ -777,42 +800,47 @@ function filenameForRender(
 async function loadThemeChain(
   admin: ReturnType<typeof getAdminClient>,
   ids: { person_id: string | null; organisation_id: string | null },
-): Promise<Array<{ owner_kind: string; theme_id: string; config: any }>> {
-  const chain: Array<{ owner_kind: string; theme_id: string; config: any }> = [];
+): Promise<Array<{ owner_kind: string; theme_id: string; config: any; version_int: number | null }>> {
+  // version_int (migration 244) tracks the theme content version. We carry it
+  // alongside id+config so the render-insert path can stamp
+  // drone_renders.theme_version_int_at_render and the swimlane's
+  // drone_renders_stale_against_theme RPC can later badge cards whose theme
+  // has been edited since they were rendered.
+  const chain: Array<{ owner_kind: string; theme_id: string; config: any; version_int: number | null }> = [];
 
   if (ids.person_id) {
     const { data } = await admin
       .from("drone_themes")
-      .select("id, config")
+      .select("id, config, version_int")
       .eq("owner_kind", "person")
       .eq("owner_id", ids.person_id)
       .eq("is_default", true)
       .eq("status", "active")
       .maybeSingle();
-    if (data) chain.push({ owner_kind: "person", theme_id: data.id, config: data.config });
+    if (data) chain.push({ owner_kind: "person", theme_id: data.id, config: data.config, version_int: data.version_int ?? null });
   }
   if (ids.organisation_id) {
     const { data } = await admin
       .from("drone_themes")
-      .select("id, config")
+      .select("id, config, version_int")
       .eq("owner_kind", "organisation")
       .eq("owner_id", ids.organisation_id)
       .eq("is_default", true)
       .eq("status", "active")
       .maybeSingle();
-    if (data) chain.push({ owner_kind: "organisation", theme_id: data.id, config: data.config });
+    if (data) chain.push({ owner_kind: "organisation", theme_id: data.id, config: data.config, version_int: data.version_int ?? null });
   }
   // Brand level: forward-compat (skip)
 
   // System default — always last
   const { data: sys } = await admin
     .from("drone_themes")
-    .select("id, config")
+    .select("id, config, version_int")
     .eq("owner_kind", "system")
     .eq("is_default", true)
     .eq("status", "active")
     .maybeSingle();
-  if (sys) chain.push({ owner_kind: "system", theme_id: sys.id, config: sys.config });
+  if (sys) chain.push({ owner_kind: "system", theme_id: sys.id, config: sys.config, version_int: sys.version_int ?? null });
 
   return chain;
 }

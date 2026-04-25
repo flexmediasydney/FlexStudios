@@ -1,19 +1,28 @@
 /**
- * ThemeEditor — Drone Phase 4 Stream J
+ * ThemeEditor — Drone Phase 4 Stream J (rev. 2026-04-25)
  *
- * Form for creating + editing a drone theme. Per IMPLEMENTATION_PLAN_V2.md §6.4:
- *   - Left: section nav (collapsible accordion)
- *   - Centre: form for active section
- *   - Right: live preview placeholder (Wave 3 polish)
- *   - Top bar: theme name + [Save] [Save as new] [Cancel]
+ * Form for creating + editing a drone theme.
+ *
+ * Structural restructure (2026-04-25):
+ *   - Sections grouped into "POI overlay" and "Nadir / Oblique render"
+ *     so operators see which preview each setting affects.
+ *   - Right column: 3-tab preview (Nadir / Oblique / POI) — client-side
+ *     SVG mocks render live as the operator edits. The slower
+ *     drone-render-preview Edge Function is kept as an opt-in "Render
+ *     full preview (slow)" button per tab.
+ *   - Save flow: when version_int > 1 (theme has been saved before), show
+ *     an impact-confirmation dialog listing in-flight projects whose
+ *     renders were produced from the prior version, with an opt-in
+ *     "auto-re-render" path that fans out to drone-render with
+ *     wipe_existing=true.
  *
  * Backend wiring:
  *   - INSERT/UPDATE: api.functions.invoke('setDroneTheme', { theme_id?, owner_kind, owner_id, name, config, is_default })
  *   - LOAD existing: api.entities.DroneTheme.get(themeId)
+ *   - IMPACT (save dialog): api.rpc('drone_theme_impacted_projects', { p_theme_id })
+ *   - RE-RENDER fan-out:    api.functions.invoke('drone-render', { shoot_id, wipe_existing: true })
  *
- * Form pattern: controlled inputs with local state. Repo uses this pattern in
- * BrandingPreferencesModule, AgencyDetailsEditor, ConfirmDialog, etc — checked
- * 3 forms before settling. (react-hook-form is in package.json but unused.)
+ * Subagent C will fill in the <HelpTip tip="..."> placeholders next to each field.
  *
  * Permissions are gated by the parent (ThemeBrandingSubtab); this component
  * trusts its caller. Save is also gated server-side by setDroneTheme.
@@ -27,6 +36,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -39,6 +49,15 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogFooter,
+  AlertDialogTitle,
+  AlertDialogDescription,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import {
   Loader2,
@@ -53,14 +72,15 @@ import {
   ShieldAlert,
   RefreshCw,
   Palette,
+  Camera,
+  Map as MapIcon,
+  MousePointer,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { HelpTip } from "./HelpTip";
 
 // ── Defaults: derived from modal/drone_render/themes/flexmedia_default.json ──
-// Users start with a sensible, fully-populated config so every form field is
-// editable from the get-go. Saves only the user's chosen values; the inheritance
-// chain in themeResolver fills missing keys at render time.
 const DEFAULT_CONFIG = {
   theme_name: "",
   version: "1.0",
@@ -100,6 +120,7 @@ const DEFAULT_CONFIG = {
   },
 
   property_pin: {
+    enabled: true,
     mode: "line_up_with_house_icon",
     size_px: 120,
     fill_color: "#FFFFFF",
@@ -226,17 +247,24 @@ const DEFAULT_CONFIG = {
   ],
 };
 
-// ── Section nav metadata ────────────────────────────────────────────────────
-const SECTIONS = [
-  { id: "anchor_line", label: "Anchor line" },
-  { id: "poi_label", label: "POI label" },
-  { id: "property_pin", label: "Property pin" },
-  { id: "boundary", label: "Boundary" },
-  { id: "poi_selection", label: "POI selection" },
-  { id: "branding_ribbon", label: "Branding ribbon" },
-  { id: "output_variants", label: "Output variants" },
-  { id: "safety_rules", label: "Safety rules" },
-];
+// ── Section grouping (2026-04-25) ───────────────────────────────────────────
+// Group sections by which preview each setting affects. The left sidebar nav
+// renders two collapsible groups (POI overlay / Nadir / Oblique render).
+const SECTIONS_BY_GROUP = {
+  poi: [
+    { id: "poi_selection", label: "POI selection (which POIs to fetch)" },
+    { id: "anchor_line", label: "Anchor line (POI → label connector)" },
+    { id: "poi_label", label: "POI label (style)" },
+    { id: "poi_label_foreground", label: "POI label foreground (advanced)" },
+  ],
+  render: [
+    { id: "property_pin", label: "Property pin" },
+    { id: "boundary", label: "Boundary outline" },
+    { id: "branding_ribbon", label: "Branding ribbon" },
+    { id: "output_variants", label: "Output variants" },
+    { id: "safety_rules", label: "Safety rules (read-only)" },
+  ],
+};
 
 const PROPERTY_PIN_MODES = [
   { value: "pill_with_address", label: "Pill with address" },
@@ -261,9 +289,6 @@ const setDeep = (obj, path, value) => {
 
 const isHex = (v) => typeof v === "string" && /^#([0-9a-fA-F]{3}){1,2}$/.test(v);
 
-// Walk the config and count any value at *_color / fill / color keys that is
-// neither null, "transparent", nor a valid hex. Used to gate Save and surface
-// where to look. Pure: no side-effects.
 const countInvalidColors = (obj, path = "") => {
   if (obj == null || typeof obj !== "object") return 0;
   if (Array.isArray(obj)) {
@@ -274,7 +299,6 @@ const countInvalidColors = (obj, path = "") => {
     const looksLikeColor =
       /color/i.test(k) || k === "fill" || k === "bg_color" || k === "stroke_color";
     if (looksLikeColor && typeof v === "string") {
-      // Allow null, transparent, empty (treated as inherit)
       if (v && v !== "transparent" && !isHex(v)) n += 1;
     } else if (typeof v === "object" && v !== null) {
       n += countInvalidColors(v, `${path}.${k}`);
@@ -283,7 +307,6 @@ const countInvalidColors = (obj, path = "") => {
   return n;
 };
 
-// Read-only display for system safety rules. Editing is out of scope for v1.
 const SYSTEM_SAFETY_RULES = [
   {
     id: "anchor_must_not_overlap_pin",
@@ -304,7 +327,7 @@ const SYSTEM_SAFETY_RULES = [
 
 // ── Field components (small, generic) ──────────────────────────────────────
 
-function FieldRow({ label, hint, children, className }) {
+function FieldRow({ label, hint, children, className, fieldKey }) {
   return (
     <div
       className={cn(
@@ -313,7 +336,10 @@ function FieldRow({ label, hint, children, className }) {
       )}
     >
       <div className="pt-1.5">
-        <Label className="text-xs font-medium text-foreground">{label}</Label>
+        <Label className="text-xs font-medium text-foreground inline-flex items-center">
+          {label}
+          <HelpTip fieldKey={fieldKey} />
+        </Label>
         {hint && <p className="text-[10px] text-muted-foreground mt-0.5">{hint}</p>}
       </div>
       <div className="min-w-0">{children}</div>
@@ -360,8 +386,12 @@ function NumberField({ value, onChange, min, max, step = 1, suffix }) {
             onChange(null);
             return;
           }
-          const n = Number(raw);
-          if (Number.isFinite(n)) onChange(n);
+          let n = Number(raw);
+          if (!Number.isFinite(n)) return;
+          // Soft clamp on commit (matches server-side validation expectations).
+          if (typeof min === "number" && n < min) n = min;
+          if (typeof max === "number" && n > max) n = max;
+          onChange(n);
         }}
         className="h-8 text-xs w-32"
       />
@@ -467,6 +497,388 @@ function SectionAccordion({ id, label, openId, onToggle, children, badge, onRese
   );
 }
 
+// ── Client-side mock previews (SVG) ────────────────────────────────────────
+// Three distinct preview surfaces, each highlighting only the styling that
+// affects it. They're not pixel-accurate vs the Modal renderer — they're
+// guides so the operator can sanity-check colours / sizes / placement
+// without burning a 0.5-2 s round-trip per slider tick.
+
+// Shared SVG hex-fill helper (defends against bad colour values mid-edit).
+function safeColor(v, fallback) {
+  if (!v || v === "transparent") return fallback;
+  return isHex(v) ? v : fallback;
+}
+
+// Synthetic terrain background (low-detail SVG pattern) — better than a blank
+// frame for showing how the overlay reads against an aerial photo. We avoid
+// loading an external JPG so the editor stays fast and works offline.
+function NadirBackground() {
+  return (
+    <g aria-hidden>
+      <defs>
+        <pattern id="nadir-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <rect width="40" height="40" fill="#3a4a3f" />
+          <path d="M0 20 H40 M20 0 V40" stroke="#2c3a31" strokeWidth="1" />
+        </pattern>
+        <pattern id="nadir-roof" x="180" y="100" width="120" height="80" patternUnits="userSpaceOnUse">
+          <rect width="120" height="80" fill="#7a6e5a" />
+        </pattern>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#nadir-grid)" />
+      {/* a few "buildings" */}
+      <rect x="180" y="100" width="120" height="80" fill="#7a6e5a" stroke="#574d3d" strokeWidth="1.5" />
+      <rect x="60" y="40" width="60" height="50" fill="#6b5e4a" stroke="#3f3527" strokeWidth="1.5" />
+      <rect x="350" y="190" width="50" height="60" fill="#807458" stroke="#574d3d" strokeWidth="1.5" />
+      {/* "road" */}
+      <rect x="0" y="220" width="500" height="14" fill="#444" />
+    </g>
+  );
+}
+
+function ObliqueBackground() {
+  return (
+    <g aria-hidden>
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#a3c8df" />
+          <stop offset="60%" stopColor="#dceaf4" />
+        </linearGradient>
+        <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#4a6048" />
+          <stop offset="100%" stopColor="#2f3d2b" />
+        </linearGradient>
+      </defs>
+      {/* sky */}
+      <rect width="100%" height="120" fill="url(#sky)" />
+      {/* ground (perspective) */}
+      <polygon points="0,120 500,120 500,300 0,300" fill="url(#ground)" />
+      {/* hero house in 3/4 perspective */}
+      <polygon points="180,160 320,160 350,240 150,240" fill="#9a8a6e" stroke="#3f3527" strokeWidth="2" />
+      <polygon points="180,160 250,110 320,160" fill="#7d6d52" stroke="#3f3527" strokeWidth="2" />
+      <rect x="220" y="190" width="30" height="40" fill="#3a3025" />
+      {/* neighbour buildings */}
+      <rect x="40" y="180" width="80" height="60" fill="#7d7060" stroke="#3f3527" strokeWidth="1.5" />
+      <rect x="380" y="190" width="80" height="60" fill="#867865" stroke="#3f3527" strokeWidth="1.5" />
+    </g>
+  );
+}
+
+// Generic POI label preview (used by both nadir/oblique mocks and the POI tab).
+// Renders a single label box positioned at (cx, cy) with the user's poi_label
+// style applied.
+function PoiLabelMock({ cx, cy, text, secondary, cfg, scale = 1 }) {
+  const fill = safeColor(cfg?.fill, "#FFFFFF");
+  const textColor = safeColor(cfg?.text_color, "#000000");
+  const padX = ((cfg?.padding_px?.left ?? 24) + (cfg?.padding_px?.right ?? 24)) / 2;
+  const padY = ((cfg?.padding_px?.top ?? 12) + (cfg?.padding_px?.bottom ?? 12)) / 2;
+  const fs = (cfg?.font_size_px ?? 36) * scale;
+  // Approx text width — 0.55em per char is a safe middle-ground.
+  const txtCase = cfg?.text_case ?? "uppercase";
+  const display =
+    txtCase === "uppercase" ? text.toUpperCase()
+      : txtCase === "titlecase" ? text.replace(/\b\w/g, (c) => c.toUpperCase())
+      : text;
+  const w = display.length * fs * 0.55 + padX * 2 * scale;
+  const h = fs * 1.15 + padY * 2 * scale;
+  const cornerRadius =
+    cfg?.shape === "pill" ? h / 2
+      : cfg?.shape === "rounded_rectangle" ? Math.min(12, (cfg?.corner_radius_px ?? 0) * scale)
+      : (cfg?.corner_radius_px ?? 0) * scale;
+  const borderColor = cfg?.border?.color;
+  const borderWidth = (cfg?.border?.width_px ?? 0) * scale;
+  return (
+    <g>
+      <rect
+        x={cx - w / 2}
+        y={cy - h / 2}
+        width={w}
+        height={h}
+        rx={cornerRadius}
+        ry={cornerRadius}
+        fill={fill === "transparent" ? "none" : fill}
+        stroke={borderColor && isHex(borderColor) ? borderColor : "none"}
+        strokeWidth={borderWidth}
+      />
+      <text
+        x={cx}
+        y={cy}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill={textColor}
+        fontFamily={cfg?.font_family || "DejaVu Sans, sans-serif"}
+        fontSize={fs}
+      >
+        {display}
+      </text>
+      {secondary && cfg?.secondary_text?.enabled && (
+        <text
+          x={cx}
+          y={cy + h / 2 + fs * 0.6}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill={safeColor(cfg?.secondary_text?.color, "#666666")}
+          fontFamily={cfg?.font_family || "DejaVu Sans, sans-serif"}
+          fontSize={fs * 0.6}
+        >
+          {secondary}
+        </text>
+      )}
+    </g>
+  );
+}
+
+// Anchor-line (POI → label connector) mock.
+function AnchorLineMock({ x1, y1, x2, y2, cfg, scale = 1 }) {
+  const color = safeColor(cfg?.color, "#FFFFFF");
+  const opacity = typeof cfg?.opacity === "number" ? cfg.opacity : 1;
+  const width = (cfg?.width_px ?? 3) * scale;
+  const dashArray =
+    cfg?.shape === "dashed" ? `${8 * scale} ${6 * scale}` : "none";
+  const marker = cfg?.end_marker;
+  return (
+    <g opacity={opacity}>
+      <line
+        x1={x1}
+        y1={y1}
+        x2={x2}
+        y2={y2}
+        stroke={color}
+        strokeWidth={width}
+        strokeDasharray={dashArray}
+        strokeLinecap="round"
+      />
+      {marker?.shape && marker.shape !== "none" && marker.size_px > 0 && (() => {
+        const ms = marker.size_px * scale;
+        const mfill = safeColor(marker.fill_color, color);
+        const mstroke = safeColor(marker.stroke_color, color);
+        const msw = marker.stroke_width_px ?? 0;
+        if (marker.shape === "dot" || marker.shape === "circle")
+          return <circle cx={x1} cy={y1} r={ms / 2} fill={mfill} stroke={mstroke} strokeWidth={msw} />;
+        if (marker.shape === "diamond")
+          return (
+            <polygon
+              points={`${x1},${y1 - ms / 2} ${x1 + ms / 2},${y1} ${x1},${y1 + ms / 2} ${x1 - ms / 2},${y1}`}
+              fill={mfill}
+              stroke={mstroke}
+              strokeWidth={msw}
+            />
+          );
+        if (marker.shape === "cross")
+          return (
+            <g stroke={mstroke || mfill} strokeWidth={Math.max(2, msw)} strokeLinecap="round">
+              <line x1={x1 - ms / 2} y1={y1 - ms / 2} x2={x1 + ms / 2} y2={y1 + ms / 2} />
+              <line x1={x1 - ms / 2} y1={y1 + ms / 2} x2={x1 + ms / 2} y2={y1 - ms / 2} />
+            </g>
+          );
+        return null;
+      })()}
+    </g>
+  );
+}
+
+// Property-pin mock (drawn for nadir + oblique).
+function PropertyPinMock({ cx, cy, cfg, scale = 1 }) {
+  if (cfg?.enabled === false) return null;
+  const size = (cfg?.size_px ?? 120) * scale * 0.5; // half-scale for preview density
+  const fill = safeColor(cfg?.fill_color, "#FFFFFF");
+  const stroke = safeColor(cfg?.stroke_color, "#000000");
+  const sw = (cfg?.stroke_width_px ?? 3) * scale;
+  const mode = cfg?.mode || "teardrop_with_icon";
+  const isLineUp = mode === "line_up_with_house_icon";
+  const isPill = mode === "pill_with_address";
+
+  if (isPill) {
+    const w = size * 1.6;
+    const h = size * 0.6;
+    return (
+      <g>
+        <rect
+          x={cx - w / 2}
+          y={cy - h / 2}
+          width={w}
+          height={h}
+          rx={h / 2}
+          ry={h / 2}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={sw}
+        />
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fill={safeColor(cfg?.content?.text_color, "#000000")} fontSize={h * 0.45}>
+          PIN
+        </text>
+      </g>
+    );
+  }
+
+  if (isLineUp) {
+    return (
+      <g>
+        <line x1={cx} y1={cy + size} x2={cx} y2={cy} stroke={stroke} strokeWidth={sw} />
+        <circle cx={cx} cy={cy} r={size * 0.3} fill={fill} stroke={stroke} strokeWidth={sw} />
+        <path
+          d={`M ${cx - size * 0.15} ${cy + size * 0.05} L ${cx} ${cy - size * 0.15} L ${cx + size * 0.15} ${cy + size * 0.05} Z`}
+          fill={safeColor(cfg?.content?.icon_color, "#000000")}
+        />
+      </g>
+    );
+  }
+
+  // teardrop_*
+  return (
+    <g>
+      <path
+        d={`M ${cx} ${cy + size * 0.5} C ${cx - size * 0.55} ${cy + size * 0.1}, ${cx - size * 0.55} ${cy - size * 0.5}, ${cx} ${cy - size * 0.5} C ${cx + size * 0.55} ${cy - size * 0.5}, ${cx + size * 0.55} ${cy + size * 0.1}, ${cx} ${cy + size * 0.5} Z`}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+      {cfg?.content?.type === "icon" && (
+        <path
+          d={`M ${cx - size * 0.2} ${cy + size * 0.05} L ${cx} ${cy - size * 0.2} L ${cx + size * 0.2} ${cy + size * 0.05} L ${cx + size * 0.2} ${cy + size * 0.2} L ${cx - size * 0.2} ${cy + size * 0.2} Z`}
+          fill={safeColor(cfg?.content?.icon_color, "#000000")}
+        />
+      )}
+      {cfg?.content?.type === "monogram" && (
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={size * 0.45} fill={safeColor(cfg?.content?.text_color, "#000000")}>
+          {(cfg?.content?.monogram || "AB").slice(0, 2)}
+        </text>
+      )}
+      {cfg?.content?.type === "text" && (
+        <text x={cx} y={cy} textAnchor="middle" dominantBaseline="middle" fontSize={size * 0.3} fill={safeColor(cfg?.content?.text_color, "#000000")}>
+          {(cfg?.content?.text || "TXT").slice(0, 4)}
+        </text>
+      )}
+    </g>
+  );
+}
+
+function BoundaryMock({ points, cfg, scale = 1 }) {
+  if (!cfg?.enabled) return null;
+  const color = safeColor(cfg?.line?.color, "#FFFFFF");
+  const width = (cfg?.line?.width_px ?? 6) * scale * 0.5;
+  const dash =
+    cfg?.line?.style === "dashed" ? `${10 * scale} ${6 * scale}`
+      : cfg?.line?.style === "dotted" ? `${2 * scale} ${4 * scale}`
+      : "none";
+  return (
+    <polygon
+      points={points.map((p) => p.join(",")).join(" ")}
+      fill="none"
+      stroke={color}
+      strokeWidth={width}
+      strokeDasharray={dash}
+      strokeLinejoin="round"
+    />
+  );
+}
+
+function BrandingRibbonMock({ cfg, width, height }) {
+  if (!cfg?.enabled) return null;
+  const h = Math.min((cfg?.height_px ?? 80) * 0.3, height * 0.18);
+  const y = cfg?.position === "top" ? 0 : height - h;
+  const bg = safeColor(cfg?.bg_color, "#000000");
+  const fg = safeColor(cfg?.text_color, "#FFFFFF");
+  return (
+    <g>
+      <rect x={0} y={y} width={width} height={h} fill={bg} opacity={0.92} />
+      {cfg?.show_address !== false && (
+        <text
+          x={width / 2}
+          y={y + h / 2}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fill={fg}
+          fontSize={Math.max(10, h * 0.5)}
+        >
+          9 Chauvel Ave, Wattle Grove
+        </text>
+      )}
+    </g>
+  );
+}
+
+function NadirPreview({ config }) {
+  const w = 500, h = 300;
+  // Property pin near centre, with 3 POIs and anchor lines around it.
+  const pin = { x: 250, y: 150 };
+  const pois = [
+    { x: 90, y: 60, lx: 60, ly: 35, name: "Wattle Grove Park", dist: "220 m" },
+    { x: 410, y: 80, lx: 440, ly: 50, name: "Wattle Grove Public School", dist: "280 m" },
+    { x: 380, y: 240, lx: 410, ly: 270, name: "Wattle Grove Shops", dist: "350 m" },
+  ];
+  // Boundary as a small rectangle around the pin (in image coords).
+  const boundaryPts = [
+    [220, 130], [280, 130], [280, 170], [220, 170],
+  ];
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto block bg-black">
+      <NadirBackground />
+      <BoundaryMock points={boundaryPts} cfg={config?.boundary} scale={1} />
+      <PropertyPinMock cx={pin.x} cy={pin.y} cfg={config?.property_pin} scale={1} />
+      {pois.map((p, i) => (
+        <g key={i}>
+          <AnchorLineMock x1={p.x} y1={p.y} x2={p.lx} y2={p.ly} cfg={config?.anchor_line} scale={0.5} />
+          <circle cx={p.x} cy={p.y} r={4} fill="#fff" />
+          <PoiLabelMock cx={p.lx} cy={p.ly} text={p.name} secondary={p.dist} cfg={config?.poi_label} scale={0.35} />
+        </g>
+      ))}
+      <BrandingRibbonMock cfg={config?.branding_ribbon} width={w} height={h} />
+    </svg>
+  );
+}
+
+function ObliquePreview({ config }) {
+  const w = 500, h = 300;
+  const pin = { x: 250, y: 200 };
+  const pois = [
+    { x: 80, y: 220, lx: 70, ly: 175, name: "Park", dist: "220 m" },
+    { x: 420, y: 230, lx: 430, ly: 175, name: "School", dist: "280 m" },
+  ];
+  // Boundary perspective polygon around the hero house base.
+  const boundaryPts = [
+    [180, 230], [320, 230], [340, 250], [160, 250],
+  ];
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto block bg-black">
+      <ObliqueBackground />
+      <BoundaryMock points={boundaryPts} cfg={config?.boundary} scale={1} />
+      <PropertyPinMock cx={pin.x} cy={pin.y - 60} cfg={config?.property_pin} scale={1} />
+      {pois.map((p, i) => (
+        <g key={i}>
+          <AnchorLineMock x1={p.x} y1={p.y} x2={p.lx} y2={p.ly} cfg={config?.anchor_line} scale={0.5} />
+          <circle cx={p.x} cy={p.y} r={4} fill="#fff" />
+          <PoiLabelMock cx={p.lx} cy={p.ly} text={p.name} secondary={p.dist} cfg={config?.poi_label} scale={0.35} />
+        </g>
+      ))}
+      <BrandingRibbonMock cfg={config?.branding_ribbon} width={w} height={h} />
+    </svg>
+  );
+}
+
+function PoiCloseupPreview({ config }) {
+  const w = 500, h = 300;
+  // Show a single POI label + anchor line at large scale, plain background.
+  const poi = { x: 130, y: 220 };
+  const label = { x: 320, y: 110 };
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto block">
+      <rect width={w} height={h} fill="#1f2933" />
+      {/* faint grid for measurement reference */}
+      <g opacity={0.08} stroke="#fff">
+        {Array.from({ length: 10 }).map((_, i) => (
+          <line key={`v${i}`} x1={i * 50} y1={0} x2={i * 50} y2={h} />
+        ))}
+        {Array.from({ length: 6 }).map((_, i) => (
+          <line key={`h${i}`} x1={0} y1={i * 50} x2={w} y2={i * 50} />
+        ))}
+      </g>
+      <AnchorLineMock x1={poi.x} y1={poi.y} x2={label.x} y2={label.y} cfg={config?.anchor_line} scale={1} />
+      <circle cx={poi.x} cy={poi.y} r={8} fill="#fff" stroke="#000" strokeWidth={2} />
+      <PoiLabelMock cx={label.x} cy={label.y} text="Wattle Grove Public School" secondary="280 m" cfg={config?.poi_label} scale={0.6} />
+    </svg>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────
 
 export default function ThemeEditor({
@@ -482,26 +894,33 @@ export default function ThemeEditor({
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [isDefault, setIsDefault] = useState(false);
   const [version, setVersion] = useState(null);
+  const [versionInt, setVersionInt] = useState(null);
   const [status, setStatus] = useState("active");
-  const [openSection, setOpenSection] = useState("anchor_line");
+  const [openSection, setOpenSection] = useState("poi_selection");
+  const [openGroup, setOpenGroup] = useState("poi"); // which sidebar group is expanded
+  const [previewTab, setPreviewTab] = useState("nadir");
   const [loading, setLoading] = useState(!!themeId);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState(null);
 
-  // Count invalid hex colors anywhere in the config. Used to gate Save and
-  // surface a banner; recomputed on every edit (cheap walk).
+  // Save-confirmation dialog state (only fires when versionInt > 1).
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveAsNewPending, setSaveAsNewPending] = useState(false);
+  const [impactLoading, setImpactLoading] = useState(false);
+  const [impactRows, setImpactRows] = useState([]); // [{ project_id, project_address, shoot_id, shoot_status, renders_count, in_flight }]
+  const [impactRpcAvailable, setImpactRpcAvailable] = useState(true);
+  const [autoRerender, setAutoRerender] = useState(false);
+  const [rerendering, setRerendering] = useState(false);
+
   const invalidColorCount = useMemo(() => countInvalidColors(config), [config]);
 
-  // ── Live preview state (right column) ────────────────────────────────────
-  // Wired to drone-render-preview Edge Function. Debounced 800ms after the
-  // last config edit. Each fetch increments `previewSeq` and only the most
-  // recent reply is shown (older late responses are dropped).
-  const [previewImg, setPreviewImg] = useState(null); // data URL string
+  // ── Live preview state (right column) — kept for the slow server preview ─
+  const [previewImg, setPreviewImg] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState(null);
   const previewSeqRef = useRef(0);
 
-  // ── Hydrate from existing theme (edit) or from initialTheme prop (duplicate) ──
+  // ── Hydrate ──────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     async function hydrate() {
@@ -510,6 +929,7 @@ export default function ThemeEditor({
         setConfig({ ...DEFAULT_CONFIG, ...(initialTheme.config || {}) });
         setIsDefault(!!initialTheme.is_default);
         setVersion(initialTheme.version || null);
+        setVersionInt(initialTheme.version_int ?? null);
         setStatus(initialTheme.status || "active");
         return;
       }
@@ -523,6 +943,7 @@ export default function ThemeEditor({
         setConfig({ ...DEFAULT_CONFIG, ...(row.config || {}) });
         setIsDefault(!!row.is_default);
         setVersion(row.version || null);
+        setVersionInt(row.version_int ?? null);
         setStatus(row.status || "active");
       } catch (e) {
         if (!cancelled) setLoadError(e?.message || "Failed to load theme");
@@ -536,31 +957,58 @@ export default function ThemeEditor({
     };
   }, [themeId, initialTheme]);
 
-  // Update a deep path inside `config`
   const update = useCallback((path, value) => {
     setConfig((prev) => setDeep(prev, path, value));
   }, []);
 
+  // ── Impact-list fetch (Subagent A's drone_theme_impacted_projects RPC) ──
+  // Called inside the save dialog when versionInt > 1. If the RPC isn't
+  // available (e.g. migration hasn't been applied in this env) we degrade
+  // gracefully — the dialog still opens, the impact section shows a
+  // "couldn't load" tooltip, and Save proceeds without the auto-rerender opt.
+  const fetchImpactList = useCallback(async (tid) => {
+    if (!tid) {
+      setImpactRows([]);
+      return;
+    }
+    setImpactLoading(true);
+    try {
+      const rows = await api.rpc("drone_theme_impacted_projects", { p_theme_id: tid });
+      setImpactRows(Array.isArray(rows) ? rows.filter((r) => r.in_flight === true) : []);
+      setImpactRpcAvailable(true);
+    } catch (e) {
+      // If the RPC doesn't exist (404 / function not found), disable the impact
+      // list with a tooltip and let Save proceed without the re-render opt.
+      console.warn("[ThemeEditor] drone_theme_impacted_projects unavailable:", e?.message);
+      setImpactRpcAvailable(false);
+      setImpactRows([]);
+    } finally {
+      setImpactLoading(false);
+    }
+  }, []);
+
   // ── Save handlers ────────────────────────────────────────────────────────
-  const saveTheme = useCallback(
+  // Direct save — used for new themes (versionInt null/1) or when the user
+  // confirms via the dialog. Returns the server response so callers can
+  // chain re-renders against the new theme version.
+  const performSave = useCallback(
     async ({ saveAsNew = false }) => {
       if (!name?.trim()) {
         toast.error("Theme name is required");
-        return;
+        return null;
       }
       if (!canEdit) {
         toast.error("You don't have permission to save this theme");
-        return;
+        return null;
       }
       if (invalidColorCount > 0) {
         toast.error(
           `Fix ${invalidColorCount} invalid colour value${invalidColorCount === 1 ? "" : "s"} before saving`,
         );
-        return;
+        return null;
       }
       setSaving(true);
       try {
-        // saveAsNew → strip theme_id so backend creates a new row
         const payload = {
           owner_kind: ownerKind,
           owner_id: ownerId,
@@ -576,25 +1024,108 @@ export default function ThemeEditor({
         if (!data?.success) {
           throw new Error(data?.error || "Save failed");
         }
+        // Mirror server state locally (so the version badge updates without a
+        // round-trip and a follow-up Save doesn't reuse a stale version).
+        if (typeof data.version === "number") setVersion(data.version);
+        // The server doesn't echo version_int; bump optimistically so the
+        // dialog logic on the next Save uses the new value. Parent will
+        // refetch on close anyway.
+        setVersionInt((v) => (v == null ? 1 : v + 1));
         toast.success(saveAsNew ? "Theme created" : "Theme saved");
-        onSaved?.({
+        return {
           theme_id: data.theme_id,
           version: data.version,
           name: name.trim(),
           is_default: isDefault,
-        });
+        };
       } catch (e) {
         toast.error(e?.message || "Failed to save theme");
+        return null;
       } finally {
         setSaving(false);
       }
     },
-    [name, config, isDefault, themeId, ownerKind, ownerId, canEdit, onSaved, invalidColorCount],
+    [name, config, isDefault, themeId, ownerKind, ownerId, canEdit, invalidColorCount],
   );
 
-  // Reset the entire form to FlexMedia defaults — useful when a theme has been
-  // heavily customised and the user wants to start over without leaving the
-  // editor. Doesn't save until the user clicks Save.
+  // Fan out drone-render with wipe_existing for each impacted shoot.
+  const reRenderImpactedShoots = useCallback(async () => {
+    if (impactRows.length === 0) return { ok: 0, failed: 0 };
+    setRerendering(true);
+    let ok = 0;
+    let failed = 0;
+    // Deduplicate shoot_ids first — multiple rows per shoot if there are
+    // many renders, but we only need one drone-render call per shoot.
+    const shootIds = Array.from(new Set(impactRows.map((r) => r.shoot_id).filter(Boolean)));
+    for (const sid of shootIds) {
+      try {
+        const result = await api.functions.invoke("drone-render", {
+          shoot_id: sid,
+          wipe_existing: true,
+        });
+        if (result?.data?.success === false) {
+          failed += 1;
+        } else {
+          ok += 1;
+        }
+      } catch (e) {
+        console.warn("[ThemeEditor] re-render failed for shoot", sid, e?.message);
+        failed += 1;
+      }
+    }
+    setRerendering(false);
+    return { ok, failed };
+  }, [impactRows]);
+
+  // Save click handler — branches into the confirmation dialog when
+  // versionInt > 1 (the theme has been saved before) and is_default. For new
+  // themes / first-save we skip the dialog: there can't be impacted renders
+  // yet because no render has stamped this theme version.
+  const onClickSave = useCallback(
+    async ({ saveAsNew }) => {
+      // saveAsNew always creates a fresh row; skip dialog (no prior renders).
+      if (saveAsNew) {
+        const saved = await performSave({ saveAsNew: true });
+        if (saved) onSaved?.(saved);
+        return;
+      }
+      // First save (or unknown version_int) — no impact possible.
+      if (!themeId || (versionInt ?? 1) <= 1) {
+        const saved = await performSave({ saveAsNew: false });
+        if (saved) onSaved?.(saved);
+        return;
+      }
+      // Existing theme, version > 1 — open dialog and fetch impact list.
+      setSaveAsNewPending(false);
+      setAutoRerender(false);
+      setSaveDialogOpen(true);
+      fetchImpactList(themeId);
+    },
+    [themeId, versionInt, performSave, onSaved, fetchImpactList],
+  );
+
+  const onConfirmSaveFromDialog = useCallback(
+    async ({ withRerender }) => {
+      const saved = await performSave({ saveAsNew: saveAsNewPending });
+      if (!saved) {
+        // Save failed — keep dialog open so the operator can retry without
+        // losing the impact context.
+        return;
+      }
+      if (withRerender && impactRows.length > 0) {
+        const { ok, failed } = await reRenderImpactedShoots();
+        if (failed > 0) {
+          toast.error(`Re-rendered ${ok}/${ok + failed} shoots — ${failed} failed`);
+        } else if (ok > 0) {
+          toast.success(`Queued re-render for ${ok} shoot${ok === 1 ? "" : "s"}`);
+        }
+      }
+      setSaveDialogOpen(false);
+      onSaved?.(saved);
+    },
+    [performSave, saveAsNewPending, impactRows.length, reRenderImpactedShoots, onSaved],
+  );
+
   const resetToDefaults = useCallback(() => {
     if (!canEdit) return;
     if (typeof window !== "undefined" && !window.confirm(
@@ -604,8 +1135,6 @@ export default function ThemeEditor({
     toast.info("Reset to FlexMedia defaults — click Save to persist.");
   }, [canEdit]);
 
-  // Reset just one section (top-level config key) back to its FlexMedia
-  // default. Wired into each accordion header.
   const resetSection = useCallback(
     (sectionKey) => {
       if (!canEdit) return;
@@ -619,9 +1148,7 @@ export default function ThemeEditor({
     [canEdit],
   );
 
-  // ── Live preview fetch ───────────────────────────────────────────────────
-  // Single-shot preview call. Uses sequence numbering so that if a slower
-  // response races a fresher one, the older one is ignored.
+  // ── Slow / accurate server preview (kept as opt-in button) ──────────────
   const fetchPreview = useCallback(async (cfg) => {
     const mySeq = ++previewSeqRef.current;
     setPreviewLoading(true);
@@ -630,7 +1157,6 @@ export default function ThemeEditor({
       const result = await api.functions.invoke("drone-render-preview", {
         theme_config: { ...cfg, theme_name: cfg?.theme_name || "preview" },
       });
-      // Drop late responses
       if (mySeq !== previewSeqRef.current) return;
       const data = result?.data;
       if (!data?.success || !data?.image_b64) {
@@ -647,25 +1173,13 @@ export default function ThemeEditor({
     }
   }, []);
 
-  // Debounced wrapper. 800 ms after the last edit before re-rendering, so
-  // dragging a colour-picker/number-input doesn't fire a render per keystroke.
-  // useMemo keeps the same debounced fn instance for the component's lifetime;
-  // the effect below cancels pending calls on unmount.
   const debouncedFetchPreview = useMemo(
     () => debounce((cfg) => fetchPreview(cfg), 800),
     [fetchPreview],
   );
   useEffect(() => () => debouncedFetchPreview.cancel(), [debouncedFetchPreview]);
 
-  // Re-fetch preview whenever `config` changes (after initial hydration).
-  // Skip while still loading the existing theme — otherwise we'd preview the
-  // DEFAULT_CONFIG before the user's saved values arrive.
-  useEffect(() => {
-    if (loading) return;
-    debouncedFetchPreview(config);
-  }, [config, loading, debouncedFetchPreview]);
-
-  const refreshPreview = useCallback(() => {
+  const triggerServerPreview = useCallback(() => {
     debouncedFetchPreview.cancel();
     fetchPreview(config);
   }, [config, debouncedFetchPreview, fetchPreview]);
@@ -715,9 +1229,9 @@ export default function ThemeEditor({
   };
   const addQuotaType = () => {
     let i = 1;
-    let name = "new_type";
-    while (quotas[name]) name = `new_type_${i++}`;
-    update(["poi_selection", "type_quotas", name], { priority: 99, max: 1 });
+    let n = "new_type";
+    while (quotas[n]) n = `new_type_${i++}`;
+    update(["poi_selection", "type_quotas", n], { priority: 99, max: 1 });
   };
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -751,6 +1265,1145 @@ export default function ThemeEditor({
     );
   }
 
+  // Render the section panel for a given id. Encapsulated so both groups
+  // (poi / render) can render any section without code duplication.
+  function renderSection(id) {
+    switch (id) {
+      case "poi_selection":
+        return (
+          <SectionAccordion
+            id="poi_selection"
+            label="POI selection (which POIs to fetch)"
+            openId={openSection}
+            onToggle={setOpenSection}
+            canReset={canEdit}
+            onReset={() => resetSection("poi_selection")}
+          >
+            <FieldRow label="Radius" hint="metres" fieldKey="poi_selection.radius_m">
+              <NumberField
+                value={config.poi_selection?.radius_m}
+                onChange={(v) => update(["poi_selection", "radius_m"], v)}
+                min={50}
+                max={5000}
+                suffix="m"
+              />
+            </FieldRow>
+            <FieldRow label="Max pins per shot" fieldKey="poi_selection.max_pins_per_shot">
+              <NumberField
+                value={config.poi_selection?.max_pins_per_shot}
+                onChange={(v) => update(["poi_selection", "max_pins_per_shot"], v)}
+                min={0}
+                max={20}
+              />
+            </FieldRow>
+            <FieldRow label="Min separation" fieldKey="poi_selection.min_separation_px">
+              <NumberField
+                value={config.poi_selection?.min_separation_px}
+                onChange={(v) => update(["poi_selection", "min_separation_px"], v)}
+                min={0}
+                max={2000}
+                suffix="px"
+              />
+            </FieldRow>
+            <FieldRow label="Curation" fieldKey="poi_selection.curation">
+              <SelectField
+                value={config.poi_selection?.curation}
+                onChange={(v) => update(["poi_selection", "curation"], v)}
+                options={["auto", "manual_only"]}
+              />
+            </FieldRow>
+
+            <div className="mt-3 pt-2 border-t border-dashed border-muted">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-muted-foreground">
+                  Type quotas
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={addQuotaType}
+                  className="h-7 text-xs"
+                >
+                  <Plus className="h-3 w-3 mr-1" />
+                  Add type
+                </Button>
+              </div>
+              <div className="space-y-1.5">
+                {quotaEntries.length === 0 && (
+                  <p className="text-[10px] text-muted-foreground italic">
+                    No type quotas defined.
+                  </p>
+                )}
+                {quotaEntries.map(([typeName, q]) => (
+                  // Using the original `typeName` as React key means a rename
+                  // re-mounts the row and the input loses focus mid-edit. Use
+                  // a stable identifier (the row's index in the entries map)
+                  // so the input keeps focus across keystrokes; the rename
+                  // happens onBlur instead. (#audit fix)
+                  <QuotaRow
+                    key={typeName}
+                    typeName={typeName}
+                    quota={q}
+                    onRename={(next) => renameQuotaType(typeName, next)}
+                    onUpdate={(k, v) => updateQuota(typeName, k, v)}
+                    onRemove={() => removeQuotaType(typeName)}
+                  />
+                ))}
+              </div>
+            </div>
+          </SectionAccordion>
+        );
+
+      case "anchor_line":
+        return (
+          <SectionAccordion
+            id="anchor_line"
+            label="Anchor line (POI → label connector)"
+            openId={openSection}
+            onToggle={setOpenSection}
+            canReset={canEdit}
+            onReset={() => resetSection("anchor_line")}
+          >
+            <FieldRow label="Shape" fieldKey="anchor_line.shape">
+              <SelectField
+                value={config.anchor_line?.shape}
+                onChange={(v) => update(["anchor_line", "shape"], v)}
+                options={["thin", "thick_bar", "dashed"]}
+              />
+            </FieldRow>
+            <FieldRow label="Width" hint="pixels" fieldKey="anchor_line.width_px">
+              <NumberField
+                value={config.anchor_line?.width_px}
+                onChange={(v) => update(["anchor_line", "width_px"], v)}
+                min={1}
+                max={50}
+                suffix="px"
+              />
+            </FieldRow>
+            <FieldRow label="Color" fieldKey="anchor_line.color">
+              <ColorField
+                value={config.anchor_line?.color}
+                onChange={(v) => update(["anchor_line", "color"], v)}
+              />
+            </FieldRow>
+            <FieldRow label="Opacity" hint="0.0 – 1.0" fieldKey="anchor_line.opacity">
+              <NumberField
+                value={config.anchor_line?.opacity}
+                onChange={(v) => update(["anchor_line", "opacity"], v)}
+                min={0}
+                max={1}
+                step={0.05}
+              />
+            </FieldRow>
+
+            <div className="mt-3 pt-2 border-t border-dashed border-muted">
+              <p className="text-xs font-semibold text-muted-foreground mb-1">End marker</p>
+              <FieldRow label="Shape" fieldKey="anchor_line.end_marker.shape">
+                <SelectField
+                  value={config.anchor_line?.end_marker?.shape}
+                  onChange={(v) => update(["anchor_line", "end_marker", "shape"], v)}
+                  options={["none", "dot", "diamond", "circle", "cross"]}
+                />
+              </FieldRow>
+              <FieldRow label="Size" fieldKey="anchor_line.end_marker.size_px">
+                <NumberField
+                  value={config.anchor_line?.end_marker?.size_px}
+                  onChange={(v) => update(["anchor_line", "end_marker", "size_px"], v)}
+                  min={0}
+                  max={100}
+                  suffix="px"
+                />
+              </FieldRow>
+              <FieldRow label="Fill color" fieldKey="anchor_line.end_marker.fill_color">
+                <ColorField
+                  value={config.anchor_line?.end_marker?.fill_color}
+                  onChange={(v) => update(["anchor_line", "end_marker", "fill_color"], v)}
+                />
+              </FieldRow>
+              <FieldRow label="Stroke color" fieldKey="anchor_line.end_marker.stroke_color">
+                <ColorField
+                  value={config.anchor_line?.end_marker?.stroke_color}
+                  onChange={(v) => update(["anchor_line", "end_marker", "stroke_color"], v)}
+                />
+              </FieldRow>
+              <FieldRow label="Stroke width" fieldKey="anchor_line.end_marker.stroke_width_px">
+                <NumberField
+                  value={config.anchor_line?.end_marker?.stroke_width_px}
+                  onChange={(v) => update(["anchor_line", "end_marker", "stroke_width_px"], v)}
+                  min={0}
+                  max={20}
+                  suffix="px"
+                />
+              </FieldRow>
+            </div>
+          </SectionAccordion>
+        );
+
+      case "poi_label":
+        return (
+          <SectionAccordion
+            id="poi_label"
+            label="POI label (style)"
+            openId={openSection}
+            onToggle={setOpenSection}
+            canReset={canEdit}
+            onReset={() => resetSection("poi_label")}
+          >
+            <FieldRow label="Shape" fieldKey="poi_label.shape">
+              <SelectField
+                value={config.poi_label?.shape}
+                onChange={(v) => update(["poi_label", "shape"], v)}
+                options={["rectangle", "rounded_rectangle", "pill"]}
+              />
+            </FieldRow>
+            <FieldRow label="Corner radius" fieldKey="poi_label.corner_radius_px">
+              <NumberField
+                value={config.poi_label?.corner_radius_px}
+                onChange={(v) => update(["poi_label", "corner_radius_px"], v)}
+                min={0}
+                max={64}
+                suffix="px"
+              />
+            </FieldRow>
+            <FieldRow label="Fill" hint='hex or "transparent"' fieldKey="poi_label.fill">
+              <ColorField
+                value={config.poi_label?.fill}
+                onChange={(v) => update(["poi_label", "fill"], v)}
+              />
+            </FieldRow>
+            <FieldRow label="Text color" fieldKey="poi_label.text_color">
+              <ColorField
+                value={config.poi_label?.text_color}
+                onChange={(v) => update(["poi_label", "text_color"], v)}
+              />
+            </FieldRow>
+            <FieldRow label="Text case" fieldKey="poi_label.text_case">
+              <SelectField
+                value={config.poi_label?.text_case}
+                onChange={(v) => update(["poi_label", "text_case"], v)}
+                options={["asis", "uppercase", "titlecase"]}
+              />
+            </FieldRow>
+            <FieldRow label="Font size" fieldKey="poi_label.font_size_px">
+              <NumberField
+                value={config.poi_label?.font_size_px}
+                onChange={(v) => update(["poi_label", "font_size_px"], v)}
+                min={6}
+                max={200}
+                suffix="px"
+              />
+            </FieldRow>
+
+            <div className="mt-3 pt-2 border-t border-dashed border-muted">
+              <p className="text-xs font-semibold text-muted-foreground mb-1">Padding</p>
+              <FieldRow label="Top" fieldKey="poi_label.padding_px.top">
+                <NumberField
+                  value={config.poi_label?.padding_px?.top}
+                  onChange={(v) => update(["poi_label", "padding_px", "top"], v)}
+                  min={0}
+                  suffix="px"
+                />
+              </FieldRow>
+              <FieldRow label="Right" fieldKey="poi_label.padding_px.right">
+                <NumberField
+                  value={config.poi_label?.padding_px?.right}
+                  onChange={(v) => update(["poi_label", "padding_px", "right"], v)}
+                  min={0}
+                  suffix="px"
+                />
+              </FieldRow>
+              <FieldRow label="Bottom" fieldKey="poi_label.padding_px.bottom">
+                <NumberField
+                  value={config.poi_label?.padding_px?.bottom}
+                  onChange={(v) => update(["poi_label", "padding_px", "bottom"], v)}
+                  min={0}
+                  suffix="px"
+                />
+              </FieldRow>
+              <FieldRow label="Left" fieldKey="poi_label.padding_px.left">
+                <NumberField
+                  value={config.poi_label?.padding_px?.left}
+                  onChange={(v) => update(["poi_label", "padding_px", "left"], v)}
+                  min={0}
+                  suffix="px"
+                />
+              </FieldRow>
+            </div>
+
+            <div className="mt-3 pt-2 border-t border-dashed border-muted">
+              <p className="text-xs font-semibold text-muted-foreground mb-1">Border</p>
+              <FieldRow label="Color" fieldKey="poi_label.border.color">
+                <ColorField
+                  value={config.poi_label?.border?.color}
+                  onChange={(v) => update(["poi_label", "border", "color"], v)}
+                  allowNull
+                />
+              </FieldRow>
+              <FieldRow label="Width" fieldKey="poi_label.border.width_px">
+                <NumberField
+                  value={config.poi_label?.border?.width_px}
+                  onChange={(v) => update(["poi_label", "border", "width_px"], v)}
+                  min={0}
+                  max={20}
+                  suffix="px"
+                />
+              </FieldRow>
+            </div>
+
+            <div className="mt-3 pt-2 border-t border-dashed border-muted">
+              <p className="text-xs font-semibold text-muted-foreground mb-1">
+                Secondary text
+              </p>
+              <FieldRow label="Enabled" fieldKey="poi_label.secondary_text.enabled">
+                <SwitchField
+                  value={config.poi_label?.secondary_text?.enabled}
+                  onChange={(v) => update(["poi_label", "secondary_text", "enabled"], v)}
+                />
+              </FieldRow>
+              {config.poi_label?.secondary_text?.enabled && (
+                <>
+                  <FieldRow label="Template" fieldKey="poi_label.secondary_text.template">
+                    <TextField
+                      value={config.poi_label?.secondary_text?.template}
+                      onChange={(v) =>
+                        update(["poi_label", "secondary_text", "template"], v)
+                      }
+                      placeholder="{distance}"
+                      mono
+                    />
+                  </FieldRow>
+                  <FieldRow label="Color" fieldKey="poi_label.secondary_text.color">
+                    <ColorField
+                      value={config.poi_label?.secondary_text?.color}
+                      onChange={(v) =>
+                        update(["poi_label", "secondary_text", "color"], v)
+                      }
+                    />
+                  </FieldRow>
+                </>
+              )}
+            </div>
+          </SectionAccordion>
+        );
+
+      case "poi_label_foreground":
+        // Advanced text-rendering knobs (font family, line height, letter
+        // spacing, primary template). Most operators won't touch these.
+        return (
+          <SectionAccordion
+            id="poi_label_foreground"
+            label="POI label foreground (advanced)"
+            openId={openSection}
+            onToggle={setOpenSection}
+            canReset={canEdit}
+            onReset={() => resetSection("poi_label")}
+          >
+            <FieldRow label="Font family" hint="must exist on render server" fieldKey="poi_label.font_family">
+              <TextField
+                value={config.poi_label?.font_family}
+                onChange={(v) => update(["poi_label", "font_family"], v)}
+                placeholder="DejaVu Sans"
+                mono
+              />
+            </FieldRow>
+            <FieldRow label="Letter spacing" hint="em units" fieldKey="poi_label.letter_spacing">
+              <NumberField
+                value={config.poi_label?.letter_spacing}
+                onChange={(v) => update(["poi_label", "letter_spacing"], v)}
+                min={-2}
+                max={5}
+                step={0.05}
+              />
+            </FieldRow>
+            <FieldRow label="Line height" hint="multiplier" fieldKey="poi_label.line_height">
+              <NumberField
+                value={config.poi_label?.line_height}
+                onChange={(v) => update(["poi_label", "line_height"], v)}
+                min={0.8}
+                max={3}
+                step={0.05}
+              />
+            </FieldRow>
+            <FieldRow label="Primary template" hint="e.g. {name}" fieldKey="poi_label.text_template">
+              <TextField
+                value={config.poi_label?.text_template}
+                onChange={(v) => update(["poi_label", "text_template"], v)}
+                placeholder="{name}"
+                mono
+              />
+            </FieldRow>
+          </SectionAccordion>
+        );
+
+      case "property_pin":
+        return (
+          <SectionAccordion
+            id="property_pin"
+            label="Property pin"
+            openId={openSection}
+            onToggle={setOpenSection}
+            canReset={canEdit}
+            onReset={() => resetSection("property_pin")}
+            badge={config.property_pin?.enabled !== false ? "On" : "Off"}
+          >
+            <FieldRow label="Enabled" hint="Master switch — turn off to hide the property pin" fieldKey="property_pin.enabled">
+              <SwitchField
+                value={config.property_pin?.enabled !== false}
+                onChange={(v) => update(["property_pin", "enabled"], v)}
+              />
+            </FieldRow>
+            {config.property_pin?.enabled !== false && (
+              <>
+                <FieldRow label="Mode" fieldKey="property_pin.mode">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    {PROPERTY_PIN_MODES.map((m) => (
+                      <label
+                        key={m.value}
+                        className={cn(
+                          "flex items-center gap-2 px-2 py-1.5 rounded-md text-xs border cursor-pointer transition-colors",
+                          config.property_pin?.mode === m.value
+                            ? "border-primary bg-primary/5"
+                            : "border-input hover:bg-muted",
+                        )}
+                      >
+                        <input
+                          type="radio"
+                          name="pin-mode"
+                          value={m.value}
+                          checked={config.property_pin?.mode === m.value}
+                          onChange={() => update(["property_pin", "mode"], m.value)}
+                          className="h-3 w-3"
+                        />
+                        <span className="truncate">{m.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </FieldRow>
+                <FieldRow label="Size" fieldKey="property_pin.size_px">
+                  <NumberField
+                    value={config.property_pin?.size_px}
+                    onChange={(v) => update(["property_pin", "size_px"], v)}
+                    min={20}
+                    max={400}
+                    suffix="px"
+                  />
+                </FieldRow>
+                <FieldRow label="Fill color" fieldKey="property_pin.fill_color">
+                  <ColorField
+                    value={config.property_pin?.fill_color}
+                    onChange={(v) => update(["property_pin", "fill_color"], v)}
+                  />
+                </FieldRow>
+                <FieldRow label="Stroke color" fieldKey="property_pin.stroke_color">
+                  <ColorField
+                    value={config.property_pin?.stroke_color}
+                    onChange={(v) => update(["property_pin", "stroke_color"], v)}
+                  />
+                </FieldRow>
+                <FieldRow label="Stroke width" fieldKey="property_pin.stroke_width_px">
+                  <NumberField
+                    value={config.property_pin?.stroke_width_px}
+                    onChange={(v) => update(["property_pin", "stroke_width_px"], v)}
+                    min={0}
+                    max={20}
+                    suffix="px"
+                  />
+                </FieldRow>
+
+                <div className="mt-3 pt-2 border-t border-dashed border-muted">
+                  <p className="text-xs font-semibold text-muted-foreground mb-1">Content</p>
+                  <FieldRow label="Type" fieldKey="property_pin.content.type">
+                    <SelectField
+                      value={config.property_pin?.content?.type}
+                      onChange={(v) => update(["property_pin", "content", "type"], v)}
+                      options={["none", "text", "logo", "monogram", "icon"]}
+                    />
+                  </FieldRow>
+                  {config.property_pin?.content?.type === "text" && (
+                    <FieldRow label="Text" fieldKey="property_pin.content.text">
+                      <TextField
+                        value={config.property_pin?.content?.text}
+                        onChange={(v) => update(["property_pin", "content", "text"], v)}
+                      />
+                    </FieldRow>
+                  )}
+                  {config.property_pin?.content?.type === "monogram" && (
+                    <FieldRow label="Monogram" fieldKey="property_pin.content.monogram">
+                      <TextField
+                        value={config.property_pin?.content?.monogram}
+                        onChange={(v) => update(["property_pin", "content", "monogram"], v)}
+                        placeholder="e.g. AB"
+                      />
+                    </FieldRow>
+                  )}
+                  {config.property_pin?.content?.type === "icon" && (
+                    <FieldRow label="Icon name" fieldKey="property_pin.content.icon_name">
+                      <TextField
+                        value={config.property_pin?.content?.icon_name}
+                        onChange={(v) => update(["property_pin", "content", "icon_name"], v)}
+                        placeholder="home"
+                        mono
+                      />
+                    </FieldRow>
+                  )}
+                  {config.property_pin?.content?.type === "logo" && (
+                    <FieldRow label="Logo asset" hint="Dropbox path (placeholder)" fieldKey="property_pin.content.logo_asset_ref">
+                      <div className="flex items-center gap-2 w-full">
+                        <Input
+                          value={config.property_pin?.content?.logo_asset_ref ?? ""}
+                          onChange={(e) =>
+                            update(
+                              ["property_pin", "content", "logo_asset_ref"],
+                              e.target.value,
+                            )
+                          }
+                          placeholder="/FlexMedia/Brands/.../logo.svg"
+                          className="h-8 text-xs font-mono"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled
+                          title="File picker integration: Wave 3"
+                        >
+                          <ImageIcon className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </FieldRow>
+                  )}
+                  {(config.property_pin?.content?.type === "text" ||
+                    config.property_pin?.content?.type === "monogram") && (
+                    <>
+                      <FieldRow label="Text color" fieldKey="property_pin.content.text_color">
+                        <ColorField
+                          value={config.property_pin?.content?.text_color}
+                          onChange={(v) =>
+                            update(["property_pin", "content", "text_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Text size" fieldKey="property_pin.content.text_size_px">
+                        <NumberField
+                          value={config.property_pin?.content?.text_size_px}
+                          onChange={(v) =>
+                            update(["property_pin", "content", "text_size_px"], v)
+                          }
+                          min={6}
+                          max={120}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                    </>
+                  )}
+                  {config.property_pin?.content?.type === "icon" && (
+                    <FieldRow label="Icon color" fieldKey="property_pin.content.icon_color">
+                      <ColorField
+                        value={config.property_pin?.content?.icon_color}
+                        onChange={(v) => update(["property_pin", "content", "icon_color"], v)}
+                      />
+                    </FieldRow>
+                  )}
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-dashed border-muted">
+                  <p className="text-xs font-semibold text-muted-foreground mb-1">
+                    Address label
+                  </p>
+                  <FieldRow label="Enabled" fieldKey="property_pin.address_label.enabled">
+                    <SwitchField
+                      value={config.property_pin?.address_label?.enabled}
+                      onChange={(v) =>
+                        update(["property_pin", "address_label", "enabled"], v)
+                      }
+                    />
+                  </FieldRow>
+                  {config.property_pin?.address_label?.enabled && (
+                    <>
+                      <FieldRow label="Position" fieldKey="property_pin.address_label.position">
+                        <SelectField
+                          value={config.property_pin?.address_label?.position}
+                          onChange={(v) =>
+                            update(["property_pin", "address_label", "position"], v)
+                          }
+                          options={["below", "above"]}
+                        />
+                      </FieldRow>
+                      <FieldRow label="Text color" fieldKey="property_pin.address_label.text_color">
+                        <ColorField
+                          value={config.property_pin?.address_label?.text_color}
+                          onChange={(v) =>
+                            update(["property_pin", "address_label", "text_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Background" fieldKey="property_pin.address_label.bg_color">
+                        <ColorField
+                          value={config.property_pin?.address_label?.bg_color}
+                          onChange={(v) =>
+                            update(["property_pin", "address_label", "bg_color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Font size" fieldKey="property_pin.address_label.font_size_px">
+                        <NumberField
+                          value={config.property_pin?.address_label?.font_size_px}
+                          onChange={(v) =>
+                            update(["property_pin", "address_label", "font_size_px"], v)
+                          }
+                          min={6}
+                          max={120}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </SectionAccordion>
+        );
+
+      case "boundary":
+        return (
+          <SectionAccordion
+            id="boundary"
+            label="Boundary outline"
+            openId={openSection}
+            onToggle={setOpenSection}
+            badge={config.boundary?.enabled ? "On" : "Off"}
+            canReset={canEdit}
+            onReset={() => resetSection("boundary")}
+          >
+            <FieldRow label="Enabled" fieldKey="boundary.enabled">
+              <SwitchField
+                value={config.boundary?.enabled}
+                onChange={(v) => update(["boundary", "enabled"], v)}
+              />
+            </FieldRow>
+
+            {config.boundary?.enabled && (
+              <>
+                <div className="mt-3 pt-2 border-t border-dashed border-muted">
+                  <p className="text-xs font-semibold text-muted-foreground mb-1">Line</p>
+                  <FieldRow label="Style" fieldKey="boundary.line.style">
+                    <SelectField
+                      value={config.boundary?.line?.style}
+                      onChange={(v) => update(["boundary", "line", "style"], v)}
+                      options={["solid", "dashed", "dotted"]}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Width" fieldKey="boundary.line.width_px">
+                    <NumberField
+                      value={config.boundary?.line?.width_px}
+                      onChange={(v) => update(["boundary", "line", "width_px"], v)}
+                      min={1}
+                      max={50}
+                      suffix="px"
+                    />
+                  </FieldRow>
+                  <FieldRow label="Color" fieldKey="boundary.line.color">
+                    <ColorField
+                      value={config.boundary?.line?.color}
+                      onChange={(v) => update(["boundary", "line", "color"], v)}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Corner radius" fieldKey="boundary.line.corner_radius_px">
+                    <NumberField
+                      value={config.boundary?.line?.corner_radius_px}
+                      onChange={(v) =>
+                        update(["boundary", "line", "corner_radius_px"], v)
+                      }
+                      min={0}
+                      max={100}
+                      suffix="px"
+                    />
+                  </FieldRow>
+                  <FieldRow label="Shadow" fieldKey="boundary.line.shadow.enabled">
+                    <SwitchField
+                      value={config.boundary?.line?.shadow?.enabled}
+                      onChange={(v) =>
+                        update(["boundary", "line", "shadow", "enabled"], v)
+                      }
+                    />
+                  </FieldRow>
+                  {config.boundary?.line?.shadow?.enabled && (
+                    <>
+                      {/* Audit fix: shadow color/offset/blur were never editable
+                          before — only the enabled toggle was wired. (#audit) */}
+                      <FieldRow label="Shadow color" fieldKey="boundary.line.shadow.color">
+                        <ColorField
+                          value={config.boundary?.line?.shadow?.color}
+                          onChange={(v) =>
+                            update(["boundary", "line", "shadow", "color"], v)
+                          }
+                        />
+                      </FieldRow>
+                      <FieldRow label="Shadow offset X" fieldKey="boundary.line.shadow.offset_x_px">
+                        <NumberField
+                          value={config.boundary?.line?.shadow?.offset_x_px}
+                          onChange={(v) =>
+                            update(["boundary", "line", "shadow", "offset_x_px"], v)
+                          }
+                          min={-40}
+                          max={40}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Shadow offset Y" fieldKey="boundary.line.shadow.offset_y_px">
+                        <NumberField
+                          value={config.boundary?.line?.shadow?.offset_y_px}
+                          onChange={(v) =>
+                            update(["boundary", "line", "shadow", "offset_y_px"], v)
+                          }
+                          min={-40}
+                          max={40}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                      <FieldRow label="Shadow blur" fieldKey="boundary.line.shadow.blur_px">
+                        <NumberField
+                          value={config.boundary?.line?.shadow?.blur_px}
+                          onChange={(v) =>
+                            update(["boundary", "line", "shadow", "blur_px"], v)
+                          }
+                          min={0}
+                          max={40}
+                          suffix="px"
+                        />
+                      </FieldRow>
+                    </>
+                  )}
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-dashed border-muted">
+                  <p className="text-xs font-semibold text-muted-foreground mb-1">
+                    Exterior treatment
+                  </p>
+                  <FieldRow label="Blur" fieldKey="boundary.exterior_treatment.blur_enabled">
+                    <SwitchField
+                      value={config.boundary?.exterior_treatment?.blur_enabled}
+                      onChange={(v) =>
+                        update(["boundary", "exterior_treatment", "blur_enabled"], v)
+                      }
+                    />
+                  </FieldRow>
+                  {config.boundary?.exterior_treatment?.blur_enabled && (
+                    <FieldRow label="Blur strength" fieldKey="boundary.exterior_treatment.blur_strength_px">
+                      <NumberField
+                        value={config.boundary?.exterior_treatment?.blur_strength_px}
+                        onChange={(v) =>
+                          update(
+                            ["boundary", "exterior_treatment", "blur_strength_px"],
+                            v,
+                          )
+                        }
+                        min={0}
+                        max={50}
+                        suffix="px"
+                      />
+                    </FieldRow>
+                  )}
+                  <FieldRow label="Darken" hint="0.0 – 1.0 (1 = unchanged)" fieldKey="boundary.exterior_treatment.darken_factor">
+                    <NumberField
+                      value={config.boundary?.exterior_treatment?.darken_factor}
+                      onChange={(v) =>
+                        update(["boundary", "exterior_treatment", "darken_factor"], v)
+                      }
+                      min={0}
+                      max={1}
+                      step={0.05}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Hue shift" hint="-180 to +180" fieldKey="boundary.exterior_treatment.hue_shift_degrees">
+                    <NumberField
+                      value={config.boundary?.exterior_treatment?.hue_shift_degrees}
+                      onChange={(v) =>
+                        update(
+                          ["boundary", "exterior_treatment", "hue_shift_degrees"],
+                          v,
+                        )
+                      }
+                      min={-180}
+                      max={180}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Saturation" hint="0.0 = grayscale" fieldKey="boundary.exterior_treatment.saturation_factor">
+                    <NumberField
+                      value={config.boundary?.exterior_treatment?.saturation_factor}
+                      onChange={(v) =>
+                        update(
+                          ["boundary", "exterior_treatment", "saturation_factor"],
+                          v,
+                        )
+                      }
+                      min={0}
+                      max={3}
+                      step={0.05}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Lightness" fieldKey="boundary.exterior_treatment.lightness_factor">
+                    <NumberField
+                      value={config.boundary?.exterior_treatment?.lightness_factor}
+                      onChange={(v) =>
+                        update(
+                          ["boundary", "exterior_treatment", "lightness_factor"],
+                          v,
+                        )
+                      }
+                      min={0}
+                      max={3}
+                      step={0.05}
+                    />
+                  </FieldRow>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-dashed border-muted">
+                  <p className="text-xs font-semibold text-muted-foreground mb-1">
+                    Side measurements
+                  </p>
+                  <FieldRow label="Enabled" fieldKey="boundary.side_measurements.enabled">
+                    <SwitchField
+                      value={config.boundary?.side_measurements?.enabled}
+                      onChange={(v) =>
+                        update(["boundary", "side_measurements", "enabled"], v)
+                      }
+                    />
+                  </FieldRow>
+                  {config.boundary?.side_measurements?.enabled && (
+                    <>
+                      <FieldRow label="Unit" fieldKey="boundary.side_measurements.unit">
+                        <SelectField
+                          value={config.boundary?.side_measurements?.unit}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "unit"], v)
+                          }
+                          options={["metres", "feet"]}
+                        />
+                      </FieldRow>
+                      <FieldRow label="Decimals" fieldKey="boundary.side_measurements.decimals">
+                        <NumberField
+                          value={config.boundary?.side_measurements?.decimals}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "decimals"], v)
+                          }
+                          min={0}
+                          max={4}
+                        />
+                      </FieldRow>
+                      <FieldRow label="Position" fieldKey="boundary.side_measurements.position">
+                        <SelectField
+                          value={config.boundary?.side_measurements?.position}
+                          onChange={(v) =>
+                            update(["boundary", "side_measurements", "position"], v)
+                          }
+                          options={["outside", "inside"]}
+                        />
+                      </FieldRow>
+                    </>
+                  )}
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-dashed border-muted">
+                  <p className="text-xs font-semibold text-muted-foreground mb-1">
+                    Sqm total
+                  </p>
+                  <FieldRow label="Enabled" fieldKey="boundary.sqm_total.enabled">
+                    <SwitchField
+                      value={config.boundary?.sqm_total?.enabled}
+                      onChange={(v) => update(["boundary", "sqm_total", "enabled"], v)}
+                    />
+                  </FieldRow>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-dashed border-muted">
+                  <p className="text-xs font-semibold text-muted-foreground mb-1">
+                    Address overlay
+                  </p>
+                  <FieldRow label="Enabled" fieldKey="boundary.address_overlay.enabled">
+                    <SwitchField
+                      value={config.boundary?.address_overlay?.enabled}
+                      onChange={(v) =>
+                        update(["boundary", "address_overlay", "enabled"], v)
+                      }
+                    />
+                  </FieldRow>
+                </div>
+              </>
+            )}
+          </SectionAccordion>
+        );
+
+      case "branding_ribbon":
+        return (
+          <SectionAccordion
+            id="branding_ribbon"
+            label="Branding ribbon"
+            openId={openSection}
+            onToggle={setOpenSection}
+            badge={config.branding_ribbon?.enabled ? "On" : "Off"}
+            canReset={canEdit}
+            onReset={() => resetSection("branding_ribbon")}
+          >
+            <FieldRow label="Enabled" fieldKey="branding_ribbon.enabled">
+              <SwitchField
+                value={config.branding_ribbon?.enabled}
+                onChange={(v) => update(["branding_ribbon", "enabled"], v)}
+              />
+            </FieldRow>
+            {config.branding_ribbon?.enabled && (
+              <>
+                <FieldRow label="Position" fieldKey="branding_ribbon.position">
+                  <SelectField
+                    value={config.branding_ribbon?.position}
+                    onChange={(v) => update(["branding_ribbon", "position"], v)}
+                    options={["top", "bottom"]}
+                  />
+                </FieldRow>
+                <FieldRow label="Height" fieldKey="branding_ribbon.height_px">
+                  <NumberField
+                    value={config.branding_ribbon?.height_px}
+                    onChange={(v) => update(["branding_ribbon", "height_px"], v)}
+                    min={20}
+                    max={400}
+                    suffix="px"
+                  />
+                </FieldRow>
+                <FieldRow label="Background" fieldKey="branding_ribbon.bg_color">
+                  <ColorField
+                    value={config.branding_ribbon?.bg_color}
+                    onChange={(v) => update(["branding_ribbon", "bg_color"], v)}
+                  />
+                </FieldRow>
+                <FieldRow label="Text color" fieldKey="branding_ribbon.text_color">
+                  <ColorField
+                    value={config.branding_ribbon?.text_color}
+                    onChange={(v) => update(["branding_ribbon", "text_color"], v)}
+                  />
+                </FieldRow>
+                <FieldRow label="Show org logo" fieldKey="branding_ribbon.show_org_logo">
+                  <SwitchField
+                    value={config.branding_ribbon?.show_org_logo}
+                    onChange={(v) => update(["branding_ribbon", "show_org_logo"], v)}
+                  />
+                </FieldRow>
+                {config.branding_ribbon?.show_org_logo && (
+                  <FieldRow label="Logo asset" hint="Dropbox path (placeholder)" fieldKey="branding_ribbon.logo_asset_ref">
+                    <div className="flex items-center gap-2 w-full">
+                      <Input
+                        value={config.branding_ribbon?.logo_asset_ref ?? ""}
+                        onChange={(e) =>
+                          update(["branding_ribbon", "logo_asset_ref"], e.target.value)
+                        }
+                        placeholder="/FlexMedia/Brands/.../logo.png"
+                        className="h-8 text-xs font-mono"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled
+                        title="File picker integration: Wave 3"
+                      >
+                        <ImageIcon className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </FieldRow>
+                )}
+                <FieldRow label="Show address" fieldKey="branding_ribbon.show_address">
+                  <SwitchField
+                    value={config.branding_ribbon?.show_address}
+                    onChange={(v) => update(["branding_ribbon", "show_address"], v)}
+                  />
+                </FieldRow>
+                <FieldRow label="Show shot ID" fieldKey="branding_ribbon.show_shot_id">
+                  <SwitchField
+                    value={config.branding_ribbon?.show_shot_id}
+                    onChange={(v) => update(["branding_ribbon", "show_shot_id"], v)}
+                  />
+                </FieldRow>
+              </>
+            )}
+          </SectionAccordion>
+        );
+
+      case "output_variants":
+        return (
+          <SectionAccordion
+            id="output_variants"
+            label="Output variants"
+            openId={openSection}
+            onToggle={setOpenSection}
+            badge={`${variants.length}`}
+            canReset={canEdit}
+            onReset={() => resetSection("output_variants")}
+          >
+            <div className="space-y-2">
+              {variants.length === 0 && (
+                <p className="text-[10px] text-muted-foreground italic">
+                  No output variants defined.
+                </p>
+              )}
+              {variants.map((v, idx) => (
+                <div
+                  key={idx}
+                  className="rounded-md border border-input p-2.5 space-y-1.5 bg-muted/20"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <Badge variant="outline" className="text-[10px] font-normal">
+                      Variant #{idx + 1}
+                    </Badge>
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => removeVariant(idx)}
+                      className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <FieldRow label="Name" fieldKey="output_variants[].name">
+                    <TextField
+                      value={v.name}
+                      onChange={(val) => updateVariant(idx, "name", val)}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Format" fieldKey="output_variants[].format">
+                    <SelectField
+                      value={v.format}
+                      onChange={(val) => updateVariant(idx, "format", val)}
+                      options={["JPEG", "TIFF", "PNG"]}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Quality" hint="JPEG: 0–100" fieldKey="output_variants[].quality">
+                    <NumberField
+                      value={v.quality}
+                      onChange={(val) => updateVariant(idx, "quality", val)}
+                      min={1}
+                      max={100}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Width" fieldKey="output_variants[].target_width_px">
+                    <NumberField
+                      value={v.target_width_px}
+                      onChange={(val) => updateVariant(idx, "target_width_px", val)}
+                      min={100}
+                      max={20000}
+                      suffix="px"
+                    />
+                  </FieldRow>
+                  <FieldRow label="Aspect" fieldKey="output_variants[].aspect">
+                    <SelectField
+                      value={v.aspect}
+                      onChange={(val) => updateVariant(idx, "aspect", val)}
+                      options={[
+                        { value: "preserve", label: "Preserve" },
+                        { value: "crop_1_1", label: "Crop 1:1" },
+                        { value: "crop_16_9", label: "Crop 16:9" },
+                        { value: "crop_4_5", label: "Crop 4:5" },
+                      ]}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Max bytes" fieldKey="output_variants[].max_bytes">
+                    <NumberField
+                      value={v.max_bytes}
+                      onChange={(val) => updateVariant(idx, "max_bytes", val)}
+                      min={0}
+                    />
+                  </FieldRow>
+                  <FieldRow label="Color profile" fieldKey="output_variants[].color_profile">
+                    <SelectField
+                      value={v.color_profile}
+                      onChange={(val) => updateVariant(idx, "color_profile", val)}
+                      options={["sRGB", "Adobe_RGB"]}
+                    />
+                  </FieldRow>
+                </div>
+              ))}
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={addVariant}
+                className="w-full"
+              >
+                <Plus className="h-3.5 w-3.5 mr-1.5" />
+                Add output variant
+              </Button>
+            </div>
+          </SectionAccordion>
+        );
+
+      case "safety_rules":
+        return (
+          <SectionAccordion
+            id="safety_rules"
+            label="Safety rules (read-only)"
+            openId={openSection}
+            onToggle={setOpenSection}
+            badge="System"
+          >
+            <p className="text-[11px] text-muted-foreground mb-2">
+              These are FlexMedia-managed render-safety rules. Editing arrives in a later
+              release.
+            </p>
+            <div className="space-y-1.5">
+              {SYSTEM_SAFETY_RULES.map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-muted/40 border border-muted"
+                >
+                  <ShieldAlert
+                    className={cn(
+                      "h-3.5 w-3.5 mt-0.5 shrink-0",
+                      r.enforcement === "error" ? "text-red-500" : "text-amber-500",
+                    )}
+                  />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium">{r.message}</p>
+                    <p className="text-[10px] text-muted-foreground font-mono">
+                      {r.id} · {r.enforcement}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SectionAccordion>
+        );
+
+      default:
+        return null;
+    }
+  }
+
+  // Helper used by the section grouping nav: render the title-bar for one
+  // collapsible group. Click toggles which group is expanded.
+  function renderGroupHeader(groupId, label, Icon) {
+    const open = openGroup === groupId;
+    return (
+      <button
+        type="button"
+        onClick={() => setOpenGroup(open ? null : groupId)}
+        className={cn(
+          "w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-md text-xs font-semibold uppercase tracking-wide transition-colors",
+          open ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/40",
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <Icon className="h-3.5 w-3.5" />
+          {label}
+        </span>
+        {open ? (
+          <ChevronDown className="h-3 w-3" />
+        ) : (
+          <ChevronRight className="h-3 w-3" />
+        )}
+      </button>
+    );
+  }
+
   return (
     <div className="space-y-3">
       {/* ── Top bar ─────────────────────────────────────────────────────── */}
@@ -779,7 +2432,7 @@ export default function ThemeEditor({
               </Label>
             </div>
             {version != null && (
-              <Badge variant="outline" className="text-[10px] font-normal">
+              <Badge variant="outline" className="text-[10px] font-normal" title={`version_int: ${versionInt ?? "?"}`}>
                 v{version}
               </Badge>
             )}
@@ -801,7 +2454,7 @@ export default function ThemeEditor({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => saveTheme({ saveAsNew: true })}
+                onClick={() => onClickSave({ saveAsNew: true })}
                 disabled={saving || !name.trim() || invalidColorCount > 0}
                 title={
                   invalidColorCount > 0
@@ -816,7 +2469,7 @@ export default function ThemeEditor({
             {canEdit && (
               <Button
                 size="sm"
-                onClick={() => saveTheme({ saveAsNew: false })}
+                onClick={() => onClickSave({ saveAsNew: false })}
                 disabled={saving || !name.trim() || invalidColorCount > 0}
                 title={
                   invalidColorCount > 0
@@ -836,9 +2489,7 @@ export default function ThemeEditor({
         </CardContent>
       </Card>
 
-      {/* Inheritance + validation hints. Helps users understand the chain
-          (Person → Org → FlexMedia default) and surfaces blocking errors
-          before they hit Save. */}
+      {/* Inheritance + validation hints */}
       <div className="flex flex-col gap-2">
         {ownerKind !== "system" && (
           <div className="rounded-md border border-input bg-muted/30 px-3 py-2 flex items-start gap-2 text-xs">
@@ -874,1122 +2525,342 @@ export default function ThemeEditor({
         )}
       </div>
 
-      {/* ── Two-pane layout: form left, preview placeholder right ────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3">
+      {/* ── Three-column layout: nav + form + previews ─────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr_360px] gap-3">
+        {/* Sidebar nav: two collapsible groups */}
+        <Card className="self-start lg:sticky lg:top-3">
+          <CardContent className="p-2 space-y-2">
+            <div>
+              {renderGroupHeader("poi", "POI overlay", MousePointer)}
+              {openGroup === "poi" && (
+                <div className="mt-1 ml-1 space-y-0.5">
+                  {SECTIONS_BY_GROUP.poi.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setOpenSection(s.id)}
+                      className={cn(
+                        "w-full text-left text-xs px-2.5 py-1.5 rounded-md transition-colors",
+                        openSection === s.id
+                          ? "bg-primary/10 text-primary font-medium"
+                          : "text-foreground/80 hover:bg-muted/60",
+                      )}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              {renderGroupHeader("render", "Nadir / Oblique render", MapIcon)}
+              {openGroup === "render" && (
+                <div className="mt-1 ml-1 space-y-0.5">
+                  {SECTIONS_BY_GROUP.render.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setOpenSection(s.id)}
+                      className={cn(
+                        "w-full text-left text-xs px-2.5 py-1.5 rounded-md transition-colors",
+                        openSection === s.id
+                          ? "bg-primary/10 text-primary font-medium"
+                          : "text-foreground/80 hover:bg-muted/60",
+                      )}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Form column */}
         <Card>
           <CardContent className="p-3 space-y-1">
-            {/* Anchor line */}
-            <SectionAccordion
-              id="anchor_line"
-              label="Anchor line"
-              openId={openSection}
-              onToggle={setOpenSection}
-              canReset={canEdit}
-              onReset={() => resetSection("anchor_line")}
-            >
-              <FieldRow label="Shape">
-                <SelectField
-                  value={config.anchor_line?.shape}
-                  onChange={(v) => update(["anchor_line", "shape"], v)}
-                  options={["thin", "thick_bar", "dashed"]}
-                />
-              </FieldRow>
-              <FieldRow label="Width" hint="pixels">
-                <NumberField
-                  value={config.anchor_line?.width_px}
-                  onChange={(v) => update(["anchor_line", "width_px"], v)}
-                  min={1}
-                  max={50}
-                  suffix="px"
-                />
-              </FieldRow>
-              <FieldRow label="Color">
-                <ColorField
-                  value={config.anchor_line?.color}
-                  onChange={(v) => update(["anchor_line", "color"], v)}
-                />
-              </FieldRow>
-              <FieldRow label="Opacity" hint="0.0 – 1.0">
-                <NumberField
-                  value={config.anchor_line?.opacity}
-                  onChange={(v) => update(["anchor_line", "opacity"], v)}
-                  min={0}
-                  max={1}
-                  step={0.05}
-                />
-              </FieldRow>
+            {[...SECTIONS_BY_GROUP.poi, ...SECTIONS_BY_GROUP.render].map((s) => (
+              <div key={s.id}>{renderSection(s.id)}</div>
+            ))}
+          </CardContent>
+        </Card>
 
-              <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                <p className="text-xs font-semibold text-muted-foreground mb-1">End marker</p>
-                <FieldRow label="Shape">
-                  <SelectField
-                    value={config.anchor_line?.end_marker?.shape}
-                    onChange={(v) => update(["anchor_line", "end_marker", "shape"], v)}
-                    options={["none", "dot", "diamond", "circle", "cross"]}
-                  />
-                </FieldRow>
-                <FieldRow label="Size">
-                  <NumberField
-                    value={config.anchor_line?.end_marker?.size_px}
-                    onChange={(v) => update(["anchor_line", "end_marker", "size_px"], v)}
-                    min={0}
-                    max={100}
-                    suffix="px"
-                  />
-                </FieldRow>
-                <FieldRow label="Fill color">
-                  <ColorField
-                    value={config.anchor_line?.end_marker?.fill_color}
-                    onChange={(v) => update(["anchor_line", "end_marker", "fill_color"], v)}
-                  />
-                </FieldRow>
-                <FieldRow label="Stroke color">
-                  <ColorField
-                    value={config.anchor_line?.end_marker?.stroke_color}
-                    onChange={(v) => update(["anchor_line", "end_marker", "stroke_color"], v)}
-                  />
-                </FieldRow>
-                <FieldRow label="Stroke width">
-                  <NumberField
-                    value={config.anchor_line?.end_marker?.stroke_width_px}
-                    onChange={(v) => update(["anchor_line", "end_marker", "stroke_width_px"], v)}
-                    min={0}
-                    max={20}
-                    suffix="px"
-                  />
-                </FieldRow>
-              </div>
-            </SectionAccordion>
+        {/* Preview column — three tabs */}
+        <Card className="self-start lg:sticky lg:top-3 bg-muted/20">
+          <CardContent className="p-3 space-y-3">
+            <Tabs value={previewTab} onValueChange={setPreviewTab}>
+              <TabsList className="grid w-full grid-cols-3 h-8">
+                <TabsTrigger value="nadir" className="text-[10px] gap-1">
+                  <Camera className="h-3 w-3" />
+                  Nadir
+                </TabsTrigger>
+                <TabsTrigger value="oblique" className="text-[10px] gap-1">
+                  <Camera className="h-3 w-3" />
+                  Oblique
+                </TabsTrigger>
+                <TabsTrigger value="poi" className="text-[10px] gap-1">
+                  <MousePointer className="h-3 w-3" />
+                  POI
+                </TabsTrigger>
+              </TabsList>
 
-            {/* POI label */}
-            <SectionAccordion
-              id="poi_label"
-              label="POI label"
-              openId={openSection}
-              onToggle={setOpenSection}
-              canReset={canEdit}
-              onReset={() => resetSection("poi_label")}
-            >
-              <FieldRow label="Shape">
-                <SelectField
-                  value={config.poi_label?.shape}
-                  onChange={(v) => update(["poi_label", "shape"], v)}
-                  options={["rectangle", "rounded_rectangle", "pill"]}
-                />
-              </FieldRow>
-              <FieldRow label="Corner radius">
-                <NumberField
-                  value={config.poi_label?.corner_radius_px}
-                  onChange={(v) => update(["poi_label", "corner_radius_px"], v)}
-                  min={0}
-                  max={64}
-                  suffix="px"
-                />
-              </FieldRow>
-              <FieldRow label="Fill" hint='hex or "transparent"'>
-                <ColorField
-                  value={config.poi_label?.fill}
-                  onChange={(v) => update(["poi_label", "fill"], v)}
-                />
-              </FieldRow>
-              <FieldRow label="Text color">
-                <ColorField
-                  value={config.poi_label?.text_color}
-                  onChange={(v) => update(["poi_label", "text_color"], v)}
-                />
-              </FieldRow>
-              <FieldRow label="Text case">
-                <SelectField
-                  value={config.poi_label?.text_case}
-                  onChange={(v) => update(["poi_label", "text_case"], v)}
-                  options={["asis", "uppercase", "titlecase"]}
-                />
-              </FieldRow>
-              <FieldRow label="Font size">
-                <NumberField
-                  value={config.poi_label?.font_size_px}
-                  onChange={(v) => update(["poi_label", "font_size_px"], v)}
-                  min={6}
-                  max={200}
-                  suffix="px"
-                />
-              </FieldRow>
-
-              <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                <p className="text-xs font-semibold text-muted-foreground mb-1">Padding</p>
-                <FieldRow label="Top">
-                  <NumberField
-                    value={config.poi_label?.padding_px?.top}
-                    onChange={(v) => update(["poi_label", "padding_px", "top"], v)}
-                    min={0}
-                    suffix="px"
-                  />
-                </FieldRow>
-                <FieldRow label="Right">
-                  <NumberField
-                    value={config.poi_label?.padding_px?.right}
-                    onChange={(v) => update(["poi_label", "padding_px", "right"], v)}
-                    min={0}
-                    suffix="px"
-                  />
-                </FieldRow>
-                <FieldRow label="Bottom">
-                  <NumberField
-                    value={config.poi_label?.padding_px?.bottom}
-                    onChange={(v) => update(["poi_label", "padding_px", "bottom"], v)}
-                    min={0}
-                    suffix="px"
-                  />
-                </FieldRow>
-                <FieldRow label="Left">
-                  <NumberField
-                    value={config.poi_label?.padding_px?.left}
-                    onChange={(v) => update(["poi_label", "padding_px", "left"], v)}
-                    min={0}
-                    suffix="px"
-                  />
-                </FieldRow>
-              </div>
-
-              <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                <p className="text-xs font-semibold text-muted-foreground mb-1">Border</p>
-                <FieldRow label="Color">
-                  <ColorField
-                    value={config.poi_label?.border?.color}
-                    onChange={(v) => update(["poi_label", "border", "color"], v)}
-                    allowNull
-                  />
-                </FieldRow>
-                <FieldRow label="Width">
-                  <NumberField
-                    value={config.poi_label?.border?.width_px}
-                    onChange={(v) => update(["poi_label", "border", "width_px"], v)}
-                    min={0}
-                    max={20}
-                    suffix="px"
-                  />
-                </FieldRow>
-              </div>
-
-              <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                <p className="text-xs font-semibold text-muted-foreground mb-1">
-                  Secondary text
+              <TabsContent value="nadir" className="mt-2">
+                <div className="rounded-md overflow-hidden border border-input">
+                  <NadirPreview config={config} />
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1.5">
+                  Top-down view sample. Property pin + boundary + POI labels overlaid.
                 </p>
-                <FieldRow label="Enabled">
-                  <SwitchField
-                    value={config.poi_label?.secondary_text?.enabled}
-                    onChange={(v) => update(["poi_label", "secondary_text", "enabled"], v)}
-                  />
-                </FieldRow>
-                {config.poi_label?.secondary_text?.enabled && (
-                  <>
-                    <FieldRow label="Template">
-                      <TextField
-                        value={config.poi_label?.secondary_text?.template}
-                        onChange={(v) =>
-                          update(["poi_label", "secondary_text", "template"], v)
-                        }
-                        placeholder="{distance}"
-                        mono
-                      />
-                    </FieldRow>
-                    <FieldRow label="Color">
-                      <ColorField
-                        value={config.poi_label?.secondary_text?.color}
-                        onChange={(v) =>
-                          update(["poi_label", "secondary_text", "color"], v)
-                        }
-                      />
-                    </FieldRow>
-                  </>
-                )}
-              </div>
-            </SectionAccordion>
+              </TabsContent>
 
-            {/* Property pin */}
-            <SectionAccordion
-              id="property_pin"
-              label="Property pin"
-              openId={openSection}
-              onToggle={setOpenSection}
-              canReset={canEdit}
-              onReset={() => resetSection("property_pin")}
-              badge={config.property_pin?.enabled !== false ? "On" : "Off"}
-            >
-              <FieldRow label="Enabled" hint="Master switch — turn off to hide the property pin">
-                <SwitchField
-                  value={config.property_pin?.enabled !== false}
-                  onChange={(v) => update(["property_pin", "enabled"], v)}
-                />
-              </FieldRow>
-              {config.property_pin?.enabled !== false && (
-              <>
-              <FieldRow label="Mode">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                  {PROPERTY_PIN_MODES.map((m) => (
-                    <label
-                      key={m.value}
-                      className={cn(
-                        "flex items-center gap-2 px-2 py-1.5 rounded-md text-xs border cursor-pointer transition-colors",
-                        config.property_pin?.mode === m.value
-                          ? "border-primary bg-primary/5"
-                          : "border-input hover:bg-muted",
-                      )}
-                    >
-                      <input
-                        type="radio"
-                        name="pin-mode"
-                        value={m.value}
-                        checked={config.property_pin?.mode === m.value}
-                        onChange={() => update(["property_pin", "mode"], m.value)}
-                        className="h-3 w-3"
-                      />
-                      <span className="truncate">{m.label}</span>
-                    </label>
-                  ))}
+              <TabsContent value="oblique" className="mt-2">
+                <div className="rounded-md overflow-hidden border border-input">
+                  <ObliquePreview config={config} />
                 </div>
-              </FieldRow>
-              <FieldRow label="Size">
-                <NumberField
-                  value={config.property_pin?.size_px}
-                  onChange={(v) => update(["property_pin", "size_px"], v)}
-                  min={20}
-                  max={400}
-                  suffix="px"
-                />
-              </FieldRow>
-              <FieldRow label="Fill color">
-                <ColorField
-                  value={config.property_pin?.fill_color}
-                  onChange={(v) => update(["property_pin", "fill_color"], v)}
-                />
-              </FieldRow>
-              <FieldRow label="Stroke color">
-                <ColorField
-                  value={config.property_pin?.stroke_color}
-                  onChange={(v) => update(["property_pin", "stroke_color"], v)}
-                />
-              </FieldRow>
-              <FieldRow label="Stroke width">
-                <NumberField
-                  value={config.property_pin?.stroke_width_px}
-                  onChange={(v) => update(["property_pin", "stroke_width_px"], v)}
-                  min={0}
-                  max={20}
-                  suffix="px"
-                />
-              </FieldRow>
-
-              <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                <p className="text-xs font-semibold text-muted-foreground mb-1">Content</p>
-                <FieldRow label="Type">
-                  <SelectField
-                    value={config.property_pin?.content?.type}
-                    onChange={(v) => update(["property_pin", "content", "type"], v)}
-                    options={["none", "text", "logo", "monogram", "icon"]}
-                  />
-                </FieldRow>
-                {config.property_pin?.content?.type === "text" && (
-                  <FieldRow label="Text">
-                    <TextField
-                      value={config.property_pin?.content?.text}
-                      onChange={(v) => update(["property_pin", "content", "text"], v)}
-                    />
-                  </FieldRow>
-                )}
-                {config.property_pin?.content?.type === "monogram" && (
-                  <FieldRow label="Monogram">
-                    <TextField
-                      value={config.property_pin?.content?.monogram}
-                      onChange={(v) => update(["property_pin", "content", "monogram"], v)}
-                      placeholder="e.g. AB"
-                    />
-                  </FieldRow>
-                )}
-                {config.property_pin?.content?.type === "icon" && (
-                  <FieldRow label="Icon name">
-                    <TextField
-                      value={config.property_pin?.content?.icon_name}
-                      onChange={(v) => update(["property_pin", "content", "icon_name"], v)}
-                      placeholder="home"
-                      mono
-                    />
-                  </FieldRow>
-                )}
-                {config.property_pin?.content?.type === "logo" && (
-                  <FieldRow label="Logo asset" hint="Dropbox path (placeholder)">
-                    <div className="flex items-center gap-2 w-full">
-                      <Input
-                        value={config.property_pin?.content?.logo_asset_ref ?? ""}
-                        onChange={(e) =>
-                          update(
-                            ["property_pin", "content", "logo_asset_ref"],
-                            e.target.value,
-                          )
-                        }
-                        placeholder="/FlexMedia/Brands/.../logo.svg"
-                        className="h-8 text-xs font-mono"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled
-                        title="File picker integration: Wave 3"
-                      >
-                        <ImageIcon className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </FieldRow>
-                )}
-                {(config.property_pin?.content?.type === "text" ||
-                  config.property_pin?.content?.type === "monogram") && (
-                  <>
-                    <FieldRow label="Text color">
-                      <ColorField
-                        value={config.property_pin?.content?.text_color}
-                        onChange={(v) =>
-                          update(["property_pin", "content", "text_color"], v)
-                        }
-                      />
-                    </FieldRow>
-                    <FieldRow label="Text size">
-                      <NumberField
-                        value={config.property_pin?.content?.text_size_px}
-                        onChange={(v) =>
-                          update(["property_pin", "content", "text_size_px"], v)
-                        }
-                        min={6}
-                        max={120}
-                        suffix="px"
-                      />
-                    </FieldRow>
-                  </>
-                )}
-                {config.property_pin?.content?.type === "icon" && (
-                  <FieldRow label="Icon color">
-                    <ColorField
-                      value={config.property_pin?.content?.icon_color}
-                      onChange={(v) => update(["property_pin", "content", "icon_color"], v)}
-                    />
-                  </FieldRow>
-                )}
-              </div>
-
-              <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                <p className="text-xs font-semibold text-muted-foreground mb-1">
-                  Address label
+                <p className="text-[10px] text-muted-foreground mt-1.5">
+                  Angled (oblique) view sample. Same overlays as Nadir.
                 </p>
-                <FieldRow label="Enabled">
-                  <SwitchField
-                    value={config.property_pin?.address_label?.enabled}
-                    onChange={(v) =>
-                      update(["property_pin", "address_label", "enabled"], v)
-                    }
-                  />
-                </FieldRow>
-                {config.property_pin?.address_label?.enabled && (
-                  <>
-                    <FieldRow label="Position">
-                      <SelectField
-                        value={config.property_pin?.address_label?.position}
-                        onChange={(v) =>
-                          update(["property_pin", "address_label", "position"], v)
-                        }
-                        options={["below", "above", "none"]}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Text color">
-                      <ColorField
-                        value={config.property_pin?.address_label?.text_color}
-                        onChange={(v) =>
-                          update(["property_pin", "address_label", "text_color"], v)
-                        }
-                      />
-                    </FieldRow>
-                    <FieldRow label="Background">
-                      <ColorField
-                        value={config.property_pin?.address_label?.bg_color}
-                        onChange={(v) =>
-                          update(["property_pin", "address_label", "bg_color"], v)
-                        }
-                      />
-                    </FieldRow>
-                    <FieldRow label="Font size">
-                      <NumberField
-                        value={config.property_pin?.address_label?.font_size_px}
-                        onChange={(v) =>
-                          update(["property_pin", "address_label", "font_size_px"], v)
-                        }
-                        min={6}
-                        max={120}
-                        suffix="px"
-                      />
-                    </FieldRow>
-                  </>
-                )}
-              </div>
-              </>
-              )}
-            </SectionAccordion>
+              </TabsContent>
 
-            {/* Boundary */}
-            <SectionAccordion
-              id="boundary"
-              label="Boundary"
-              openId={openSection}
-              onToggle={setOpenSection}
-              badge={config.boundary?.enabled ? "On" : "Off"}
-              canReset={canEdit}
-              onReset={() => resetSection("boundary")}
-            >
-              <FieldRow label="Enabled">
-                <SwitchField
-                  value={config.boundary?.enabled}
-                  onChange={(v) => update(["boundary", "enabled"], v)}
-                />
-              </FieldRow>
-
-              {config.boundary?.enabled && (
-                <>
-                  <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                    <p className="text-xs font-semibold text-muted-foreground mb-1">Line</p>
-                    <FieldRow label="Style">
-                      <SelectField
-                        value={config.boundary?.line?.style}
-                        onChange={(v) => update(["boundary", "line", "style"], v)}
-                        options={["solid", "dashed", "dotted"]}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Width">
-                      <NumberField
-                        value={config.boundary?.line?.width_px}
-                        onChange={(v) => update(["boundary", "line", "width_px"], v)}
-                        min={1}
-                        max={50}
-                        suffix="px"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Color">
-                      <ColorField
-                        value={config.boundary?.line?.color}
-                        onChange={(v) => update(["boundary", "line", "color"], v)}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Corner radius">
-                      <NumberField
-                        value={config.boundary?.line?.corner_radius_px}
-                        onChange={(v) =>
-                          update(["boundary", "line", "corner_radius_px"], v)
-                        }
-                        min={0}
-                        max={100}
-                        suffix="px"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Shadow">
-                      <SwitchField
-                        value={config.boundary?.line?.shadow?.enabled}
-                        onChange={(v) =>
-                          update(["boundary", "line", "shadow", "enabled"], v)
-                        }
-                      />
-                    </FieldRow>
-                  </div>
-
-                  <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                    <p className="text-xs font-semibold text-muted-foreground mb-1">
-                      Exterior treatment
-                    </p>
-                    <FieldRow label="Blur">
-                      <SwitchField
-                        value={config.boundary?.exterior_treatment?.blur_enabled}
-                        onChange={(v) =>
-                          update(["boundary", "exterior_treatment", "blur_enabled"], v)
-                        }
-                      />
-                    </FieldRow>
-                    {config.boundary?.exterior_treatment?.blur_enabled && (
-                      <FieldRow label="Blur strength">
-                        <NumberField
-                          value={config.boundary?.exterior_treatment?.blur_strength_px}
-                          onChange={(v) =>
-                            update(
-                              ["boundary", "exterior_treatment", "blur_strength_px"],
-                              v,
-                            )
-                          }
-                          min={0}
-                          max={50}
-                          suffix="px"
-                        />
-                      </FieldRow>
-                    )}
-                    <FieldRow label="Darken" hint="0.0 – 1.0 (1 = unchanged)">
-                      <NumberField
-                        value={config.boundary?.exterior_treatment?.darken_factor}
-                        onChange={(v) =>
-                          update(["boundary", "exterior_treatment", "darken_factor"], v)
-                        }
-                        min={0}
-                        max={1}
-                        step={0.05}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Hue shift" hint="-180 to +180">
-                      <NumberField
-                        value={config.boundary?.exterior_treatment?.hue_shift_degrees}
-                        onChange={(v) =>
-                          update(
-                            ["boundary", "exterior_treatment", "hue_shift_degrees"],
-                            v,
-                          )
-                        }
-                        min={-180}
-                        max={180}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Saturation" hint="0.0 = grayscale">
-                      <NumberField
-                        value={config.boundary?.exterior_treatment?.saturation_factor}
-                        onChange={(v) =>
-                          update(
-                            ["boundary", "exterior_treatment", "saturation_factor"],
-                            v,
-                          )
-                        }
-                        min={0}
-                        max={3}
-                        step={0.05}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Lightness">
-                      <NumberField
-                        value={config.boundary?.exterior_treatment?.lightness_factor}
-                        onChange={(v) =>
-                          update(
-                            ["boundary", "exterior_treatment", "lightness_factor"],
-                            v,
-                          )
-                        }
-                        min={0}
-                        max={3}
-                        step={0.05}
-                      />
-                    </FieldRow>
-                  </div>
-
-                  <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                    <p className="text-xs font-semibold text-muted-foreground mb-1">
-                      Side measurements
-                    </p>
-                    <FieldRow label="Enabled">
-                      <SwitchField
-                        value={config.boundary?.side_measurements?.enabled}
-                        onChange={(v) =>
-                          update(["boundary", "side_measurements", "enabled"], v)
-                        }
-                      />
-                    </FieldRow>
-                    {config.boundary?.side_measurements?.enabled && (
-                      <>
-                        <FieldRow label="Unit">
-                          <SelectField
-                            value={config.boundary?.side_measurements?.unit}
-                            onChange={(v) =>
-                              update(["boundary", "side_measurements", "unit"], v)
-                            }
-                            options={["metres", "feet"]}
-                          />
-                        </FieldRow>
-                        <FieldRow label="Decimals">
-                          <NumberField
-                            value={config.boundary?.side_measurements?.decimals}
-                            onChange={(v) =>
-                              update(["boundary", "side_measurements", "decimals"], v)
-                            }
-                            min={0}
-                            max={4}
-                          />
-                        </FieldRow>
-                        <FieldRow label="Position">
-                          <SelectField
-                            value={config.boundary?.side_measurements?.position}
-                            onChange={(v) =>
-                              update(["boundary", "side_measurements", "position"], v)
-                            }
-                            options={["outside", "inside"]}
-                          />
-                        </FieldRow>
-                      </>
-                    )}
-                  </div>
-
-                  <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                    <p className="text-xs font-semibold text-muted-foreground mb-1">
-                      Sqm total
-                    </p>
-                    <FieldRow label="Enabled">
-                      <SwitchField
-                        value={config.boundary?.sqm_total?.enabled}
-                        onChange={(v) => update(["boundary", "sqm_total", "enabled"], v)}
-                      />
-                    </FieldRow>
-                  </div>
-
-                  <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                    <p className="text-xs font-semibold text-muted-foreground mb-1">
-                      Address overlay
-                    </p>
-                    <FieldRow label="Enabled">
-                      <SwitchField
-                        value={config.boundary?.address_overlay?.enabled}
-                        onChange={(v) =>
-                          update(["boundary", "address_overlay", "enabled"], v)
-                        }
-                      />
-                    </FieldRow>
-                  </div>
-                </>
-              )}
-            </SectionAccordion>
-
-            {/* POI selection */}
-            <SectionAccordion
-              id="poi_selection"
-              label="POI selection"
-              openId={openSection}
-              onToggle={setOpenSection}
-              canReset={canEdit}
-              onReset={() => resetSection("poi_selection")}
-            >
-              <FieldRow label="Radius" hint="metres">
-                <NumberField
-                  value={config.poi_selection?.radius_m}
-                  onChange={(v) => update(["poi_selection", "radius_m"], v)}
-                  min={50}
-                  max={5000}
-                  suffix="m"
-                />
-              </FieldRow>
-              <FieldRow label="Max pins per shot">
-                <NumberField
-                  value={config.poi_selection?.max_pins_per_shot}
-                  onChange={(v) => update(["poi_selection", "max_pins_per_shot"], v)}
-                  min={0}
-                  max={20}
-                />
-              </FieldRow>
-              <FieldRow label="Min separation">
-                <NumberField
-                  value={config.poi_selection?.min_separation_px}
-                  onChange={(v) => update(["poi_selection", "min_separation_px"], v)}
-                  min={0}
-                  max={2000}
-                  suffix="px"
-                />
-              </FieldRow>
-              <FieldRow label="Curation">
-                <SelectField
-                  value={config.poi_selection?.curation}
-                  onChange={(v) => update(["poi_selection", "curation"], v)}
-                  options={["auto", "manual_only"]}
-                />
-              </FieldRow>
-
-              <div className="mt-3 pt-2 border-t border-dashed border-muted">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-semibold text-muted-foreground">
-                    Type quotas
-                  </p>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={addQuotaType}
-                    className="h-7 text-xs"
-                  >
-                    <Plus className="h-3 w-3 mr-1" />
-                    Add type
-                  </Button>
+              <TabsContent value="poi" className="mt-2">
+                <div className="rounded-md overflow-hidden border border-input">
+                  <PoiCloseupPreview config={config} />
                 </div>
-                <div className="space-y-1.5">
-                  {quotaEntries.length === 0 && (
-                    <p className="text-[10px] text-muted-foreground italic">
-                      No type quotas defined.
-                    </p>
-                  )}
-                  {quotaEntries.map(([typeName, q]) => (
-                    <div
-                      key={typeName}
-                      className="grid grid-cols-[1fr_72px_72px_auto] gap-2 items-center"
-                    >
-                      <Input
-                        value={typeName}
-                        onChange={(e) => renameQuotaType(typeName, e.target.value.trim())}
-                        className="h-8 text-xs font-mono"
-                      />
-                      <Input
-                        type="number"
-                        value={q.priority ?? ""}
-                        onChange={(e) =>
-                          updateQuota(typeName, "priority", Number(e.target.value))
-                        }
-                        placeholder="prio"
-                        className="h-8 text-xs"
-                      />
-                      <Input
-                        type="number"
-                        value={q.max ?? ""}
-                        onChange={(e) =>
-                          updateQuota(typeName, "max", Number(e.target.value))
-                        }
-                        placeholder="max"
-                        className="h-8 text-xs"
-                      />
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => removeQuotaType(typeName)}
-                        className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </SectionAccordion>
+                <p className="text-[10px] text-muted-foreground mt-1.5">
+                  Close-up of one POI label + anchor line. Pure styling preview.
+                </p>
+              </TabsContent>
+            </Tabs>
 
-            {/* Branding ribbon */}
-            <SectionAccordion
-              id="branding_ribbon"
-              label="Branding ribbon"
-              openId={openSection}
-              onToggle={setOpenSection}
-              badge={config.branding_ribbon?.enabled ? "On" : "Off"}
-              canReset={canEdit}
-              onReset={() => resetSection("branding_ribbon")}
-            >
-              <FieldRow label="Enabled">
-                <SwitchField
-                  value={config.branding_ribbon?.enabled}
-                  onChange={(v) => update(["branding_ribbon", "enabled"], v)}
-                />
-              </FieldRow>
-              {config.branding_ribbon?.enabled && (
-                <>
-                  <FieldRow label="Position">
-                    <SelectField
-                      value={config.branding_ribbon?.position}
-                      onChange={(v) => update(["branding_ribbon", "position"], v)}
-                      options={["top", "bottom", "none"]}
-                    />
-                  </FieldRow>
-                  <FieldRow label="Height">
-                    <NumberField
-                      value={config.branding_ribbon?.height_px}
-                      onChange={(v) => update(["branding_ribbon", "height_px"], v)}
-                      min={20}
-                      max={400}
-                      suffix="px"
-                    />
-                  </FieldRow>
-                  <FieldRow label="Background">
-                    <ColorField
-                      value={config.branding_ribbon?.bg_color}
-                      onChange={(v) => update(["branding_ribbon", "bg_color"], v)}
-                    />
-                  </FieldRow>
-                  <FieldRow label="Text color">
-                    <ColorField
-                      value={config.branding_ribbon?.text_color}
-                      onChange={(v) => update(["branding_ribbon", "text_color"], v)}
-                    />
-                  </FieldRow>
-                  <FieldRow label="Show org logo">
-                    <SwitchField
-                      value={config.branding_ribbon?.show_org_logo}
-                      onChange={(v) => update(["branding_ribbon", "show_org_logo"], v)}
-                    />
-                  </FieldRow>
-                  {config.branding_ribbon?.show_org_logo && (
-                    <FieldRow label="Logo asset" hint="Dropbox path (placeholder)">
-                      <div className="flex items-center gap-2 w-full">
-                        <Input
-                          value={config.branding_ribbon?.logo_asset_ref ?? ""}
-                          onChange={(e) =>
-                            update(["branding_ribbon", "logo_asset_ref"], e.target.value)
-                          }
-                          placeholder="/FlexMedia/Brands/.../logo.png"
-                          className="h-8 text-xs font-mono"
-                        />
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled
-                          title="File picker integration: Wave 3"
-                        >
-                          <ImageIcon className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </FieldRow>
-                  )}
-                  <FieldRow label="Show address">
-                    <SwitchField
-                      value={config.branding_ribbon?.show_address}
-                      onChange={(v) => update(["branding_ribbon", "show_address"], v)}
-                    />
-                  </FieldRow>
-                  <FieldRow label="Show shot ID">
-                    <SwitchField
-                      value={config.branding_ribbon?.show_shot_id}
-                      onChange={(v) => update(["branding_ribbon", "show_shot_id"], v)}
-                    />
-                  </FieldRow>
-                </>
-              )}
-            </SectionAccordion>
-
-            {/* Output variants */}
-            <SectionAccordion
-              id="output_variants"
-              label="Output variants"
-              openId={openSection}
-              onToggle={setOpenSection}
-              badge={`${variants.length}`}
-              canReset={canEdit}
-              onReset={() => resetSection("output_variants")}
-            >
-              <div className="space-y-2">
-                {variants.length === 0 && (
-                  <p className="text-[10px] text-muted-foreground italic">
-                    No output variants defined.
-                  </p>
-                )}
-                {variants.map((v, idx) => (
-                  <div
-                    key={idx}
-                    className="rounded-md border border-input p-2.5 space-y-1.5 bg-muted/20"
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <Badge variant="outline" className="text-[10px] font-normal">
-                        Variant #{idx + 1}
-                      </Badge>
-                      <Button
-                        type="button"
-                        size="icon"
-                        variant="ghost"
-                        onClick={() => removeVariant(idx)}
-                        className="h-6 w-6 text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                    <FieldRow label="Name">
-                      <TextField
-                        value={v.name}
-                        onChange={(val) => updateVariant(idx, "name", val)}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Format">
-                      <SelectField
-                        value={v.format}
-                        onChange={(val) => updateVariant(idx, "format", val)}
-                        options={["JPEG", "TIFF", "PNG"]}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Quality" hint="JPEG: 0–100">
-                      <NumberField
-                        value={v.quality}
-                        onChange={(val) => updateVariant(idx, "quality", val)}
-                        min={1}
-                        max={100}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Width">
-                      <NumberField
-                        value={v.target_width_px}
-                        onChange={(val) => updateVariant(idx, "target_width_px", val)}
-                        min={100}
-                        max={20000}
-                        suffix="px"
-                      />
-                    </FieldRow>
-                    <FieldRow label="Aspect">
-                      <SelectField
-                        value={v.aspect}
-                        onChange={(val) => updateVariant(idx, "aspect", val)}
-                        options={[
-                          { value: "preserve", label: "Preserve" },
-                          { value: "crop_1_1", label: "Crop 1:1" },
-                          { value: "crop_16_9", label: "Crop 16:9" },
-                          { value: "crop_4_5", label: "Crop 4:5" },
-                        ]}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Max bytes">
-                      <NumberField
-                        value={v.max_bytes}
-                        onChange={(val) => updateVariant(idx, "max_bytes", val)}
-                        min={0}
-                      />
-                    </FieldRow>
-                    <FieldRow label="Color profile">
-                      <SelectField
-                        value={v.color_profile}
-                        onChange={(val) => updateVariant(idx, "color_profile", val)}
-                        options={["sRGB", "Adobe_RGB"]}
-                      />
-                    </FieldRow>
-                  </div>
-                ))}
+            {/* Server-side preview (slow, accurate) ─ opt-in */}
+            <div className="pt-3 mt-2 border-t border-dashed border-muted space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Render full preview
+                </p>
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={addVariant}
-                  className="w-full"
+                  onClick={triggerServerPreview}
+                  disabled={previewLoading}
+                  className="h-7 text-[10px] gap-1.5"
+                  title="Calls drone-render-preview against a bundled DJI fixture (1-2 s)"
                 >
-                  <Plus className="h-3.5 w-3.5 mr-1.5" />
-                  Add output variant
+                  {previewLoading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-3 w-3" />
+                  )}
+                  {previewLoading ? "Rendering" : "Render (slow)"}
                 </Button>
               </div>
-            </SectionAccordion>
-
-            {/* Safety rules — read-only system rules */}
-            <SectionAccordion
-              id="safety_rules"
-              label="Safety rules"
-              openId={openSection}
-              onToggle={setOpenSection}
-              badge="System"
-            >
-              <p className="text-[11px] text-muted-foreground mb-2">
-                These are FlexMedia-managed render-safety rules. Editing arrives in a later
-                release.
-              </p>
-              <div className="space-y-1.5">
-                {SYSTEM_SAFETY_RULES.map((r) => (
-                  <div
-                    key={r.id}
-                    className="flex items-start gap-2 px-2.5 py-2 rounded-md bg-muted/40 border border-muted"
-                  >
-                    <ShieldAlert
-                      className={cn(
-                        "h-3.5 w-3.5 mt-0.5 shrink-0",
-                        r.enforcement === "error" ? "text-red-500" : "text-amber-500",
-                      )}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium">{r.message}</p>
-                      <p className="text-[10px] text-muted-foreground font-mono">
-                        {r.id} · {r.enforcement}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </SectionAccordion>
-          </CardContent>
-        </Card>
-
-        {/* Live preview column ─ renders the in-progress theme on a bundled
-            DJI sample via the drone-render-preview Edge Function. */}
-        <Card className="self-start lg:sticky lg:top-3 bg-muted/20">
-          <CardContent className="p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Live preview
-                </p>
-                {previewLoading && (
-                  <Badge variant="outline" className="text-[9px] font-normal gap-1">
-                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                    Rendering
-                  </Badge>
-                )}
-              </div>
-              <Button
-                type="button"
-                size="icon"
-                variant="ghost"
-                onClick={refreshPreview}
-                disabled={previewLoading}
-                title="Re-render preview now"
-                className="h-7 w-7 text-muted-foreground hover:text-foreground"
-              >
-                <RefreshCw
-                  className={cn("h-3.5 w-3.5", previewLoading && "animate-spin")}
-                />
-              </Button>
-            </div>
-
-            {/* Image area: aspect-video frame holds the rendered fixture.
-                Loading overlay shows over the previous image so operators
-                see continuity of edits rather than blank flicker. */}
-            <div className="relative aspect-video rounded-md border border-input bg-muted/40 overflow-hidden">
-              {previewImg ? (
-                <img
-                  src={previewImg}
-                  alt="Theme preview"
-                  className="w-full h-full object-contain bg-black"
-                  draggable={false}
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-center px-3">
-                  {previewError ? (
-                    <p className="text-[11px] text-muted-foreground">
-                      No preview yet.
-                    </p>
-                  ) : (
-                    <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Generating first preview…
+              {previewImg && (
+                <div className="relative aspect-video rounded-md border border-input bg-muted/40 overflow-hidden">
+                  <img
+                    src={previewImg}
+                    alt="Server-side preview"
+                    className="w-full h-full object-contain bg-black"
+                    draggable={false}
+                  />
+                  {previewLoading && (
+                    <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                      <Loader2 className="h-6 w-6 animate-spin text-white/90" />
                     </div>
                   )}
                 </div>
               )}
-              {previewImg && previewLoading && (
-                <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
-                  <Loader2 className="h-6 w-6 animate-spin text-white/90" />
-                </div>
-              )}
-            </div>
-
-            {previewError && (
-              <div
-                role="alert"
-                className="rounded-md border border-red-200 bg-red-50/80 dark:border-red-900/50 dark:bg-red-950/30 px-2.5 py-2 flex items-start gap-2"
-              >
-                <AlertCircle className="h-3.5 w-3.5 text-red-600 mt-0.5 shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[11px] font-medium text-red-800 dark:text-red-200">
-                    Preview failed
-                  </p>
-                  <p className="text-[10px] text-red-700 dark:text-red-300 mt-0.5 break-words">
+              {previewError && (
+                <div
+                  role="alert"
+                  className="rounded-md border border-red-200 bg-red-50/80 dark:border-red-900/50 dark:bg-red-950/30 px-2 py-1.5 flex items-start gap-2"
+                >
+                  <AlertCircle className="h-3 w-3 text-red-600 mt-0.5 shrink-0" />
+                  <p className="text-[10px] text-red-700 dark:text-red-300 break-words">
                     {previewError}
                   </p>
                 </div>
-              </div>
-            )}
-
-            <div className="text-[10px] text-muted-foreground space-y-0.5">
-              <p>
-                Updates ~1 s after edits stop. Renders against a bundled DJI fixture
-                with three sample POIs; not your project's actual shots.
-              </p>
-              <p className="font-mono mt-2">
-                {SECTIONS.length} sections · {variants.length} variant
-                {variants.length === 1 ? "" : "s"}
+              )}
+              <p className="text-[10px] text-muted-foreground">
+                Renders against a bundled DJI fixture; not your project's actual shots.
               </p>
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {/* ── Save-confirmation dialog (existing themes only) ──────────────── */}
+      <AlertDialog open={saveDialogOpen} onOpenChange={(open) => {
+        if (!saving && !rerendering) setSaveDialogOpen(open);
+      }}>
+        <AlertDialogContent className="max-w-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Save changes?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm">
+                <p>
+                  This will update the theme to version{" "}
+                  <span className="font-mono font-semibold">
+                    {versionInt != null ? versionInt + 1 : "?"}
+                  </span>
+                  .{" "}
+                  {impactRpcAvailable ? (
+                    impactRows.length > 0 ? (
+                      <>The following projects have renders that were produced from the previous version:</>
+                    ) : impactLoading ? (
+                      <>Checking which projects are impacted…</>
+                    ) : (
+                      <>No in-flight projects have renders from the previous version of this theme.</>
+                    )
+                  ) : (
+                    <span className="text-muted-foreground italic" title="The drone_theme_impacted_projects RPC isn't available in this environment. Save proceeds without the auto-rerender option.">
+                      Impact list unavailable.
+                    </span>
+                  )}
+                </p>
+
+                {impactLoading && (
+                  <div className="flex items-center gap-2 py-2 text-muted-foreground">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Loading impacted projects…
+                  </div>
+                )}
+
+                {!impactLoading && impactRows.length > 0 && (
+                  <div className="rounded-md border border-input bg-muted/30 p-2.5 max-h-48 overflow-y-auto">
+                    <ul className="space-y-1">
+                      {impactRows.slice(0, 25).map((r) => (
+                        <li key={r.shoot_id} className="text-xs flex items-center justify-between gap-2">
+                          <span className="font-medium truncate">
+                            {r.project_address || r.project_id?.slice(0, 8)}
+                          </span>
+                          <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+                            {r.renders_count} render{r.renders_count === 1 ? "" : "s"} · {r.shoot_status}
+                          </span>
+                        </li>
+                      ))}
+                      {impactRows.length > 25 && (
+                        <li className="text-[10px] text-muted-foreground italic pt-1">
+                          …and {impactRows.length - 25} more
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                )}
+
+                {!impactLoading && impactRows.length > 0 && (
+                  <label className="flex items-center gap-2 cursor-pointer text-xs">
+                    <Checkbox
+                      checked={autoRerender}
+                      onCheckedChange={(v) => setAutoRerender(!!v)}
+                      disabled={rerendering}
+                    />
+                    <span>
+                      Auto-re-render impacted projects with the new theme
+                    </span>
+                  </label>
+                )}
+
+                {rerendering && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Queuing re-renders…
+                  </div>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSaveDialogOpen(false)}
+              disabled={saving || rerendering}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onConfirmSaveFromDialog({ withRerender: false })}
+              disabled={saving || rerendering}
+            >
+              {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
+              Save (won't re-render)
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => onConfirmSaveFromDialog({ withRerender: true })}
+              disabled={saving || rerendering || impactRows.length === 0 || !autoRerender}
+              title={
+                impactRows.length === 0
+                  ? "No impacted projects to re-render"
+                  : !autoRerender
+                    ? "Tick the auto-rerender option to enable"
+                    : undefined
+              }
+            >
+              {(saving || rerendering) ? (
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Save className="h-3.5 w-3.5 mr-1.5" />
+              )}
+              Save + Re-render
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// ── Quota row (extracted so the input can hold focus across renames) ──────
+function QuotaRow({ typeName, quota, onRename, onUpdate, onRemove }) {
+  const [draftName, setDraftName] = useState(typeName);
+  // Keep draft in sync if the upstream name changes (e.g. parent reset).
+  useEffect(() => {
+    setDraftName(typeName);
+  }, [typeName]);
+  return (
+    <div className="grid grid-cols-[1fr_72px_72px_auto] gap-2 items-center">
+      <Input
+        value={draftName}
+        onChange={(e) => setDraftName(e.target.value)}
+        // Defer the rename to onBlur so the input keeps focus mid-edit.
+        onBlur={() => {
+          const trimmed = draftName.trim();
+          if (trimmed && trimmed !== typeName) onRename(trimmed);
+          else setDraftName(typeName);
+        }}
+        className="h-8 text-xs font-mono"
+      />
+      <Input
+        type="number"
+        value={quota.priority ?? ""}
+        onChange={(e) => onUpdate("priority", Number(e.target.value))}
+        placeholder="prio"
+        className="h-8 text-xs"
+      />
+      <Input
+        type="number"
+        value={quota.max ?? ""}
+        onChange={(e) => onUpdate("max", Number(e.target.value))}
+        placeholder="max"
+        className="h-8 text-xs"
+      />
+      <Button
+        type="button"
+        size="icon"
+        variant="ghost"
+        onClick={onRemove}
+        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+      >
+        <X className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }

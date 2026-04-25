@@ -334,9 +334,20 @@ export function classifyShotRole(shot: ClassifiableShot): ShotRole {
  * Refine nadir classifications: distinguish SfM-grid nadirs (sequential burst)
  * from MLS-hero nadirs (isolated single shot).
  *
- * A nadir is part of an SfM grid if there are >= 3 OTHER nadirs within
- * a 30-second window centered on it. Isolated nadirs (no neighbors within
- * 30s) get reclassified to nadir_hero.
+ * A nadir is part of an SfM grid if there are >= 8 OTHER nadirs within
+ * a 60-second window centered on it. Hero/border-outline top-down shots
+ * are typically taken in clusters of 1-7 (operator manually frames
+ * altitude/yaw variations to give the deliverable visual padding around
+ * the property edge). Real autonomous SfM grid missions are 10-50+ shots
+ * captured in tight 1-3-second cadence — well above the 8-neighbor
+ * threshold.
+ *
+ * Earlier versions used >=3 within 30s but Joseph (operator) flagged
+ * that mid-size hero clusters (e.g. 3-4 padded top-downs) were getting
+ * mis-classified as SfM-only and disappeared from delivery. Bumped to
+ * the >=8/60s window so a small purposeful cluster passes through as
+ * nadir_hero, while a 26-shot autonomous mission still locks as
+ * nadir_grid.
  *
  * Apply this AFTER classifyShotRole has run on every shot, and scope each
  * call to a single shoot — otherwise two distinct flights' nadirs may
@@ -345,8 +356,8 @@ export function classifyShotRole(shot: ClassifiableShot): ShotRole {
  * Shots without captured_at can't be clustered; they're left at whatever
  * classifyShotRole picked (typically nadir_grid).
  */
-const NADIR_CLUSTER_WINDOW_MS = 30_000;
-const NADIR_CLUSTER_NEIGHBOR_THRESHOLD = 3;
+const NADIR_CLUSTER_WINDOW_MS = 60_000;
+const NADIR_CLUSTER_NEIGHBOR_THRESHOLD = 8;
 
 interface NadirRefinable {
   captured_at: string | null;
