@@ -325,6 +325,20 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     return m;
   }, [grouped.preview]);
 
+  // Map from shot_id → preview render's id (newest variant). Used by the
+  // "Edit pins" button on Raw Proposed / Raw Accepted cards so the Pin
+  // Editor opens against the AI-preview render image when one exists.
+  // The Pin Editor falls back to the raw shot path when ?render= is absent
+  // or doesn't resolve.
+  const previewRenderIdByShotId = useMemo(() => {
+    const m = new Map();
+    for (const [shotId, variants] of grouped.preview) {
+      const top = variants[0];
+      if (top?.id) m.set(shotId, top.id);
+    }
+    return m;
+  }, [grouped.preview]);
+
   // Per-column ordered list of lightbox items. Built once and indexed by the
   // column key so a click on any card can resolve to (columnKey, index) and
   // open DroneLightbox at that position. Items only include cards with a
@@ -797,6 +811,7 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
               isShotColumn={SHOT_COLUMNS.has(col.key)}
               shotsById={shotsById}
               previewPathByShotId={previewPathByShotId}
+              previewRenderIdByShotId={previewRenderIdByShotId}
               projectId={projectId}
               shootId={shootId}
               canEdit={isManagerOrAbove}
@@ -928,6 +943,7 @@ function PipelineColumn({
   isShotColumn,
   shotsById,
   previewPathByShotId,
+  previewRenderIdByShotId,
   projectId,
   shootId,
   canEdit,
@@ -1024,6 +1040,9 @@ function PipelineColumn({
               shot={shot}
               column={column.key}
               previewPath={previewPathByShotId.get(shot.id) || null}
+              previewRenderId={previewRenderIdByShotId.get(shot.id) || null}
+              projectId={projectId}
+              shootId={shootId}
               canEdit={canEdit}
               pendingShotAction={pendingShotAction}
               onMutateShot={onMutateShot}
@@ -1073,6 +1092,9 @@ function ShotLifecycleCard({
   shot,
   column,
   previewPath,
+  previewRenderId,
+  projectId,
+  shootId,
   canEdit,
   pendingShotAction,
   onMutateShot,
@@ -1137,6 +1159,31 @@ function ShotLifecycleCard({
         {/* Triage actions */}
         {canEdit && (
           <div className="flex items-center gap-1 flex-wrap pt-1">
+            {/* Edit pins — opens the Pin Editor against the AI preview render
+                when one exists for this shot (the Editor falls back to the raw
+                shot path otherwise). World-anchored pins persist across every
+                future render of every shot in this shoot, so pre-placing
+                during the curate phase is meaningful work. */}
+            {projectId && shootId && shot?.id && (
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="h-6 text-[10px] px-1.5"
+                title="Edit pins on this shot — your changes apply to every future render in this shoot."
+              >
+                <Link
+                  to={createPageUrl(
+                    `DronePinEditor?project=${projectId}&shoot=${shootId}&shot=${shot.id}${
+                      previewRenderId ? `&render=${previewRenderId}` : ""
+                    }`,
+                  )}
+                >
+                  <Pencil className="h-2.5 w-2.5 mr-1" />
+                  Edit pins
+                </Link>
+              </Button>
+            )}
             {!isAccepted ? (
               <>
                 <Button
