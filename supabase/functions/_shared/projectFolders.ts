@@ -223,15 +223,19 @@ export async function createProjectFolders(
     .order('folder_kind');
   if (readErr) throw readErr;
 
-  // 5. Audit.
-  await auditEvent({
-    projectId,
-    folderKind: 'audit',
-    eventType: 'folders_created',
-    actorType: opts?.actorType || 'system',
-    actorId: opts?.actorId,
-    metadata: { root_path: rootPath, folder_count: ALL_FOLDER_KINDS.length },
-  });
+  // 5. Audit — only on fresh provisioning. A retry (where dropbox_root_path
+  // was already set on entry) would otherwise emit a duplicate folders_created
+  // event despite the rest of the function being idempotent.
+  if (!proj.dropbox_root_path) {
+    await auditEvent({
+      projectId,
+      folderKind: 'audit',
+      eventType: 'folders_created',
+      actorType: opts?.actorType || 'system',
+      actorId: opts?.actorId,
+      metadata: { root_path: rootPath, folder_count: ALL_FOLDER_KINDS.length },
+    });
+  }
 
   return { rootPath, folders: (folders || []) as ProjectFolder[] };
 }
