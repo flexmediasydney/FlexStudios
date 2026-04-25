@@ -96,158 +96,165 @@ def run_sfm_for_shoot(
     )
 
     t0 = time.time()
+    # NOTE: Modal containers reuse hot disks across invocations, so we MUST
+    # clean up `work` in a finally block to keep disk usage bounded.
     work = Path(tempfile.mkdtemp(prefix="sfm_"))
-    img_dir = work / "images"
-    img_dir.mkdir()
-    sparse_dir = work / "sparse"
-    sparse_dir.mkdir()
-    db_path = work / "database.db"
+    try:
+        img_dir = work / "images"
+        img_dir.mkdir()
+        sparse_dir = work / "sparse"
+        sparse_dir.mkdir()
+        db_path = work / "database.db"
 
-    # ── 1. Materialise images locally (downscale + EXIF copy) ───────
-    print(f"[sfm] preparing {len(image_urls)} images at width={target_width}")
-    fetched_names: List[str] = []
-    for entry in image_urls:
-        name = entry["name"]
-        dst = img_dir / name
-        raw_bytes = _fetch_bytes(entry)
-        # Decode + downscale.
-        arr = np.frombuffer(raw_bytes, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            print(f"[sfm]   skip (decode failed): {name}")
-            continue
-        h, w = img.shape[:2]
-        if w > target_width:
-            scale = target_width / w
-            img = cv2.resize(img, (target_width, int(h * scale)), interpolation=cv2.INTER_AREA)
-        cv2.imwrite(str(dst), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        # ── 1. Materialise images locally (downscale + EXIF copy) ───────
+        print(f"[sfm] preparing {len(image_urls)} images at width={target_width}")
+        fetched_names: List[str] = []
+        for entry in image_urls:
+            name = entry["name"]
+            dst = img_dir / name
+            raw_bytes = _fetch_bytes(entry)
+            # Decode + downscale.
+            arr = np.frombuffer(raw_bytes, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None:
+                print(f"[sfm]   skip (decode failed): {name}")
+                continue
+            h, w = img.shape[:2]
+            if w > target_width:
+                scale = target_width / w
+                img = cv2.resize(img, (target_width, int(h * scale)), interpolation=cv2.INTER_AREA)
+            cv2.imwrite(str(dst), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
 
-        # Persist EXIF GPS so pycolmap & exiftool downstream both see it.
-        # Strategy: write the original bytes to a sidecar then copy tags.
-        if not exif_metadata or name not in exif_metadata:
-            tmp_orig = dst.with_suffix(".orig.jpg")
-            tmp_orig.write_bytes(raw_bytes)
-            subprocess.run(
-                ["exiftool", "-tagsFromFile", str(tmp_orig),
-                 "-overwrite_original", str(dst)],
-                check=False, capture_output=True,
+            # Persist EXIF GPS so pycolmap & exiftool downstream both see it.
+            # Strategy: write the original bytes to a sidecar then copy tags.
+            if not exif_metadata or name not in exif_metadata:
+                tmp_orig = dst.with_suffix(".orig.jpg")
+                tmp_orig.write_bytes(raw_bytes)
+                subprocess.run(
+                    ["exiftool", "-tagsFromFile", str(tmp_orig),
+                     "-overwrite_original", str(dst)],
+                    check=False, capture_output=True,
+                )
+                tmp_orig.unlink(missing_ok=True)
+
+            fetched_names.append(name)
+
+        if len(fetched_names) < 3:
+            raise RuntimeError(
+                f"only fetched {len(fetched_names)} usable images; need ≥3 for SfM"
             )
-            tmp_orig.unlink(missing_ok=True)
 
-        fetched_names.append(name)
+        t_fetch = time.time() - t0
 
-    if len(fetched_names) < 3:
-        raise RuntimeError(
-            f"only fetched {len(fetched_names)} usable images; need ≥3 for SfM"
+        # ── 2. SIFT feature extraction ─────────────────────────────────
+        print(f"[sfm] extracting SIFT features (max_features={max_features})")
+        extraction_opts = pycolmap.FeatureExtractionOptions()
+        extraction_opts.max_image_size = target_width
+        extraction_opts.sift.max_num_features = max_features
+        pycolmap.extract_features(
+            database_path=str(db_path),
+            image_path=str(img_dir),
+            camera_mode=pycolmap.CameraMode.SINGLE,
+            camera_model="SIMPLE_RADIAL",
+            extraction_options=extraction_opts,
         )
 
-    t_fetch = time.time() - t0
+        # ── 3. Exhaustive matching ─────────────────────────────────────
+        print("[sfm] exhaustive matching")
+        pycolmap.match_exhaustive(database_path=str(db_path))
 
-    # ── 2. SIFT feature extraction ─────────────────────────────────
-    print(f"[sfm] extracting SIFT features (max_features={max_features})")
-    extraction_opts = pycolmap.FeatureExtractionOptions()
-    extraction_opts.max_image_size = target_width
-    extraction_opts.sift.max_num_features = max_features
-    pycolmap.extract_features(
-        database_path=str(db_path),
-        image_path=str(img_dir),
-        camera_mode=pycolmap.CameraMode.SINGLE,
-        camera_model="SIMPLE_RADIAL",
-        extraction_options=extraction_opts,
-    )
+        # ── 4. Incremental reconstruction ──────────────────────────────
+        print("[sfm] incremental mapping")
+        maps = pycolmap.incremental_mapping(
+            database_path=str(db_path),
+            image_path=str(img_dir),
+            output_path=str(sparse_dir),
+        )
+        if not maps:
+            raise RuntimeError("incremental_mapping produced no reconstructions")
+        largest_key = max(maps.keys(), key=lambda k: maps[k].num_reg_images())
+        recon = maps[largest_key]
+        n_reg = recon.num_reg_images()
+        n_pts = len(recon.points3D)
+        print(f"[sfm] reconstruction: {n_reg}/{len(fetched_names)} images, {n_pts} 3D points")
 
-    # ── 3. Exhaustive matching ─────────────────────────────────────
-    print("[sfm] exhaustive matching")
-    pycolmap.match_exhaustive(database_path=str(db_path))
+        t_sfm = time.time() - t0 - t_fetch
 
-    # ── 4. Incremental reconstruction ──────────────────────────────
-    print("[sfm] incremental mapping")
-    maps = pycolmap.incremental_mapping(
-        database_path=str(db_path),
-        image_path=str(img_dir),
-        output_path=str(sparse_dir),
-    )
-    if not maps:
-        raise RuntimeError("incremental_mapping produced no reconstructions")
-    largest_key = max(maps.keys(), key=lambda k: maps[k].num_reg_images())
-    recon = maps[largest_key]
-    n_reg = recon.num_reg_images()
-    n_pts = len(recon.points3D)
-    print(f"[sfm] reconstruction: {n_reg}/{len(fetched_names)} images, {n_pts} 3D points")
+        # ── 5. Pull SfM camera centres + GPS, fit similarity, compute poses ─
+        poses = poses_from_reconstruction(recon)
+        gps = _gather_gps(img_dir, list(poses.keys()), exif_metadata or {})
+        if len(gps) < 3:
+            raise RuntimeError(
+                f"only {len(gps)} GPS-tagged registered images — need ≥3 for alignment"
+            )
 
-    t_sfm = time.time() - t0 - t_fetch
+        proj = WorldToPixelProjector(recon, poses, gps)
 
-    # ── 5. Pull SfM camera centres + GPS, fit similarity, compute poses ─
-    poses = poses_from_reconstruction(recon)
-    gps = _gather_gps(img_dir, list(poses.keys()), exif_metadata or {})
-    if len(gps) < 3:
-        raise RuntimeError(
-            f"only {len(gps)} GPS-tagged registered images — need ≥3 for alignment"
+        # Per-image WGS84 camera positions: convert SfM → ENU → lat/lon/alt.
+        cameras_out: List[Dict[str, Any]] = []
+        for name, pose in poses.items():
+            enu = proj.sfm_to_enu(pose.world_xyz)
+            lat, lon, alt = proj.enu_ref.from_enu(enu)
+            cameras_out.append({
+                "name": name,
+                "image_id": int(pose.image_id),
+                "camera_id": int(pose.camera_id),
+                "world_xyz_sfm": pose.world_xyz.tolist(),
+                "enu_xyz_m": enu.tolist(),
+                "wgs84": {"lat": lat, "lon": lon, "alt": alt},
+                "rotation_world_to_cam": pose.R.tolist(),  # row-major 3x3
+                "translation_world_to_cam": pose.t.tolist(),
+                "residual_m": proj.per_image_residuals().get(name),
+            })
+
+        residual_summary = proj.residual_summary()
+
+        # Camera intrinsics (single shared camera under CameraMode.SINGLE).
+        intrinsics_out: List[Dict[str, Any]] = []
+        for cam_id, cam in recon.cameras.items():
+            intrinsics_out.append({
+                "camera_id": int(cam_id),
+                "model": cam.model_name if hasattr(cam, "model_name") else str(cam.model),
+                "width": int(cam.width),
+                "height": int(cam.height),
+                "params": list(map(float, cam.params)),
+            })
+
+        enu_ref = proj.enu_ref
+        elapsed = time.time() - t0
+        print(
+            f"[sfm] done in {elapsed:.1f}s "
+            f"({t_fetch:.1f}s fetch + {t_sfm:.1f}s sfm + {elapsed - t_fetch - t_sfm:.1f}s align)"
         )
 
-    proj = WorldToPixelProjector(recon, poses, gps)
-
-    # Per-image WGS84 camera positions: convert SfM → ENU → lat/lon/alt.
-    cameras_out: List[Dict[str, Any]] = []
-    for name, pose in poses.items():
-        enu = proj.sfm_to_enu(pose.world_xyz)
-        lat, lon, alt = proj.enu_ref.from_enu(enu)
-        cameras_out.append({
-            "name": name,
-            "image_id": int(pose.image_id),
-            "camera_id": int(pose.camera_id),
-            "world_xyz_sfm": pose.world_xyz.tolist(),
-            "enu_xyz_m": enu.tolist(),
-            "wgs84": {"lat": lat, "lon": lon, "alt": alt},
-            "rotation_world_to_cam": pose.R.tolist(),  # row-major 3x3
-            "translation_world_to_cam": pose.t.tolist(),
-            "residual_m": proj.per_image_residuals().get(name),
-        })
-
-    residual_summary = proj.residual_summary()
-
-    # Camera intrinsics (single shared camera under CameraMode.SINGLE).
-    intrinsics_out: List[Dict[str, Any]] = []
-    for cam_id, cam in recon.cameras.items():
-        intrinsics_out.append({
-            "camera_id": int(cam_id),
-            "model": cam.model_name if hasattr(cam, "model_name") else str(cam.model),
-            "width": int(cam.width),
-            "height": int(cam.height),
-            "params": list(map(float, cam.params)),
-        })
-
-    enu_ref = proj.enu_ref
-    elapsed = time.time() - t0
-    print(
-        f"[sfm] done in {elapsed:.1f}s "
-        f"({t_fetch:.1f}s fetch + {t_sfm:.1f}s sfm + {elapsed - t_fetch - t_sfm:.1f}s align)"
-    )
-
-    return {
-        "schema_version": 1,
-        "ok": True,
-        "n_input_images": len(image_urls),
-        "n_fetched_images": len(fetched_names),
-        "n_registered_images": int(n_reg),
-        "n_points3d": int(n_pts),
-        "alignment_reference_wgs84": {
-            "lat": enu_ref.lat, "lon": enu_ref.lon, "alt": enu_ref.alt,
-        },
-        "alignment_scale": float(proj.scale),
-        "alignment_residuals_m": residual_summary,
-        "cameras": cameras_out,
-        "intrinsics": intrinsics_out,
-        "timing_s": {
-            "fetch": t_fetch,
-            "sfm": t_sfm,
-            "total": elapsed,
-        },
-        # Note: ortho path intentionally omitted for now — Stream B's render
-        # worker is responsible for ortho generation. We provide the sparse
-        # cloud + per-image poses, which is everything downstream needs.
-        "ortho_path": None,
-    }
+        return {
+            "schema_version": 1,
+            "ok": True,
+            "n_input_images": len(image_urls),
+            "n_fetched_images": len(fetched_names),
+            "n_registered_images": int(n_reg),
+            "n_points3d": int(n_pts),
+            "alignment_reference_wgs84": {
+                "lat": enu_ref.lat, "lon": enu_ref.lon, "alt": enu_ref.alt,
+            },
+            "alignment_scale": float(proj.scale),
+            "alignment_residuals_m": residual_summary,
+            "cameras": cameras_out,
+            "intrinsics": intrinsics_out,
+            "timing_s": {
+                "fetch": t_fetch,
+                "sfm": t_sfm,
+                "total": elapsed,
+            },
+            # Note: ortho path intentionally omitted for now — Stream B's render
+            # worker is responsible for ortho generation. We provide the sparse
+            # cloud + per-image poses, which is everything downstream needs.
+            "ortho_path": None,
+        }
+    finally:
+        # Modal containers reuse hot disks across invocations; without this
+        # the per-shoot temp dirs accumulate and eventually fill the disk.
+        shutil.rmtree(work, ignore_errors=True)
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -533,12 +540,18 @@ def sfm_http(payload: Dict[str, Any]):
     residual_median = residuals.get("median_m")
     residual_max = residuals.get("max_m")
 
+    # Build a single bulk-upsert body for drone_shots — PostgREST treats a
+    # POST with `Prefer: resolution=merge-duplicates` on a primary-key
+    # collision as an UPDATE, so we replace what was previously N+1 PATCHes
+    # (one per registered image) with a single round-trip.
     cameras = result.get("cameras", [])
-    pose_failures = 0
+    bulk_rows: List[Dict[str, Any]] = []
+    skipped_unknown = 0
     for cam in cameras:
         name = cam.get("name")
         sid = filename_to_shot_id.get(name)
         if not sid:
+            skipped_unknown += 1
             continue
         pose_payload = {
             "image_id": cam.get("image_id"),
@@ -550,19 +563,35 @@ def sfm_http(payload: Dict[str, Any]):
             "translation_world_to_cam": cam.get("translation_world_to_cam"),
             "residual_m": cam.get("residual_m"),
         }
+        bulk_rows.append({
+            "id": sid,
+            "sfm_pose": pose_payload,
+            "registered_in_sfm": True,
+        })
+
+    pose_failures = 0
+    if bulk_rows:
         try:
-            with httpx.Client(timeout=30.0) as client:
-                rr = client.patch(
-                    f"{supabase_url}/rest/v1/drone_shots?id=eq.{sid}",
-                    headers=rest_headers,
-                    json={"sfm_pose": pose_payload, "registered_in_sfm": True},
+            with httpx.Client(timeout=120.0) as client:
+                rr = client.post(
+                    f"{supabase_url}/rest/v1/drone_shots",
+                    headers={
+                        **rest_headers,
+                        "Prefer": "resolution=merge-duplicates,return=minimal",
+                    },
+                    json=bulk_rows,
                 )
                 if rr.status_code >= 300:
-                    pose_failures += 1
-                    print(f"[sfm_http] sfm_pose update failed for {name}: {rr.status_code} {rr.text[:200]}")
+                    pose_failures = len(bulk_rows)
+                    print(
+                        f"[sfm_http] bulk sfm_pose upsert failed "
+                        f"({len(bulk_rows)} rows): {rr.status_code} {rr.text[:300]}"
+                    )
         except Exception as e:
-            pose_failures += 1
-            print(f"[sfm_http] sfm_pose update exception for {name}: {e}")
+            pose_failures = len(bulk_rows)
+            print(f"[sfm_http] bulk sfm_pose upsert exception: {e}")
+    if skipped_unknown:
+        print(f"[sfm_http] skipped {skipped_unknown} cameras with no matching shot_id")
 
     # Mirror residual median to drone_shoots (UI surfaces it on shoot detail).
     try:
@@ -634,150 +663,163 @@ def _run_sfm_pipeline_inline(
     )
 
     t0 = time.time()
+    # NOTE: see run_sfm_for_shoot — same hot-disk reuse caveat. Always
+    # rmtree the work dir in finally to avoid filling the container disk.
     work = Path(tempfile.mkdtemp(prefix="sfm_"))
-    img_dir = work / "images"
-    img_dir.mkdir()
-    sparse_dir = work / "sparse"
-    sparse_dir.mkdir()
-    db_path = work / "database.db"
+    try:
+        img_dir = work / "images"
+        img_dir.mkdir()
+        sparse_dir = work / "sparse"
+        sparse_dir.mkdir()
+        db_path = work / "database.db"
 
-    print(f"[sfm] preparing {len(image_urls)} images at width={target_width}")
-    fetched_names: List[str] = []
-    for entry in image_urls:
-        name = entry["name"]
-        dst = img_dir / name
-        raw_bytes = _fetch_bytes(entry)
-        arr = np.frombuffer(raw_bytes, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is None:
-            print(f"[sfm]   skip (decode failed): {name}")
-            continue
-        h, w = img.shape[:2]
-        if w > target_width:
-            scale = target_width / w
-            img = cv2.resize(img, (target_width, int(h * scale)), interpolation=cv2.INTER_AREA)
-        cv2.imwrite(str(dst), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        print(f"[sfm] preparing {len(image_urls)} images at width={target_width}")
+        fetched_names: List[str] = []
+        for entry in image_urls:
+            name = entry["name"]
+            dst = img_dir / name
+            raw_bytes = _fetch_bytes(entry)
+            arr = np.frombuffer(raw_bytes, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is None:
+                print(f"[sfm]   skip (decode failed): {name}")
+                continue
+            h, w = img.shape[:2]
+            if w > target_width:
+                scale = target_width / w
+                img = cv2.resize(img, (target_width, int(h * scale)), interpolation=cv2.INTER_AREA)
+            cv2.imwrite(str(dst), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
 
-        if not exif_metadata or name not in exif_metadata:
-            tmp_orig = dst.with_suffix(".orig.jpg")
-            tmp_orig.write_bytes(raw_bytes)
-            subprocess.run(
-                ["exiftool", "-tagsFromFile", str(tmp_orig),
-                 "-overwrite_original", str(dst)],
-                check=False, capture_output=True,
+            if not exif_metadata or name not in exif_metadata:
+                tmp_orig = dst.with_suffix(".orig.jpg")
+                tmp_orig.write_bytes(raw_bytes)
+                subprocess.run(
+                    ["exiftool", "-tagsFromFile", str(tmp_orig),
+                     "-overwrite_original", str(dst)],
+                    check=False, capture_output=True,
+                )
+                tmp_orig.unlink(missing_ok=True)
+
+            fetched_names.append(name)
+
+        if len(fetched_names) < 3:
+            raise RuntimeError(
+                f"only fetched {len(fetched_names)} usable images; need ≥3 for SfM"
             )
-            tmp_orig.unlink(missing_ok=True)
 
-        fetched_names.append(name)
+        t_fetch = time.time() - t0
 
-    if len(fetched_names) < 3:
-        raise RuntimeError(
-            f"only fetched {len(fetched_names)} usable images; need ≥3 for SfM"
+        print(f"[sfm] extracting SIFT features (max_features={max_features})")
+        extraction_opts = pycolmap.FeatureExtractionOptions()
+        extraction_opts.max_image_size = target_width
+        extraction_opts.sift.max_num_features = max_features
+        pycolmap.extract_features(
+            database_path=str(db_path),
+            image_path=str(img_dir),
+            camera_mode=pycolmap.CameraMode.SINGLE,
+            camera_model="SIMPLE_RADIAL",
+            extraction_options=extraction_opts,
         )
 
-    t_fetch = time.time() - t0
+        print("[sfm] exhaustive matching")
+        pycolmap.match_exhaustive(database_path=str(db_path))
 
-    print(f"[sfm] extracting SIFT features (max_features={max_features})")
-    extraction_opts = pycolmap.FeatureExtractionOptions()
-    extraction_opts.max_image_size = target_width
-    extraction_opts.sift.max_num_features = max_features
-    pycolmap.extract_features(
-        database_path=str(db_path),
-        image_path=str(img_dir),
-        camera_mode=pycolmap.CameraMode.SINGLE,
-        camera_model="SIMPLE_RADIAL",
-        extraction_options=extraction_opts,
-    )
+        print("[sfm] incremental mapping")
+        maps = pycolmap.incremental_mapping(
+            database_path=str(db_path),
+            image_path=str(img_dir),
+            output_path=str(sparse_dir),
+        )
+        if not maps:
+            raise RuntimeError("incremental_mapping produced no reconstructions")
+        largest_key = max(maps.keys(), key=lambda k: maps[k].num_reg_images())
+        recon = maps[largest_key]
+        n_reg = recon.num_reg_images()
+        n_pts = len(recon.points3D)
+        print(f"[sfm] reconstruction: {n_reg}/{len(fetched_names)} images, {n_pts} 3D points")
 
-    print("[sfm] exhaustive matching")
-    pycolmap.match_exhaustive(database_path=str(db_path))
+        t_sfm = time.time() - t0 - t_fetch
 
-    print("[sfm] incremental mapping")
-    maps = pycolmap.incremental_mapping(
-        database_path=str(db_path),
-        image_path=str(img_dir),
-        output_path=str(sparse_dir),
-    )
-    if not maps:
-        raise RuntimeError("incremental_mapping produced no reconstructions")
-    largest_key = max(maps.keys(), key=lambda k: maps[k].num_reg_images())
-    recon = maps[largest_key]
-    n_reg = recon.num_reg_images()
-    n_pts = len(recon.points3D)
-    print(f"[sfm] reconstruction: {n_reg}/{len(fetched_names)} images, {n_pts} 3D points")
+        poses = poses_from_reconstruction(recon)
+        gps = _gather_gps(img_dir, list(poses.keys()), exif_metadata or {})
+        if len(gps) < 3:
+            raise RuntimeError(
+                f"only {len(gps)} GPS-tagged registered images — need ≥3 for alignment"
+            )
 
-    t_sfm = time.time() - t0 - t_fetch
+        proj = WorldToPixelProjector(recon, poses, gps)
 
-    poses = poses_from_reconstruction(recon)
-    gps = _gather_gps(img_dir, list(poses.keys()), exif_metadata or {})
-    if len(gps) < 3:
-        raise RuntimeError(
-            f"only {len(gps)} GPS-tagged registered images — need ≥3 for alignment"
+        cameras_out: List[Dict[str, Any]] = []
+        for name, pose in poses.items():
+            enu = proj.sfm_to_enu(pose.world_xyz)
+            lat, lon, alt = proj.enu_ref.from_enu(enu)
+            cameras_out.append({
+                "name": name,
+                "image_id": int(pose.image_id),
+                "camera_id": int(pose.camera_id),
+                "world_xyz_sfm": pose.world_xyz.tolist(),
+                "enu_xyz_m": enu.tolist(),
+                "wgs84": {"lat": lat, "lon": lon, "alt": alt},
+                "rotation_world_to_cam": pose.R.tolist(),
+                "translation_world_to_cam": pose.t.tolist(),
+                "residual_m": proj.per_image_residuals().get(name),
+            })
+
+        residual_summary = proj.residual_summary()
+
+        intrinsics_out: List[Dict[str, Any]] = []
+        for cam_id, cam in recon.cameras.items():
+            intrinsics_out.append({
+                "camera_id": int(cam_id),
+                "model": cam.model_name if hasattr(cam, "model_name") else str(cam.model),
+                "width": int(cam.width),
+                "height": int(cam.height),
+                "params": list(map(float, cam.params)),
+            })
+
+        enu_ref = proj.enu_ref
+        elapsed = time.time() - t0
+        print(
+            f"[sfm] done in {elapsed:.1f}s "
+            f"({t_fetch:.1f}s fetch + {t_sfm:.1f}s sfm + {elapsed - t_fetch - t_sfm:.1f}s align)"
         )
 
-    proj = WorldToPixelProjector(recon, poses, gps)
-
-    cameras_out: List[Dict[str, Any]] = []
-    for name, pose in poses.items():
-        enu = proj.sfm_to_enu(pose.world_xyz)
-        lat, lon, alt = proj.enu_ref.from_enu(enu)
-        cameras_out.append({
-            "name": name,
-            "image_id": int(pose.image_id),
-            "camera_id": int(pose.camera_id),
-            "world_xyz_sfm": pose.world_xyz.tolist(),
-            "enu_xyz_m": enu.tolist(),
-            "wgs84": {"lat": lat, "lon": lon, "alt": alt},
-            "rotation_world_to_cam": pose.R.tolist(),
-            "translation_world_to_cam": pose.t.tolist(),
-            "residual_m": proj.per_image_residuals().get(name),
-        })
-
-    residual_summary = proj.residual_summary()
-
-    intrinsics_out: List[Dict[str, Any]] = []
-    for cam_id, cam in recon.cameras.items():
-        intrinsics_out.append({
-            "camera_id": int(cam_id),
-            "model": cam.model_name if hasattr(cam, "model_name") else str(cam.model),
-            "width": int(cam.width),
-            "height": int(cam.height),
-            "params": list(map(float, cam.params)),
-        })
-
-    enu_ref = proj.enu_ref
-    elapsed = time.time() - t0
-    print(
-        f"[sfm] done in {elapsed:.1f}s "
-        f"({t_fetch:.1f}s fetch + {t_sfm:.1f}s sfm + {elapsed - t_fetch - t_sfm:.1f}s align)"
-    )
-
-    return {
-        "schema_version": 1,
-        "ok": True,
-        "n_input_images": len(image_urls),
-        "n_fetched_images": len(fetched_names),
-        "n_registered_images": int(n_reg),
-        "n_points3d": int(n_pts),
-        "alignment_reference_wgs84": {
-            "lat": enu_ref.lat, "lon": enu_ref.lon, "alt": enu_ref.alt,
-        },
-        "alignment_scale": float(proj.scale),
-        "alignment_residuals_m": residual_summary,
-        "cameras": cameras_out,
-        "intrinsics": intrinsics_out,
-        "timing_s": {"fetch": t_fetch, "sfm": t_sfm, "total": elapsed},
-        "ortho_path": None,
-    }
+        return {
+            "schema_version": 1,
+            "ok": True,
+            "n_input_images": len(image_urls),
+            "n_fetched_images": len(fetched_names),
+            "n_registered_images": int(n_reg),
+            "n_points3d": int(n_pts),
+            "alignment_reference_wgs84": {
+                "lat": enu_ref.lat, "lon": enu_ref.lon, "alt": enu_ref.alt,
+            },
+            "alignment_scale": float(proj.scale),
+            "alignment_residuals_m": residual_summary,
+            "cameras": cameras_out,
+            "intrinsics": intrinsics_out,
+            "timing_s": {"fetch": t_fetch, "sfm": t_sfm, "total": elapsed},
+            "ortho_path": None,
+        }
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 # ──────────────────────────────────────────────────────────────────
 # Local entrypoint: `modal run modal/drone_sfm/sfm_worker.py::test_aukerman`
 # Streams the local fixture up to the cloud and asserts on residuals.
 # ──────────────────────────────────────────────────────────────────
+# Default fixture path for Joseph's local dev box. Other contributors should
+# set SFM_FIXTURE_DIR to their own checkout location.
+_DEFAULT_FIXTURE_DIR = os.environ.get(
+    "SFM_FIXTURE_DIR",
+    "/Users/josephsaad/flexmedia-drone-spike/odm_datasets/odm_data_aukerman-master/images",
+)
+
+
 @app.local_entrypoint()
 def test_aukerman(
-    fixture_dir: str = "/Users/josephsaad/flexmedia-drone-spike/odm_datasets/odm_data_aukerman-master/images",
+    fixture_dir: str = _DEFAULT_FIXTURE_DIR,
     every_nth: int = 2,
     max_residual_median_m: float = 1.5,
     max_residual_max_m: float = 5.0,
@@ -787,10 +829,16 @@ def test_aukerman(
 
     Defaults match the spike: every 2nd image (39/77), median residual must
     be <1.5m, registration ≥95% of submitted images.
+
+    Override the fixture path via the SFM_FIXTURE_DIR env var or the
+    --fixture-dir CLI flag (e.g. `modal run … --fixture-dir /path/to/images`).
     """
     fixture = Path(fixture_dir).expanduser()
     if not fixture.exists():
-        raise SystemExit(f"fixture dir not found: {fixture}")
+        raise SystemExit(
+            f"fixture dir not found: {fixture}\n"
+            f"  Set SFM_FIXTURE_DIR=/path/to/images or pass --fixture-dir."
+        )
 
     paths = sorted(fixture.glob("*.JPG"))[::every_nth]
     if not paths:

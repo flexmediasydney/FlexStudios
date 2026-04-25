@@ -32,6 +32,9 @@ const MAX_ATTEMPTS = 3;
 
 // ─── Token management ─────────────────────────────────────────────────────────
 
+// Module-scoped — assumes single-tenant Dropbox (FlexStudios is single-tenant).
+// If FlexStudios ever multi-tenants, key by tenant_id (Map<tenantId, token>).
+// (#56 audit — kept as-is intentionally.)
 let cachedAccessToken: string | null = null;
 let refreshPromise: Promise<string> | null = null;
 
@@ -44,10 +47,21 @@ export async function getDropboxAccessToken(opts?: { forceRefresh?: boolean }): 
   return refreshDropboxAccessToken();
 }
 
+/**
+ * Window during which a freshly-resolved refresh promise is still shared with
+ * concurrent callers. Picked to be long enough that requests arriving within
+ * the same "burst" share the in-flight refresh, but short enough that a stale
+ * cached promise never blocks a future refresh attempt.
+ *
+ * (#57 audit fix.)
+ */
+const REFRESH_PROMISE_TTL_MS = 1000;
+
 async function refreshDropboxAccessToken(): Promise<string> {
   if (refreshPromise) return refreshPromise;
 
-  refreshPromise = (async () => {
+  // Kick off the refresh and assign immediately so concurrent callers see it.
+  const local = (async () => {
     const refreshToken = Deno.env.get('DROPBOX_REFRESH_TOKEN');
     const appKey = Deno.env.get('DROPBOX_APP_KEY');
     const appSecret = Deno.env.get('DROPBOX_APP_SECRET');
@@ -76,11 +90,27 @@ async function refreshDropboxAccessToken(): Promise<string> {
     return cachedAccessToken!;
   })();
 
-  try {
-    return await refreshPromise;
-  } finally {
-    refreshPromise = null;
-  }
+  refreshPromise = local;
+
+  // Schedule cleanup AFTER a short window so a second-but-quickly-arrived
+  // caller still finds and shares this in-flight promise. (#57 audit fix.)
+  // The previous `finally { refreshPromise = null; }` raced — by the time the
+  // first caller reached `finally`, a second caller blocked behind it would
+  // see `null` and kick off a duplicate refresh. We must NOT null the promise
+  // synchronously on completion. If the refresh fails, we still want to clear
+  // it so the next caller can retry — handled by attaching the timer
+  // unconditionally.
+  local
+    .catch(() => { /* swallow here; original caller awaits and re-throws */ })
+    .finally(() => {
+      setTimeout(() => {
+        // Only null if we're still pointing at THIS promise. A subsequent
+        // refresh (e.g. another forceRefresh) would have already reassigned.
+        if (refreshPromise === local) refreshPromise = null;
+      }, REFRESH_PROMISE_TTL_MS);
+    });
+
+  return local;
 }
 
 // ─── Low-level fetch helper ──────────────────────────────────────────────────
@@ -212,9 +242,15 @@ export async function dropboxContent(
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_CONTENT_TIMEOUT_MS;
 
   let token = await getDropboxAccessToken();
-  let attempt = 0;
+  let refreshed = false;
+  let lastErr = '';
 
-  while (true) {
+  // (#58 audit fix) Bounded loop with 5xx exponential backoff matching
+  // dropboxApi. Previously a 5xx on the content endpoint would throw on the
+  // first attempt — uploads/downloads of binary blobs would lose to transient
+  // upstream blips. We honour MAX_ATTEMPTS overall, with one extra slot
+  // reserved for the post-refresh retry on 401.
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${token}`,
       'Dropbox-API-Arg': JSON.stringify(args),
@@ -232,15 +268,36 @@ export async function dropboxContent(
 
     // Peek at body for token-expiry detection without consuming if we'll retry.
     const txt = await res.text().catch(() => '');
+    lastErr = `${res.status}: ${txt.slice(0, 300)}`;
 
-    if (attempt === 0 && isExpiredTokenError(res.status, txt)) {
+    if (!refreshed && isExpiredTokenError(res.status, txt)) {
       token = await getDropboxAccessToken({ forceRefresh: true });
-      attempt++;
+      refreshed = true;
+      // Don't count this as one of the retry attempts — back off the loop
+      // counter so we still get MAX_ATTEMPTS retries on the new token.
+      attempt--;
+      continue;
+    }
+
+    if (res.status === 429 && attempt < MAX_ATTEMPTS - 1) {
+      const retryAfter = parseInt(res.headers.get('Retry-After') || '2', 10);
+      const delayMs = Math.min(Math.max(retryAfter, 1), 5) * 1000;
+      console.warn(`[dropbox-content] 429 on ${path}, retrying after ${delayMs}ms (${attempt + 1}/${MAX_ATTEMPTS})`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      continue;
+    }
+
+    if (res.status >= 500 && res.status < 600 && attempt < MAX_ATTEMPTS - 1) {
+      const delayMs = 500 * Math.pow(2, attempt);
+      console.warn(`[dropbox-content] ${res.status} on ${path}, retrying after ${delayMs}ms (${attempt + 1}/${MAX_ATTEMPTS})`);
+      await new Promise((r) => setTimeout(r, delayMs));
       continue;
     }
 
     throw new Error(`Dropbox ${path} ${res.status}: ${txt.slice(0, 300)}`);
   }
+
+  throw new Error(`Dropbox ${path} exhausted ${MAX_ATTEMPTS} attempts: ${lastErr}`);
 }
 
 // ─── High-level folder operations (used by projectFolders.ts) ────────────────
@@ -416,6 +473,13 @@ export async function getOrCreateSharedLink(path: string): Promise<string> {
   // Omit `settings` entirely — explicit `requested_visibility: team_only` returns
   // settings_error/not_authorized on apps without team-link scope. Default
   // visibility is whatever the workspace policy allows.
+  //
+  // (#59 audit — design decision deferred.) The default link visibility
+  // depends on the team's Dropbox sharing policy: it can be public-with-link
+  // (anyone with URL), team-only, or password-protected. If FlexStudios ever
+  // tightens the policy or wants enforced team-only links, request the
+  // `team_collaboration.write` / sharing-team scope on the app and pass
+  // `settings.requested_visibility = "team_only"`. Joseph to audit later.
   const created = await dropboxApi<{ url: string }>('/sharing/create_shared_link_with_settings', {
     path,
   });

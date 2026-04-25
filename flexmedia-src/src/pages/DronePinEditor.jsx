@@ -202,11 +202,21 @@ export default function DronePinEditor() {
     return { lat, lng };
   }, [projectQ.data]);
 
+  // #85: Pose availability is per-shot, not per-shoot. The SfM worker never
+  // populates `sparse_bin_dropbox_path` on drone_sfm_runs, so the previous
+  // shoot-level check always returned false and the editor permanently fell
+  // back to the GPS prior. Check at the active shot level instead: the shot
+  // must be registered in SfM AND have a stored sfm_pose payload.
   const poseAvailable = useMemo(() => {
-    const sfm =
-      Array.isArray(sfmQ.data) && sfmQ.data.length > 0 ? sfmQ.data[0] : null;
-    return Boolean(sfm?.sparse_bin_dropbox_path);
-  }, [sfmQ.data]);
+    const activeShot = shots.find((s) => s.id === currentShotId);
+    if (!activeShot) return false;
+    return (
+      activeShot.registered_in_sfm === true &&
+      activeShot.sfm_pose != null &&
+      typeof activeShot.sfm_pose === "object" &&
+      Object.keys(activeShot.sfm_pose).length > 0
+    );
+  }, [shots, currentShotId]);
 
   // ── Loading / error states ──────────────────────────────────────────────
   if (!projectId || !shootId) {

@@ -375,15 +375,40 @@ function ShotDetailDialog({ shot, onClose }) {
               />
             </div>
 
-            {/* SfM pose */}
-            {shot.sfm_pose && Object.keys(shot.sfm_pose).length > 0 && (
-              <div>
-                <p className="text-xs font-semibold mb-1">SfM pose</p>
+            {/* SfM pose (#72): show stale/null status next to the heading so
+               operators know whether the rendered pose is from the current
+               SfM run or a stale one (e.g. after EXIF re-ingest). */}
+            <div>
+              <p className="text-xs font-semibold mb-1 flex items-center gap-1.5">
+                SfM pose
+                {shot.sfm_pose && Object.keys(shot.sfm_pose).length > 0 ? (
+                  shot.registered_in_sfm ? null : (
+                    <span
+                      className="text-[9px] px-1 py-0.5 rounded font-medium bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                      title="Pose was set by an earlier SfM run but the shot is not registered in the current run — likely stale (e.g. after EXIF re-ingest)."
+                    >
+                      stale
+                    </span>
+                  )
+                ) : (
+                  <span
+                    className="text-[9px] px-1 py-0.5 rounded font-medium bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                    title="No SfM pose recorded for this shot."
+                  >
+                    ?
+                  </span>
+                )}
+              </p>
+              {shot.sfm_pose && Object.keys(shot.sfm_pose).length > 0 ? (
                 <pre className="text-[10px] bg-muted/50 rounded p-2 overflow-x-auto max-h-40">
                   {JSON.stringify(shot.sfm_pose, null, 2)}
                 </pre>
-              </div>
-            )}
+              ) : (
+                <p className="text-xs text-muted-foreground italic">
+                  No SfM pose stored.
+                </p>
+              )}
+            </div>
 
             {/* Full EXIF */}
             <div>

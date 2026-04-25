@@ -132,6 +132,28 @@ function polygonPerimeterM(ring: LatLng[]): number {
   return total;
 }
 
+/**
+ * Detect the Australian state/territory from a free-text address string.
+ *
+ * Looks for the canonical 2–3 letter state code preceding a 4-digit postcode
+ * (the `AU_ADDRESS_PATTERN` we already use in normaliseAddress). If no such
+ * pattern is found, returns null.
+ *
+ * Used by the cadastral handler to short-circuit non-NSW projects (#42 audit).
+ * The NSW DCDB layer has no data outside NSW; querying it for VIC/QLD/WA
+ * returns 404 and breaks downstream renders. We currently have no other
+ * states' endpoints wired so we just fail soft and let the render engine
+ * fall back to the no-boundary mode.
+ */
+function detectAustralianState(rawAddress: string): string | null {
+  if (!rawAddress) return null;
+  const m = String(rawAddress).match(/\b(NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\b\s*,?\s*\d{4}\b/i);
+  if (m) return m[1].toUpperCase();
+  // Looser fallback: state code anywhere as a standalone token.
+  const m2 = String(rawAddress).match(/\b(NSW|VIC|QLD|SA|WA|TAS|NT|ACT)\b/i);
+  return m2 ? m2[1].toUpperCase() : null;
+}
+
 /** Centroid (arithmetic mean of vertices — fine for nearly-convex small lots). */
 function polygonCentroid(ring: LatLng[]): LatLng {
   const sum = ring.reduce(
@@ -303,9 +325,23 @@ async function queryCadastreByPoint(
  * Fallback: query NSW Cadastre layer 9 by lotidstring LIKE filter, useful
  * when we have a parsed lot/plan label rather than a coord. Not currently
  * wired up but kept here for the future "operator pastes lot/DP" path.
+ *
+ * Security (#43 audit fix): the input is interpolated into a SQL-like WHERE
+ * clause for the ArcGIS REST endpoint. The previous `replace(/'/g, '')` is
+ * insufficient — comments, NULL bytes, multi-line breaks, etc. would all slip
+ * through. Now strict-allowlisted to `^[A-Z0-9/-]{1,40}$` (the format
+ * lotidstring actually takes, e.g. "14/2/DP1588"). Anything outside that is
+ * rejected outright. The function signature reflects the rejection by
+ * returning [] for invalid input.
  */
+const LOT_ID_STRING_PATTERN = /^[A-Z0-9/-]{1,40}$/;
+
 async function queryCadastreByLotIdString(lotIdString: string): Promise<GeoJsonFeature[]> {
-  const safe = lotIdString.replace(/'/g, '').toUpperCase();
+  const safe = String(lotIdString || '').toUpperCase().trim();
+  if (!LOT_ID_STRING_PATTERN.test(safe)) {
+    console.warn(`[${GENERATOR}] queryCadastreByLotIdString rejected unsafe input: '${safe.slice(0, 40)}'`);
+    return [];
+  }
   const where = `UPPER(lotidstring) LIKE '%${safe}%'`;
   const url = new URL(NSW_CADASTRE_QUERY_URL);
   url.searchParams.set('where', where);
@@ -390,6 +426,35 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const rawAddress = String(project.property_address ?? '').trim();
   const addressQuery = normaliseAddress(rawAddress) || `point:${propertyLat},${propertyLng}`;
 
+  // Short-circuit non-NSW projects (#42 audit fix). The NSW DCDB endpoint we
+  // call has no data outside NSW; querying it for VIC/QLD/WA returns 404 and
+  // breaks the render pipeline. Fail soft with an empty polygon so the render
+  // engine falls back to the no-boundary mode. Other states' cadastre
+  // endpoints are out of scope — wire those up in a future PR if needed.
+  const detectedState = detectAustralianState(rawAddress);
+  if (detectedState && detectedState !== 'NSW') {
+    console.log(`[${GENERATOR}] non-NSW project (state=${detectedState}) — returning empty polygon`);
+    return jsonResponse(
+      {
+        success: true,
+        cached: false,
+        polygon: [],
+        lot_label: null,
+        plan_label: null,
+        area_sqm: 0,
+        perimeter_m: 0,
+        source: 'unsupported_state',
+        detected_state: detectedState,
+        warning: `non-NSW boundary fetch not supported (detected state: ${detectedState}) — render will use no-boundary fallback`,
+        fetched_at: new Date().toISOString(),
+        expires_at: new Date().toISOString(),
+        address_query: addressQuery,
+      },
+      200,
+      req,
+    );
+  }
+
   // 2. Cache hit?
   if (!body.refresh) {
     const { data: cached } = await admin
@@ -458,11 +523,24 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse('NSW DCDB returned features without parseable polygons', 502, req);
   }
 
-  parsed.sort(
-    (a, b) =>
-      haversineMetres(propertyLat, propertyLng, a.centroid.lat, a.centroid.lng) -
-      haversineMetres(propertyLat, propertyLng, b.centroid.lat, b.centroid.lng),
-  );
+  // Pick by closest centroid to the property coord. For most projects there
+  // is exactly one matching lot. For stratum / multi-tier sites (e.g. high-rise
+  // apartments) several lot polygons may share the same centroid (each tier
+  // has its own row but the geometry overlaps), so the centroid distance is
+  // a tie. (#44 audit) When centroid distance is tied (within ~1m), prefer the
+  // lot with the lowest numeric `lot_label` — usually the ground-floor /
+  // primary-title row. If no parseable lot_label, first-wins.
+  parsed.sort((a, b) => {
+    const da = haversineMetres(propertyLat, propertyLng, a.centroid.lat, a.centroid.lng);
+    const db = haversineMetres(propertyLat, propertyLng, b.centroid.lat, b.centroid.lng);
+    if (Math.abs(da - db) > 1) return da - db;
+    // Centroid tie — try lot_label numerically (extract leading digits).
+    const la = Number((a.lot_label || '').match(/^\d+/)?.[0] ?? Number.POSITIVE_INFINITY);
+    const lb = Number((b.lot_label || '').match(/^\d+/)?.[0] ?? Number.POSITIVE_INFINITY);
+    if (la !== lb) return la - lb;
+    // Final tie — preserve original order (first-wins).
+    return 0;
+  });
   const chosen = parsed[0];
 
   const fetchedAt = new Date();

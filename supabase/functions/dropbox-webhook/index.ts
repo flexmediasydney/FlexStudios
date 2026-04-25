@@ -77,7 +77,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Defer processing — Dropbox needs a fast response ────────────────────
-  const work = processDropboxDelta(WATCH_PATH, 'webhook')
+  // forceEmitOnSeed: true so that if our cursor is null (first webhook ever
+  // OR sync_state was reset) and there are pre-existing JPGs in raw_drones,
+  // they still produce file_added events. Without this, files uploaded BEFORE
+  // a project's webhook starts watching would never trigger ingest.
+  // (#55 audit fix — B3 case.)
+  const work = processDropboxDelta(WATCH_PATH, 'webhook', { forceEmitOnSeed: true })
     .then(async (r) => {
       console.log(`[${GENERATOR}] processed: emitted=${r.emitted} skipped=${r.skipped} errors=${r.errors.length}`);
       // After the delta lands, scan project_folder_events for any raw_drones
@@ -159,9 +164,25 @@ async function computeHmacSha256Hex(message: string, secret: string): Promise<st
   return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Constant-time string comparison.
+ *
+ * (#53 audit fix) The previous version returned false early on length
+ * mismatch, which leaks the length of `b` (the secret-derived expected
+ * signature) via timing. For Dropbox HMAC-SHA256 signatures both inputs are
+ * always 64 hex chars so the leak is theoretical, but the attack surface is
+ * trivial to close: pad both inputs to the longer length with a sentinel char
+ * (NUL) and iterate the full length, XORing every byte. The mismatch in
+ * length is then implicitly captured by the XOR (the sentinel won't match
+ * the real char) without short-circuiting.
+ */
 function constantTimeEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const len = Math.max(a.length, b.length);
+  let result = a.length ^ b.length;
+  for (let i = 0; i < len; i++) {
+    const ca = i < a.length ? a.charCodeAt(i) : 0;
+    const cb = i < b.length ? b.charCodeAt(i) : 0;
+    result |= ca ^ cb;
+  }
   return result === 0;
 }

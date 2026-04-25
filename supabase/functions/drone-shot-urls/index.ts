@@ -99,38 +99,58 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     );
   }
 
-  // Mint a 4h temp link per shot. Dropbox's get_temporary_link is rate-limited
-  // (we've seen 30 req/s across the app's app key), so we serialise.
-  // For Carrington (1 shot) and typical nadir grids (10–100 shots) this is fine.
-  const out: Array<{
+  // Mint a 4h temp link per shot, in chunks of 5 in parallel. Dropbox's
+  // get_temporary_link is rate-limited (~30 req/s app-wide) but 5-way
+  // concurrency is well below that and turns 100×300ms serial → ~6s. (#36 audit)
+  type OutRow = {
     shot_id: string;
     filename: string;
     dropbox_path: string;
     url: string;
+    expires_at: string;
     gps_lat: number | null;
     gps_lon: number | null;
     relative_altitude: number | null;
-  }> = [];
+  };
+  const out: OutRow[] = [];
   const failed: Array<{ shot_id: string; filename: string; error: string }> = [];
+  const TEMP_LINK_TTL_MS = 4 * 60 * 60 * 1000; // Dropbox temp links expire after 4h
 
-  for (const r of rows) {
+  const URL_CONCURRENCY = 5;
+  const mintOne = async (r: ShotRow): Promise<OutRow | { __failed: true; error: string }> => {
     try {
       const linkResp = await dropboxApi<{ link: string; metadata: unknown }>(
         '/files/get_temporary_link',
         { path: r.dropbox_path },
       );
-      out.push({
+      return {
         shot_id: r.id,
         filename: r.filename,
         dropbox_path: r.dropbox_path,
         url: linkResp.link,
+        // (#37 audit) expires_at populated in response per the documented schema.
+        expires_at: new Date(Date.now() + TEMP_LINK_TTL_MS).toISOString(),
         gps_lat: r.gps_lat,
         gps_lon: r.gps_lon,
         relative_altitude: r.relative_altitude,
-      });
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      failed.push({ shot_id: r.id, filename: r.filename, error: msg.slice(0, 200) });
+      return { __failed: true, error: msg.slice(0, 200) };
+    }
+  };
+
+  for (let i = 0; i < rows.length; i += URL_CONCURRENCY) {
+    const chunk = rows.slice(i, i + URL_CONCURRENCY);
+    const settled = await Promise.all(chunk.map(mintOne));
+    for (let j = 0; j < settled.length; j++) {
+      const res = settled[j];
+      const r = chunk[j];
+      if ('__failed' in res) {
+        failed.push({ shot_id: r.id, filename: r.filename, error: res.error });
+      } else {
+        out.push(res);
+      }
     }
   }
 

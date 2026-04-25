@@ -273,6 +273,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       const { error } = await admin.from('drone_custom_pins').insert({
         ...payload,
         created_by: user.id === '__service_role__' ? null : user.id,
+        // (#45 audit) created_by carries the contractor's UUID; the audit
+        // event payload also flags is_contractor for fast UI filtering.
       });
       if (error) {
         console.error(`[${GENERATOR}] insert failed:`, error);
@@ -301,6 +303,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // Emit a domain audit event.
+  // Audit #45: contractors writing pins still get actor_type='user' (their
+  // identity matters for accountability), but we annotate the payload with
+  // is_contractor=true so the activity feed can surface the role distinction
+  // without having to re-resolve user.role at read time.
+  const isService = user.id === '__service_role__';
+  const isContractor = !isService && (user.role || '') === 'contractor';
   let eventId: number | null = null;
   {
     const { data: evRow, error: evErr } = await admin
@@ -309,13 +317,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         project_id: shoot.project_id,
         shoot_id: shoot.id,
         event_type: 'pin_edit_saved',
-        actor_type: user.id === '__service_role__' ? 'system' : 'user',
-        actor_id: user.id === '__service_role__' ? null : user.id,
+        actor_type: isService ? 'system' : 'user',
+        actor_id: isService ? null : user.id,
         payload: {
           changes_count: creates + updates + deletes,
           creates,
           updates,
           deletes,
+          ...(isContractor ? { is_contractor: true } : {}),
           edits_summary: edits.map((e) => ({
             action: e.action,
             pin_id: e.pin_id,
@@ -357,15 +366,27 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
+  // Audit #48: standardise partial-failure response shape so the frontend
+  // doesn't have to reconcile (success: false, errors: [...]) against an
+  // HTTP-207 result. We always return success: true when at least one edit
+  // was applied; partial failures are surfaced via partial_failures[]. Pure
+  // total-failure (no edits applied AND errors present) returns success:
+  // false to keep the failure path obvious.
+  const totalApplied = creates + updates + deletes;
+  const hasErrors = errors.length > 0;
+  const isPartial = hasErrors && totalApplied > 0;
+  const isTotalFail = hasErrors && totalApplied === 0;
+  const status = !hasErrors ? 200 : isPartial ? 207 : 400;
   return jsonResponse(
     {
-      success: errors.length === 0,
+      success: !isTotalFail,
       applied: { creates, updates, deletes },
-      errors: errors.length ? errors : undefined,
+      partial_failures: isPartial ? errors : undefined,
+      errors: isTotalFail ? errors : undefined,
       job_id: jobId,
       event_id: eventId,
     },
-    errors.length === 0 ? 200 : 207,
+    status,
     req,
   );
 });

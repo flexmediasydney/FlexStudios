@@ -308,7 +308,7 @@ def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
             }
 
         src_h, src_w = full_img.shape[:2]
-        variants_out: Dict[str, Dict[str, str]] = {}
+        variants_out: Dict[str, Dict[str, Any]] = {}
 
         for v in variants_cfg:
             try:
@@ -355,16 +355,23 @@ def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
                     resized = cv2.resize(full_img, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
                 # Encode
+                format_downgraded_from: Optional[str] = None
                 if fmt == "PNG":
                     ext = ".png"
                     params = [cv2.IMWRITE_PNG_COMPRESSION, 6]
                 else:
-                    # JPEG (and TIFF — opencv lacks TIFF quality, so we fall back to JPEG)
+                    # JPEG (and TIFF — opencv lacks TIFF quality, so we fall
+                    # back to JPEG and surface that explicitly to the caller
+                    # via format_downgraded_from so the downstream pipeline
+                    # knows the bytes are JPEG, not TIFF).
                     ext = ".jpg"
                     params = [cv2.IMWRITE_JPEG_QUALITY, quality]
                     if fmt == "TIFF":
-                        # Surface TIFF as JPEG-effective so downstream upload still works.
-                        # If/when we need true TIFF, swap in libtiff via Pillow here.
+                        format_downgraded_from = "TIFF"
+                        print(
+                            f"variant {name}: TIFF requested but opencv-headless "
+                            f"lacks TIFF encoder — downgrading to JPEG q={quality}"
+                        )
                         fmt = "JPEG"
 
                 ok, buf = cv2.imencode(ext, resized, params)
@@ -382,10 +389,13 @@ def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
                             break
                         data = buf.tobytes()
 
-                variants_out[name] = {
+                variant_record: Dict[str, Any] = {
                     "image_b64": base64.b64encode(data).decode("ascii"),
                     "format": fmt,
                 }
+                if format_downgraded_from:
+                    variant_record["format_downgraded_from"] = format_downgraded_from
+                variants_out[name] = variant_record
             except Exception as ex:
                 # Per-variant failures are non-fatal; log + continue
                 print(f"variant {v.get('name', '?')} failed: {ex}")

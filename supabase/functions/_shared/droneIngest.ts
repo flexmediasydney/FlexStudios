@@ -80,7 +80,11 @@ export interface GroupableShot {
 
 // ─── DJI filename parsing ────────────────────────────────────────────────────
 
-const DJI_FILENAME_RE = /^DJI_(\d{8,14})_(\d{4})_([A-Z]+)\.(?:JPG|jpg|jpeg|JPEG|DNG|dng)$/;
+// Case-insensitive on the prefix so Dropbox-style lowercased filenames
+// (e.g. `dji_20260420094122_0773_d.jpg`) still parse and get assigned a
+// dji_index. The trailing role suffix is also normalised to upper-case for
+// consistent indexing downstream. (#17 audit fix)
+const DJI_FILENAME_RE = /^dji_(\d{8,14})_(\d{4})_([a-z]+)\.(?:jpe?g|dng)$/i;
 
 export function parseDjiFilename(filename: string): DjiFilenameInfo | null {
   const m = filename.match(DJI_FILENAME_RE);
@@ -88,7 +92,7 @@ export function parseDjiFilename(filename: string): DjiFilenameInfo | null {
   return {
     timestamp_str: m[1],
     dji_index: parseInt(m[2], 10),
-    suffix: m[3],
+    suffix: m[3].toUpperCase(),
   };
 }
 

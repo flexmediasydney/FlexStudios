@@ -45,6 +45,66 @@ const MODAL_RENDER_URL =
   "https://joseph-89037--flexstudios-drone-render-render-http.modal.run";
 const RENDER_TOKEN = Deno.env.get("FLEXSTUDIOS_RENDER_TOKEN") || "";
 
+// Roles permitted to call the preview. Employees / contractors don't author
+// themes, so we drop them from the allow-list — narrows the SSRF surface and
+// mirrors the Theme Editor UI gate. (#27 audit fix)
+const PREVIEW_ALLOWED_ROLES = new Set(["master_admin", "admin", "manager"]);
+
+// In-memory rate limit: 30 requests per minute per user. Theme Editor live
+// preview spams the endpoint as the user moves a slider, so a soft cap keeps
+// any single account from hammering Modal. The Map persists across requests
+// in a single Edge Function isolate; cold starts reset the bucket but that's
+// acceptable (worst case a user gets 60 requests in a row across two warm
+// isolates). (#27 audit fix)
+const PREVIEW_RATE_WINDOW_MS = 60 * 1000;
+const PREVIEW_RATE_MAX = 30;
+const previewBuckets = new Map<string, number[]>();
+
+function rateLimitOk(userId: string): { ok: boolean; resetMs?: number } {
+  const now = Date.now();
+  const cutoff = now - PREVIEW_RATE_WINDOW_MS;
+  const arr = previewBuckets.get(userId) || [];
+  // Drop timestamps older than the window.
+  let i = 0;
+  while (i < arr.length && arr[i] < cutoff) i++;
+  const recent = i === 0 ? arr : arr.slice(i);
+  if (recent.length >= PREVIEW_RATE_MAX) {
+    return { ok: false, resetMs: PREVIEW_RATE_WINDOW_MS - (now - recent[0]) };
+  }
+  recent.push(now);
+  previewBuckets.set(userId, recent);
+  return { ok: true };
+}
+
+/**
+ * Recursively scan a theme_config object and reject any `content.url` field —
+ * the Modal renderer fetches that URL server-side, which would let an
+ * authenticated caller pivot the Edge Function into an SSRF probe. We force
+ * callers to inline `content_b64` instead, which has no network reach. (#28 audit fix)
+ */
+function findContentUrl(node: unknown, path: string[] = []): string | null {
+  if (node === null || typeof node !== "object") return null;
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      const hit = findContentUrl(node[i], [...path, String(i)]);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  const obj = node as Record<string, unknown>;
+  // Reject `content.url` exactly (the renderer's documented field) AND any
+  // nested object with a top-level `url` under a key called `content`.
+  for (const [k, v] of Object.entries(obj)) {
+    if (k === "content" && v && typeof v === "object" && !Array.isArray(v)) {
+      const cv = v as Record<string, unknown>;
+      if (typeof cv.url === "string") return [...path, k, "url"].join(".");
+    }
+    const hit = findContentUrl(v, [...path, k]);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 // Bundled fixture: 800×599 DJI Mavic 3 Pro Cine sample (~170 KB JPEG),
 // downscaled with Lanczos from supabase/functions/_shared/_fixtures/dji_sample.jpg
 // and embedded as base64 in `_fixture.ts` (Supabase's eszip bundler only
@@ -126,12 +186,38 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return jsonResponse({ _version: "v1.0", _fn: GENERATOR }, 200, req);
   }
 
-  // Auth: any signed-in user. Read-only.
+  // Auth: master_admin / admin / manager only. Employees / contractors can't
+  // author themes, so they don't need preview access. (#27 audit fix)
   const user = await getUserFromReq(req).catch(() => null);
   if (!user) return errorResponse("Authentication required", 401, req);
+  const isService = user.id === "__service_role__";
+  if (!isService && !PREVIEW_ALLOWED_ROLES.has(user.role || "")) {
+    return errorResponse(`Role ${user.role || "(none)"} not permitted`, 403, req);
+  }
+
+  // Per-user rate limit. (#27 audit fix)
+  if (!isService) {
+    const rl = rateLimitOk(user.id);
+    if (!rl.ok) {
+      return errorResponse(
+        `Rate limit exceeded (${PREVIEW_RATE_MAX} req/min). Retry in ${Math.ceil((rl.resetMs || 0) / 1000)}s.`,
+        429,
+        req,
+      );
+    }
+  }
 
   if (!body.theme_config || typeof body.theme_config !== "object") {
     return errorResponse("theme_config required (object)", 400, req);
+  }
+  // Reject any content.url field — server-side fetch surface. (#28 audit fix)
+  const ssrfHit = findContentUrl(body.theme_config);
+  if (ssrfHit) {
+    return errorResponse(
+      `theme_config contains forbidden 'content.url' field at ${ssrfHit}; use 'content_b64' instead`,
+      400,
+      req,
+    );
   }
   if (!RENDER_TOKEN) {
     return errorResponse(
@@ -154,12 +240,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const t0 = Date.now();
 
-  // POST to Modal render_http endpoint
+  // POST to Modal render_http endpoint. RENDER_TOKEN goes in the Authorization
+  // header to keep it out of Modal's request-body error logs. The body field
+  // is retained for backward compat with the deployed Modal worker.
+  // TODO: drop the body _token once Modal accepts header-only auth. (#7 audit)
   let modalResp: Response;
   try {
     modalResp = await fetch(MODAL_RENDER_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${RENDER_TOKEN}`,
+      },
       body: JSON.stringify({
         _token: RENDER_TOKEN,
         image_b64: base64Encode(fixtureBytes),

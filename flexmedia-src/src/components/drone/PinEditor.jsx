@@ -156,36 +156,60 @@ export default function PinEditor({
   const [items, _setItems] = useState(() =>
     initialiseItems({ customPins, theme, projectCoord }),
   );
-  const undoStack = useRef([]);
-  const redoStack = useRef([]);
+  // #77: replace Array.shift-based pruning (O(n) per push) with a circular
+  // buffer. We keep 50 most-recent snapshots; pushing onto a full buffer
+  // overwrites the oldest in O(1).
+  const HISTORY_CAP = 50;
+  const undoStack = useRef({ buf: new Array(HISTORY_CAP), head: 0, size: 0 });
+  const redoStack = useRef({ buf: new Array(HISTORY_CAP), head: 0, size: 0 });
+
+  const pushHistory = useCallback((stack, snapshot) => {
+    const s = stack.current;
+    s.buf[s.head] = snapshot;
+    s.head = (s.head + 1) % HISTORY_CAP;
+    if (s.size < HISTORY_CAP) s.size += 1;
+  }, []);
+  const popHistory = useCallback((stack) => {
+    const s = stack.current;
+    if (s.size === 0) return undefined;
+    s.head = (s.head - 1 + HISTORY_CAP) % HISTORY_CAP;
+    const v = s.buf[s.head];
+    s.buf[s.head] = undefined;
+    s.size -= 1;
+    return v;
+  }, []);
+  const clearHistory = useCallback((stack) => {
+    const s = stack.current;
+    s.buf = new Array(HISTORY_CAP);
+    s.head = 0;
+    s.size = 0;
+  }, []);
 
   const setItems = useCallback((updater) => {
     _setItems((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
-      undoStack.current.push(prev);
-      // Cap history at 50 entries
-      if (undoStack.current.length > 50) undoStack.current.shift();
-      redoStack.current = [];
+      pushHistory(undoStack, prev);
+      clearHistory(redoStack);
       return next;
     });
-  }, []);
+  }, [pushHistory, clearHistory]);
 
   const undo = useCallback(() => {
     _setItems((current) => {
-      const prev = undoStack.current.pop();
+      const prev = popHistory(undoStack);
       if (!prev) return current;
-      redoStack.current.push(current);
+      pushHistory(redoStack, current);
       return prev;
     });
-  }, []);
+  }, [popHistory, pushHistory]);
   const redo = useCallback(() => {
     _setItems((current) => {
-      const next = redoStack.current.pop();
+      const next = popHistory(redoStack);
       if (!next) return current;
-      undoStack.current.push(current);
+      pushHistory(undoStack, current);
       return next;
     });
-  }, []);
+  }, [popHistory, pushHistory]);
 
   // ── Derived data ─────────────────────────────────────────────────────────
   const activeShot = useMemo(
@@ -232,9 +256,33 @@ export default function PinEditor({
   const imgRef = useRef(null);
   const stageRef = useRef(null);
 
-  // Image natural-size after load
+  // Image natural-size after load.
+  // #76: Defensively revoke previous blob URLs on shot change / unmount so
+  // we don't leak object URLs if the parent ever switches from query-string
+  // URLs to URL.createObjectURL() blobs. No-op for normal http(s) URLs.
+  const previousImageUrlRef = useRef(null);
   useEffect(() => {
     setImageLoaded(false);
+    const prev = previousImageUrlRef.current;
+    if (prev && prev !== imageUrl && typeof prev === "string" && prev.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(prev);
+      } catch {
+        /* ignore */
+      }
+    }
+    previousImageUrlRef.current = imageUrl || null;
+    return () => {
+      // On unmount, revoke whatever blob URL we currently hold (if any).
+      const current = previousImageUrlRef.current;
+      if (current && typeof current === "string" && current.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(current);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
   }, [activeShotId, imageUrl]);
 
   const handleImageLoad = useCallback((e) => {
@@ -311,6 +359,11 @@ export default function PinEditor({
             startMouse: { x: e.clientX, y: e.clientY },
             startPixel: { ...hit._pixel },
             moved: false,
+            // #79: snapshot the pose at drag-start so the inverse projection
+            // on mouseup uses the pose that was active when the drag began,
+            // not whatever pose belongs to a shot the user clicked through to
+            // mid-drag.
+            startPose: pose,
           };
         } else {
           setSelectedItemId(null);
@@ -406,17 +459,21 @@ export default function PinEditor({
     if (!ds) return;
     if (ds.kind === "drag-pin" && ds.moved) {
       // Snapshot history at end of drag (single undo step per drag)
-      undoStack.current.push(items);
-      if (undoStack.current.length > 50) undoStack.current.shift();
-      redoStack.current = [];
+      // #77: use the circular-buffer helpers so capacity stays bounded in O(1).
+      pushHistory(undoStack, items);
+      clearHistory(redoStack);
 
       _setItems((prev) =>
         prev.map((it) => {
           if (it.id !== ds.id) return it;
           if (it.kind !== "world") return { ...it, _dirty: true };
-          // Convert _previewPixel → world via inverse projection
+          // Convert _previewPixel → world via inverse projection.
+          // #79: use the pose snapshot captured at mousedown rather than the
+          // current closure's `pose` (which may have changed if activeShotId
+          // shifted mid-drag).
           const target = it._previewPixel || ds.startPixel;
-          if (!pose) {
+          const dragPose = ds.startPose || pose;
+          if (!dragPose) {
             toast.warning(
               "Pose data unavailable — pin world position not updated",
             );
@@ -426,7 +483,7 @@ export default function PinEditor({
           const newWorld = pixelToGroundGps({
             px: target.x,
             py: target.y,
-            ...pose,
+            ...dragPose,
           });
           if (!newWorld) {
             toast.warning(
@@ -444,7 +501,7 @@ export default function PinEditor({
         }),
       );
     }
-  }, [items, pose]);
+  }, [items, pose, pushHistory, clearHistory]);
 
   // Mouse-wheel zoom about cursor.
   const onWheel = useCallback(
@@ -480,12 +537,26 @@ export default function PinEditor({
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e) => {
+      // #78: Skip ALL shortcuts (v/m/p/t/z and the navigation arrows) when
+      // the user is typing in any input-like element. Cover INPUT/TEXTAREA/
+      // SELECT plus contentEditable surfaces (e.g. shadcn dialogs that wrap
+      // their content in editable divs).
+      const ae = document.activeElement;
       const isInputFocused =
-        document.activeElement &&
-        ["INPUT", "TEXTAREA", "SELECT"].includes(
-          document.activeElement.tagName,
-        );
+        ae &&
+        (["INPUT", "TEXTAREA", "SELECT"].includes(ae.tagName) ||
+          ae.isContentEditable === true);
       if (isInputFocused) return;
+      // Also bail if the event target itself is an editable surface (defence
+      // against focus mismatches).
+      const tgt = e.target;
+      if (
+        tgt &&
+        (["INPUT", "TEXTAREA", "SELECT"].includes(tgt.tagName) ||
+          tgt.isContentEditable === true)
+      ) {
+        return;
+      }
       if (e.metaKey || e.ctrlKey) {
         if (e.key.toLowerCase() === "z") {
           e.preventDefault();
@@ -1044,7 +1115,7 @@ export default function PinEditor({
                     variant="ghost"
                     className="h-7 w-7"
                     onClick={undo}
-                    disabled={undoStack.current.length === 0}
+                    disabled={undoStack.current.size === 0}
                   >
                     <Undo2 className="h-3.5 w-3.5" />
                   </Button>
@@ -1058,7 +1129,7 @@ export default function PinEditor({
                     variant="ghost"
                     className="h-7 w-7"
                     onClick={redo}
-                    disabled={redoStack.current.length === 0}
+                    disabled={redoStack.current.size === 0}
                   >
                     <Redo2 className="h-3.5 w-3.5" />
                   </Button>

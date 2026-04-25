@@ -53,20 +53,31 @@ const PIPELINE_STAGES = [
   { key: "final_ready",       label: "Final" },
 ];
 
-// Map a shoot.status → which stages are "done"
+// Map a shoot.status → "completed" rank (number of stages fully done).
+//
+// Strip is 6 stages indexed 0-5: Ingested, SfM, Render, Proposed, Adjustments,
+// Final. The strip lights stage `i` as DONE when `i + 1 <= rank` and as CURRENT
+// when `i + 1 === rank + 1`, so:
+//   rank=1 → Ingested DONE, SfM CURRENT
+//   rank=2 → Ingested+SfM DONE, Render CURRENT
+//   rank=6 → all DONE
+//
+// #73 fix: previously rendering=1 put Render BEFORE SfM in the strip's done
+// state, and sfm_complete collapsed onto the same rank. Re-ordered so SfM
+// happens first, and render_failed is mapped explicitly.
 function stagesCompleted(status) {
-  // Order from earliest → latest. Anything <= current rank is done.
   const rank = {
-    ingested: 0,
-    analysing: 0,
-    sfm_running: 0,
-    sfm_complete: 1,
-    sfm_failed: 0,
-    rendering: 1,
-    proposed_ready: 3,
-    adjustments_ready: 4,
-    final_ready: 5,
-    delivered: 5,
+    ingested:          1, // Ingested DONE; SfM is the current stage
+    analysing:         1, // analysis still part of Ingested
+    sfm_running:       1, // SfM is the current stage (in progress, not done)
+    sfm_complete:      2, // SfM DONE; Render is the current stage
+    sfm_failed:        1, // SfM stopped; strip shows SfM as current with failed badge
+    rendering:         2, // Render is the current stage (in progress, not done)
+    render_failed:     2, // Render stopped; strip stops at Render
+    proposed_ready:    3, // Render DONE; Proposed is the current stage
+    adjustments_ready: 4, // Proposed DONE; Adjustments is the current stage
+    final_ready:       5, // Adjustments DONE; Final is the current stage
+    delivered:         6, // all DONE
   };
   return rank[status] ?? 0;
 }
@@ -179,22 +190,26 @@ export default function ProjectDronesTab({ project }) {
 
   const shoots = shootsQuery.data || [];
 
-  // Auto-select most recent shoot if URL didn't pin one
+  // #74: combine the "auto-select most recent" + "clear if-deleted" effects
+  // into one. Both used `shoots` in their dep array; refetching produced a new
+  // array reference and re-ran both. Now we derive a single signal from
+  // `shoots[0]?.id` + a presence-check signature so unrelated array re-renders
+  // don't re-trigger this effect.
+  const firstShootId = shoots[0]?.id || null;
+  const selectedShootStillExists =
+    selectedShootId && shoots.some((s) => s.id === selectedShootId);
   useEffect(() => {
-    if (selectedShootId) return;
-    if (shoots.length > 0) {
-      setSelectedShootId(shoots[0].id);
+    if (!firstShootId) return;
+    // Auto-select the most recent shoot if URL didn't pin one
+    if (!selectedShootId) {
+      setSelectedShootId(firstShootId);
+      return;
     }
-  }, [shoots, selectedShootId]);
-
-  // If selected id is no longer in the list (e.g. deleted), clear
-  useEffect(() => {
-    if (!selectedShootId) return;
-    if (shoots.length === 0) return;
-    if (!shoots.some((s) => s.id === selectedShootId)) {
-      setSelectedShootId(shoots[0]?.id || null);
+    // If selected id is no longer in the list (e.g. deleted), fall back to first
+    if (!selectedShootStillExists) {
+      setSelectedShootId(firstShootId);
     }
-  }, [shoots, selectedShootId]);
+  }, [firstShootId, selectedShootId, selectedShootStillExists]);
 
   const selectedShoot = useMemo(
     () => shoots.find((s) => s.id === selectedShootId) || null,
@@ -512,7 +527,11 @@ function ShootDetail({ shoot, sfmRun, activeSubtab, onSubtabChange, projectId })
 // ── PipelineStrip ────────────────────────────────────────────────────────────
 function PipelineStrip({ shoot, sfmRun }) {
   const completedRank = stagesCompleted(shoot.status);
-  const failed = shoot.status === "sfm_failed";
+  // #73: surface render_failed in the strip too (was only checking sfm_failed).
+  const failed =
+    shoot.status === "sfm_failed" || shoot.status === "render_failed";
+  const failedLabel =
+    shoot.status === "render_failed" ? "Render failed" : "SfM failed";
 
   return (
     <div className="rounded-md border bg-muted/30 px-3 py-2.5">
@@ -548,7 +567,7 @@ function PipelineStrip({ shoot, sfmRun }) {
         {failed && (
           <Badge variant="destructive" className="ml-2 text-[10px]">
             <AlertCircle className="h-2.5 w-2.5 mr-1" />
-            SfM failed
+            {failedLabel}
           </Badge>
         )}
       </div>

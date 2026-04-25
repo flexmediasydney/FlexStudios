@@ -39,9 +39,29 @@ export interface ProcessResult {
   cursor_set: boolean;
 }
 
+export interface ProcessOptions {
+  /**
+   * On initial-seed (cursor is null), normally we just store the cursor and
+   * emit ZERO events — the assumption being that a fresh project has no files
+   * yet and PR4 backfill is the truth for pre-existing files.
+   *
+   * (#55 audit fix) But the B3 case is: a project gets provisioned AFTER
+   * files have already been uploaded to its raw_drones folder (e.g. operator
+   * dropped photos via Dropbox web UI before clicking "Provision"). With the
+   * default branch those files NEVER produce ingest events.
+   *
+   * Set `forceEmitOnSeed: true` to ALSO process every JPG entry returned by
+   * the initial seed listing as if it were a real-time delta — emitting
+   * file_added events that downstream pipelines (drone-job-dispatcher) will
+   * pick up. Default false (preserves backwards compat for nightly reconcile).
+   */
+  forceEmitOnSeed?: boolean;
+}
+
 export async function processDropboxDelta(
   watchPath: string,
   actorType: 'webhook' | 'system',
+  opts?: ProcessOptions,
 ): Promise<ProcessResult> {
   const admin = getAdminClient();
 
@@ -61,6 +81,15 @@ export async function processDropboxDelta(
     const result = await listFolder(watchPath, { recursive: true, maxEntries: 50_000 });
     cursor = result.cursor;
     console.log(`[dropboxSync] initial seed for ${watchPath}: ${result.entries.length} entries`);
+    // If the caller opted in (#55 fix), surface the seed entries to the
+    // event-emission loop below so pre-existing JPGs in raw_drones folders
+    // produce file_added events on first sync.
+    if (opts?.forceEmitOnSeed) {
+      entries = result.entries
+        .filter((e) => e['.tag'] === 'file' && /\.(jpe?g)$/i.test(e.name || ''))
+        .filter((e) => /\/01_RAW_WORKING\/drones\//i.test(e.path_display || e.path_lower || ''));
+      console.log(`[dropboxSync] forceEmitOnSeed: queuing ${entries.length} raw_drones JPG(s) for emission`);
+    }
   } else {
     let hasMore = true;
     let currentCursor: string = cursor;
@@ -77,7 +106,10 @@ export async function processDropboxDelta(
   let skipped = 0;
   const errors: string[] = [];
 
-  if (!isInitialSeed) {
+  // Emit when this is a real delta OR when the caller asked for forced
+  // emission on the initial seed. Default initial-seed branch still emits 0.
+  const shouldEmit = !isInitialSeed || (opts?.forceEmitOnSeed === true);
+  if (shouldEmit) {
     for (const entry of entries) {
       try {
         const handled = await processEntry(entry, actorType);
@@ -170,16 +202,33 @@ async function processEntry(entry: DropboxEntry, actorType: 'webhook' | 'system'
   }
 
   // .tag === 'file' — distinguish add vs modify by prior dropbox_id event.
+  // (#52 audit fix) Two webhooks for the same file processed in parallel
+  // would BOTH see "no prior event", BOTH insert a file_added, and the
+  // downstream ingest queue ends up double-firing. Race window is small
+  // but real because Dropbox can fire multiple webhooks within tens of ms
+  // for the same content_hash. Short-circuit: if a file_added for this
+  // dropbox_id was emitted in the last 30s, treat it as already-handled
+  // and skip emission entirely. We still keep the add/modify discrimination
+  // for older priors (>30s back).
   let eventType = 'file_added';
   if (entry.id) {
     const { data: prior } = await admin
       .from('project_folder_events')
-      .select('id')
+      .select('id, event_type, created_at')
       .eq('dropbox_id', entry.id)
       .in('event_type', ['file_added', 'file_modified'])
+      .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (prior) eventType = 'file_modified';
+    if (prior) {
+      const priorAt = new Date(prior.created_at as string).getTime();
+      const ageMs = Date.now() - priorAt;
+      // Same dropbox_id with a recent file_added → race-duplicate, skip.
+      if (prior.event_type === 'file_added' && ageMs < 30_000) {
+        return false;
+      }
+      eventType = 'file_modified';
+    }
   }
 
   await auditEvent({

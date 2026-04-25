@@ -44,11 +44,71 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Constants — Mavic 3 Pro wide camera intrinsics (matches the spike).
+# Camera intrinsics defaults — Mavic 3 Pro wide @ 24mm-equiv (matches the spike).
+#
+# These are FALLBACK values only. When the caller supplies
+# `scene.camera_intrinsics` (populated from EXIF make/model/focal — see #18),
+# the per-shot values override these. Without per-drone intrinsics, POIs
+# project to the wrong pixel for any non-M3P drone (e.g. Mavic 2 Pro is
+# 4000x2250 with fx≈10mm, completely different geometry).
+#
+# TODO: drone-render Edge Function should populate scene.camera_intrinsics
+#       from drone_shots.exif (already extracted per #18) so we never fall
+#       back to defaults in production.
 # ─────────────────────────────────────────────────────────────────────────────
 DEFAULT_W, DEFAULT_H = 5280, 3956
 DEFAULT_FX_MM, DEFAULT_FY_MM = 12.29, 12.29  # focal length mm (M3P wide @ 24mm equiv)
 DEFAULT_SENSOR_W_MM, DEFAULT_SENSOR_H_MM = 17.3, 13.0
+
+
+def _resolve_intrinsics(scene: dict, image_w: int, image_h: int) -> tuple:
+    """Pick camera intrinsics for projection.
+
+    Preference order:
+      1. scene.camera_intrinsics.{width, height, fx_mm, fy_mm?, cx_px?, cy_px?}
+         — when present, fx_mm/fy_mm are interpreted in the same sensor frame
+         as DEFAULT_SENSOR_W_MM/H_MM unless the caller also supplies
+         sensor_w_mm/sensor_h_mm, and pixel scaling is anchored to the
+         supplied intrinsic width/height. This means a Mavic 2 Pro shot
+         (4000x2250, fx≈10mm) projects to the right pixel even when the
+         actual delivered image was downscaled.
+      2. Defaults (Mavic 3 Pro wide).
+
+    Returns: (fx_px, fy_px, cx_px, cy_px) — all in *image pixels* of the
+    image we're actually annotating (image_w/image_h).
+    """
+    intr = (scene or {}).get("camera_intrinsics") or {}
+
+    intr_w = float(intr.get("width") or DEFAULT_W)
+    intr_h = float(intr.get("height") or DEFAULT_H)
+    fx_mm = float(intr.get("fx_mm") or DEFAULT_FX_MM)
+    fy_mm = float(intr.get("fy_mm") or fx_mm)
+    sensor_w_mm = float(intr.get("sensor_w_mm") or DEFAULT_SENSOR_W_MM)
+    sensor_h_mm = float(intr.get("sensor_h_mm") or DEFAULT_SENSOR_H_MM)
+
+    # Convert to focal-length-in-pixels at the *intrinsic* image size, then
+    # rescale to the actual annotated image size (so downstream resampling
+    # of the drone JPG before render still projects correctly).
+    fx_px_intr = (fx_mm / sensor_w_mm) * intr_w
+    fy_px_intr = (fy_mm / sensor_h_mm) * intr_h
+
+    sx = image_w / intr_w
+    sy = image_h / intr_h
+    fx_px = fx_px_intr * sx
+    fy_px = fy_px_intr * sy
+
+    cx_px = intr.get("cx_px")
+    cy_px = intr.get("cy_px")
+    if cx_px is None:
+        cx_px = image_w / 2.0
+    else:
+        cx_px = float(cx_px) * sx
+    if cy_px is None:
+        cy_px = image_h / 2.0
+    else:
+        cy_px = float(cy_px) * sy
+
+    return (fx_px, fy_px, cx_px, cy_px)
 
 SCHEMA_VERSION = "1.0"
 
@@ -62,6 +122,71 @@ FONT_REGULAR_PATH = str(FONTS_DIR / "DejaVuSans.ttf")
 
 # Internal font cache (path, size) -> PIL ImageFont
 _FONT_CACHE: dict[tuple[str, int], ImageFont.FreeTypeFont] = {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SSRF protection for property_pin custom_svg URLs.
+# urllib.request.urlopen(any_url) accepts file://, http://169.254.169.254 (AWS
+# metadata IMDS), internal Modal endpoints, etc. Lock down to https-only and
+# a small allowlist of expected CDN hostnames. Theme authors should always
+# prefer content_b64; URL is a last-resort path retained for back-compat.
+# ─────────────────────────────────────────────────────────────────────────────
+_CUSTOM_SVG_ALLOWED_HOSTS_EXACT = {
+    "flexmedia.sydney",
+    "flexstudios.app",
+    "cdn.flexmedia.sydney",
+}
+_CUSTOM_SVG_ALLOWED_HOST_SUFFIXES = (
+    ".dropboxusercontent.com",
+)
+
+
+def _custom_svg_url_is_safe(url: str) -> bool:
+    """Return True iff `url` is https + on the small allowlist of trusted hosts.
+
+    Rejects: any non-https scheme (file://, http://, gopher://, ftp://, …),
+             any host not in the exact-match set or *.dropboxusercontent.com.
+    """
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+    except Exception:
+        return False
+    if (p.scheme or "").lower() != "https":
+        return False
+    host = (p.hostname or "").lower()
+    if not host:
+        return False
+    if host in _CUSTOM_SVG_ALLOWED_HOSTS_EXACT:
+        return True
+    for suffix in _CUSTOM_SVG_ALLOWED_HOST_SUFFIXES:
+        if host.endswith(suffix):
+            return True
+    return False
+
+
+def _make_svg_placeholder(target_w: int) -> "Image.Image":
+    """Return a transparent PIL image with a red 'X' to flag rejected SVG URLs.
+
+    Used in place of crashing the whole render when custom_svg.url is
+    blocked or fetch fails. Render output stays valid — the caller can see
+    the placeholder and fix the theme config.
+    """
+    side = max(16, int(target_w))
+    placeholder = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    pdraw = ImageDraw.Draw(placeholder)
+    line_w = max(2, side // 16)
+    inset = side // 8
+    pdraw.line(
+        [(inset, inset), (side - inset, side - inset)],
+        fill=(255, 32, 32, 230),
+        width=line_w,
+    )
+    pdraw.line(
+        [(side - inset, inset), (inset, side - inset)],
+        fill=(255, 32, 32, 230),
+        width=line_w,
+    )
+    return placeholder
 
 
 def _get_font(path: str, size: int) -> ImageFont.FreeTypeFont:
@@ -123,7 +248,12 @@ def _hex_to_rgba(hex_color: Optional[str], alpha: int = 255) -> Optional[tuple]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Geometry — GPS to pixel projection (matches spike formulation exactly).
 # ─────────────────────────────────────────────────────────────────────────────
-def _gps_to_px(tlat, tlon, dlat, dlon, alt, heading, pitch, w, h):
+def _gps_to_px(tlat, tlon, dlat, dlon, alt, heading, pitch, w, h, intrinsics=None):
+    """Project a target lat/lon to pixel coords on the image.
+
+    `intrinsics`: optional (fx_px, fy_px, cx_px, cy_px) tuple. When None we
+    fall back to the legacy default Mavic 3 Pro intrinsics scaled to (w, h).
+    """
     cos_lat = math.cos(math.radians(dlat))
     dE = (tlon - dlon) * 111319 * cos_lat
     dN = (tlat - dlat) * 111319
@@ -145,9 +275,12 @@ def _gps_to_px(tlat, tlon, dlat, dlon, alt, heading, pitch, w, h):
     Z_c = dE * cam_z[0] + dN * cam_z[1] + dU * cam_z[2]
     if Z_c <= 0:
         return None
-    fx = (DEFAULT_FX_MM / DEFAULT_SENSOR_W_MM) * w
-    fy = (DEFAULT_FY_MM / DEFAULT_SENSOR_H_MM) * h
-    cx, cy = w / 2, h / 2
+    if intrinsics is None:
+        fx = (DEFAULT_FX_MM / DEFAULT_SENSOR_W_MM) * w
+        fy = (DEFAULT_FY_MM / DEFAULT_SENSOR_H_MM) * h
+        cx, cy = w / 2, h / 2
+    else:
+        fx, fy, cx, cy = intrinsics
     return (fx * X_c / Z_c + cx, fy * Y_c / Z_c + cy)
 
 
@@ -532,34 +665,55 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
         cv2.line(canvas_bgr, (x, by2), (x, y - 8), fill, 2, cv2.LINE_AA)
 
     elif mode == "custom_svg":
-        # Rasterise an SVG (provided as base64 in content.content_b64, or
-        # https URL in content.url — v1 favours content_b64 to avoid network
-        # calls from Modal). Draw at the pin's pixel position with the
-        # configured size_px (taken as the target width; height preserves AR).
+        # Rasterise an SVG. content_b64 is strongly preferred (no network
+        # call); content.url is a last-resort path that's restricted to a
+        # small allowlist of https hosts to defend against SSRF — otherwise
+        # urllib would happily fetch file:// or 169.254.169.254 (AWS IMDS).
+        # Rejected/failed URL fetches render a red 'X' placeholder rather
+        # than crashing the whole render.
+        target_w = max(8, int(size))
         svg_bytes: Optional[bytes] = None
+        placeholder_reason: Optional[str] = None
+
         b64 = content.get("content_b64")
         if b64:
             try:
                 import base64 as _b64
                 svg_bytes = _b64.b64decode(b64)
             except Exception as e:
-                print(f"custom_svg: invalid content_b64 ({e}); skipping pin")
-                return canvas_bgr
+                placeholder_reason = f"invalid content_b64 ({e})"
         elif content.get("url"):
-            try:
-                import urllib.request
-                req = urllib.request.Request(
-                    content["url"],
-                    headers={"User-Agent": "flexstudios-drone-render/1.0"},
+            url = content["url"]
+            if not _custom_svg_url_is_safe(url):
+                placeholder_reason = (
+                    f"url rejected by allowlist (must be https + on "
+                    f"flexmedia.sydney/flexstudios.app/cdn.flexmedia.sydney/"
+                    f"*.dropboxusercontent.com): {url[:120]}"
                 )
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    svg_bytes = r.read()
-            except Exception as e:
-                print(f"custom_svg: url fetch failed ({e}); skipping pin")
-                return canvas_bgr
-        if not svg_bytes:
-            print("custom_svg: no svg source provided; skipping pin")
-            return canvas_bgr
+            else:
+                try:
+                    import urllib.request
+                    req = urllib.request.Request(
+                        url,
+                        headers={"User-Agent": "flexstudios-drone-render/1.0"},
+                    )
+                    with urllib.request.urlopen(req, timeout=8) as r:
+                        svg_bytes = r.read()
+                except Exception as e:
+                    placeholder_reason = f"url fetch failed ({e})"
+        else:
+            placeholder_reason = "no svg source provided"
+
+        if placeholder_reason or not svg_bytes:
+            print(f"custom_svg: {placeholder_reason or 'empty svg bytes'}; rendering placeholder")
+            svg_img = _make_svg_placeholder(target_w)
+            sw_img = svg_img.size[0]
+            sh_img = svg_img.size[1]
+            paste_x = max(0, min(x - sw_img // 2, w - sw_img))
+            paste_y = max(0, min(y - sh_img, h - sh_img))
+            overlay, _ = _bgr_to_rgba_overlay(w, h)
+            overlay.paste(svg_img, (paste_x, paste_y), svg_img)
+            return _composite_overlay_onto_bgr(canvas_bgr, overlay)
 
         try:
             import cairosvg  # type: ignore
@@ -567,7 +721,6 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
             print("custom_svg: cairosvg not installed; skipping pin")
             return canvas_bgr
 
-        target_w = max(8, int(size))
         try:
             png_bytes = cairosvg.svg2png(
                 bytestring=svg_bytes,
@@ -640,13 +793,14 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
 # ─────────────────────────────────────────────────────────────────────────────
 # Boundary layer pass
 # ─────────────────────────────────────────────────────────────────────────────
-def _project_polygon(polygon_latlon, scene, w, h) -> Optional[np.ndarray]:
+def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[np.ndarray]:
     """Project a list of [lat, lon] tuples to pixel coords. Returns Nx2 int32 or None."""
     pts = []
     for lat, lon in polygon_latlon:
         px = _gps_to_px(
             lat, lon, scene["lat"], scene["lon"], scene["alt"],
             scene["yaw"], scene["pitch"], w, h,
+            intrinsics=intrinsics,
         )
         if px is None:
             return None
@@ -958,7 +1112,9 @@ def _draw_address_overlay(
     return _composite_overlay_onto_bgr(canvas_bgr, overlay)
 
 
-def _render_boundary(canvas_bgr: np.ndarray, theme: dict, scene: dict, w: int, h: int) -> np.ndarray:
+def _render_boundary(
+    canvas_bgr: np.ndarray, theme: dict, scene: dict, w: int, h: int, intrinsics=None
+) -> np.ndarray:
     """Apply the boundary pass per theme.boundary block + scene.polygon_latlon."""
     boundary_cfg = theme.get("boundary", {})
     if not boundary_cfg.get("enabled", False):
@@ -968,7 +1124,7 @@ def _render_boundary(canvas_bgr: np.ndarray, theme: dict, scene: dict, w: int, h
     if not polygon_latlon or len(polygon_latlon) < 3:
         return canvas_bgr  # nothing to draw
 
-    polygon_px = _project_polygon(polygon_latlon, scene, w, h)
+    polygon_px = _project_polygon(polygon_latlon, scene, w, h, intrinsics=intrinsics)
     if polygon_px is None:
         return canvas_bgr
 
@@ -1091,6 +1247,16 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
             "address": str,         # optional, used by boundary.address_overlay
             "street_number": str,   # optional
             "street_name": str,     # optional
+            "camera_intrinsics": {  # optional — when present, used in place of the
+                "width": int,       # M3P defaults so non-M3P drones project correctly.
+                "height": int,      # Should be threaded through by the drone-render
+                "fx_mm": float,     # Edge Function from drone_shots.exif (#18).
+                "fy_mm": float,         # optional, defaults to fx_mm
+                "sensor_w_mm": float,   # optional, defaults to 17.3 (M3P)
+                "sensor_h_mm": float,   # optional, defaults to 13.0 (M3P)
+                "cx_px": float,         # optional principal point x (default w/2)
+                "cy_px": float,         # optional principal point y (default h/2)
+            },
         }
 
     Returns:
@@ -1107,8 +1273,14 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
 
     canvas = img.copy()
 
+    # Resolve per-shot camera intrinsics. When scene.camera_intrinsics is
+    # populated (from EXIF make/model/focal — see #18) this gives correct
+    # POI projection on Mavic 2 Pro / Mini / etc. Otherwise we fall back to
+    # the Mavic 3 Pro defaults (which is what the original spike used).
+    intrinsics = _resolve_intrinsics(scene, w, h)
+
     # ───── Boundary pass FIRST (so POIs and pin sit on top) ─────
-    canvas = _render_boundary(canvas, theme_config, scene, w, h)
+    canvas = _render_boundary(canvas, theme_config, scene, w, h, intrinsics=intrinsics)
 
     # ───── POI labels ─────
     pois = scene.get("pois", [])
@@ -1123,6 +1295,7 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
             poi["lat"], poi["lon"],
             scene["lat"], scene["lon"], scene["alt"],
             scene["yaw"], scene["pitch"], w, h,
+            intrinsics=intrinsics,
         )
         if px is None:
             continue
@@ -1141,6 +1314,7 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
             scene["property_lat"], scene["property_lon"],
             scene["lat"], scene["lon"], scene["alt"],
             scene["yaw"], scene["pitch"], w, h,
+            intrinsics=intrinsics,
         )
         if pp and 0 < pp[0] < w and 0 < pp[1] < h:
             canvas = _draw_property_pin(canvas, int(pp[0]), int(pp[1]), theme_config.get("property_pin", {}), w, h)

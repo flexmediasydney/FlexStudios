@@ -130,34 +130,60 @@ serve(async (req: Request) => {
     .select("id, folder_kind, dropbox_path, shared_link")
     .eq("project_id", projectId);
   const folderUpdates: Array<{ id: string; folder_kind: string; old: string; new: string }> = [];
+  let foldersFailed = 0;
   for (const f of folders || []) {
     const oldPath = f.dropbox_path as string;
     if (oldPath.startsWith(OLD_PREFIX)) {
       const newPath = NEW_PREFIX + oldPath.slice(OLD_PREFIX.length);
-      await admin
+      const { error: updErr } = await admin
         .from("project_folders")
         .update({ dropbox_path: newPath, shared_link: null })
         .eq("id", f.id);
-      folderUpdates.push({ id: f.id, folder_kind: f.folder_kind, old: oldPath, new: newPath });
+      if (updErr) {
+        foldersFailed++;
+        console.error(
+          `[drone-migrate-paths] PARTIAL MIGRATION: project_folders ${f.id} update failed: ${updErr.message}`,
+        );
+      } else {
+        folderUpdates.push({ id: f.id, folder_kind: f.folder_kind, old: oldPath, new: newPath });
+      }
     }
   }
   result.project_folders_updated = folderUpdates.length;
+  if (foldersFailed > 0) result.project_folders_failed = foldersFailed;
 
   // 4. Update drone_shots.dropbox_path.
+  // (#50 audit) Keep the case of everything AFTER the prefix swap. The prior
+  // code did `NEW_PREFIX.toLowerCase() + ...` which produced all-lowercase
+  // paths for shots/renders while project_folders kept display-case →
+  // inconsistent, broke media-proxy lookups. Use the canonical NEW_PREFIX
+  // (display-case) here.
   const { data: shots } = await admin
     .from("drone_shots")
     .select("id, dropbox_path, shoot_id, drone_shoots!inner(project_id)")
     .eq("drone_shoots.project_id", projectId);
   let shotsUpdated = 0;
+  let shotsFailed = 0;
   for (const s of shots || []) {
     const old = s.dropbox_path as string;
     if (old?.toLowerCase().startsWith(OLD_PREFIX.toLowerCase())) {
-      const newPath = NEW_PREFIX.toLowerCase() + old.slice(OLD_PREFIX.length);
-      await admin.from("drone_shots").update({ dropbox_path: newPath }).eq("id", s.id);
-      shotsUpdated++;
+      const newPath = NEW_PREFIX + old.slice(OLD_PREFIX.length);
+      const { error: updErr } = await admin
+        .from("drone_shots")
+        .update({ dropbox_path: newPath })
+        .eq("id", s.id);
+      if (updErr) {
+        shotsFailed++;
+        console.error(
+          `[drone-migrate-paths] PARTIAL MIGRATION: drone_shots ${s.id} update failed: ${updErr.message}`,
+        );
+      } else {
+        shotsUpdated++;
+      }
     }
   }
   result.drone_shots_updated = shotsUpdated;
+  if (shotsFailed > 0) result.drone_shots_failed = shotsFailed;
 
   // 5. Update drone_renders.dropbox_path. Need to filter by project via shoot.
   const { data: renders } = await admin
@@ -165,15 +191,27 @@ serve(async (req: Request) => {
     .select("id, dropbox_path, shot_id, drone_shots!inner(shoot_id, drone_shoots!inner(project_id))")
     .eq("drone_shots.drone_shoots.project_id", projectId);
   let rendersUpdated = 0;
+  let rendersFailed = 0;
   for (const r of renders || []) {
     const old = r.dropbox_path as string;
     if (old?.toLowerCase().startsWith(OLD_PREFIX.toLowerCase())) {
-      const newPath = NEW_PREFIX.toLowerCase() + old.slice(OLD_PREFIX.length);
-      await admin.from("drone_renders").update({ dropbox_path: newPath }).eq("id", r.id);
-      rendersUpdated++;
+      const newPath = NEW_PREFIX + old.slice(OLD_PREFIX.length);
+      const { error: updErr } = await admin
+        .from("drone_renders")
+        .update({ dropbox_path: newPath })
+        .eq("id", r.id);
+      if (updErr) {
+        rendersFailed++;
+        console.error(
+          `[drone-migrate-paths] PARTIAL MIGRATION: drone_renders ${r.id} update failed: ${updErr.message}`,
+        );
+      } else {
+        rendersUpdated++;
+      }
     }
   }
   result.drone_renders_updated = rendersUpdated;
+  if (rendersFailed > 0) result.drone_renders_failed = rendersFailed;
 
   // 6. Invalidate any cached thumbnails for this project's old paths.
   const { count: cacheDeleted } = await admin
@@ -181,6 +219,19 @@ serve(async (req: Request) => {
     .delete({ count: "exact" })
     .eq("project_id", projectId);
   result.media_cache_invalidated = cacheDeleted ?? 0;
+
+  // (#51 audit) No transactional rollback across Dropbox + DB steps. If any
+  // step partially failed above, surface a clear "PARTIAL MIGRATION" log
+  // line + a flag in the result so an operator can rerun this idempotent
+  // migrator (it's safe — startsWith() check skips already-migrated rows).
+  // TODO: when a stored procedure approach is acceptable, wrap steps 2-6 in
+  // a single transaction via an RPC and replace this best-effort path.
+  if (shotsFailed > 0 || rendersFailed > 0 || foldersFailed > 0) {
+    result.partial_migration = true;
+    console.error(
+      `[drone-migrate-paths] PARTIAL MIGRATION for project ${projectId}: folders_failed=${foldersFailed} shots_failed=${shotsFailed} renders_failed=${rendersFailed}. Rerun this endpoint — it is idempotent.`,
+    );
+  }
 
   return jsonResponse(result, 200, req);
 });

@@ -17,7 +17,7 @@
  *       Defensive permission check inside component too.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
@@ -55,9 +55,15 @@ import { createPageUrl } from "@/utils";
 // ── Pipeline kanban columns ─────────────────────────────────────────────────
 // Subset of the drone_shoots.status enum that represents "active" work.
 // 'delivered' and 'sfm_failed' are excluded (terminal / shown in Alerts).
+//
+// #83: Split the prior 'SfM done' column (which lumped sfm_running with
+// sfm_complete and made it impossible to see what was still processing) into
+// 'In SfM' (sfm_running) and 'SfM done' (sfm_complete) so operators can see
+// where work is actually queued.
 const PIPELINE_COLUMNS = [
   { key: "ingested",          label: "Ingested",     statuses: ["ingested", "analysing"] },
-  { key: "sfm_complete",      label: "SfM done",      statuses: ["sfm_complete", "sfm_running"] },
+  { key: "sfm_running",       label: "In SfM",        statuses: ["sfm_running"] },
+  { key: "sfm_complete",      label: "SfM done",      statuses: ["sfm_complete"] },
   { key: "rendering",         label: "Rendering",     statuses: ["rendering"] },
   { key: "proposed_ready",    label: "Proposed",      statuses: ["proposed_ready"] },
   { key: "adjustments_ready", label: "Adjustments",   statuses: ["adjustments_ready"] },
@@ -199,7 +205,7 @@ function PipelineKanban({ shoots, projectsById }) {
           </div>
         ) : (
         <div className="overflow-x-auto">
-          <div className="grid gap-2 p-3 min-w-[860px]" style={{ gridTemplateColumns: `repeat(${PIPELINE_COLUMNS.length}, minmax(140px, 1fr))` }}>
+          <div className="grid gap-2 p-3 min-w-[1000px]" style={{ gridTemplateColumns: `repeat(${PIPELINE_COLUMNS.length}, minmax(140px, 1fr))` }}>
             {PIPELINE_COLUMNS.map((col) => {
               const items = grouped.get(col.key) || [];
               const total = totalsByCol.get(col.key) || 0;
@@ -493,6 +499,10 @@ function AlertsPanel({ sfmFailures, highRollShoots, missingNadirShoots, projects
 export default function DroneCommandCenter() {
   const queryClient = useQueryClient();
   const { isAdminOrAbove } = usePermissions();
+  // #81: Coerce to a strict-boolean so undefined-while-loading doesn't
+  // accidentally fire queries with denied auth. We also page-gate below in
+  // case `usePermissions` ever returns undefined for an extended period.
+  const adminGateOpen = isAdminOrAbove === true;
 
   // ─── Stats RPC ──────────────────────────────────────────────────────────
   // NB: hooks always run; permission gate is rendered below as a return.
@@ -503,7 +513,7 @@ export default function DroneCommandCenter() {
       return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     },
     staleTime: 30 * 1000,
-    enabled: isAdminOrAbove,
+    enabled: adminGateOpen,
   });
 
   // ─── Active shoots for kanban (last 30 days, all non-terminal statuses) ─
@@ -520,7 +530,7 @@ export default function DroneCommandCenter() {
       );
     },
     staleTime: 30 * 1000,
-    enabled: isAdminOrAbove,
+    enabled: adminGateOpen,
   });
 
   // ─── Project lookup map for the shoots/events we display ────────────────
@@ -540,7 +550,7 @@ export default function DroneCommandCenter() {
         500,
       );
     },
-    enabled: isAdminOrAbove && projectIds.length > 0,
+    enabled: adminGateOpen && projectIds.length > 0,
     staleTime: 60 * 1000,
   });
 
@@ -556,14 +566,14 @@ export default function DroneCommandCenter() {
     queryFn: () =>
       api.entities.DroneEvent.filter({}, "-created_at", ACTIVITY_LIMIT),
     staleTime: 5_000,
-    enabled: isAdminOrAbove,
+    enabled: adminGateOpen,
   });
   const folderEventsQuery = useQuery({
     queryKey: ["project_folder_events_recent_global"],
     queryFn: () =>
       api.entities.ProjectFolderEvent.filter({}, "-created_at", ACTIVITY_LIMIT),
     staleTime: 5_000,
-    enabled: isAdminOrAbove,
+    enabled: adminGateOpen,
   });
 
   const activityEvents = useMemo(() => {
@@ -594,7 +604,7 @@ export default function DroneCommandCenter() {
       return rows.map((r) => ({ ...r, _project_id: projByShoot.get(r.shoot_id) || null }));
     },
     staleTime: 60 * 1000,
-    enabled: isAdminOrAbove,
+    enabled: adminGateOpen,
   });
 
   const highRollShotsQuery = useQuery({
@@ -625,7 +635,7 @@ export default function DroneCommandCenter() {
         .map((s) => ({ ...s, _max_roll: byShoot.get(s.id)?.maxRoll || 0 }));
     },
     staleTime: 60 * 1000,
-    enabled: isAdminOrAbove,
+    enabled: adminGateOpen,
   });
 
   const missingNadirQuery = useQuery({
@@ -642,42 +652,82 @@ export default function DroneCommandCenter() {
         50,
       ),
     staleTime: 60 * 1000,
-    enabled: isAdminOrAbove,
+    enabled: adminGateOpen,
   });
 
   // ─── Realtime invalidations ─────────────────────────────────────────────
+  // #82: Throttle invalidations per-queryKey so a busy day (dozens of drone
+  // events/min) doesn't refetch the dashboard every event. We coalesce into
+  // a 2s window — first event in a window invalidates immediately, then any
+  // further events in that window are deferred until the window closes, at
+  // which point we fire one trailing invalidate. This keeps the UI snappy
+  // (no waiting on the first event) while bounding refetch frequency.
+  const INVALIDATE_WINDOW_MS = 2000;
+  const invalidateThrottleRef = useRef(new Map()); // keyStr → { last, timeout }
+  const throttledInvalidate = useCallback(
+    (keyArr) => {
+      const keyStr = JSON.stringify(keyArr);
+      const map = invalidateThrottleRef.current;
+      const now = Date.now();
+      const entry = map.get(keyStr) || { last: 0, timeout: null };
+      const elapsed = now - entry.last;
+      if (elapsed >= INVALIDATE_WINDOW_MS) {
+        // Fire immediately, open a new window.
+        if (entry.timeout) {
+          clearTimeout(entry.timeout);
+          entry.timeout = null;
+        }
+        entry.last = now;
+        map.set(keyStr, entry);
+        queryClient.invalidateQueries({ queryKey: keyArr });
+      } else if (!entry.timeout) {
+        // Inside window — schedule one trailing invalidate at window end.
+        const remaining = INVALIDATE_WINDOW_MS - elapsed;
+        entry.timeout = setTimeout(() => {
+          entry.last = Date.now();
+          entry.timeout = null;
+          map.set(keyStr, entry);
+          queryClient.invalidateQueries({ queryKey: keyArr });
+        }, remaining);
+        map.set(keyStr, entry);
+      }
+      // else: trailing already scheduled — drop this event.
+    },
+    [queryClient],
+  );
+
   useEffect(() => {
-    if (!isAdminOrAbove) return;
+    if (!adminGateOpen) return;
     const unsubs = [];
     try {
       unsubs.push(
         api.entities.DroneEvent.subscribe(() => {
-          queryClient.invalidateQueries({ queryKey: ["drone_events_recent"] });
-          queryClient.invalidateQueries({ queryKey: ["drone_dashboard_stats"] });
+          throttledInvalidate(["drone_events_recent"]);
+          throttledInvalidate(["drone_dashboard_stats"]);
         }),
       );
     } catch (e) { console.warn("[DroneCommandCenter] DroneEvent subscribe failed:", e); }
     try {
       unsubs.push(
         api.entities.DroneShoot.subscribe(() => {
-          queryClient.invalidateQueries({ queryKey: ["drone_command_center_shoots"] });
-          queryClient.invalidateQueries({ queryKey: ["drone_dashboard_stats"] });
-          queryClient.invalidateQueries({ queryKey: ["drone_missing_nadir"] });
+          throttledInvalidate(["drone_command_center_shoots"]);
+          throttledInvalidate(["drone_dashboard_stats"]);
+          throttledInvalidate(["drone_missing_nadir"]);
         }),
       );
     } catch (e) { console.warn("[DroneCommandCenter] DroneShoot subscribe failed:", e); }
     try {
       unsubs.push(
         api.entities.ProjectFolderEvent.subscribe(() => {
-          queryClient.invalidateQueries({ queryKey: ["project_folder_events_recent_global"] });
+          throttledInvalidate(["project_folder_events_recent_global"]);
         }),
       );
     } catch (e) { console.warn("[DroneCommandCenter] ProjectFolderEvent subscribe failed:", e); }
     try {
       unsubs.push(
         api.entities.DroneSfmRun.subscribe(() => {
-          queryClient.invalidateQueries({ queryKey: ["drone_sfm_failures_7d"] });
-          queryClient.invalidateQueries({ queryKey: ["drone_dashboard_stats"] });
+          throttledInvalidate(["drone_sfm_failures_7d"]);
+          throttledInvalidate(["drone_dashboard_stats"]);
         }),
       );
     } catch (e) { console.warn("[DroneCommandCenter] DroneSfmRun subscribe failed:", e); }
@@ -686,8 +736,15 @@ export default function DroneCommandCenter() {
       for (const u of unsubs) {
         try { if (typeof u === "function") u(); } catch { /* ignore */ }
       }
+      // Cancel any pending trailing invalidates so unmount doesn't fire stale
+      // refetches against an unmounted component.
+      const map = invalidateThrottleRef.current;
+      for (const [, entry] of map) {
+        if (entry.timeout) clearTimeout(entry.timeout);
+      }
+      map.clear();
     };
-  }, [queryClient, isAdminOrAbove]);
+  }, [adminGateOpen, throttledInvalidate]);
 
   const stats = statsQuery.data || {};
   const isLoadingStats = statsQuery.isLoading;

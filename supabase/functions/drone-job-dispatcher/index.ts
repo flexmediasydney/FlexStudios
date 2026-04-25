@@ -3,9 +3,9 @@
  * ────────────────────
  * Pulls pending `drone_jobs` and dispatches them to the appropriate handler:
  *
- *   kind='ingest'           → POST to drone-ingest    payload: { project_id }
- *   kind='render'           → POST to drone-render    payload: { shoot_id, kind?, fallback? }
- *   kind='sfm' / 'sfm_run'  → POST to Modal sfm_http  payload: { _token, shoot_id }
+ *   kind='ingest'  → POST to drone-ingest    payload: { project_id }
+ *   kind='render'  → POST to drone-render    payload: { shoot_id, kind?, fallback? }
+ *   kind='sfm'     → POST to Modal sfm_http  payload: { _token, shoot_id }
  *
  *     On SfM success the dispatcher chains a follow-up `kind='render'` job
  *     (debounced ~10s) for the same shoot, so the next dispatcher tick will
@@ -129,11 +129,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const deferred: DroneJob[] = [];
 
   for (const job of jobs) {
-    if ((job.kind === "sfm" || job.kind === "sfm_run") && sfmDispatched >= MAX_SFM_PER_TICK) {
+    // Canonical kind is 'sfm' per the drone_jobs CHECK constraint. The legacy
+    // 'sfm_run' literal has been removed from this codebase (#20 audit). If
+    // any historical row still has 'sfm_run' we treat it as 'sfm' below.
+    const isSfmKind = job.kind === "sfm" || job.kind === "sfm_run";
+    if (isSfmKind && sfmDispatched >= MAX_SFM_PER_TICK) {
       deferred.push(job);
       continue;
     }
-    if (job.kind === "sfm" || job.kind === "sfm_run") sfmDispatched++;
+    if (isSfmKind) sfmDispatched++;
     try {
       const ok = await dispatchOne(admin, job);
       if (ok.ok) {
@@ -155,27 +159,49 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         // drone_shots.sfm_pose values. Shoots that exit cleanly with too few
         // images (Modal returns ok=false but HTTP 200) do NOT trigger a
         // chained render — they remain at status='sfm_failed' for review.
-        if ((job.kind === "sfm_run" || job.kind === "sfm") && ok.sfm_ok === true) {
+        //
+        // Pin-edit guard (#33 audit): if the user kicked off a pin_edit_saved
+        // render between SfM start and SfM success, the existing pending /
+        // running render will pick up the new SfM pose itself. Skip the
+        // chained render so we don't clobber that work.
+        if (isSfmKind && ok.sfm_ok === true) {
           const shootId =
             (job.payload?.shoot_id as string | undefined) || job.shoot_id;
           if (shootId) {
-            const scheduled = new Date(Date.now() + 10_000).toISOString();
-            const { error: enqErr } = await admin.from("drone_jobs").insert({
-              project_id: (job.payload?.project_id as string | null) ?? null,
-              shoot_id: shootId,
-              kind: "render",
-              status: "pending",
-              payload: {
-                shoot_id: shootId,
-                kind: "poi_plus_boundary",
-                chained_from: job.id,
-              },
-              scheduled_for: scheduled,
-            });
-            if (enqErr) {
-              console.warn(
-                `[${GENERATOR}] failed to chain render job after sfm ${job.id}: ${enqErr.message}`,
+            // Look back 5 min for any pending/running render job for this shoot.
+            const windowStart = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+            const { data: priorRender } = await admin
+              .from("drone_jobs")
+              .select("id, status, payload")
+              .eq("shoot_id", shootId)
+              .eq("kind", "render")
+              .in("status", ["pending", "running"])
+              .gte("created_at", windowStart)
+              .limit(1)
+              .maybeSingle();
+            if (priorRender) {
+              console.log(
+                `[${GENERATOR}] sfm ${job.id} succeeded but render job ${priorRender.id} is already pending/running for shoot ${shootId} — skipping chained render (will pick up new SfM pose)`,
               );
+            } else {
+              const scheduled = new Date(Date.now() + 10_000).toISOString();
+              const { error: enqErr } = await admin.from("drone_jobs").insert({
+                project_id: (job.payload?.project_id as string | null) ?? null,
+                shoot_id: shootId,
+                kind: "render",
+                status: "pending",
+                payload: {
+                  shoot_id: shootId,
+                  kind: "poi_plus_boundary",
+                  chained_from: job.id,
+                },
+                scheduled_for: scheduled,
+              });
+              if (enqErr) {
+                console.warn(
+                  `[${GENERATOR}] failed to chain render job after sfm ${job.id}: ${enqErr.message}`,
+                );
+              }
             }
           }
         }
@@ -244,10 +270,12 @@ async function dispatchOne(
         // to the drone_renders_adjusted/ folder + adjustments column state.
         reason: job.payload?.reason,
       });
-    // We accept both 'sfm_run' (legacy/dispatcher-canonical) and 'sfm' (the
-    // value that drone-ingest enqueues per migration 225 CHECK constraint).
-    case "sfm_run":
+    // 'sfm' is the canonical kind per migration 225 CHECK constraint.
+    // 'sfm_run' is a deprecated alias kept for forward-compat with any rows
+    // still in the queue from prior deployments — accepted at dispatch time
+    // only. New enqueues should always use 'sfm'. (#20 audit fix)
     case "sfm":
+    case "sfm_run":
       return await callModalSfm({
         shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
       });
@@ -270,23 +298,29 @@ async function callModalSfm(args: {
   try {
     const resp = await fetch(MODAL_SFM_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        // Send token as Bearer to keep it out of Modal's request-body error
+        // logs. Body field retained for backward compat. (#7 audit)
+        Authorization: `Bearer ${renderToken}`,
+      },
       body: JSON.stringify({ _token: renderToken, shoot_id: args.shoot_id }),
       // Long timeout — Modal pipeline can take several minutes for a real
       // nadir grid. The Edge Function's wall-clock cap (Deno) is enforced by
       // the platform; we set ours just in case.
       signal: AbortSignal.timeout(SFM_HTTP_TIMEOUT_MS),
     });
+    // Single-read body — see callEdgeFunction for rationale. (#35 audit)
+    const rawText = await resp.text().catch(() => "");
     if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
       return {
         ok: false,
-        error: `sfm_http returned ${resp.status}: ${text.slice(0, 400)}`,
+        error: `sfm_http returned ${resp.status}: ${rawText.slice(0, 400)}`,
       };
     }
     let json: Record<string, unknown> = {};
     try {
-      json = await resp.json();
+      json = JSON.parse(rawText);
     } catch {
       return { ok: false, error: "sfm_http returned non-JSON body" };
     }
@@ -331,45 +365,54 @@ async function callEdgeFunction(
       body: JSON.stringify(body),
     });
 
+    // Body inspection: read the body ONCE as text and try to parse it as JSON.
+    // The previous code did `resp.text().catch()` for the non-OK path then
+    // `resp.json()` for the OK path — fine in isolation but brittle if the
+    // path order ever flipped (you can't read a body twice). Single-read is
+    // safer and lets the error branch report the same body shape. (#35 audit)
+    const rawText = await resp.text().catch(() => "");
+
     if (!resp.ok) {
-      const text = await resp.text().catch(() => "");
-      return { ok: false, error: `${fnName} returned ${resp.status}: ${text.slice(0, 300)}` };
+      return { ok: false, error: `${fnName} returned ${resp.status}: ${rawText.slice(0, 300)}` };
     }
 
-    // Body inspection: catch the case where the Edge Function returned 200
-    // but its own work-unit-level result was a failure. drone-render and
-    // drone-ingest both expose shots_total / shots_rendered (or similar)
-    // in their response body — if shots_rendered === 0 with shots_total > 0,
-    // that's a per-job failure even though HTTP was 200.
-    try {
-      const bodyJson = await resp.json();
-      if (bodyJson && typeof bodyJson === "object") {
-        if (
-          typeof bodyJson.shots_total === "number" &&
-          typeof bodyJson.shots_rendered === "number" &&
-          bodyJson.shots_total > 0 &&
-          bodyJson.shots_rendered === 0
-        ) {
-          // Pull a representative per-shot error if present.
-          const firstErr = Array.isArray(bodyJson.results)
-            ? bodyJson.results.find((r: { ok: boolean }) => r && r.ok === false)?.error
-            : undefined;
-          return {
-            ok: false,
-            error: `${fnName}: 0/${bodyJson.shots_total} shots rendered. ${
-              firstErr ? `First error: ${String(firstErr).slice(0, 200)}` : ""
-            }`.trim(),
-          };
-        }
-        if (bodyJson.success === false) {
-          return {
-            ok: false,
-            error: `${fnName}: success=false, error=${bodyJson.error || "unknown"}`,
-          };
-        }
+    // drone-render and drone-ingest both expose shots_total / shots_rendered
+    // (or similar) in their response body — if shots_rendered === 0 with
+    // shots_total > 0, that's a per-job failure even though HTTP was 200.
+    let bodyJson: Record<string, unknown> | null = null;
+    if (rawText.length > 0) {
+      try {
+        bodyJson = JSON.parse(rawText);
+      } catch {
+        // Not JSON — accept HTTP-200 as success.
+        bodyJson = null;
       }
-    } catch {
-      // Not JSON — accept HTTP-200 as success.
+    }
+    if (bodyJson && typeof bodyJson === "object") {
+      if (
+        typeof bodyJson.shots_total === "number" &&
+        typeof bodyJson.shots_rendered === "number" &&
+        bodyJson.shots_total > 0 &&
+        bodyJson.shots_rendered === 0
+      ) {
+        // Pull a representative per-shot error if present.
+        const firstErr = Array.isArray(bodyJson.results)
+          ? (bodyJson.results as Array<{ ok: boolean; error?: string }>)
+              .find((r) => r && r.ok === false)?.error
+          : undefined;
+        return {
+          ok: false,
+          error: `${fnName}: 0/${bodyJson.shots_total} shots rendered. ${
+            firstErr ? `First error: ${String(firstErr).slice(0, 200)}` : ""
+          }`.trim(),
+        };
+      }
+      if (bodyJson.success === false) {
+        return {
+          ok: false,
+          error: `${fnName}: success=false, error=${bodyJson.error || "unknown"}`,
+        };
+      }
     }
     return { ok: true };
   } catch (err) {

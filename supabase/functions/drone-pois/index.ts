@@ -23,9 +23,8 @@
  *
  * Deployed verify_jwt=false; we do our own auth via getUserFromReq.
  *
- * Google Places API key: tried via env first (GOOGLE_PLACES_API_KEY), with a
- * fallback to vault.decrypted_secrets if env missing. The key is never echoed
- * to logs or response bodies.
+ * Google Places API key: read from env GOOGLE_PLACES_API_KEY (set via
+ * `supabase secrets set`). The key is never echoed to logs or response bodies.
  */
 
 import {
@@ -112,31 +111,21 @@ function haversineMetres(lat1: number, lng1: number, lat2: number, lng2: number)
 }
 
 /**
- * Resolve the Google Places API key.
- *   1. Env var GOOGLE_PLACES_API_KEY (preferred — set via supabase secrets).
- *   2. Fallback: vault.decrypted_secrets via the admin client.
+ * Resolve the Google Places API key from the GOOGLE_PLACES_API_KEY env var
+ * (set via `supabase secrets set`).
  *
- * Returns null if neither source has the key. The key is NEVER logged.
+ * Returns null if not configured. The key is NEVER logged.
+ *
+ * Historical note (#41 audit fix): this used to fall back to
+ * `admin.from('vault.decrypted_secrets')`, but PostgREST cannot resolve
+ * schema-qualified table names like that — the vault path was always dead
+ * code. The env var is the only supported source; keep the secret synced via
+ * `supabase secrets set GOOGLE_PLACES_API_KEY=...`.
  */
 async function resolveGooglePlacesKey(): Promise<string | null> {
   const fromEnv = Deno.env.get('GOOGLE_PLACES_API_KEY');
   if (fromEnv && fromEnv.length > 10) return fromEnv;
-
-  // Fallback to vault — only used if env wasn't propagated.
-  try {
-    const admin = getAdminClient();
-    const { data, error } = await admin
-      .from('vault.decrypted_secrets')
-      .select('decrypted_secret')
-      .eq('name', 'google_places_api_key')
-      .limit(1)
-      .single();
-    if (error) return null;
-    const secret = (data as { decrypted_secret?: string } | null)?.decrypted_secret;
-    return secret && secret.length > 10 ? secret : null;
-  } catch {
-    return null;
-  }
+  return null;
 }
 
 /**
@@ -286,14 +275,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`Project not found: ${projErr?.message ?? 'unknown'}`, 404, req);
   }
 
-  const propertyLat = Number(project.confirmed_lat ?? project.geocoded_lat);
-  const propertyLng = Number(project.confirmed_lng ?? project.geocoded_lng);
+  // Resolve raw values for diagnostics (#40 audit: distinguish "missing" from
+  // "present but unparseable" — strings like "NaN", "" sneak in via dirty data
+  // and the previous error message wrongly said the field was empty).
+  const rawLat = project.confirmed_lat ?? project.geocoded_lat;
+  const rawLng = project.confirmed_lng ?? project.geocoded_lng;
+  const propertyLat = Number(rawLat);
+  const propertyLng = Number(rawLng);
   if (!Number.isFinite(propertyLat) || !Number.isFinite(propertyLng)) {
-    return errorResponse(
-      'Project has no property coordinates (confirmed_lat/lng or geocoded_lat/lng required)',
-      400,
-      req,
-    );
+    const hasRawValue = (rawLat !== null && rawLat !== undefined && String(rawLat) !== '')
+      || (rawLng !== null && rawLng !== undefined && String(rawLng) !== '');
+    const message = hasRawValue
+      ? `Project coordinates are unparseable (got lat='${String(rawLat)}', lng='${String(rawLng)}') — please re-confirm in the Location editor`
+      : 'Project has no property coordinates (confirmed_lat/lng or geocoded_lat/lng required)';
+    return errorResponse(message, 400, req);
   }
 
   // 2. Cache hit? Cache lookup must include radius_m so that a request with
@@ -330,7 +325,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const apiKey = await resolveGooglePlacesKey();
   if (!apiKey) {
     return errorResponse(
-      'Google Places API key not configured (env GOOGLE_PLACES_API_KEY or vault.google_places_api_key)',
+      'Google Places API key not configured (set env GOOGLE_PLACES_API_KEY via `supabase secrets set`)',
       500,
       req,
     );

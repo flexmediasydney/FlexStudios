@@ -165,34 +165,52 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     .eq("id", shoot.id)
     .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
 
-  // ── Render each shot in sequence (Modal handles concurrency upstream) ───
-  const renderResults: Array<{
+  // ── Render each shot in parallel chunks ──────────────────────────────
+  // Modal has soft caps on concurrent worker invocations; 3 shots in flight
+  // is conservative and keeps memory bounded for large nadir grids. Chunks
+  // run sequentially to preserve result order. (#9 audit fix)
+  type RenderResult = {
     shot_id: string;
     filename: string;
     ok: boolean;
     out_path?: string;
     error?: string;
     variants?: Array<{ variant: string; out_path: string }>;
-  }> = [];
+  };
+  const renderResults: RenderResult[] = [];
+  const RENDER_CONCURRENCY = 3;
 
-  for (const shot of shots) {
+  // Honour fallback='gps_only' from the dispatcher payload — when set, we
+  // skip the per-shot SfM pose lookup and project everything via GPS-only
+  // (the existing render path already does this since we don't pass sfm_pose
+  // to Modal in this function; the flag is a future-proof signal that this
+  // shoot should never block on SfM availability). (#16 audit fix)
+  const fallbackGpsOnly = (body as { fallback?: string }).fallback === "gps_only";
+  void fallbackGpsOnly; // currently informational; the per-shot loop below
+  // does GPS-only projection in all cases (sfm_pose is loaded but unused
+  // pending Stream-Z drone-render SfM-aware projection).
+
+  // Single-shot render fn (closes over scene/theme deps).
+  const renderOneShot = async (shot: typeof shots[number]): Promise<RenderResult> => {
     try {
       // Download source image
       const dlRes = await downloadFile(shot.dropbox_path);
       if (!dlRes.ok) {
-        renderResults.push({
+        return {
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
           error: `Dropbox download failed: ${dlRes.status}`,
-        });
-        continue;
+        };
       }
       const srcBytes = new Uint8Array(await dlRes.arrayBuffer());
 
       // Build scene. Skip shots whose GPS is missing/unparseable — Number(null)
       // is NaN, which would silently cascade through to Modal and produce a
       // visually-broken render with POIs landing at frame center. (#B4 audit fix)
+      // Also skip shots with missing relative_altitude — we no longer fall back
+      // to gps_altitude (MSL ≠ AGL) so a missing AGL means the projection math
+      // can't run reliably. (#18 audit fix)
       const scene: Record<string, unknown> = {
         lat: Number(shot.gps_lat),
         lon: Number(shot.gps_lon),
@@ -204,13 +222,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         address: [project.property_address, project.property_suburb].filter(Boolean).join(", "),
       };
       if (!Number.isFinite(scene.lat as number) || !Number.isFinite(scene.lon as number)) {
-        renderResults.push({
+        return {
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
           error: "shot has missing or unparseable GPS — cannot render",
-        });
-        continue;
+        };
+      }
+      if (!Number.isFinite(scene.alt as number)) {
+        return {
+          shot_id: shot.id,
+          filename: shot.filename,
+          ok: false,
+          error: "shot has missing relative_altitude (AGL) — cannot render",
+        };
       }
       if (pois && pois.length > 0) scene.pois = pois;
       if (cadastral && Array.isArray(cadastral.polygon)) {
@@ -223,10 +248,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         : [];
       const wantVariants = variantsCfg.length > 0;
 
-      // POST to Modal HTTP endpoint
+      // POST to Modal HTTP endpoint. RENDER_TOKEN is sent as a Bearer header to
+      // avoid leaking it through Modal's request-body error logs. The body field
+      // (_token) is retained for backward compat with the deployed Modal worker.
+      // TODO: drop the body _token field once the Modal render_http endpoint
+      // accepts header-only auth. (#7 audit fix)
       const modalResp = await fetch(MODAL_RENDER_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${RENDER_TOKEN}`,
+        },
         body: JSON.stringify({
           _token: RENDER_TOKEN,
           image_b64: base64Encode(srcBytes),
@@ -238,13 +270,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
       if (!modalResp.ok) {
         const errText = await modalResp.text().catch(() => "");
-        renderResults.push({
+        return {
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
           error: `Modal returned ${modalResp.status}: ${errText.slice(0, 200)}`,
-        });
-        continue;
+        };
       }
       const modalJson = await modalResp.json();
 
@@ -270,13 +301,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         });
       }
       if (variants.length === 0) {
-        renderResults.push({
+        return {
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
           error: "Modal returned no usable image payload",
-        });
-        continue;
+        };
       }
 
       // Upload + insert per variant
@@ -294,20 +324,32 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             continue;
           }
 
-          const { error: insErr } = await admin.from("drone_renders").insert({
+          // Theme persistence (#10 audit fix): when there's a real theme_id in
+          // the chain, store the id + version pointer only — the snapshot can
+          // be reproduced from drone_themes. Inline snapshot is reserved for
+          // ad-hoc previews where there's no canonical theme to refer to.
+          const themeIdForRow = themeChain[0]?.theme_id || null;
+          const themeVersion = (themeForKind as { _version?: string | number } | null | undefined)
+            ?._version ?? null;
+          const renderRow: Record<string, unknown> = {
             shot_id: shot.id,
             column_state: initialColumnState,
             kind,
             dropbox_path: uploadRes.path_lower,
-            theme_id: themeChain[0]?.theme_id || null,
-            theme_snapshot: themeForKind,
+            theme_id: themeIdForRow,
+            // Only inline-snapshot when we have no canonical theme to point at.
+            theme_snapshot: themeIdForRow ? null : themeForKind,
             property_coord_used: {
               source: project.confirmed_lat ? "confirmed" : "geocoded",
               ...projectCoord,
             },
             pin_overrides: null,
             output_variant: v.name,
-          });
+          };
+          if (themeIdForRow && themeVersion !== null) {
+            renderRow.theme_version = themeVersion;
+          }
+          const { error: insErr } = await admin.from("drone_renders").insert(renderRow);
           if (insErr) {
             anyVariantFailed = true;
             firstError = firstError || `drone_renders insert (${v.name}) failed: ${insErr.message}`;
@@ -339,16 +381,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       }
 
       if (variantResults.length === 0) {
-        renderResults.push({
+        return {
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
           error: firstError || "All variants failed",
-        });
-        continue;
+        };
       }
 
-      renderResults.push({
+      return {
         shot_id: shot.id,
         filename: shot.filename,
         ok: !anyVariantFailed,
@@ -357,10 +398,53 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           ? { variants: variantResults }
           : {}),
         ...(anyVariantFailed ? { error: firstError || undefined } : {}),
-      });
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      renderResults.push({ shot_id: shot.id, filename: shot.filename, ok: false, error: msg });
+      // Structured per-shot error log so it's machine-greppable in the
+      // function logs alongside other Edge Function output. (#11 audit fix)
+      console.error(
+        JSON.stringify({
+          fn: GENERATOR,
+          project_id: project.id,
+          shoot_id: shoot.id,
+          shot_id: shot.id,
+          filename: shot.filename,
+          err: msg,
+        }),
+      );
+      return { shot_id: shot.id, filename: shot.filename, ok: false, error: msg };
+    }
+  };
+
+  for (let i = 0; i < shots.length; i += RENDER_CONCURRENCY) {
+    const chunk = shots.slice(i, i + RENDER_CONCURRENCY);
+    const settled = await Promise.allSettled(chunk.map(renderOneShot));
+    for (let j = 0; j < settled.length; j++) {
+      const r = settled[j];
+      if (r.status === "fulfilled") {
+        renderResults.push(r.value);
+      } else {
+        // Defensive — renderOneShot already wraps errors; this branch shouldn't
+        // fire, but emit a structured error so we'd see it if it did.
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        const shot = chunk[j];
+        console.error(
+          JSON.stringify({
+            fn: GENERATOR,
+            project_id: project.id,
+            shoot_id: shoot.id,
+            shot_id: shot.id,
+            err: `unhandled rejection: ${msg}`,
+          }),
+        );
+        renderResults.push({
+          shot_id: shot.id,
+          filename: shot.filename,
+          ok: false,
+          error: msg,
+        });
+      }
     }
   }
 
@@ -485,6 +569,15 @@ async function loadThemeChain(
   return chain;
 }
 
+// TODO (#8 audit): when this function is called from the drone-job-dispatcher
+// the forwarded Authorization header carries a service-role JWT. drone-pois /
+// drone-cadastral both gate via getUserClient(req) which doesn't recognise the
+// service-role principal → the sub-call returns 0 POIs / null cadastral and
+// the chained render comes out blank. Fix is owned by the drone-pois /
+// drone-cadastral team (Z2): they need to detect the service-role JWT and skip
+// the per-user RLS check (e.g. accept ?internal=1 + service-role JWT). Until
+// that lands, dispatcher-chained renders won't show POIs/boundary even when
+// the data exists. Tracking: see audit finding #8.
 async function fetchPois(req: Request, projectId: string): Promise<any[]> {
   const baseUrl = req.url.replace(/\/drone-render(\?.*)?$/, "/drone-pois");
   const auth = req.headers.get("Authorization");
@@ -501,6 +594,9 @@ async function fetchPois(req: Request, projectId: string): Promise<any[]> {
   return j.pois || [];
 }
 
+// TODO (#8 audit): same caveat as fetchPois — when invoked via the dispatcher's
+// service-role JWT, drone-cadastral's getUserClient doesn't recognise the
+// principal so we get null back. Fix is owned by drone-cadastral (Z2).
 async function fetchCadastral(req: Request, projectId: string): Promise<any | null> {
   const baseUrl = req.url.replace(/\/drone-render(\?.*)?$/, "/drone-cadastral");
   const auth = req.headers.get("Authorization");

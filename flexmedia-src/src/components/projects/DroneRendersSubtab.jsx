@@ -38,12 +38,7 @@ import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -70,6 +65,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
+import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
 
 const COLUMNS = [
   { key: "raw",          label: "Raw",          tone: "border-slate-300 dark:border-slate-700" },
@@ -143,10 +139,23 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   });
 
   // Realtime: invalidate renders on any insert/update/delete for our shots.
-  // The subscribe callback receives the changed row, so filter by shot_id.
+  // We re-subscribe whenever the shot set changes (#69) so newly-ingested
+  // shots are not silently filtered out. The current api wrapper does not
+  // expose Supabase's server-side `filter` channel option (#68), so we keep
+  // a defensive client-side `shotIdSet.has` filter while resubscribing — the
+  // resubscribe is keyed off `shotsQuery.data?.length` so adding a shot
+  // tears down the stale subscription and starts a fresh one with the
+  // up-to-date set rather than capturing the closure's stale set.
+  const shotIdsSignature = useMemo(() => {
+    const ids = (shotsQuery.data || []).map((s) => s.id);
+    ids.sort();
+    return ids.join(",");
+  }, [shotsQuery.data]);
+
   useEffect(() => {
     if (!shootId) return;
-    const shotIdSet = new Set((shotsQuery.data || []).map((s) => s.id));
+    if (!shotIdsSignature) return; // wait for shotsQuery to resolve with ids
+    const shotIdSet = new Set(shotIdsSignature.split(","));
     if (shotIdSet.size === 0) return;
     let active = true;
 
@@ -165,7 +174,7 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
         console.warn("[DroneRendersSubtab] DroneRender unsubscribe failed:", e);
       }
     };
-  }, [shootId, shotsQuery.data, queryClient]);
+  }, [shootId, shotIdsSignature, queryClient]);
 
   const shots = shotsQuery.data || [];
   const renders = rendersQuery.data || [];
@@ -468,6 +477,13 @@ function PipelineColumn({
     setIsOver(false);
     if (!isValidDropTarget || !dragRender) return;
     e.preventDefault();
+    // #70: Guard against rapid drag/drop firing duplicate Edge-Function
+    // invocations for the same render. callTransition writes pendingAction[id]
+    // for the entire round-trip; bail early if already in flight.
+    if (pendingAction[dragRender.id]) {
+      setDragRender(null);
+      return;
+    }
     const target = column.key === "rejected" ? "rejected" : column.key;
     onTransition(dragRender.id, target);
     setDragRender(null);
@@ -591,9 +607,47 @@ function RenderCard({
     }
   }, [orderedVariants, selectedVariantId]);
 
-  const r =
+  // Hooks must be called before any early return (rules-of-hooks).
+  // #71: Replace the dropbox.com/home URL (which respects permissions
+  // imperfectly and 404s for users without folder access) with a download
+  // through the existing media proxy. We fetch the full-resolution blob via
+  // fetchMediaProxy(mode='proxy') and trigger a save with the proper filename.
+  const [isDownloading, setIsDownloading] = useState(false);
+  const selectedRender =
     orderedVariants.find((v) => v.id === selectedVariantId) ||
-    orderedVariants[0];
+    orderedVariants[0] ||
+    null;
+  const handleDownload = useCallback(async () => {
+    const path = selectedRender?.dropbox_path;
+    if (!path) return;
+    setIsDownloading(true);
+    try {
+      const blobUrl = await enqueueFetch(() =>
+        fetchMediaProxy(SHARED_THUMB_CACHE, path, "proxy"),
+      );
+      if (!blobUrl) {
+        toast.error("Download failed — proxy returned no blob");
+        return;
+      }
+      const filename =
+        shot?.filename ||
+        path.split("/").pop() ||
+        `drone-${selectedRender.id}.jpg`;
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error("[DroneRendersSubtab] download failed:", err);
+      toast.error(err?.message || "Download failed");
+    } finally {
+      setIsDownloading(false);
+    }
+  }, [selectedRender?.dropbox_path, selectedRender?.id, shot?.filename]);
+
+  const r = selectedRender;
   if (!r) return null;
 
   const hasMultiVariant = orderedVariants.length > 1;
@@ -611,10 +665,6 @@ function RenderCard({
   const isAdjustments = column === "adjustments";
   const isProposed = column === "proposed";
   const isRejected = column === "rejected";
-
-  const downloadHref = isFinal && r.dropbox_path
-    ? `https://www.dropbox.com/home${encodeURI(r.dropbox_path)}`
-    : null;
 
   // Cards in the rejected drawer aren't draggable — they only restore via the
   // dedicated Restore button (drag has no meaningful destination column).
@@ -848,18 +898,22 @@ function RenderCard({
             </Button>
           )}
 
-          {/* FINAL → Download */}
-          {isFinal && downloadHref && (
+          {/* FINAL → Download (via media proxy — see #71) */}
+          {isFinal && r.dropbox_path && (
             <Button
               variant="outline"
               size="sm"
               className="h-6 text-[10px] px-2"
-              asChild
+              onClick={handleDownload}
+              disabled={isDownloading}
+              title="Download via media proxy"
             >
-              <a href={downloadHref} target="_blank" rel="noopener noreferrer">
+              {isDownloading ? (
+                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+              ) : (
                 <Download className="h-2.5 w-2.5 mr-1" />
-                Download
-              </a>
+              )}
+              Download
             </Button>
           )}
         </div>

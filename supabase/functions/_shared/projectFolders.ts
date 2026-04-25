@@ -440,6 +440,34 @@ async function mirrorEventToDropbox(projectId: string, event: { id: number; crea
 
   const ts = new Date(event.created_at).getTime();
   const filename = `${ts}_${event.id}.json`;
-  const path = `${data.dropbox_path}/events/${filename}`;
-  await uploadFile(path, JSON.stringify(event, null, 2), 'add');
+  const eventsDir = `${data.dropbox_path}/events`;
+  const path = `${eventsDir}/${filename}`;
+
+  // (#60 audit fix) The `_AUDIT/events/` subfolder doesn't exist on a fresh
+  // project until provisioning runs. Events emitted BEFORE provisioning (or
+  // by any code path that touches a project before its folder skeleton is
+  // built) used to silently fail the Dropbox-mirror step because Dropbox
+  // /files/upload doesn't auto-create parent dirs. We now make the events/
+  // dir on demand. createFolder is idempotent (path/conflict/folder is
+  // treated as success) so the cost is one extra round-trip on the first
+  // event after provisioning, then nothing.
+  //
+  // TODO (backfill): historical events emitted before this fix have no
+  // Dropbox mirror. A separate one-shot job would need to walk
+  // project_folder_events for all rows where the corresponding _AUDIT/events
+  // file is absent and re-mirror them. Out of scope for this PR.
+  try {
+    await uploadFile(path, JSON.stringify(event, null, 2), 'add');
+  } catch (uploadErr) {
+    const msg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+    // path/not_found typically means the events/ dir is missing; recover by
+    // creating it and retrying once.
+    if (msg.includes('path/not_found') || msg.includes('not_found')) {
+      console.warn(`[projectFolders] _AUDIT/events missing for project ${projectId} — provisioning on demand`);
+      await createFolder(eventsDir);
+      await uploadFile(path, JSON.stringify(event, null, 2), 'add');
+    } else {
+      throw uploadErr;
+    }
+  }
 }

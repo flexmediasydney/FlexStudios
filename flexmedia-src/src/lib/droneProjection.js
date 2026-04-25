@@ -223,6 +223,12 @@ export function pixelToGroundGps({
  *
  * Uses sfm_pose when present (post-SfM, more accurate), else falls back to
  * raw EXIF GPS + IMU.
+ *
+ * #86: If the shot's `exif_raw.camera_intrinsics` contains a custom intrinsics
+ * block (e.g. for a non-Mavic-3-Pro rig), it is included in the pose so
+ * downstream `gpsToPixel`/`pixelToGroundGps` calls (which spread `...pose`)
+ * pick up per-rig fx/fy/cx/cy. Intrinsics keys we honour: `w, h, fx, fy, cx,
+ * cy`. Anything else is ignored.
  */
 export function poseFromShot(shot) {
   if (!shot) return null;
@@ -240,5 +246,19 @@ export function poseFromShot(shot) {
   ) {
     return null;
   }
-  return { dlat: lat, dlon: lon, alt, heading, pitch };
+  const pose = { dlat: lat, dlon: lon, alt, heading, pitch };
+  // Optional per-shot intrinsics override (e.g. shots from a different
+  // camera body uploaded to a Mavic-3-Pro shoot).
+  const intrinsics =
+    shot?.exif_raw?.camera_intrinsics &&
+    typeof shot.exif_raw.camera_intrinsics === "object"
+      ? shot.exif_raw.camera_intrinsics
+      : null;
+  if (intrinsics) {
+    for (const key of ["w", "h", "fx", "fy", "cx", "cy"]) {
+      const v = Number(intrinsics[key]);
+      if (Number.isFinite(v) && v > 0) pose[key] = v;
+    }
+  }
+  return pose;
 }

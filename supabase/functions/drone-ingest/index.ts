@@ -53,7 +53,7 @@ import {
   getAdminClient,
 } from '../_shared/supabase.ts';
 import { listFiles } from '../_shared/projectFolders.ts';
-import { downloadFile } from '../_shared/dropbox.ts';
+import { downloadFile, dropboxApi } from '../_shared/dropbox.ts';
 import {
   extractExifFromBytes,
   classifyShotRole,
@@ -63,6 +63,60 @@ import {
   type ExtractedExif,
   type ShotRole,
 } from '../_shared/droneIngest.ts';
+
+// Cap a JPG read to the first ~96 KB. EXIF (JPEG APP1 marker) lives at the
+// beginning of the file — DJI XMP segments comfortably fit in the first ~32 KB
+// and we leave headroom for thumbnails embedded ahead of the SOI of the next
+// segment. Pulling the full frame (~10-20 MB per shot) blows the Edge
+// Function's 256 MB cap after ~12-25 shots. (#13 audit fix)
+const EXIF_PARTIAL_BYTES = 96 * 1024;
+
+/**
+ * Fetch only the first EXIF_PARTIAL_BYTES of a Dropbox file via a temporary
+ * link with an HTTP Range header. Falls back to a full downloadFile() when the
+ * temp link can't be minted or the CDN ignores the Range header.
+ */
+async function fetchExifBytes(path: string): Promise<Uint8Array> {
+  try {
+    const linkResp = await dropboxApi<{ link: string }>(
+      '/files/get_temporary_link',
+      { path },
+    );
+    const r = await fetch(linkResp.link, {
+      headers: { Range: `bytes=0-${EXIF_PARTIAL_BYTES - 1}` },
+    });
+    // 206 Partial Content (preferred) or 200 (CDN ignored Range — full body).
+    if (r.ok || r.status === 206) {
+      const buf = new Uint8Array(await r.arrayBuffer());
+      // Cancel any leftover stream eagerly to free buffers before next shot.
+      try {
+        r.body?.cancel();
+      } catch {
+        /* body already consumed */
+      }
+      return buf;
+    }
+    throw new Error(`temp-link fetch returned ${r.status}`);
+  } catch (rangeErr) {
+    // Last-ditch full download (still cheap relative to OOM); cap to the same
+    // partial slice so we don't OOM on a giant file.
+    console.warn(
+      `[drone-ingest] range-fetch failed for ${path}, falling back to full download: ${
+        rangeErr instanceof Error ? rangeErr.message : String(rangeErr)
+      }`,
+    );
+    const dlRes = await downloadFile(path);
+    const full = new Uint8Array(await dlRes.arrayBuffer());
+    try {
+      dlRes.body?.cancel();
+    } catch {
+      /* body already consumed */
+    }
+    return full.length > EXIF_PARTIAL_BYTES
+      ? full.subarray(0, EXIF_PARTIAL_BYTES)
+      : full;
+  }
+}
 
 const GENERATOR = 'drone-ingest';
 
@@ -158,6 +212,11 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
   const admin = getAdminClient();
 
   // 1. List raw_drones files in Dropbox (one round-trip).
+  // Note: listFiles wraps listFolder which silently caps at maxEntries=5000.
+  // Audit #19: emit a warning AND a drone_event when truncation happens so
+  // the activity log surfaces the cap. listFiles doesn't currently return a
+  // `truncated` flag (owned by Z2's projectFolders.ts), so we approximate by
+  // logging the count and emitting a warn-event when we observe the cap value.
   let files: Awaited<ReturnType<typeof listFiles>>;
   try {
     files = await listFiles(projectId, 'raw_drones');
@@ -169,6 +228,28 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
       return emptyResult();
     }
     throw err;
+  }
+  // Heuristic truncation alert: listFolder defaults to 5000 entries — if we
+  // got exactly that count back, we're almost certainly truncated. Emit a
+  // warn-event so an operator can spot it in the activity log.
+  if (files.length >= 5000) {
+    console.warn(
+      `[${GENERATOR}] listFiles returned ${files.length} entries for project ${projectId} — possibly truncated at 5000. (#19 audit)`,
+    );
+    await admin
+      .from('drone_events')
+      .insert({
+        project_id: projectId,
+        event_type: 'shoot_ingested',
+        actor_type: 'system' as const,
+        actor_id: actorId,
+        payload: {
+          warning: 'raw_drones_listing_possibly_truncated',
+          files_seen: files.length,
+          maxEntries: 5000,
+          note: 'increase maxEntries in listFolder or paginate via cursor',
+        },
+      });
   }
 
   // 2. Read existing shots so we can dedupe by dropbox_path. We also load
@@ -190,19 +271,29 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
   }));
   const existingByPath = new Map(existingShots.map((s) => [s.dropbox_path, s]));
 
-  // 3. Process new files: download + parse. Failures are logged-and-skipped,
-  //    not fatal — one corrupt JPG should not block the whole batch.
+  // 3. Process new files: range-fetch EXIF + parse. Failures are logged-and-
+  //    skipped, not fatal — one corrupt JPG should not block the whole batch.
+  //    Track filesConsidered separately from existingShots so the response's
+  //    shots_skipped_already_indexed accurately reports "JPGs we WOULD have
+  //    inserted but already had a matching dropbox_path", not just total
+  //    pre-existing shot count for the project. (#15 audit fix)
   const newShots: NewShotMaterialised[] = [];
   let exifFailures = 0;
+  let filesConsidered = 0;
+  let filesAlreadyIndexed = 0;
 
   for (const file of files) {
-    if (existingByPath.has(file.path)) continue;
     // Sanity gate — only process JPGs / DNGs.
     if (!/\.(jpe?g|dng)$/i.test(file.name)) continue;
+    filesConsidered++;
+
+    if (existingByPath.has(file.path)) {
+      filesAlreadyIndexed++;
+      continue;
+    }
 
     try {
-      const res = await downloadFile(file.path);
-      const buf = await res.arrayBuffer();
+      const buf = await fetchExifBytes(file.path);
       const exif = extractExifFromBytes(buf);
       const dji = parseDjiFilename(file.name);
       const shot_role = classifyShotRole(exif);
@@ -236,7 +327,8 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
           shoots_updated: 0,
           has_nadir_grid: false,
           files_seen: files.length,
-          already_indexed: existingShots.length,
+          files_considered: filesConsidered,
+          already_indexed: filesAlreadyIndexed,
           exif_failures: exifFailures,
         },
       })
@@ -249,7 +341,7 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
     }
     return {
       shots_added: 0,
-      shots_skipped_already_indexed: existingShots.length,
+      shots_skipped_already_indexed: filesAlreadyIndexed,
       shots_skipped_exif_failure: exifFailures,
       shoots_created: 0,
       shoots_updated: 0,
@@ -283,6 +375,7 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
     const group = groups[i];
     const existingInGroup = group.shots.find((s) => s.__kind === 'existing');
     let shoot: ShootRow | null = null;
+    let isNew = false;
 
     if (existingInGroup && existingInGroup.__kind === 'existing') {
       // Resolve shoot_id from the existing shot.
@@ -296,26 +389,71 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
     }
 
     if (!shoot) {
-      // Create. flight_ended_at and image_count get recomputed in step 7.
-      const insertRow = {
-        project_id: projectId,
-        flight_started_at: group.flight_started_at,
-        flight_ended_at: group.flight_ended_at,
-        drone_model: droneModel,
-        status: 'ingested' as const,
-        image_count: 0, // recomputed below
-        has_nadir_grid: false, // recomputed below
-      };
-      const { data, error } = await admin
+      // Idempotency guard (#12 audit): before inserting a new shoot row, look
+      // for one that already matches (project_id, flight_started_at). Two
+      // concurrent webhooks can race this code path otherwise — both miss the
+      // existing-shot check (because the OTHER webhook hadn't inserted shots
+      // yet either) and both proceed to insert duplicate shoots.
+      const { data: existingShoot, error: existingErr } = await admin
         .from('drone_shoots')
-        .insert(insertRow)
         .select('id, project_id, flight_started_at, flight_ended_at')
-        .single();
-      if (error) throw error;
-      shoot = data as ShootRow;
-      groupShoots.push({ group_index: i, shoot, is_new: true });
+        .eq('project_id', projectId)
+        .eq('flight_started_at', group.flight_started_at)
+        .maybeSingle();
+      if (existingErr) throw existingErr;
+      if (existingShoot) {
+        shoot = existingShoot as ShootRow;
+        isNew = false;
+      } else {
+        // Create. flight_ended_at and image_count get recomputed in step 7.
+        const insertRow = {
+          project_id: projectId,
+          flight_started_at: group.flight_started_at,
+          flight_ended_at: group.flight_ended_at,
+          drone_model: droneModel,
+          status: 'ingested' as const,
+          image_count: 0, // recomputed below
+          has_nadir_grid: false, // recomputed below
+        };
+        const { data, error } = await admin
+          .from('drone_shoots')
+          .insert(insertRow)
+          .select('id, project_id, flight_started_at, flight_ended_at')
+          .single();
+        if (error) {
+          // Race: someone else inserted between our SELECT and our INSERT.
+          // Re-read once more to get the canonical row.
+          const { data: raceRecover } = await admin
+            .from('drone_shoots')
+            .select('id, project_id, flight_started_at, flight_ended_at')
+            .eq('project_id', projectId)
+            .eq('flight_started_at', group.flight_started_at)
+            .maybeSingle();
+          if (raceRecover) {
+            shoot = raceRecover as ShootRow;
+            isNew = false;
+          } else {
+            throw error;
+          }
+        } else {
+          shoot = data as ShootRow;
+          isNew = true;
+        }
+      }
+    }
+
+    // Audit #14: ensure each group is pushed exactly once. The previous code
+    // had two .push() sites — one inside the !shoot branch with is_new=true
+    // and one in the else branch — but a future edit could easily double-push
+    // if the existingInGroup branch was reached but `shoot` ended up null
+    // (e.g. dangling shoot_id). Single-push at the bottom of the loop body
+    // makes the invariant explicit.
+    if (shoot) {
+      groupShoots.push({ group_index: i, shoot, is_new: isNew });
     } else {
-      groupShoots.push({ group_index: i, shoot, is_new: false });
+      console.warn(
+        `[${GENERATOR}] group ${i} for project ${projectId} produced no shoot row; skipping`,
+      );
     }
   }
 
@@ -336,8 +474,12 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
         captured_at: ns.exif.captured_at,
         gps_lat: ns.exif.gps_lat,
         gps_lon: ns.exif.gps_lon,
-        // relative_altitude is the XMP AGL; fall back to GPS altitude when missing.
-        relative_altitude: ns.exif.relative_altitude ?? ns.exif.gps_altitude,
+        // relative_altitude is the XMP AGL (DJI RelativeAltitude). We do NOT
+        // fall back to gps_altitude because that's MSL not AGL — projecting
+        // POIs through MSL altitude on elevated terrain places them hundreds
+        // of metres off. Leave NULL when missing; drone-render will skip
+        // shots without AGL altitude rather than render incorrectly. (#18 audit)
+        relative_altitude: ns.exif.relative_altitude,
         flight_yaw: ns.exif.flight_yaw,
         gimbal_pitch: ns.exif.gimbal_pitch,
         gimbal_roll: ns.exif.gimbal_roll,
@@ -450,7 +592,7 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
       has_nadir_grid_shoots: hasNadirCount,
       jobs_enqueued: jobsEnqueued,
       exif_failures: exifFailures,
-      already_indexed: existingShots.length,
+      already_indexed: filesAlreadyIndexed,
     },
   };
   const { data: evtData, error: evtErr } = await admin
@@ -466,7 +608,7 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
 
   return {
     shots_added: shotsAdded,
-    shots_skipped_already_indexed: existingShots.length,
+    shots_skipped_already_indexed: filesAlreadyIndexed,
     shots_skipped_exif_failure: exifFailures,
     shoots_created: groupShoots.filter((g) => g.is_new).length,
     shoots_updated: groupShoots.filter((g) => !g.is_new).length,

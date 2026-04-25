@@ -72,6 +72,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const user = await getUserFromReq(req).catch(() => null);
   if (!user) return errorResponse('Authentication required', 401, req);
+  const isService = user.id === '__service_role__';
 
   // Health check is post-auth so unauthenticated probers can't enumerate
   // function versions / deployment metadata. (#1 audit fix)
@@ -79,8 +80,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
   }
 
+  // Service-role is permitted (future automated approval pipelines).
+  // Otherwise the user must hold one of ALLOWED_ROLES. (#21 audit fix)
   const role = user.role || '';
-  if (!ALLOWED_ROLES.includes(role)) {
+  if (!isService && !ALLOWED_ROLES.includes(role)) {
     return errorResponse(`Role ${role || '(none)'} not permitted`, 403, req);
   }
 
@@ -116,6 +119,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // Resolve 'restore' → look up the most recent render_rejected event and
   // put the row back at whatever column it was in before being rejected.
+  //
+  // Audit #23: a render that's been through reject→restore→reject would
+  // pick up the FIRST rejection's from_state if we only ordered by
+  // created_at desc and stopped at the most recent render_rejected. We must
+  // find the rejection that happened AFTER the last restore (if any) so we
+  // restore to the column that was occupied by THIS rejection cycle, not the
+  // one before it.
   if (toState === 'restore') {
     if (fromState !== 'rejected') {
       return errorResponse(
@@ -124,14 +134,26 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       );
     }
     const admin0 = getAdminClient();
-    const { data: lastReject } = await admin0
+    // Find the most recent prior 'render_restored' event, if any.
+    const { data: lastRestoreEvent } = await admin0
+      .from('drone_events')
+      .select('created_at')
+      .eq('event_type', 'render_restored')
+      .filter('payload->>render_id', 'eq', body.render_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const lastRestoreAt = lastRestoreEvent?.created_at as string | undefined;
+    // Find the most recent render_rejected AFTER any prior restore.
+    let rejectQ = admin0
       .from('drone_events')
       .select('payload, created_at')
       .eq('event_type', 'render_rejected')
       .filter('payload->>render_id', 'eq', body.render_id)
       .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(1);
+    if (lastRestoreAt) rejectQ = rejectQ.gt('created_at', lastRestoreAt);
+    const { data: lastReject } = await rejectQ.maybeSingle();
     const restored = (lastReject?.payload as { from_state?: string } | null)?.from_state;
     if (!restored || !['proposed', 'adjustments', 'final'].includes(restored)) {
       // No prior reject event recorded — fall back to 'proposed' so the user
@@ -159,6 +181,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Resolve project_id (for the audit event) via shot → shoot ──────────────
+  // drone_events.project_id is NOT NULL in the schema, so a missing project_id
+  // means we silently drop the audit event. Try harder: shot → shoot first,
+  // then fall back to looking up the shoot via project_folders that prefix
+  // the render's dropbox_path. (#25 audit fix)
   const { data: shotRow } = await admin
     .from('drone_shots')
     .select('id, shoot_id')
@@ -173,6 +199,40 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .eq('id', shotRow.shoot_id)
       .maybeSingle();
     projectId = shootRow?.project_id ?? null;
+  }
+
+  // Fallback A: render row has shot_id but the shot was hard-deleted. Walk
+  // back via shoot_id (sometimes drone_renders carries shoot_id directly via
+  // FK denormalisation in older snapshots — defensive cast guards against
+  // schema drift).
+  if (!projectId) {
+    const renderShootId = (render as { shoot_id?: string | null }).shoot_id;
+    if (renderShootId) {
+      const { data: shootRow2 } = await admin
+        .from('drone_shoots')
+        .select('id, project_id')
+        .eq('id', renderShootId)
+        .maybeSingle();
+      projectId = shootRow2?.project_id ?? null;
+    }
+  }
+
+  // Fallback B: derive from the render's dropbox_path → project_folders.
+  // The render landed somewhere under 06_ENRICHMENT/.../<project>/... so
+  // longest-prefix-match against project_folders gives us the owner.
+  if (!projectId && render.dropbox_path) {
+    const { data: folderHit } = await admin
+      .from('project_folders')
+      .select('project_id, dropbox_path')
+      .ilike('dropbox_path', '%/' + render.dropbox_path.split('/').slice(2, 4).join('/') + '%')
+      .limit(1)
+      .maybeSingle();
+    projectId = folderHit?.project_id ?? null;
+    if (projectId) {
+      console.warn(
+        `[${GENERATOR}] resolved project_id ${projectId} for render ${body.render_id} via dropbox_path fallback (shot/shoot lookup missed)`,
+      );
+    }
   }
 
   // ── Auto-supersede prior occupant of the target slot ─────────────────────
@@ -205,7 +265,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Update column_state ────────────────────────────────────────────────────
   const updatePatch: Record<string, unknown> = { column_state: toState };
   if (toState === 'final') {
-    updatePatch.approved_by = user.id === '__service_role__' ? null : user.id;
+    updatePatch.approved_by = isService ? null : user.id;
     updatePatch.approved_at = new Date().toISOString();
   }
 
@@ -230,8 +290,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       const { getFolderPath } = await import('../_shared/projectFolders.ts');
 
       const finalFolder = await getFolderPath(projectId, 'final_delivery_drones');
-      // Strip the proposed-folder filename from the source path so we can re-mount it
-      const filename = render.dropbox_path.split('/').pop() ?? `render_${body.render_id}.jpg`;
+      // Strip the proposed-folder filename from the source path so we can
+      // re-mount it. The render row always has a dropbox_path (NOT NULL in
+      // the schema), so the trailing fallback in the prior code was dead. (#26 audit)
+      const filename = render.dropbox_path.split('/').pop() as string;
       const targetPath = `${finalFolder}/${filename}`;
       const meta = await copyFile(render.dropbox_path, targetPath);
       finalDropboxPath = meta.path_lower ?? targetPath.toLowerCase();
@@ -252,7 +314,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       const { deleteFile } = await import('../_shared/dropbox.ts');
       const { getFolderPath } = await import('../_shared/projectFolders.ts');
       const finalFolder = await getFolderPath(projectId, 'final_delivery_drones');
-      const filename = render.dropbox_path.split('/').pop() ?? `render_${body.render_id}.jpg`;
+      // dropbox_path is NOT NULL — drop the dead `??` fallback. (#26 audit)
+      const filename = render.dropbox_path.split('/').pop() as string;
       const targetPath = `${finalFolder}/${filename}`;
       await deleteFile(targetPath);
     } catch (delErr) {
@@ -277,8 +340,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         shoot_id: shotRow?.shoot_id ?? null,
         shot_id: render.shot_id,
         event_type: eventType,
-        actor_type: 'user',
-        actor_id: user.id === '__service_role__' ? null : user.id,
+        actor_type: isService ? 'system' : 'user',
+        actor_id: isService ? null : user.id,
         payload: {
           render_id: body.render_id,
           from_state: fromState,
@@ -293,8 +356,22 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       console.warn(`[${GENERATOR}] drone_events insert failed: ${evErr.message}`);
     }
   } else {
-    console.warn(
-      `[${GENERATOR}] no project_id resolved for render ${body.render_id} — skipping audit event`,
+    // (#25 audit) project_id is NOT NULL on drone_events; without it we can't
+    // record the audit. Log LOUDLY (error, not warn) with full context so
+    // ops can spot orphaned approvals in the function logs and reconcile.
+    console.error(
+      JSON.stringify({
+        fn: GENERATOR,
+        level: 'error',
+        msg: 'project_id_unresolved_audit_skipped',
+        render_id: body.render_id,
+        shot_id: render.shot_id,
+        from_state: fromState,
+        to_state: toState,
+        actor_id: isService ? null : user.id,
+        dropbox_path: render.dropbox_path,
+        kind: render.kind,
+      }),
     );
   }
 

@@ -34,8 +34,15 @@ import { cn } from "@/lib/utils";
 
 const blobCache = SHARED_THUMB_CACHE;
 
-function cacheKey(path, mode) {
-  return `${mode}::${path}`;
+// #84: Include `size` in the cache key so distinct render-size requests for
+// the same path don't collide. The shared media-proxy itself only knows
+// 'thumb' vs 'proxy' modes today, but callers may want to differentiate by
+// requested display size (e.g. card thumb vs detail dialog) and we don't
+// want one consumer's blob to be served in place of another's. The default
+// segment 'default' keeps backwards compatibility with existing call sites
+// that don't pass `size`.
+function cacheKey(path, mode, size) {
+  return `${mode}::${size || "default"}::${path}`;
 }
 
 /**
@@ -54,6 +61,9 @@ async function fetchThumb(path, mode = "thumb") {
 export default function DroneThumbnail({
   dropboxPath,
   mode = "thumb",
+  // #84: optional size discriminator threaded into the cache key so different
+  // call sites requesting the same path at different sizes don't share blobs.
+  size,
   alt = "",
   className,
   aspectRatio = "aspect-[4/3]",
@@ -64,7 +74,7 @@ export default function DroneThumbnail({
   const [blobUrl, setBlobUrl] = useState(() => {
     // Synchronous cache hit — show immediately, no flash
     if (!dropboxPath) return null;
-    return blobCache.get(cacheKey(dropboxPath, mode)) || null;
+    return blobCache.get(cacheKey(dropboxPath, mode, size)) || null;
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
@@ -92,14 +102,14 @@ export default function DroneThumbnail({
     setImgLoaded(false);
     // If we already have a cached blob for the new path, surface it instantly
     if (dropboxPath) {
-      const cached = blobCache.get(cacheKey(dropboxPath, mode));
+      const cached = blobCache.get(cacheKey(dropboxPath, mode, size));
       if (cached) {
         setBlobUrl(cached);
         setImgLoaded(true);
         lastPathRef.current = dropboxPath;
       }
     }
-  }, [dropboxPath, mode]);
+  }, [dropboxPath, mode, size]);
 
   // IntersectionObserver: only fetch when the tile scrolls into view (or near it).
   // Browsers' native loading="lazy" on <img> doesn't help here because we're
@@ -156,7 +166,7 @@ export default function DroneThumbnail({
         setLoading(false);
       });
     }
-  }, [dropboxPath, mode, blobUrl, onLoaded]);
+  }, [dropboxPath, mode, size, blobUrl, onLoaded]);
 
   return (
     <div
