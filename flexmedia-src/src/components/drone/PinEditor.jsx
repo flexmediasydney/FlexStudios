@@ -34,7 +34,9 @@ import {
   useRef,
   useState,
 } from "react";
+import { useBlocker } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
+import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -102,11 +104,6 @@ const VIRTUAL_WORLD_KINDS = {
     color: "#F59E0B",
     icon: "P",
   },
-  boundary: {
-    label: "Boundary",
-    color: "#10B981",
-    icon: "B",
-  },
 };
 
 // ── Utility — generate a stable client id for new pins ─────────────────────
@@ -126,9 +123,11 @@ export default function PinEditor({
   shots = [],
   currentShotId,
   theme,
+  themeError = null, // truthy when theme failed to load — blocks editing
   customPins = [],
   projectCoord,
   imageUrl,
+  imageError = null, // truthy when source image failed to load
   poseAvailable = true, // false → SfM not available, use GPS prior
   onSave,
   onCancel,
@@ -142,6 +141,21 @@ export default function PinEditor({
   const [isSaving, setIsSaving] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
+  // #22: Initial seed uses camera-native dimensions (5280x3956 for Mavic 3 Pro)
+  // but `output_variants.target_width_px` may render a downscaled JPEG (e.g.
+  // 2400px wide). On image onLoad we update `imageNatural` to the displayed
+  // image's actual naturalWidth/Height so fit-to-frame is sized correctly.
+  // HOWEVER, `gpsToPixel` / `pixelToGroundGps` are called with `...pose`,
+  // and pose carries CAMERA_DEFAULTS (5280x3956) intrinsics — so pin positions
+  // returned by the projection live in the camera-native pixel space, NOT the
+  // rendered/displayed image space. When the displayed image is downscaled,
+  // the projected pin coords overshoot the displayed image extent and pins
+  // appear in the wrong place on screen.
+  // TODO(#22): proper fix requires either (a) always rendering against the
+  // ORIGINAL drone shot resolution (CSS-scale to fit), or (b) scaling pixel
+  // coords from camera-native space → rendered-image space using the ratio
+  // (imageNatural.w / pose.w). Option (b) is cheaper but requires every
+  // gpsToPixel/pixelToGroundGps call site to scale-and-unscale consistently.
   const [imageNatural, setImageNatural] = useState({
     w: CAMERA_DEFAULTS.w,
     h: CAMERA_DEFAULTS.h,
@@ -162,12 +176,21 @@ export default function PinEditor({
   const HISTORY_CAP = 50;
   const undoStack = useRef({ buf: new Array(HISTORY_CAP), head: 0, size: 0 });
   const redoStack = useRef({ buf: new Array(HISTORY_CAP), head: 0, size: 0 });
+  // #19: mirror stack sizes in React state so the Undo/Redo toolbar buttons
+  // re-render when the underlying refs change. useRef.current.size doesn't
+  // trigger renders, so the disabled prop went stale (button stayed disabled
+  // after the first edit, or stayed enabled after undoing back to empty).
+  // Always update these in lockstep with pushHistory/popHistory/clearHistory.
+  const [undoSize, setUndoSize] = useState(0);
+  const [redoSize, setRedoSize] = useState(0);
 
   const pushHistory = useCallback((stack, snapshot) => {
     const s = stack.current;
     s.buf[s.head] = snapshot;
     s.head = (s.head + 1) % HISTORY_CAP;
     if (s.size < HISTORY_CAP) s.size += 1;
+    if (stack === undoStack) setUndoSize(s.size);
+    else if (stack === redoStack) setRedoSize(s.size);
   }, []);
   const popHistory = useCallback((stack) => {
     const s = stack.current;
@@ -176,6 +199,8 @@ export default function PinEditor({
     const v = s.buf[s.head];
     s.buf[s.head] = undefined;
     s.size -= 1;
+    if (stack === undoStack) setUndoSize(s.size);
+    else if (stack === redoStack) setRedoSize(s.size);
     return v;
   }, []);
   const clearHistory = useCallback((stack) => {
@@ -183,6 +208,8 @@ export default function PinEditor({
     s.buf = new Array(HISTORY_CAP);
     s.head = 0;
     s.size = 0;
+    if (stack === undoStack) setUndoSize(0);
+    else if (stack === redoStack) setRedoSize(0);
   }, []);
 
   const setItems = useCallback((updater) => {
@@ -270,7 +297,6 @@ export default function PinEditor({
 
   // ── Canvas / image refs ─────────────────────────────────────────────────
   const containerRef = useRef(null);
-  const imgRef = useRef(null);
   const stageRef = useRef(null);
 
   // Image natural-size after load.
@@ -331,7 +357,12 @@ export default function PinEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageLoaded]);
 
-  // ── Mouse interaction ──────────────────────────────────────────────────
+  // ── Pointer interaction ────────────────────────────────────────────────
+  // #17: Pointer Events instead of Mouse Events so touch (iPad on-site
+  // drone operators) and stylus work the same as mouse. setPointerCapture
+  // on pointerdown ensures all subsequent pointermove / pointerup events
+  // for that pointerId fire on the capturing element even if the finger
+  // leaves it.
   const dragState = useRef(null);
 
   const screenToImage = useCallback(
@@ -345,8 +376,17 @@ export default function PinEditor({
     [view],
   );
 
-  const onMouseDown = useCallback(
+  const onPointerDown = useCallback(
     (e) => {
+      // #17: Capture this pointer so pointermove/pointerup keep firing on
+      // the stage even if the finger/cursor leaves the stage element
+      // mid-drag. Wrapped in try/catch — capture is best-effort and may
+      // fail on detached nodes.
+      try {
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+      } catch {
+        /* ignore */
+      }
       // Hit test against projected pins
       const rect = stageRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -370,18 +410,30 @@ export default function PinEditor({
       if (tool === TOOLS.SELECT) {
         if (hit) {
           setSelectedItemId(hit.id);
-          dragState.current = {
-            kind: "drag-pin",
-            id: hit.id,
-            startMouse: { x: e.clientX, y: e.clientY },
-            startPixel: { ...hit._pixel },
-            moved: false,
-            // #79: snapshot the pose at drag-start so the inverse projection
-            // on mouseup uses the pose that was active when the drag began,
-            // not whatever pose belongs to a shot the user clicked through to
-            // mid-drag.
-            startPose: pose,
-          };
+          // #5: Property pin position is owned by `projects.confirmed_lat/lng`.
+          // Allow selection (so the inspector renders + shows the lock-out
+          // hint) but skip the drag — fall through to pan so the gesture
+          // doesn't feel inert. The inspector also disables label/color/etc.
+          if (hit.virtual === "property") {
+            dragState.current = {
+              kind: "pan",
+              startMouse: { x: e.clientX, y: e.clientY },
+              startView: { ...view },
+            };
+          } else {
+            dragState.current = {
+              kind: "drag-pin",
+              id: hit.id,
+              startMouse: { x: e.clientX, y: e.clientY },
+              startPixel: { ...hit._pixel },
+              moved: false,
+              // #79: snapshot the pose at drag-start so the inverse projection
+              // on mouseup uses the pose that was active when the drag began,
+              // not whatever pose belongs to a shot the user clicked through to
+              // mid-drag.
+              startPose: pose,
+            };
+          }
         } else {
           setSelectedItemId(null);
           dragState.current = {
@@ -432,7 +484,7 @@ export default function PinEditor({
     ],
   );
 
-  const onMouseMove = useCallback(
+  const onPointerMove = useCallback(
     (e) => {
       const ds = dragState.current;
       if (!ds) return;
@@ -470,7 +522,14 @@ export default function PinEditor({
     [view.zoom],
   );
 
-  const onMouseUp = useCallback(() => {
+  const onPointerUp = useCallback((e) => {
+    // #17: Release pointer capture taken in onPointerDown. Best-effort —
+    // some platforms drop the capture automatically.
+    try {
+      e?.currentTarget?.releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* ignore */
+    }
     const ds = dragState.current;
     dragState.current = null;
     if (!ds) return;
@@ -587,6 +646,9 @@ export default function PinEditor({
           setTool(TOOLS.SELECT);
           break;
         case "m":
+        case "h":
+          // #30: H is the Figma/Adobe convention for the hand/pan tool. Keep
+          // M as a synonym so existing muscle memory still works.
           setTool(TOOLS.PAN);
           break;
         case "p":
@@ -660,6 +722,9 @@ export default function PinEditor({
     (dx, dy) => {
       const item = items.find((i) => i.id === selectedItemId);
       if (!item) return;
+      // #5: Property pin is owned by projects.confirmed_lat/lng — don't let
+      // arrow-key nudges create a hidden override.
+      if (item.virtual === "property") return;
       if (item.kind === "pixel") {
         updateItem(item.id, {
           pixel: { x: item.pixel.x + dx, y: item.pixel.y + dy },
@@ -706,7 +771,11 @@ export default function PinEditor({
 
   // ── Save ────────────────────────────────────────────────────────────────
   const handleSave = useCallback(
-    async (scope = "this_shot") => {
+    async () => {
+      // #3: scope param dropped — Subagent A removed it from drone-pins-save
+      // and the "Apply to all shots" UI is now hidden until the backend
+      // supports a real per-pin fan-out. World pins already broadcast across
+      // all renders in the shoot via projection at render time.
       if (!shoot?.id) {
         toast.error("Missing shoot id — cannot save");
         return;
@@ -716,7 +785,7 @@ export default function PinEditor({
         const edits = computeSaveEdits({
           items,
           shootId: shoot.id,
-          scope,
+          imageNatural,
         });
         if (edits.length === 0) {
           toast.info("Nothing to save");
@@ -773,7 +842,23 @@ export default function PinEditor({
                 : undefined,
           },
         );
-        if (typeof onSave === "function") onSave({ scope, edits, result });
+        // #7: clear local dirty markers and history stacks after a successful
+        // save so dirtyCount drops to 0, the Save button disables, and the
+        // beforeunload / useBlocker / "Discard unsaved changes?" modal stops
+        // firing on subsequent navigation. Without this, an editor that didn't
+        // unmount on save (e.g. fallback path or future un-navigate) would
+        // claim there are unsaved changes forever.
+        // Drop _delete rows (they're gone server-side) and reset _dirty/_new
+        // on everything else; this also means the "saved" snapshot becomes
+        // the new baseline for undo, so we clear both stacks too.
+        _setItems((prev) =>
+          prev
+            .filter((i) => !i._delete)
+            .map((i) => ({ ...i, _dirty: false, _new: false })),
+        );
+        clearHistory(undoStack);
+        clearHistory(redoStack);
+        if (typeof onSave === "function") onSave({ edits, result });
       } catch (err) {
         console.error("[PinEditor] save failed", err);
         toast.error(`Save failed: ${err?.message || err}`);
@@ -781,7 +866,7 @@ export default function PinEditor({
         setIsSaving(false);
       }
     },
-    [items, shoot?.id, onSave],
+    [items, shoot?.id, onSave, imageNatural, clearHistory],
   );
 
   // Preview-only render: hits drone-render-preview for fast iteration.
@@ -824,27 +909,50 @@ export default function PinEditor({
     }
   }, [theme]);
 
+  // #24: single source of truth for "is this item unsaved?" — used by the
+  // dirty-count badge, save-button enable, beforeunload, requestCancel and
+  // useBlocker so they can never disagree.
+  const isItemDirty = useCallback(
+    (i) => Boolean(i._dirty || i._delete || i._new),
+    [],
+  );
+
   // Cancel button: warn about unsaved changes via confirm modal.
   const requestCancel = useCallback(() => {
-    const dirty = items.some((i) => i._dirty || i._delete || i._new);
-    if (dirty) {
+    if (items.some(isItemDirty)) {
       setConfirm("cancel_unsaved");
     } else {
       onCancel?.();
     }
-  }, [items, onCancel]);
+  }, [items, isItemDirty, onCancel]);
 
   // Warn before window unload if unsaved.
   useEffect(() => {
     const beforeUnload = (e) => {
-      const dirty = items.some((i) => i._dirty || i._delete || i._new);
-      if (!dirty) return;
+      if (!items.some(isItemDirty)) return;
       e.preventDefault();
       e.returnValue = "";
     };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
-  }, [items]);
+  }, [items, isItemDirty]);
+
+  // #25: react-router v6.4+ useBlocker handles in-app navigation away from a
+  // dirty editor — beforeUnload above only catches full reload / tab close.
+  // Confirm via window.confirm to keep this lightweight.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      items.some(isItemDirty) &&
+      currentLocation.pathname !== nextLocation.pathname,
+  );
+  useEffect(() => {
+    if (blocker?.state !== "blocked") return;
+    if (window.confirm("You have unsaved pin edits. Discard and leave?")) {
+      blocker.proceed();
+    } else {
+      blocker.reset();
+    }
+  }, [blocker]);
 
   // ── UI ──────────────────────────────────────────────────────────────────
   const selectedItem = useMemo(
@@ -852,7 +960,7 @@ export default function PinEditor({
     [items, selectedItemId],
   );
 
-  const dirtyCount = items.filter((i) => i._dirty || i._delete).length;
+  const dirtyCount = items.filter(isItemDirty).length;
 
   // Layer groups for the tree.
   const layerGroups = useMemo(() => {
@@ -928,9 +1036,14 @@ export default function PinEditor({
             </Button>
             <Button
               size="sm"
-              disabled={isSaving || dirtyCount === 0}
-              onClick={() => handleSave("this_shot")}
+              disabled={isSaving || dirtyCount === 0 || Boolean(themeError)}
+              onClick={() => handleSave()}
               className="gap-2"
+              title={
+                themeError
+                  ? "Editing blocked — theme failed to load"
+                  : undefined
+              }
             >
               {isSaving ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -947,8 +1060,41 @@ export default function PinEditor({
           </div>
         </div>
 
+        {/* #11: Theme load failure is BLOCKING — without a theme we don't
+            know which POIs are enabled and the editor would silently render
+            stale defaults that won't match the real render. Render a top-level
+            red banner above the canvas so the operator can't accidentally
+            commit edits against an unresolved theme.
+            #imageError: surface the source-image failure in the same banner
+            row so the user sees both problems at once. */}
+        {(themeError || imageError) && (
+          <div className="bg-red-50 dark:bg-red-950/40 border-b border-red-300 dark:border-red-800 px-4 py-2.5 text-sm text-red-800 dark:text-red-200 flex items-start gap-2 shrink-0">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              {themeError && (
+                <div>
+                  <span className="font-semibold">Theme failed to load.</span>{" "}
+                  Editing is blocked — pin overrides require a resolved theme
+                  so the editor preview matches the rendered output.{" "}
+                  <span className="text-xs opacity-80">
+                    {themeError?.message || ""}
+                  </span>
+                </div>
+              )}
+              {imageError && (
+                <div className={cn(themeError && "mt-1")}>
+                  <span className="font-semibold">Image unavailable.</span>{" "}
+                  {typeof imageError === "string"
+                    ? imageError
+                    : imageError?.message || "Failed to load shot image."}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ── MAIN ROW ──────────────────────────────────────── */}
-        <div className="flex flex-1 min-h-0">
+        <div className={cn("flex flex-1 min-h-0", themeError && "opacity-50 pointer-events-none")}>
           {/* Layers panel */}
           <aside className="w-60 border-r border-border bg-background overflow-y-auto shrink-0 p-3 text-sm">
             <div className="font-semibold text-xs uppercase text-muted-foreground mb-2">
@@ -1049,10 +1195,13 @@ export default function PinEditor({
                 variant={tool === TOOLS.ADD_PIN ? "secondary" : "ghost"}
                 className="w-full justify-start gap-1 text-xs"
                 onClick={() => setTool(TOOLS.ADD_PIN)}
+                disabled={shots.length === 0}
                 title={
-                  poseAvailable
-                    ? "Click on canvas to drop a world-anchored pin (GPS)"
-                    : "SfM unavailable — pin will be pixel-anchored to this shot"
+                  shots.length === 0
+                    ? "No shots in this shoot — add shots first."
+                    : poseAvailable
+                      ? "Click on canvas to drop a world-anchored pin (GPS)"
+                      : "SfM unavailable — pin will be pixel-anchored to this shot"
                 }
               >
                 <Plus className="h-3 w-3" /> Add POI pin
@@ -1062,7 +1211,12 @@ export default function PinEditor({
                 variant={tool === TOOLS.ADD_TEXT ? "secondary" : "ghost"}
                 className="w-full justify-start gap-1 text-xs"
                 onClick={() => setTool(TOOLS.ADD_TEXT)}
-                title="Click on canvas to drop a pixel-anchored text label on this shot"
+                disabled={shots.length === 0}
+                title={
+                  shots.length === 0
+                    ? "No shots in this shoot — add shots first."
+                    : "Click on canvas to drop a pixel-anchored text label on this shot"
+                }
               >
                 <TextIcon className="h-3 w-3" /> Add text
               </Button>
@@ -1109,21 +1263,31 @@ export default function PinEditor({
                 value={TOOLS.PAN}
                 setTool={setTool}
                 Icon={Hand}
-                label="Pan (M)"
+                label="Pan (H or M)"
               />
               <ToolButton
                 tool={tool}
                 value={TOOLS.ADD_PIN}
                 setTool={setTool}
                 Icon={PinIcon}
-                label="Add Pin (P)"
+                label={
+                  shots.length === 0
+                    ? "No shots in this shoot — add shots first."
+                    : "Add Pin (P)"
+                }
+                disabled={shots.length === 0}
               />
               <ToolButton
                 tool={tool}
                 value={TOOLS.ADD_TEXT}
                 setTool={setTool}
                 Icon={TextIcon}
-                label="Add Text (T)"
+                label={
+                  shots.length === 0
+                    ? "No shots in this shoot — add shots first."
+                    : "Add Text (T)"
+                }
+                disabled={shots.length === 0}
               />
               <div className="w-px h-5 bg-border mx-1" />
               <Tooltip>
@@ -1146,7 +1310,7 @@ export default function PinEditor({
                     variant="ghost"
                     className="h-7 w-7"
                     onClick={undo}
-                    disabled={undoStack.current.size === 0}
+                    disabled={undoSize === 0}
                   >
                     <Undo2 className="h-3.5 w-3.5" />
                   </Button>
@@ -1160,7 +1324,7 @@ export default function PinEditor({
                     variant="ghost"
                     className="h-7 w-7"
                     onClick={redo}
-                    disabled={redoStack.current.size === 0}
+                    disabled={redoSize === 0}
                   >
                     <Redo2 className="h-3.5 w-3.5" />
                   </Button>
@@ -1172,20 +1336,29 @@ export default function PinEditor({
             <div
               ref={stageRef}
               className={cn(
-                "absolute inset-0",
+                // #17: touch-none disables browser-native gestures (page
+                // scroll / pinch zoom) inside the stage so a tablet/iPad
+                // operator can drag pins with one finger without the page
+                // hijacking the gesture.
+                "absolute inset-0 touch-none",
                 tool === TOOLS.PAN && "cursor-grab",
                 tool === TOOLS.ADD_PIN && "cursor-crosshair",
                 tool === TOOLS.ADD_TEXT && "cursor-text",
               )}
-              onMouseDown={onMouseDown}
-              onMouseMove={onMouseMove}
-              onMouseUp={onMouseUp}
-              onMouseLeave={onMouseUp}
+              // #17: Pointer Events unify mouse + touch + stylus. Pointer
+              // capture guarantees pointermove/pointerup fire on the stage
+              // even if the finger leaves it mid-drag, which removes the
+              // need for an onPointerLeave fallback.
+              // TODO: convert pin-marker handlers to Pointer Events too if
+              // we ever attach drag handlers directly to PinMarker (today
+              // all hit-testing happens on the stage, so this is a no-op).
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
             >
               {/* Image */}
               {imageUrl ? (
                 <img
-                  ref={imgRef}
                   src={imageUrl}
                   alt="drone shot"
                   draggable={false}
@@ -1242,7 +1415,7 @@ export default function PinEditor({
           </main>
 
           {/* Inspector panel */}
-          <aside className="w-72 border-l border-border bg-background overflow-y-auto shrink-0 p-3 text-sm shrink-0">
+          <aside className="w-72 border-l border-border bg-background overflow-y-auto shrink-0 p-3 text-sm">
             <div className="font-semibold text-xs uppercase text-muted-foreground mb-2">
               Inspector
             </div>
@@ -1293,8 +1466,17 @@ export default function PinEditor({
                     )}
                     title={s.filename}
                   >
-                    <div className="w-12 h-9 bg-muted rounded flex items-center justify-center text-muted-foreground">
-                      <ImageIconLucide className="h-3.5 w-3.5" />
+                    {/* #10: real thumbnail (was a placeholder icon). The
+                        DroneThumbnail component lazy-fetches via the shared
+                        media-proxy LRU + IntersectionObserver, so this only
+                        loads when the strip scrolls into view. */}
+                    <div className="w-12 h-9 overflow-hidden rounded">
+                      <DroneThumbnail
+                        dropboxPath={s.dropbox_path}
+                        mode="thumb"
+                        alt={s.filename || "shot"}
+                        aspectRatio="aspect-[4/3]"
+                      />
                     </div>
                     <span className="font-mono">
                       {s.dji_index ?? idx + 1}
@@ -1344,7 +1526,11 @@ export default function PinEditor({
               <AlertDialogAction
                 onClick={() => {
                   setConfirm(null);
-                  handleSave("all_shots");
+                  // #3: scope arg dropped; handleSave is shoot-wide for world
+                  // pins regardless. The confirm dialog itself is currently
+                  // unreachable (Apply-to-all button is hidden), but kept here
+                  // for the day backend fan-out lands.
+                  handleSave();
                 }}
                 disabled={isSaving}
               >
@@ -1394,7 +1580,7 @@ export default function PinEditor({
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
-function ToolButton({ tool, value, setTool, Icon, label }) {
+function ToolButton({ tool, value, setTool, Icon, label, disabled = false }) {
   const active = tool === value;
   return (
     <Tooltip>
@@ -1404,6 +1590,7 @@ function ToolButton({ tool, value, setTool, Icon, label }) {
           variant={active ? "secondary" : "ghost"}
           className="h-7 w-7"
           onClick={() => setTool(value)}
+          disabled={disabled}
         >
           <Icon className="h-3.5 w-3.5" />
         </Button>
@@ -1471,8 +1658,27 @@ function Inspector({
   disabled,
 }) {
   void resolvedTheme;
+  // #5: The property pin's position is owned by `projects.confirmed_lat/lng`
+  // (set by SfM, sometimes overridden in the Project Details page). Inline
+  // edits in the Pin Editor would persist as a custom-pin override that
+  // silently shadows the project coord without writing back to the project
+  // row — confusing, hard to undo, and divergent from what the renderer
+  // reads on the next pass. Lock all edit affordances on this virtual item
+  // and surface a hint pointing operators to the project page.
+  const isPropertyPin = item.virtual === "property";
+  const inputsDisabled = disabled || isPropertyPin;
+
   const [labelDraft, setLabelDraft] = useState(item.label || "");
   useEffect(() => setLabelDraft(item.label || ""), [item.id, item.label]);
+
+  // #29: Color text input validation. Allow partial entry while typing
+  // (e.g. "#3B" → "#3B82" → "#3B82F6") via a permissive partial regex; on
+  // blur, snap to a valid 6-char hex or revert to the previous valid value.
+  const [colorDraft, setColorDraft] = useState(item.color || "");
+  useEffect(() => setColorDraft(item.color || ""), [item.id, item.color]);
+  const PARTIAL_HEX_RE = /^#[0-9A-Fa-f]{0,6}$/;
+  const FULL_HEX_RE = /^#[0-9A-Fa-f]{6}$/;
+  const colorFullValid = FULL_HEX_RE.test(colorDraft);
 
   // Compute current pixel position for read-only display
   const px = useMemo(() => {
@@ -1496,6 +1702,18 @@ function Inspector({
             (item.kind === "world" ? "World pin" : "Pixel pin")}
         </div>
       </div>
+      {/* #5: Property pin lock-out hint. Renders right under the type so the
+          operator sees it before fiddling with the (now disabled) inputs. */}
+      {isPropertyPin && (
+        <div className="rounded border border-blue-300 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-700 px-2 py-1.5 text-[11px] text-blue-800 dark:text-blue-200 flex items-start gap-1">
+          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>
+            The property pin position comes from the SfM-resolved coordinates
+            on the project. To override, edit confirmed_lat/lng in the project
+            details page.
+          </span>
+        </div>
+      )}
       <div>
         <label className="text-xs text-muted-foreground" htmlFor="pin-label">
           Label
@@ -1507,6 +1725,7 @@ function Inspector({
           onBlur={() => onChange({ label: labelDraft })}
           placeholder="(no label)"
           className="h-8 text-sm"
+          disabled={inputsDisabled}
         />
       </div>
       <div>
@@ -1518,14 +1737,42 @@ function Inspector({
             id="pin-color"
             type="color"
             value={item.color || "#3B82F6"}
-            onChange={(e) => onChange({ color: e.target.value })}
-            className="h-8 w-10 rounded border border-input bg-background"
+            onChange={(e) => {
+              onChange({ color: e.target.value });
+              setColorDraft(e.target.value);
+            }}
+            className="h-8 w-10 rounded border border-input bg-background disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={inputsDisabled}
           />
           <Input
-            value={item.color || ""}
-            onChange={(e) => onChange({ color: e.target.value })}
+            value={colorDraft}
+            onChange={(e) => {
+              const next = e.target.value;
+              // Permissive while typing — only update local draft if the
+              // value matches the partial-hex shape (or is empty). Reject
+              // pasted "rgb(...)", colour names, or other garbage at the
+              // input layer rather than letting them leak into item state.
+              if (next === "" || PARTIAL_HEX_RE.test(next)) {
+                setColorDraft(next);
+                // Commit immediately if it's already a valid full 6-char hex.
+                if (FULL_HEX_RE.test(next)) onChange({ color: next });
+              }
+            }}
+            onBlur={() => {
+              if (FULL_HEX_RE.test(colorDraft)) {
+                onChange({ color: colorDraft });
+              } else {
+                // Revert to the last committed valid value.
+                setColorDraft(item.color || "");
+              }
+            }}
             placeholder="#3B82F6"
-            className="h-8 text-sm font-mono"
+            className={cn(
+              "h-8 text-sm font-mono",
+              !colorFullValid && colorDraft !== "" && "ring-1 ring-red-500",
+            )}
+            aria-invalid={!colorFullValid && colorDraft !== ""}
+            disabled={inputsDisabled}
           />
         </div>
       </div>
@@ -1577,12 +1824,27 @@ function Inspector({
             variant="outline"
             className="w-full"
             onClick={onResetTheme}
-            disabled={disabled}
+            disabled={inputsDisabled}
           >
             Reset to theme
           </Button>
         )}
-        {item.kind === "world" && (
+        {/*
+          #3: "Apply to all shots" button is HIDDEN until the backend supports
+          proper fan-out. Previously, clicking it stamped scope='all_shots' on
+          every dirty edit in the batch — which the server-side validator
+          (correctly) rejects on pixel-anchored pins, aborting the entire save.
+          For world-anchored pins this is also moot: world coords are already
+          shared across every render in the shoot, so dragging the world pin
+          once already updates all shots that use the world projection.
+          When the backend grows a real per-pin "rebroadcast world coord to all
+          renders" pathway, restore this button and pipe scope through to just
+          the selected pin (forceItemId) — see notes on issue #3.
+          NOTE: Subagent A is removing `scope` from drone-pins-save server-side,
+          and `computeSaveEdits` no longer sends it. The onApplyAll prop is
+          retained on Inspector for forward compatibility.
+        */}
+        {false && item.kind === "world" && (
           <Button
             size="sm"
             variant="outline"
@@ -1600,7 +1862,7 @@ function Inspector({
           variant="ghost"
           className="w-full text-red-600 hover:text-red-700"
           onClick={onDelete}
-          disabled={disabled}
+          disabled={inputsDisabled}
         >
           <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
         </Button>
@@ -1633,14 +1895,14 @@ function initialiseItems({ customPins, theme, projectCoord }) {
     });
   }
 
-  // 2. Theme POIs (resolved config exposes a list under poi_label.points or
-  //    similar — we read defensively).
+  // 2. Theme POIs. #12: canonical key is `poi_label.points` — the only
+  //    location the renderer reads from. Don't fall back to `themeCfg.pois`;
+  //    that legacy key isn't part of the resolved theme schema and reading it
+  //    here lets editor-only edits diverge from what actually renders.
   const themeCfg = theme?.resolved_config || theme || {};
   const themePois = Array.isArray(themeCfg.poi_label?.points)
     ? themeCfg.poi_label.points
-    : Array.isArray(themeCfg.pois)
-      ? themeCfg.pois
-      : [];
+    : [];
   for (const p of themePois) {
     if (!p) continue;
     if (
@@ -1700,7 +1962,7 @@ function adaptCustomPinRow(row) {
 }
 
 function makeNewItem({ tool, imgPos, activeShotId, pose }) {
-  if (tool === "add_text") {
+  if (tool === TOOLS.ADD_TEXT) {
     return {
       id: localId("text"),
       kind: "pixel",
@@ -1713,7 +1975,7 @@ function makeNewItem({ tool, imgPos, activeShotId, pose }) {
       _new: true,
     };
   }
-  if (tool === "add_pin") {
+  if (tool === TOOLS.ADD_PIN) {
     // Try to make it world-anchored if pose available; else pixel-anchored.
     if (pose) {
       const w = pixelToGroundGps({
@@ -1749,7 +2011,19 @@ function makeNewItem({ tool, imgPos, activeShotId, pose }) {
   return null;
 }
 
-function computeSaveEdits({ items, shootId, scope }) {
+function computeSaveEdits({ items, shootId, imageNatural }) {
+  // #3: `scope` is no longer sent. Subagent A removed scope from
+  // drone-pins-save; the editor doesn't need to coordinate it. World pins
+  // already fan out across all renders in the shoot via projection at render
+  // time, so a "save" is implicitly per-shoot for world pins.
+  // #14: `style_overrides: null` is preserved when an item was reset to the
+  // theme defaults — letting the row become a true "follow theme" row in DB
+  // rather than a colour override that pins it to the current default.
+  // #20: pixel coords are clamped to [0, imageNatural.{w,h}] in addition to
+  // being rounded, so a pin dragged off-canvas still saves a valid pixel
+  // position in-bounds.
+  const w = Number.isFinite(imageNatural?.w) ? imageNatural.w : 0;
+  const h = Number.isFinite(imageNatural?.h) ? imageNatural.h : 0;
   const edits = [];
   for (const it of items) {
     if (it._delete && it.dbId) {
@@ -1757,20 +2031,38 @@ function computeSaveEdits({ items, shootId, scope }) {
       continue;
     }
     if (!it._dirty && !it._new) continue;
+    if (it.virtual && !it.dbId && it.virtual === "property") {
+      // #5: Property pin position is owned by `projects.confirmed_lat/lng`
+      // (set by SfM). Operators shouldn't move it inline; if they want to
+      // override, they edit the project page. Skip persisting any override
+      // edits to the property pin so we don't shadow the canonical project
+      // coord with an out-of-band custom pin row.
+      continue;
+    }
     if (it.virtual && !it.dbId) {
-      // Virtual pins (theme POIs, property) become custom pin rows when first
-      // edited. Property pin updates project.confirmed_lat/lng — but that's
-      // out of scope for v1 (Stream H/Location page handles that). For v1 we
-      // just write a custom pin override.
+      // Virtual pins (theme POIs) become custom pin rows when first
+      // edited. (Property pin handled above.)
     }
     if (it._delete) continue;
+    // #14: when the local item explicitly carries style_overrides=null and
+    // the colour matches the theme default, persist null (meaning: follow
+    // theme). Otherwise persist the colour override as before.
+    let styleOverridesPayload;
+    if (
+      it.style_overrides === null &&
+      it.themeDefaults &&
+      it.color === it.themeDefaults.color
+    ) {
+      styleOverridesPayload = null;
+    } else {
+      styleOverridesPayload = { color: it.color || null };
+    }
     const base = {
       action: it.dbId ? "update" : "create",
       pin_id: it.dbId,
       pin_type: it.subtype || (it.kind === "world" ? "poi_manual" : "text"),
       content: { label: it.label || "", text: it.label || "" },
-      style_overrides: { color: it.color || null },
-      scope,
+      style_overrides: styleOverridesPayload,
     };
     if (it.kind === "world") {
       base.world_lat = it.world?.lat ?? null;
@@ -1778,8 +2070,11 @@ function computeSaveEdits({ items, shootId, scope }) {
       base.shoot_id = shootId;
     } else {
       base.pixel_anchored_shot_id = it.shot_id || null;
-      base.pixel_x = Math.round(it.pixel?.x ?? 0);
-      base.pixel_y = Math.round(it.pixel?.y ?? 0);
+      // #20: clamp pixel coords to image bounds. A pin nudged off-canvas
+      // (Math.round only) used to save with negative or >imageNatural values
+      // which then never re-projected back into view on the next session.
+      base.pixel_x = Math.max(0, Math.min(w, Math.round(it.pixel?.x ?? 0)));
+      base.pixel_y = Math.max(0, Math.min(h, Math.round(it.pixel?.y ?? 0)));
       base.shoot_id = shootId;
     }
     edits.push(base);

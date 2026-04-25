@@ -21,8 +21,10 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { createPageUrl } from "@/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +38,7 @@ import {
   CheckCircle2,
   Clock,
   RefreshCw,
+  Pencil,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -284,19 +287,55 @@ export default function ProjectDronesTab({ project }) {
               : `${shoots.length} shoot${shoots.length === 1 ? "" : "s"}`}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
-          disabled={shootsQuery.isFetching}
-        >
-          {shootsQuery.isFetching ? (
-            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4 mr-2" />
-          )}
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* #16: Discoverability — Pin Editor was previously only reachable
+              from a PROPOSED render's "Edit" button, leaving operators
+              stranded if no proposed renders existed yet. Surface a top-level
+              entry point at the shoot scope. Disabled until at least one
+              shoot exists. */}
+          <Button
+            variant="outline"
+            size="sm"
+            asChild={shoots.length > 0 && Boolean(selectedShootId)}
+            disabled={shoots.length === 0 || !selectedShootId}
+            title={
+              shoots.length === 0
+                ? "No shoots yet — upload drone images first"
+                : !selectedShootId
+                  ? "Select a shoot to edit pins"
+                  : "Open the Pin Editor for this shoot"
+            }
+          >
+            {shoots.length > 0 && selectedShootId ? (
+              <Link
+                to={createPageUrl(
+                  `DronePinEditor?project=${projectId}&shoot=${selectedShootId}`,
+                )}
+              >
+                <Pencil className="h-4 w-4 mr-2" />
+                Open Pin Editor
+              </Link>
+            ) : (
+              <span className="inline-flex items-center">
+                <Pencil className="h-4 w-4 mr-2" />
+                Open Pin Editor
+              </span>
+            )}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleRefresh}
+            disabled={shootsQuery.isFetching}
+          >
+            {shootsQuery.isFetching ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4 mr-2" />
+            )}
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Error state */}

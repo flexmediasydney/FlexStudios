@@ -25,17 +25,16 @@
  * Save / Cancel both navigate back to /ProjectDetails?id=... &tab=drones
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import PinEditor from "@/components/drone/PinEditor";
+import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 // Pick the "best" render for a given shot — prefer most-final column.
 const COLUMN_PRIORITY = ["final", "adjustments", "proposed", "raw"];
@@ -50,20 +49,19 @@ function pickBestRender(renders, shotId) {
   return forShot[0] || null;
 }
 
-// Build a Dropbox proxy URL for a render's stored path.
-function dropboxProxyUrl(dropboxPath) {
-  if (!dropboxPath) return null;
-  if (!SUPABASE_URL) return null;
-  // Same pattern as src/utils/mediaActions.js::getVideoStreamUrl, which the
-  // drone Files tab also uses to fetch images.
-  return `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed?stream=${encodeURIComponent(
-    dropboxPath,
-  )}`;
-}
+// Why not the GET ?stream= URL? Because <img src="…/getDeliveryMediaFeed?stream=…">
+// is rejected by Supabase's gateway with 401 UNAUTHORIZED_NO_AUTH_HEADER —
+// browsers don't send an Authorization header on <img>/<video> requests, and
+// the gateway's verify_jwt is on. The function's internal `?stream=` branch
+// is auth-free by design but never executes because the gateway short-circuits.
+// The swimlane (DroneRendersSubtab → DroneThumbnail → mediaPerf.fetchMediaProxy)
+// works around this by doing an authenticated POST and turning the response
+// blob into a `blob:` URL — which `<img src>` accepts. We do the same here.
 
 export default function DronePinEditor() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const projectId = searchParams.get("project");
   const shootId = searchParams.get("shoot");
   const initialShotId = searchParams.get("shot");
@@ -157,6 +155,72 @@ export default function DronePinEditor() {
     retry: 1,
   });
 
+  // ── Realtime: refresh renders when a re-render completes ─────────────────
+  // (Audit finding #8.) Uses the same throttle pattern as DroneCommandCenter
+  // so a burst of render writes (typical when re-render queues a batch of
+  // shots) doesn't trigger one refetch per row.
+  const INVALIDATE_WINDOW_MS = 2000;
+  const invalidateThrottleRef = useRef({ last: 0, timeout: null });
+  useEffect(() => {
+    if (!shootId) return;
+    const shotIds = new Set(
+      Array.isArray(shotsQ.data) ? shotsQ.data.map((s) => s.id) : [],
+    );
+    if (shotIds.size === 0) return;
+
+    const fire = () => {
+      queryClient.invalidateQueries({
+        queryKey: ["drone_renders", "by-shoot", shootId],
+      });
+    };
+    const throttled = () => {
+      const entry = invalidateThrottleRef.current;
+      const now = Date.now();
+      const elapsed = now - entry.last;
+      if (elapsed >= INVALIDATE_WINDOW_MS) {
+        if (entry.timeout) {
+          clearTimeout(entry.timeout);
+          entry.timeout = null;
+        }
+        entry.last = now;
+        fire();
+      } else if (!entry.timeout) {
+        entry.timeout = setTimeout(() => {
+          entry.last = Date.now();
+          entry.timeout = null;
+          fire();
+        }, INVALIDATE_WINDOW_MS - elapsed);
+      }
+    };
+
+    let active = true;
+    let unsubscribe = null;
+    try {
+      unsubscribe = api.entities.DroneRender.subscribe((evt) => {
+        if (!active) return;
+        // Filter to renders whose shot belongs to this shoot.
+        const sid = evt?.data?.shot_id;
+        if (sid && !shotIds.has(sid)) return;
+        throttled();
+      });
+    } catch (e) {
+      console.warn("[DronePinEditor] DroneRender subscribe failed:", e);
+    }
+    return () => {
+      active = false;
+      try {
+        if (typeof unsubscribe === "function") unsubscribe();
+      } catch {
+        /* ignore */
+      }
+      const entry = invalidateThrottleRef.current;
+      if (entry.timeout) {
+        clearTimeout(entry.timeout);
+        entry.timeout = null;
+      }
+    };
+  }, [shootId, shotsQ.data, queryClient]);
+
   // ── Derived ─────────────────────────────────────────────────────────────
   const shots = useMemo(
     () => (Array.isArray(shotsQ.data) ? shotsQ.data : []),
@@ -170,17 +234,60 @@ export default function DronePinEditor() {
     return shots[0]?.id || null;
   }, [initialShotId, shots]);
 
-  const bestRender = useMemo(
-    () => pickBestRender(rendersQ.data || [], currentShotId),
-    [rendersQ.data, currentShotId],
-  );
+  // Honor `?render=<id>` URL param so clicking a specific render's "Edit"
+  // loads that exact image, not whatever pickBestRender chooses by column
+  // priority. (Audit finding #9.)
+  const requestedRenderId = searchParams.get("render");
+  const bestRender = useMemo(() => {
+    const renders = rendersQ.data || [];
+    if (requestedRenderId) {
+      const exact = renders.find(
+        (r) => r.id === requestedRenderId && r.shot_id === currentShotId,
+      );
+      if (exact) return exact;
+    }
+    return pickBestRender(renders, currentShotId);
+  }, [rendersQ.data, currentShotId, requestedRenderId]);
 
-  const imageUrl = useMemo(() => {
-    if (bestRender?.dropbox_path) return dropboxProxyUrl(bestRender.dropbox_path);
+  // Resolve the source path we want to load — render preferred, raw shot fallback.
+  const imageDropboxPath = useMemo(() => {
+    if (bestRender?.dropbox_path) return bestRender.dropbox_path;
     const shot = shots.find((s) => s.id === currentShotId);
-    if (shot?.dropbox_path) return dropboxProxyUrl(shot.dropbox_path);
-    return null;
+    return shot?.dropbox_path || null;
   }, [bestRender, shots, currentShotId]);
+
+  // Fetch as authenticated POST → blob URL (same pattern as DroneThumbnail).
+  // <img src="…/?stream=…"> is 401'd by Supabase's gateway because <img>
+  // requests don't carry an Authorization header. mediaPerf.fetchMediaProxy
+  // does the POST and returns a `blob:` URL — which <img> happily renders.
+  const [imageUrl, setImageUrl] = useState(null);
+  const [imageError, setImageError] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setImageError(null);
+    if (!imageDropboxPath) {
+      setImageUrl(null);
+      return;
+    }
+    enqueueFetch(() => fetchMediaProxy(SHARED_THUMB_CACHE, imageDropboxPath, "proxy"))
+      .then((url) => {
+        if (cancelled) return;
+        if (!url) {
+          setImageError("Image not available — render may still be processing.");
+          setImageUrl(null);
+        } else {
+          setImageUrl(url);
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setImageError(e?.message || "Failed to load image");
+        setImageUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [imageDropboxPath]);
 
   const projectCoord = useMemo(() => {
     const p = projectQ.data;
@@ -287,15 +394,24 @@ export default function DronePinEditor() {
   const goBackToProject = () =>
     navigate(createPageUrl(`ProjectDetails?id=${projectId}&tab=drones`));
 
+  // Distinguish "theme fetched but empty" from "theme failed to load". A failed
+  // theme load means the editor would silently render POIs that won't appear in
+  // real renders — we surface that as a blocking error inside PinEditor.
+  // (Audit finding #11.)
+  const themeError =
+    themeQ.error || (!themeQ.isLoading && themeQ.data == null) || null;
+
   return (
     <PinEditor
       shoot={shootQ.data}
       shots={shots}
       currentShotId={currentShotId}
       theme={themeQ.data}
+      themeError={themeError}
       customPins={customPinsQ.data || []}
       projectCoord={projectCoord}
       imageUrl={imageUrl}
+      imageError={imageError}
       poseAvailable={poseAvailable}
       onSave={goBackToProject}
       onCancel={goBackToProject}

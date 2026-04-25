@@ -15,9 +15,8 @@
  *         pin_type: 'poi_manual' | 'text' | 'line' | 'measurement',
  *         world_lat?, world_lng?,
  *         pixel_anchored_shot_id?, pixel_x?, pixel_y?,
- *         content?, style_overrides?,
- *         scope: 'this_shot' | 'all_shots' }
- *     | { action: 'update', pin_id: string, ...same fields, scope }
+ *         content?, style_overrides? }
+ *     | { action: 'update', pin_id: string, ...same fields }
  *     | { action: 'delete', pin_id: string }
  *
  * Response: { success, applied: { creates, updates, deletes }, job_id, event_id }
@@ -31,11 +30,12 @@
  * the admin client for atomicity (drone_custom_pins XOR constraint guarantees
  * data integrity).
  *
- * For 'all_shots' scope: a world-anchored pin's world coord is canonical, so
- * "apply to all shots" is automatic — every render uses the same world coord.
- * For pixel-anchored pins on 'all_shots' we currently scope to the supplied
- * pixel_anchored_shot_id (a pixel pin can't apply to all shots — its meaning
- * is per-shot).
+ * Note: an earlier draft accepted a per-edit `scope: 'this_shot' | 'all_shots'`
+ * field for fan-out semantics. The server never acted on it (a world-anchored
+ * pin already applies to every render via its canonical world coord, and a
+ * pixel pin is intrinsically per-shot), so the field was removed. Re-introduce
+ * if real fan-out semantics (e.g. cloning a pixel pin across N shots) are
+ * implemented in the future.
  */
 
 import {
@@ -61,7 +61,6 @@ interface BaseEdit {
   pixel_y?: number | null;
   content?: Record<string, unknown> | null;
   style_overrides?: Record<string, unknown> | null;
-  scope?: 'this_shot' | 'all_shots';
 }
 
 interface RequestBody {
@@ -226,21 +225,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let deletes = 0;
   const errors: string[] = [];
 
-  // Pre-validate: a pixel-anchored pin can never legitimately scope to
-  // 'all_shots' — its meaning is per-shot pixel coords. Previously this
-  // combination was silently swallowed by normalisePinPayload returning null.
-  // Reject up-front so the UI surfaces the operator's mistake. (#75 audit fix)
-  for (const e of edits) {
-    if (e?.action === 'delete') continue;
-    const isPixel = !!e?.pixel_anchored_shot_id;
-    if (isPixel && e?.scope === 'all_shots') {
-      return errorResponse(
-        "scope='all_shots' is not valid for pixel-anchored pins (use a world pin to apply to all shots)",
-        400,
-        req,
-      );
-    }
-  }
+  // (Code archaeology: a prior version of this function rejected the
+  // combination pixel-anchored + scope='all_shots' here. The `scope` field
+  // was never acted on server-side, so both the field and the guard were
+  // removed. Pixel pins remain intrinsically per-shot regardless.)
 
   for (const e of edits) {
     if (!e || typeof e !== 'object') continue;
@@ -267,6 +255,28 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (!payload) {
       errors.push('edit missing required world or pixel coords');
       continue;
+    }
+
+    // Audit #21: clamp world coords server-side. drone_custom_pins.world_lat
+    // is DECIMAL(10,8) and world_lng is DECIMAL(11,8) per migration 225;
+    // out-of-range values from bad pose math would silently truncate or
+    // 22003-error mid-batch. Reject per-edit so other edits in the same
+    // request still apply.
+    if (payload.world_lat !== null && payload.world_lng !== null) {
+      const lat = payload.world_lat;
+      const lng = payload.world_lng;
+      if (lat < -90 || lat > 90) {
+        const msg = `world_lat must be in [-90, 90], got ${lat}`;
+        console.warn(`[${GENERATOR}] ${msg}`);
+        errors.push(msg);
+        continue;
+      }
+      if (lng < -180 || lng > 180) {
+        const msg = `world_lng must be in [-180, 180], got ${lng}`;
+        console.warn(`[${GENERATOR}] ${msg}`);
+        errors.push(msg);
+        continue;
+      }
     }
 
     if (e.action === 'create') {
@@ -328,7 +338,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           edits_summary: edits.map((e) => ({
             action: e.action,
             pin_id: e.pin_id,
-            scope: e.scope,
             anchored: isFiniteNumber(e.world_lat) ? 'world' : 'pixel',
           })),
         },
@@ -343,6 +352,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // Enqueue a re-render job. Stream I picks this up.
+  // Audit #4: migration 240 added a partial unique index
+  // idx_drone_jobs_unique_pending_render on (shoot_id) WHERE status IN
+  // ('pending','running') AND kind='render'. If the operator hammers Save,
+  // the second insert raises 23505; we treat that as success (debounced) —
+  // the already-queued render will pick up the latest pin state when it
+  // runs.
+  // TODO(audit #1): drone-pins-save returns 5xx from the admin client on
+  // transient Postgres errors above; the frontend's directEntityFallback
+  // path could auto-retry idempotent inserts on those. Tracked in PinEditor.
   let jobId: string | null = null;
   {
     const { data: jobRow, error: jobErr } = await admin
@@ -360,7 +378,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .select('id')
       .maybeSingle();
     if (jobErr) {
-      console.warn(`[${GENERATOR}] job enqueue failed (non-fatal):`, jobErr);
+      // 23505 = unique_violation — a pending/running render for this shoot
+      // already exists. Treat as a successful debounce: log and move on.
+      const code = (jobErr as { code?: string }).code;
+      if (code === '23505') {
+        console.info(
+          `[${GENERATOR}] render job debounced (existing pending/running render for shoot ${shoot.id})`,
+        );
+      } else {
+        console.warn(`[${GENERATOR}] job enqueue failed (non-fatal):`, jobErr);
+      }
     } else if (jobRow) {
       jobId = (jobRow as { id: string }).id;
     }
