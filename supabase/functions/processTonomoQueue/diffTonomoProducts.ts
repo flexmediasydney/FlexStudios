@@ -28,6 +28,14 @@ export interface PackageRef { id: string; name?: string | null; products?: { pro
 export interface ProductDiffEntry { product_id: string; product_name: string; quantity?: number }
 export interface ProductQtyChange { product_id: string; product_name: string; from: number; to: number }
 export interface PackageDiffEntry { package_id: string; package_name: string }
+export interface PackageInternalChange {
+  package_id: string;
+  package_name: string;
+  // Per-product qty deltas inside the package's `products` override array.
+  // 'from' or 'to' = 0 implies the override was added/removed (the catalog
+  // default still applies, but the project's override was changed).
+  qty_changes: ProductQtyChange[];
+}
 
 export interface ProjectItemsDiff {
   added_products: ProductDiffEntry[];
@@ -35,6 +43,11 @@ export interface ProjectItemsDiff {
   qty_changed: ProductQtyChange[];
   added_packages: PackageDiffEntry[];
   removed_packages: PackageDiffEntry[];
+  // Same package_id on both sides, but the nested products[] override differs.
+  // Surfaces the case where deduplicateProjectItems rolls a standalone qty
+  // change (Sales Images 25→30) into a package's nested override — without
+  // this, the diff would miss it and reconcile would noop.
+  package_internal_changes: PackageInternalChange[];
 }
 
 function coerceArray<T>(value: any): T[] {
@@ -138,6 +151,7 @@ export function diffProjectPackages(
 
   const added_packages: PackageDiffEntry[] = [];
   const removed_packages: PackageDiffEntry[] = [];
+  const package_internal_changes: PackageInternalChange[] = [];
 
   for (const [pid, np] of nxtPkgMap) {
     if (!curPkgMap.has(pid)) {
@@ -145,6 +159,56 @@ export function diffProjectPackages(
         package_id: pid,
         package_name: resolvePackageName(pid, allPackages, np.name),
       });
+    } else {
+      // Same package on both sides — diff the nested products override array.
+      // deduplicateProjectItems rolls standalone qty changes (e.g. Sales Images
+      // 25 → 30) into the package's nested override; without this check the
+      // top-level diff would noop while real qty data was changing.
+      const cur = curPkgMap.get(pid)!;
+      const curNested = new Map<string, number>();
+      for (const np2 of cur.products || []) {
+        if (np2?.product_id) curNested.set(np2.product_id, np2.quantity ?? 1);
+      }
+      const nxtNested = new Map<string, number>();
+      for (const np2 of np.products || []) {
+        if (np2?.product_id) nxtNested.set(np2.product_id, np2.quantity ?? 1);
+      }
+      const qtyChanges: ProductQtyChange[] = [];
+      for (const [pid2, nxtQty] of nxtNested) {
+        const curQty = curNested.get(pid2);
+        if (curQty === undefined) {
+          qtyChanges.push({
+            product_id: pid2,
+            product_name: resolveProductName(pid2, allProducts),
+            from: 0,
+            to: nxtQty,
+          });
+        } else if (curQty !== nxtQty) {
+          qtyChanges.push({
+            product_id: pid2,
+            product_name: resolveProductName(pid2, allProducts),
+            from: curQty,
+            to: nxtQty,
+          });
+        }
+      }
+      for (const [pid2, curQty] of curNested) {
+        if (!nxtNested.has(pid2)) {
+          qtyChanges.push({
+            product_id: pid2,
+            product_name: resolveProductName(pid2, allProducts),
+            from: curQty,
+            to: 0,
+          });
+        }
+      }
+      if (qtyChanges.length > 0) {
+        package_internal_changes.push({
+          package_id: pid,
+          package_name: resolvePackageName(pid, allPackages, np.name || cur.name),
+          qty_changes: qtyChanges,
+        });
+      }
     }
   }
 
@@ -157,7 +221,7 @@ export function diffProjectPackages(
     }
   }
 
-  return { added_products, removed_products, qty_changed, added_packages, removed_packages };
+  return { added_products, removed_products, qty_changed, added_packages, removed_packages, package_internal_changes };
 }
 
 /**
@@ -170,6 +234,7 @@ export function isAddOnly(diff: ProjectItemsDiff): boolean {
   if (diff.removed_products?.length > 0) return false;
   if (diff.removed_packages?.length > 0) return false;
   if (diff.qty_changed?.length > 0) return false;
+  if (diff.package_internal_changes?.length > 0) return false;
   const hasAdds = (diff.added_products?.length > 0) || (diff.added_packages?.length > 0);
   return hasAdds;
 }
@@ -184,7 +249,8 @@ export function isNoOp(diff: ProjectItemsDiff): boolean {
     (diff.removed_products?.length ?? 0) === 0 &&
     (diff.qty_changed?.length ?? 0) === 0 &&
     (diff.added_packages?.length ?? 0) === 0 &&
-    (diff.removed_packages?.length ?? 0) === 0
+    (diff.removed_packages?.length ?? 0) === 0 &&
+    (diff.package_internal_changes?.length ?? 0) === 0
   );
 }
 

@@ -517,10 +517,16 @@ export function reconcileProductsPackagesAgainstLock(
   ].filter(Boolean).join(' and ');
   const qtySummary = diff.qty_changed.length > 0
     ? `${diff.qty_changed.length} qty change(s)` : null;
+  const internalSummary = (diff.package_internal_changes?.length ?? 0) > 0
+    ? diff.package_internal_changes!.map(p =>
+        `${p.package_name} nested: ${p.qty_changes.map(q => `${q.product_name} ${q.from}→${q.to}`).join(', ')}`
+      ).join('; ')
+    : null;
   const parts = [
     addedSummary ? `added ${addedSummary}` : null,
     removedSummary ? `removed ${removedSummary}` : null,
     qtySummary,
+    internalSummary ? `package internals: ${internalSummary}` : null,
   ].filter(Boolean).join('; ');
 
   return {
@@ -1007,6 +1013,12 @@ export async function writeProjectActivity(entities: any, params: any) {
         field: 'packages',
         added: d.added_packages || [],
         removed: d.removed_packages || [],
+      });
+    }
+    if ((d.package_internal_changes?.length || 0) > 0) {
+      changedFields.push({
+        field: 'package_internal_changes',
+        changes: d.package_internal_changes,
       });
     }
   }

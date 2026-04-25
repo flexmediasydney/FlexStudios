@@ -43,32 +43,42 @@ async function verifyHmac(rawBody: string, req: Request): Promise<{ ok: boolean;
 }
 
 // ─── Dedup-aware queue insert ────────────────────────────────────────────────
-// Background — 2026-04-19 investigation ("93 of 285 last-7d drops"):
-//   Two schema features conspire to hide duplicate-burst drops:
-//     1. Partial UNIQUE index idx_queue_event_id_action_dedup on
-//        (event_id, action) WHERE event_id IS NOT NULL
-//                           AND status IN ('pending','processing')
-//     2. BEFORE-INSERT trigger trg_queue_insert_pending (function
-//        guard_queue_insert_pending) that clamps EVERY inserted row to
-//        status='pending' regardless of the value passed by the caller.
-//   Tonomo fans out 3-10 webhooks per booking edit carrying the same event_id
-//   and action. The first insert succeeds; every subsequent insert 23505's
-//   because (a) the prior row is still 'pending', (b) the trigger forces the
-//   incoming row to 'pending' too, (c) the partial index catches the collision.
-//   The old code logged "CRITICAL", retried once (same trap), then silently
-//   returned queued=false — leaving a webhook_log row with NO queue row.
-//   That's the 93-row audit gap.
+// Background:
+//   Schema has a partial UNIQUE index idx_queue_event_id_action_dedup on
+//   (event_id, action) WHERE event_id IS NOT NULL AND status IN ('pending','processing').
+//   Plus a BEFORE-INSERT trigger that clamps every insert to status='pending'.
+//   Tonomo fires multiple webhooks for the same (event_id, action) when the
+//   user edits an order in succession — e.g. add line item A, then add line
+//   item B 17 seconds later. Both arrive with the same key and the second
+//   insert hits 23505 while the first is still pending or processing.
 //
-// Fix: detect 23505, then do a two-step dance the trigger/index cannot block:
-//   Step A: INSERT with event_id=NULL (sidesteps the partial-index predicate
-//           because it requires event_id IS NOT NULL). Trigger still forces
-//           status='pending' — that's fine, row is off the unique index.
-//   Step B: UPDATE the row to set event_id back to its real value AND flip
-//           status to 'superseded'. UPDATE does NOT fire the BEFORE-INSERT
-//           trigger. With status='superseded' the row stays outside the
-//           partial index predicate, so no collision occurs. Audit trail is
-//           preserved and the processor's in-memory dedup (processTonomoQueue
-//           line 160 `seen` map) already matches this semantics.
+// History:
+//   • Original code: logged CRITICAL and dropped the second webhook. 93 rows
+//     lost in 7 days (2026-04-19 audit gap).
+//   • First fix: insert second webhook with event_id=NULL, then update to
+//     status='superseded' to preserve audit. Saved the audit trail but still
+//     dropped the new payload — bad when the second webhook carried fresh
+//     data (qty change, new invoice line, etc).
+//   • Current fix (2026-04-25): on 23505, mark the EXISTING pending/processing
+//     row(s) as superseded (they hold staler data — Tonomo's latest payload
+//     is authoritative), then retry the insert with event_id set normally.
+//     The processor's batch dedup at line 160 was already keeping the LATEST
+//     per (action, order_id, event_id) within a batch — this aligns ingest
+//     semantics with that.
+//
+// Race notes:
+//   • If the existing row is currently in 'processing' when we mark it
+//     superseded, the processor's final UPDATE to 'completed' will overwrite
+//     'superseded' — its work won't be wasted from the row's POV, but its
+//     output gets clobbered moments later when the new pending row processes
+//     with fresher data. Net effect: latest data wins.
+//   • If the existing row was 'pending' and the processor picks it up
+//     between our supersede UPDATE and our retry INSERT, the row's status
+//     becomes 'processing' (overwriting 'superseded'), and our retry insert
+//     could 23505 again. The retry-fallback below handles that with the
+//     legacy event_id=NULL trick — preserves audit even in the rare race.
+//   • True Tonomo HTTP retries (same payload twice) are handled idempotently:
+//     the new insert succeeds, processor processes both, the second is a no-op.
 async function enqueueWithDedupGuard(
   admin: any,
   entities: any,
@@ -80,22 +90,22 @@ async function enqueueWithDedupGuard(
   },
 ): Promise<{ queued: boolean; superseded_duplicate: boolean; error: string | null }> {
   const now = new Date().toISOString();
+  const buildInsertRow = () => ({
+    webhook_log_id: row.webhook_log_id,
+    action: row.action,
+    order_id: row.order_id,
+    event_id: row.event_id,
+    status: 'pending',
+    retry_count: 0,
+    processor_version: PROCESSOR_VERSION,
+    created_at: now,
+  });
+
   try {
-    await entities.TonomoProcessingQueue.create({
-      webhook_log_id: row.webhook_log_id,
-      action: row.action,
-      order_id: row.order_id,
-      event_id: row.event_id,
-      status: 'pending',
-      retry_count: 0,
-      processor_version: PROCESSOR_VERSION,
-      created_at: now,
-    });
+    await entities.TonomoProcessingQueue.create(buildInsertRow());
     return { queued: true, superseded_duplicate: false, error: null };
   } catch (err: any) {
     const msg = String(err?.message || err || '');
-    // Postgres 23505 = unique_violation. PostgREST surfaces either the raw code
-    // or a "duplicate key value violates unique constraint" text — detect leniently.
     const isDedupConflict =
       msg.includes('idx_queue_event_id_action_dedup') ||
       msg.includes('duplicate key') ||
@@ -103,55 +113,58 @@ async function enqueueWithDedupGuard(
     if (!isDedupConflict) {
       return { queued: false, superseded_duplicate: false, error: msg };
     }
-    // Step A — insert with event_id=NULL to skip the partial index predicate.
+    if (!row.event_id) {
+      // Defensive — without an event_id we shouldn't have hit the partial
+      // index in the first place. Bail with a clear error rather than masking.
+      return { queued: false, superseded_duplicate: false, error: `dedup_conflict_without_event_id:${msg.substring(0, 120)}` };
+    }
+
+    // Mark stale in-flight rows as superseded. They hold older data than the
+    // payload that just arrived, and Tonomo's latest webhook is source of truth.
+    const { error: supErr } = await admin
+      .from('tonomo_processing_queue')
+      .update({
+        status: 'superseded',
+        result_summary: 'Superseded by later webhook with fresher data',
+        processed_at: now,
+      })
+      .eq('event_id', row.event_id)
+      .eq('action', row.action)
+      .in('status', ['pending', 'processing']);
+    if (supErr) {
+      return { queued: false, superseded_duplicate: false, error: `supersede_existing_failed:${(supErr.message || '').substring(0, 120)}` };
+    }
+
+    // Retry: the partial unique index excludes 'superseded', so the slot is
+    // free. (Race: another webhook can race in between our supersede and this
+    // insert — handled by the legacy event_id=NULL fallback below.)
     try {
-      const { data: inserted, error: insErr } = await admin
-        .from('tonomo_processing_queue')
-        .insert({
-          webhook_log_id: row.webhook_log_id,
-          action: row.action,
-          order_id: row.order_id,
-          event_id: null, // ← predicate requires event_id IS NOT NULL, so we stay off the index
-          retry_count: 0,
-          processor_version: PROCESSOR_VERSION,
-          created_at: now,
-        })
-        .select('id')
-        .single();
-      if (insErr || !inserted?.id) {
-        const insMsg = insErr?.message || 'no row returned';
-        return { queued: false, superseded_duplicate: false, error: `dedup_fallback_insert_failed:${insMsg}` };
-      }
-      // Step B — restore event_id and flip to 'superseded'. Trigger is BEFORE
-      // INSERT only; UPDATE sails through. status='superseded' keeps the row
-      // outside the partial unique index predicate → no collision.
-      const { error: updErr } = await admin
-        .from('tonomo_processing_queue')
-        .update({
-          event_id: row.event_id,
-          status: 'superseded',
-          result_summary: 'Superseded at ingest — duplicate of in-flight (event_id,action) pair',
-          processed_at: now,
-        })
-        .eq('id', inserted.id);
-      if (updErr) {
-        // Insert landed but the status flip didn't. The row is still
-        // status='pending' with event_id=null — the processor will pick it up
-        // and run it as a no-op lookup (no matching orderId+event_id trail).
-        // Strictly better than a total drop. Warn loudly.
-        console.warn(
-          `enqueueWithDedupGuard: inserted ${inserted.id} but superseded UPDATE failed: ${updErr.message}`,
-        );
-        return { queued: true, superseded_duplicate: false, error: `partial_success:${updErr.message}` };
-      }
-      return { queued: false, superseded_duplicate: true, error: null };
-    } catch (supErr: any) {
-      const supMsg = String(supErr?.message || supErr || '');
-      console.error(
-        `enqueueWithDedupGuard: primary 23505 (${msg.substring(0, 120)}); ` +
-        `fallback insert/update threw (${supMsg.substring(0, 120)})`,
+      await entities.TonomoProcessingQueue.create(buildInsertRow());
+      return { queued: true, superseded_duplicate: false, error: null };
+    } catch (retryErr: any) {
+      const retryMsg = String(retryErr?.message || retryErr || '');
+      console.warn(
+        `enqueueWithDedupGuard: supersede succeeded but retry insert hit ${retryMsg.substring(0, 120)} — falling back to event_id=NULL preservation`,
       );
-      return { queued: false, superseded_duplicate: false, error: `dedup_fallback_threw:${supMsg}` };
+      try {
+        const { data: inserted, error: insErr } = await admin
+          .from('tonomo_processing_queue')
+          .insert({ ...buildInsertRow(), event_id: null })
+          .select('id')
+          .single();
+        if (insErr || !inserted?.id) {
+          return { queued: false, superseded_duplicate: false, error: `retry_fallback_insert_failed:${(insErr?.message || 'no row').substring(0, 120)}` };
+        }
+        // Restore event_id — the row is still status='pending' so the
+        // processor will pick it up and process the new payload normally.
+        await admin
+          .from('tonomo_processing_queue')
+          .update({ event_id: row.event_id })
+          .eq('id', inserted.id);
+        return { queued: true, superseded_duplicate: false, error: null };
+      } catch (fbErr: any) {
+        return { queued: false, superseded_duplicate: false, error: `retry_fallback_threw:${String(fbErr?.message || fbErr).substring(0, 120)}` };
+      }
     }
   }
 }
