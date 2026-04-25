@@ -183,8 +183,14 @@ export default function ProjectActivityFeedItem({
                 </button>
               )}
 
-              {/* Expand/collapse for emails and notes with long content */}
-              {(item.type === 'email' || (item.type === 'note' && (item._raw?.content_html || '').length > 200)) && (
+              {/* Expand/collapse for emails and notes with content that may exceed
+                  the line-clamp. Trigger on either total length OR newline count —
+                  short notes with paragraph breaks can clip past line-clamp-6 even
+                  under 200 chars, which is what users see as "truncated". */}
+              {(item.type === 'email' || (item.type === 'note' && (
+                (item._raw?.content_html || '').length > 200 ||
+                (item._raw?.content || '').split('\n').length > 6
+              ))) && (
                 <button onClick={() => setExpanded(e => !e)} className="p-1 rounded text-muted-foreground hover:bg-muted/60 transition-colors">
                   {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                 </button>
@@ -229,8 +235,8 @@ export default function ProjectActivityFeedItem({
           {item.type === 'note' && (
             <div className={`mt-1.5 rounded-lg p-2.5 ${config.bgColor} border ${config.borderColor}`}>
               {item._raw?.content_html && !expanded ? (
-                <p className="text-sm text-foreground/80 line-clamp-3 whitespace-pre-wrap">
-                  {item._raw.content || item._raw.content_html?.replace(/<[^>]*>/g, '').substring(0, 200)}
+                <p className="text-sm text-foreground/80 line-clamp-6 whitespace-pre-wrap">
+                  {item._raw.content || item._raw.content_html?.replace(/<[^>]*>/g, '')}
                 </p>
               ) : item._raw?.content_html && expanded ? (
                 <div

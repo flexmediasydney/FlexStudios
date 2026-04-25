@@ -147,7 +147,7 @@ function ProjectNoteItem({ item }) {
           <ProjectLink project={project} />
         </div>
       )}
-      <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap line-clamp-4">{data.content}</p>
+      <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap line-clamp-6">{data.content}</p>
       {data.attachments?.length > 0 && (
         <div className="flex flex-wrap gap-1.5 pt-1 border-t">
           {data.attachments.map((att, i) => (
