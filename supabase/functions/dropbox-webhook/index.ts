@@ -27,11 +27,17 @@ import {
   handleCors,
   errorResponse,
   serveWithAudit,
+  getAdminClient,
 } from '../_shared/supabase.ts';
 import { processDropboxDelta } from '../_shared/dropboxSync.ts';
 
 const GENERATOR = 'dropbox-webhook';
 const WATCH_PATH = '/FlexMedia/Projects';
+// 2-min debounce so a 50-image bulk upload of a drone shoot collapses into
+// a single ingest job rather than 50× back-to-back runs. See migration 228
+// (uniq_drone_jobs_pending_ingest_per_project) for the constraint that
+// enforces at-most-one pending ingest per project.
+const INGEST_DEBOUNCE_SECONDS = 120;
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
@@ -72,8 +78,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // ── Defer processing — Dropbox needs a fast response ────────────────────
   const work = processDropboxDelta(WATCH_PATH, 'webhook')
-    .then((r) => {
+    .then(async (r) => {
       console.log(`[${GENERATOR}] processed: emitted=${r.emitted} skipped=${r.skipped} errors=${r.errors.length}`);
+      // After the delta lands, scan project_folder_events for any raw_drones
+      // file_added events emitted in the last 60 seconds (this run + buffer)
+      // and enqueue debounced ingest jobs per distinct project_id.
+      try {
+        const queued = await enqueueIngestForRecentRawDrones();
+        if (queued > 0) {
+          console.log(`[${GENERATOR}] enqueued ingest for ${queued} project(s)`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] ingest enqueue failed: ${msg}`);
+      }
     })
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -84,6 +102,48 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   return new Response('OK', { status: 200, headers: { 'Content-Type': 'text/plain' } });
 });
+
+/**
+ * Find any raw_drones file_added events emitted in the last 60 seconds
+ * (covering this webhook run + a small buffer) and enqueue a debounced
+ * `kind='ingest'` job per distinct project_id.
+ *
+ * Why a time-window query rather than threading the project_ids through
+ * processDropboxDelta?
+ *   - Keeps the delta processor unchanged (it's also called by reconcile,
+ *     where the queue semantics are different).
+ *   - Naturally idempotent under the unique partial index from migration 228:
+ *     repeated calls within the same window upsert the same pending row.
+ *
+ * The webhook fires multiple times during a 50-file upload. Each call advances
+ * the cursor by the new chunk and enqueues. Migration 228's unique partial
+ * index collapses all those enqueues into a single pending row whose
+ * `scheduled_for` is ratcheted forward by 2 minutes from the latest webhook
+ * invocation — i.e. ingest fires once, ~2 minutes after the last file lands.
+ */
+async function enqueueIngestForRecentRawDrones(): Promise<number> {
+  const admin = getAdminClient();
+  const since = new Date(Date.now() - 60_000).toISOString();
+  const { data, error } = await admin
+    .from('project_folder_events')
+    .select('project_id')
+    .eq('folder_kind', 'raw_drones')
+    .eq('event_type', 'file_added')
+    .gte('created_at', since);
+  if (error) throw error;
+
+  const projectIds = Array.from(new Set((data || []).map((r) => r.project_id as string).filter(Boolean)));
+  for (const pid of projectIds) {
+    const { error: rpcErr } = await admin.rpc('enqueue_drone_ingest_job', {
+      p_project_id: pid,
+      p_debounce_seconds: INGEST_DEBOUNCE_SECONDS,
+    });
+    if (rpcErr) {
+      console.warn(`[${GENERATOR}] enqueue_drone_ingest_job failed for ${pid}: ${rpcErr.message}`);
+    }
+  }
+  return projectIds.length;
+}
 
 // ─── HMAC helpers ────────────────────────────────────────────────────────────
 

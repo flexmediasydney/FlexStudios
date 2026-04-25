@@ -13,7 +13,11 @@
  * Body:
  *   { project_id: string, folder_kind?: FolderKind = 'raw_drones',
  *     filename?: string = '_smoketest_<ts>.txt',
- *     content?: string = 'smoke test <ts>' }
+ *     content?: string = 'smoke test <ts>',
+ *     content_b64?: string  // optional — base64-encoded binary; overrides
+ *                              `content` when set. Used by the drone-ingest
+ *                              smoke test to upload real DJI JPGs without
+ *                              standing up a separate uploader function. }
  *
  * Auth: master_admin / admin only.
  */
@@ -57,10 +61,25 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const ts = Date.now();
   const filename = (typeof body.filename === 'string' ? body.filename : `_smoketest_${ts}.txt`);
-  const content = (typeof body.content === 'string' ? body.content : `smoke test ${new Date(ts).toISOString()}`);
+  const contentText = (typeof body.content === 'string' ? body.content : `smoke test ${new Date(ts).toISOString()}`);
+  const contentB64 = typeof body.content_b64 === 'string' ? body.content_b64 : null;
+
+  // Decode base64 → Uint8Array when present (used by the drone-ingest smoke
+  // test to upload a real DJI JPG fixture for end-to-end EXIF extraction).
+  let payload: ArrayBuffer | Uint8Array | string = contentText;
+  if (contentB64) {
+    try {
+      const bin = atob(contentB64);
+      const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      payload = u8;
+    } catch (_) {
+      return errorResponse('content_b64 is not valid base64', 400, req);
+    }
+  }
 
   try {
-    const meta = await writeFile(projectId, folderKind, filename, content);
+    const meta = await writeFile(projectId, folderKind, filename, payload);
     return jsonResponse({
       success: true,
       uploaded: {
