@@ -92,7 +92,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const { data: project, error: projErr } = await admin
     .from("projects")
     .select(
-      "id, address, geocoded_lat, geocoded_lng, confirmed_lat, confirmed_lng, agency_id, primary_contact_person_id",
+      "id, property_address, property_suburb, geocoded_lat, geocoded_lng, confirmed_lat, confirmed_lng, agency_id, primary_contact_person_id",
     )
     .eq("id", shoot.project_id)
     .maybeSingle();
@@ -177,7 +177,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         pitch: Number(shot.gimbal_pitch),
         property_lat: projectCoord.lat,
         property_lon: projectCoord.lng,
-        address: project.address || "",
+        address: [project.property_address, project.property_suburb].filter(Boolean).join(", "),
       };
       if (pois && pois.length > 0) scene.pois = pois;
       if (cadastral && Array.isArray(cadastral.polygon)) {
@@ -212,7 +212,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       // Upload rendered output to Dropbox
       const outName = filenameForRender(shot.filename, kind);
       const outDropboxPath = `${outFolder}/${outName}`;
-      const uploadRes = await uploadFile(outDropboxPath, outBytes, { mode: "overwrite" });
+      const uploadRes = await uploadFile(outDropboxPath, outBytes, "overwrite");
       if (!uploadRes || !uploadRes.path_lower) {
         renderResults.push({
           shot_id: shot.id,

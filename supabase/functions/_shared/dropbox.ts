@@ -361,9 +361,11 @@ export async function uploadFile(
   body: ArrayBuffer | Uint8Array | string,
   mode: 'add' | 'overwrite' = 'add',
 ): Promise<DropboxFileMetadata> {
+  // Dropbox WriteMode is a tagged union: { ".tag": "overwrite" } etc.
+  // Bare string fails with: HTTP header "Dropbox-API-Arg": mode: missing '.tag' key
   const res = await dropboxContent('/files/upload', {
     path,
-    mode,
+    mode: { '.tag': mode },
     autorename: false,
     mute: true,
   }, body);
