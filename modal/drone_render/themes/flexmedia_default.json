@@ -86,11 +86,12 @@
     "radius_m": 1500, "max_pins_per_shot": 6, "min_separation_px": 220,
     "curation": "auto",
     "type_quotas": {
-      "beach": { "priority": 1, "max": 1 },
-      "shopping": { "priority": 2, "max": 1 },
-      "school": { "priority": 3, "max": 2 },
-      "train": { "priority": 4, "max": 2 },
-      "hospital": { "priority": 5, "max": 1 }
+      "school":        { "priority": 1, "max": 2 },
+      "train_station": { "priority": 2, "max": 2 },
+      "hospital":      { "priority": 3, "max": 1 },
+      "shopping_mall": { "priority": 4, "max": 1 },
+      "park":          { "priority": 5, "max": 1 },
+      "beach":         { "priority": 6, "max": 1 }
     }
   },
 

@@ -299,8 +299,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const themeRadius = Number(themeForKind?.poi_selection?.radius_m);
   const radiusToUse = Number.isFinite(themeRadius) && themeRadius > 0 ? themeRadius : undefined;
+  // Forward the resolved theme's poi_selection.type_quotas to drone-pois so
+  // operator-controlled POI categories actually apply at fetch time. When
+  // null/empty/missing, drone-pois falls back to its hardcoded defaults
+  // (back-compat). The hash of this object also keys the cache row, so
+  // different theme selections don't collide. (Stream J — type-quotas wiring.)
+  const themeQuotas = themeForKind?.poi_selection?.type_quotas;
   const [pois, cadastral] = await Promise.all([
-    needsPois(kind) ? fetchPois(req, project.id, radiusToUse) : Promise.resolve([]),
+    needsPois(kind) ? fetchPois(req, project.id, radiusToUse, themeQuotas) : Promise.resolve([]),
     needsBoundary(kind) ? fetchCadastral(req, project.id) : Promise.resolve(null),
   ]);
 
@@ -365,6 +371,22 @@ serveWithAudit(GENERATOR, async (req: Request) => {
      * "editor team owes us a file" from "render genuinely failed".
      */
     skipped_no_edit?: boolean;
+    /** Diagnostic: number of POIs that drone-render passed to Modal for this shot. */
+    pois_passed?: number;
+    /** Diagnostic: shape of the first POI (key list) — to confirm lon mapping landed. */
+    pois_first_keys?: string[];
+    /** Diagnostic: raw count from fetchPois (before the orbital-only gate). */
+    pois_from_fetch?: number;
+    /** Diagnostic: shot role at time of render. */
+    shot_role_at_render?: string;
+    /** Diagnostic: needsPois(kind) result. */
+    needs_pois?: boolean;
+    /** Diagnostic: the resolved drone-pois sub-call URL drone-render computed. */
+    pois_subcall_url?: string;
+    /** Diagnostic: HTTP status returned by the drone-pois sub-call. */
+    pois_subcall_status?: number;
+    /** Diagnostic: first 200 chars of the drone-pois sub-call response body. */
+    pois_subcall_body_head?: string;
     variants?: Array<{ variant: string; out_path: string }>;
   };
   const renderResults: RenderResult[] = [];
@@ -633,6 +655,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         filename: shot.filename,
         ok: !anyVariantFailed,
         out_path: variantResults[0].out_path,
+        pois_passed: Array.isArray(scene.pois) ? scene.pois.length : 0,
+        pois_first_keys: Array.isArray(scene.pois) && scene.pois[0]
+          ? Object.keys(scene.pois[0])
+          : undefined,
+        pois_from_fetch: Array.isArray(pois) ? pois.length : -1,
+        shot_role_at_render: shot.shot_role || "(null)",
+        needs_pois: needsPois(kind),
+        pois_subcall_url: POI_SUBCALL_TELEMETRY.url,
+        pois_subcall_status: POI_SUBCALL_TELEMETRY.status,
+        pois_subcall_body_head: POI_SUBCALL_TELEMETRY.body_head,
         ...(variantResults.length > 1
           ? { variants: variantResults }
           : {}),
@@ -854,27 +886,69 @@ async function loadThemeChain(
 // the per-user RLS check (e.g. accept ?internal=1 + service-role JWT). Until
 // that lands, dispatcher-chained renders won't show POIs/boundary even when
 // the data exists. Tracking: see audit finding #8.
-async function fetchPois(req: Request, projectId: string, radiusM?: number): Promise<any[]> {
-  const baseUrl = req.url.replace(/\/drone-render(\?.*)?$/, "/drone-pois");
+// Stash the most recent sub-call telemetry so we can surface it in the
+// per-shot RenderResult (see RenderResult.pois_subcall_*). Process-global is
+// fine because the per-invocation main handler is single-tenant.
+const POI_SUBCALL_TELEMETRY: { url?: string; status?: number; body_head?: string } = {};
+
+// External-facing Supabase URL — used as the base for sub-calls because
+// `req.url` (visible inside the Edge Function) is the *internal* route
+// without the `/functions/v1/` prefix, so deriving sub-call URLs from
+// req.url produced 404s. Same pattern drone-raw-preview already uses.
+const PUBLIC_SUPABASE_URL =
+  Deno.env.get("SUPABASE_URL") ||
+  "https://rjzdznwkxnzfekgcdkei.supabase.co";
+
+async function fetchPois(
+  req: Request,
+  projectId: string,
+  radiusM?: number,
+  typeQuotas?: Record<string, { priority?: number; max?: number }> | null,
+): Promise<any[]> {
+  const baseUrl = `${PUBLIC_SUPABASE_URL}/functions/v1/drone-pois`;
   const auth = req.headers.get("Authorization");
-  const r = await fetch(baseUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
-    body: JSON.stringify({ project_id: projectId, ...(radiusM ? { radius_m: radiusM } : {}) }),
-  });
-  if (!r.ok) {
-    console.warn(`drone-pois sub-call failed ${r.status}`);
+  POI_SUBCALL_TELEMETRY.url = baseUrl;
+  POI_SUBCALL_TELEMETRY.status = undefined;
+  POI_SUBCALL_TELEMETRY.body_head = undefined;
+  // Only include type_quotas when caller actually has one — drone-pois treats
+  // missing/empty as the fallback path that uses hardcoded defaults (and the
+  // cache hash collapses to '' so legacy cache rows still hit).
+  const includeQuotas = !!typeQuotas && typeof typeQuotas === 'object' && Object.keys(typeQuotas).length > 0;
+  let r: Response;
+  try {
+    r = await fetch(baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
+      body: JSON.stringify({
+        project_id: projectId,
+        ...(radiusM ? { radius_m: radiusM } : {}),
+        ...(includeQuotas ? { type_quotas: typeQuotas } : {}),
+      }),
+    });
+  } catch (e) {
+    POI_SUBCALL_TELEMETRY.body_head = `THREW: ${e instanceof Error ? e.message : e}`;
     return [];
   }
-  const j = await r.json().catch(() => ({}));
-  return j.pois || [];
+  POI_SUBCALL_TELEMETRY.status = r.status;
+  const text = await r.text().catch(() => "");
+  POI_SUBCALL_TELEMETRY.body_head = text.slice(0, 200);
+  if (!r.ok) return [];
+  let j: { pois?: unknown[] } = {};
+  try {
+    j = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  return (j.pois as any[]) || [];
 }
 
 // TODO (#8 audit): same caveat as fetchPois — when invoked via the dispatcher's
 // service-role JWT, drone-cadastral's getUserClient doesn't recognise the
 // principal so we get null back. Fix is owned by drone-cadastral (Z2).
 async function fetchCadastral(req: Request, projectId: string): Promise<any | null> {
-  const baseUrl = req.url.replace(/\/drone-render(\?.*)?$/, "/drone-cadastral");
+  // Same fix as fetchPois — req.url is the internal route, missing the
+  // /functions/v1/ prefix. Use the public Supabase URL.
+  const baseUrl = `${PUBLIC_SUPABASE_URL}/functions/v1/drone-cadastral`;
   const auth = req.headers.get("Authorization");
   const r = await fetch(baseUrl, {
     method: "POST",

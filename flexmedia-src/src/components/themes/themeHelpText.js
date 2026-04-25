@@ -592,8 +592,8 @@ export const THEME_HELP_TEXT = {
   },
   "poi_selection.type_quotas": {
     title: "POI type quotas",
-    desc: "Per-category limits on which POIs the auto-curator picks (e.g. max 1 beach, max 2 schools). Each category has a priority (lower number = picked first) and a max count.",
-    example: "{beach: priority 1, max 1} ensures one beach is shown if available, but no more.",
+    desc: "Which POI categories appear on rendered shots, with per-type caps. Default selection covers the major real-estate-relevant categories (schools, trains, hospitals, shopping centres, parks, beaches). De-select what's not relevant to your market. Per-type Max sets how many of that type can appear; Priority decides which types fill the global Max-pins-per-shot budget first when there are too many candidates.",
+    example: "Schools (priority 1, max 2) means schools fill the budget first, capped at 2 — un-tick them entirely if you don't want any.",
   },
 
   // ─────────────────────────────────────────────────────────────────────

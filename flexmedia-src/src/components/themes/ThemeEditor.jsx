@@ -63,7 +63,6 @@ import {
   Loader2,
   Save,
   Plus,
-  X,
   ChevronDown,
   ChevronRight,
   AlertCircle,
@@ -210,12 +209,16 @@ const DEFAULT_CONFIG = {
     max_pins_per_shot: 6,
     min_separation_px: 220,
     curation: "auto",
+    // Canonical Google Places enum keys (post-migration 246). Operators
+    // can de-select via the ThemeEditor's POI Selection > Type quotas
+    // checklist; un-ticking a row removes its key entirely.
     type_quotas: {
-      beach: { priority: 1, max: 1 },
-      shopping: { priority: 2, max: 1 },
-      school: { priority: 3, max: 2 },
-      train: { priority: 4, max: 2 },
-      hospital: { priority: 5, max: 1 },
+      school:        { priority: 1, max: 2 },
+      train_station: { priority: 2, max: 2 },
+      hospital:      { priority: 3, max: 1 },
+      shopping_mall: { priority: 4, max: 1 },
+      park:          { priority: 5, max: 1 },
+      beach:         { priority: 6, max: 1 },
     },
   },
 
@@ -273,6 +276,26 @@ const PROPERTY_PIN_MODES = [
   { value: "teardrop_with_icon", label: "Teardrop with icon" },
   { value: "teardrop_plain", label: "Teardrop plain" },
   { value: "line_up_with_house_icon", label: "Line up with house icon" },
+];
+
+// ── POI category options ──────────────────────────────────────────────────
+// Drives the POI Selection > Type quotas checklist. `value` is the canonical
+// Google Places enum that drone-pois passes verbatim to the Nearby Search
+// API; the legacy 'shopping' / 'train' aliases are normalised in drone-pois
+// for back-compat with pre-migration-246 themes. Defaults reflect the
+// operator's preferred default ordering (schools > trains > hospitals >
+// shopping > parks > beaches), with universities / stadiums / tourist
+// attractions available as opt-ins.
+const POI_TYPE_OPTIONS = [
+  { value: "school",             label: "Schools",             defaultMax: 2, defaultPriority: 1 },
+  { value: "train_station",      label: "Train stations",      defaultMax: 2, defaultPriority: 2 },
+  { value: "hospital",           label: "Hospitals",           defaultMax: 1, defaultPriority: 3 },
+  { value: "shopping_mall",      label: "Shopping centres",    defaultMax: 1, defaultPriority: 4 },
+  { value: "park",               label: "Parks",               defaultMax: 1, defaultPriority: 5 },
+  { value: "beach",              label: "Beaches",             defaultMax: 1, defaultPriority: 6 },
+  { value: "university",         label: "Universities",        defaultMax: 1, defaultPriority: 7 },
+  { value: "stadium",            label: "Stadiums",            defaultMax: 1, defaultPriority: 8 },
+  { value: "tourist_attraction", label: "Tourist attractions", defaultMax: 1, defaultPriority: 9 },
 ];
 
 // ── Tiny helpers ───────────────────────────────────────────────────────────
@@ -1211,27 +1234,31 @@ export default function ThemeEditor({
     );
 
   // ── Type-quotas helpers ──────────────────────────────────────────────────
+  // Type-quotas drive which Google Places categories drone-pois actually
+  // queries (and how many of each surface in the curated result). Keys are
+  // canonical Google Places enum values; the legacy 'shopping' / 'train'
+  // aliases are normalised at the drone-pois layer for back-compat with
+  // older themes saved before migration 246.
+  //
+  // The UI is a fixed checklist of the supported categories: ticking a row
+  // adds the key to type_quotas with that row's defaults; un-ticking it
+  // removes the key entirely (so drone-pois treats the type as opted-out).
   const quotas = config.poi_selection?.type_quotas || {};
-  const quotaEntries = useMemo(() => Object.entries(quotas), [quotas]);
-  const updateQuota = (typeName, key, value) =>
-    update(["poi_selection", "type_quotas", typeName, key], value);
-  const renameQuotaType = (oldName, newName) => {
-    if (!newName || newName === oldName || quotas[newName]) return;
-    const next = {};
-    for (const [k, v] of Object.entries(quotas)) {
-      next[k === oldName ? newName : k] = v;
+  const togglePoiType = (typeValue, defaults) => {
+    if (typeValue in quotas) {
+      // Remove the key entirely — opt-out.
+      const { [typeValue]: _, ...rest } = quotas;
+      update(["poi_selection", "type_quotas"], rest);
+    } else {
+      // Re-add with the row's defaults.
+      update(["poi_selection", "type_quotas", typeValue], {
+        priority: defaults.defaultPriority,
+        max: defaults.defaultMax,
+      });
     }
-    update(["poi_selection", "type_quotas"], next);
   };
-  const removeQuotaType = (typeName) => {
-    const { [typeName]: _, ...rest } = quotas;
-    update(["poi_selection", "type_quotas"], rest);
-  };
-  const addQuotaType = () => {
-    let i = 1;
-    let n = "new_type";
-    while (quotas[n]) n = `new_type_${i++}`;
-    update(["poi_selection", "type_quotas", n], { priority: 99, max: 1 });
+  const updatePoiTypeField = (typeValue, field, value) => {
+    update(["poi_selection", "type_quotas", typeValue, field], value);
   };
 
   // ── Render ───────────────────────────────────────────────────────────────
@@ -1314,42 +1341,41 @@ export default function ThemeEditor({
             </FieldRow>
 
             <div className="mt-3 pt-2 border-t border-dashed border-muted">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1 mb-2">
                 <p className="text-xs font-semibold text-muted-foreground">
                   Type quotas
                 </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={addQuotaType}
-                  className="h-7 text-xs"
-                >
-                  <Plus className="h-3 w-3 mr-1" />
-                  Add type
-                </Button>
+                <HelpTip fieldKey="poi_selection.type_quotas" />
               </div>
-              <div className="space-y-1.5">
-                {quotaEntries.length === 0 && (
-                  <p className="text-[10px] text-muted-foreground italic">
-                    No type quotas defined.
-                  </p>
-                )}
-                {quotaEntries.map(([typeName, q]) => (
-                  // Using the original `typeName` as React key means a rename
-                  // re-mounts the row and the input loses focus mid-edit. Use
-                  // a stable identifier (the row's index in the entries map)
-                  // so the input keeps focus across keystrokes; the rename
-                  // happens onBlur instead. (#audit fix)
-                  <QuotaRow
-                    key={typeName}
-                    typeName={typeName}
-                    quota={q}
-                    onRename={(next) => renameQuotaType(typeName, next)}
-                    onUpdate={(k, v) => updateQuota(typeName, k, v)}
-                    onRemove={() => removeQuotaType(typeName)}
-                  />
-                ))}
+              <p className="text-[10px] text-muted-foreground mb-2">
+                Tick categories to include. Per-type Max caps how many of that
+                category can appear; Priority decides which types fill the
+                global Max-pins-per-shot budget first.
+              </p>
+              <div className="grid grid-cols-[24px_1fr_72px_72px] gap-2 items-center mb-1">
+                <span />
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">Category</span>
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-center">Max</span>
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-center">Prio</span>
+              </div>
+              <div className="space-y-1">
+                {POI_TYPE_OPTIONS.map((opt) => {
+                  const enabled = opt.value in quotas;
+                  const q = quotas[opt.value] || {};
+                  return (
+                    <PoiTypeChecklistRow
+                      key={opt.value}
+                      option={opt}
+                      enabled={enabled}
+                      max={q.max ?? opt.defaultMax}
+                      priority={q.priority ?? opt.defaultPriority}
+                      onToggle={() => togglePoiType(opt.value, opt)}
+                      onChangeMax={(v) => updatePoiTypeField(opt.value, "max", v)}
+                      onChangePriority={(v) => updatePoiTypeField(opt.value, "priority", v)}
+                      disabled={!canEdit}
+                    />
+                  );
+                })}
               </div>
             </div>
           </SectionAccordion>
@@ -2818,49 +2844,57 @@ export default function ThemeEditor({
   );
 }
 
-// ── Quota row (extracted so the input can hold focus across renames) ──────
-function QuotaRow({ typeName, quota, onRename, onUpdate, onRemove }) {
-  const [draftName, setDraftName] = useState(typeName);
-  // Keep draft in sync if the upstream name changes (e.g. parent reset).
-  useEffect(() => {
-    setDraftName(typeName);
-  }, [typeName]);
+// ── POI type checklist row (one per supported Google Places category) ─────
+// Tick to enable; per-type Max + Priority drive how the global Max-pins-per-
+// shot budget is filled. When unchecked, the key is removed from
+// poi_selection.type_quotas entirely so drone-pois treats it as opted-out.
+function PoiTypeChecklistRow({
+  option,
+  enabled,
+  max,
+  priority,
+  onToggle,
+  onChangeMax,
+  onChangePriority,
+  disabled,
+}) {
   return (
-    <div className="grid grid-cols-[1fr_72px_72px_auto] gap-2 items-center">
-      <Input
-        value={draftName}
-        onChange={(e) => setDraftName(e.target.value)}
-        // Defer the rename to onBlur so the input keeps focus mid-edit.
-        onBlur={() => {
-          const trimmed = draftName.trim();
-          if (trimmed && trimmed !== typeName) onRename(trimmed);
-          else setDraftName(typeName);
-        }}
-        className="h-8 text-xs font-mono"
+    <div className="grid grid-cols-[24px_1fr_72px_72px] gap-2 items-center">
+      <Checkbox
+        checked={enabled}
+        onCheckedChange={onToggle}
+        disabled={disabled}
+        className="h-4 w-4"
       />
-      <Input
-        type="number"
-        value={quota.priority ?? ""}
-        onChange={(e) => onUpdate("priority", Number(e.target.value))}
-        placeholder="prio"
-        className="h-8 text-xs"
-      />
-      <Input
-        type="number"
-        value={quota.max ?? ""}
-        onChange={(e) => onUpdate("max", Number(e.target.value))}
-        placeholder="max"
-        className="h-8 text-xs"
-      />
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        onClick={onRemove}
-        className="h-7 w-7 text-muted-foreground hover:text-destructive"
+      <Label
+        className={cn(
+          "text-xs cursor-pointer select-none",
+          !enabled && "text-muted-foreground",
+        )}
+        onClick={() => !disabled && onToggle()}
       >
-        <X className="h-3.5 w-3.5" />
-      </Button>
+        {option.label}
+      </Label>
+      <Input
+        type="number"
+        value={enabled ? max : ""}
+        onChange={(e) => onChangeMax(Number(e.target.value))}
+        disabled={!enabled || disabled}
+        min={0}
+        max={20}
+        placeholder="—"
+        className="h-7 text-xs text-center"
+      />
+      <Input
+        type="number"
+        value={enabled ? priority : ""}
+        onChange={(e) => onChangePriority(Number(e.target.value))}
+        disabled={!enabled || disabled}
+        min={1}
+        max={99}
+        placeholder="—"
+        className="h-7 text-xs text-center"
+      />
     </div>
   );
 }
