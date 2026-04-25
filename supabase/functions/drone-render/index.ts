@@ -117,11 +117,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Resolve theme via inheritance chain ──────────────────────────
+  // loadThemeChain returns highest-priority first ([person, org, system]).
+  // mergeConfigChain is a left-fold deep-merge where right wins, so we MUST
+  // reverse to lowest-first ([system, org, person]) before merging — otherwise
+  // the system default overrides every branded customisation. (#87 audit fix)
   const themeChain = await loadThemeChain(admin, {
     person_id: project.primary_contact_person_id,
     organisation_id: project.agency_id,
   });
-  const themeResolved = mergeConfigChain(themeChain.map((t) => t.config));
+  const orderedForMerge = [...themeChain].reverse();
+  const themeResolved = mergeConfigChain(orderedForMerge.map((t) => t.config));
   const themeForKind = applyKindToTheme(themeResolved, kind);
 
   // ── Fetch POIs + cadastral via internal Edge Functions ───────────
@@ -151,7 +156,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const outFolder = await getFolderPath(project.id, outFolderKind);
 
   // ── Update shoot status to 'rendering' ───────────────────────────
-  await admin.from("drone_shoots").update({ status: "rendering" }).eq("id", shoot.id);
+  // Optimistic update — only flip if not already in a terminal state. Without
+  // this, a render kicked off concurrently with an SfM job would clobber
+  // status='sfm_running'. (#4 audit fix)
+  await admin
+    .from("drone_shoots")
+    .update({ status: "rendering" })
+    .eq("id", shoot.id)
+    .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
 
   // ── Render each shot in sequence (Modal handles concurrency upstream) ───
   const renderResults: Array<{
@@ -343,11 +355,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const successCount = renderResults.filter((r) => r.ok).length;
 
-  // Update shoot status based on results
+  // Update shoot status based on results. Total failure transitions to
+  // 'render_failed' so the dispatcher / Command Center can surface it as an
+  // alert and so a retry policy can pick it up. The previous code left the
+  // shoot stuck at 'rendering' forever on total failure. (#2 audit fix)
   let nextStatus = shoot.status;
-  if (successCount === shots.length) nextStatus = "proposed_ready";
-  else if (successCount > 0) nextStatus = "proposed_ready"; // partial success counts as ready
-  else nextStatus = "rendering"; // total failure — leave as rendering for retry
+  if (successCount > 0) nextStatus = "proposed_ready"; // any success counts as ready
+  else nextStatus = "render_failed";
 
   await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
 

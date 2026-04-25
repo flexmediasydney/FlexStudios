@@ -70,12 +70,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse('Invalid JSON body', 400, req);
   }
 
+  const user = await getUserFromReq(req).catch(() => null);
+  if (!user) return errorResponse('Authentication required', 401, req);
+
+  // Health check is post-auth so unauthenticated probers can't enumerate
+  // function versions / deployment metadata. (#1 audit fix)
   if (body._health_check) {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
   }
-
-  const user = await getUserFromReq(req).catch(() => null);
-  if (!user) return errorResponse('Authentication required', 401, req);
 
   const role = user.role || '';
   if (!ALLOWED_ROLES.includes(role)) {

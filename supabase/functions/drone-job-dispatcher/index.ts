@@ -81,6 +81,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
   const startedAt = Date.now();
 
+  // ── Reset stale 'running' jobs back to 'pending'. Edge Function crashes
+  // (panic, OOM, gateway timeout) leave claimed jobs stuck in 'running'
+  // forever. Anything still 'running' after STALE_CLAIM_MIN minutes gets
+  // requeued. Also bumps attempts so dead-letter still applies. (#30 audit fix)
+  const STALE_CLAIM_MIN = 20;
+  const { data: stale } = await admin
+    .from("drone_jobs")
+    .update({ status: "pending", started_at: null })
+    .eq("status", "running")
+    .lt("started_at", new Date(Date.now() - STALE_CLAIM_MIN * 60 * 1000).toISOString())
+    .select("id");
+  if ((stale?.length ?? 0) > 0) {
+    console.warn(`[${GENERATOR}] reset ${stale!.length} stale-claim job(s) older than ${STALE_CLAIM_MIN}m`);
+  }
+
   // ── Atomically claim up to N pending jobs ──────────────────────────────
   // Use a SELECT ... FOR UPDATE SKIP LOCKED via SQL to avoid double-dispatch.
   const { data: claimed, error: claimErr } = await admin.rpc("claim_drone_jobs", {
@@ -104,7 +119,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let failed = 0;
   const results: Array<{ id: string; kind: string; ok: boolean; error?: string }> = [];
 
+  // Cap SfM dispatches per tick. SfM jobs take ~2-15 minutes each; the Edge
+  // Function wall-clock budget is ~145s so claiming more than 1 SfM means
+  // the rest stay in 'running' until they're swept as stale. (#34 audit fix)
+  // Other job kinds (ingest/render/render_preview) are seconds-scale so they
+  // share the remaining budget freely.
+  const MAX_SFM_PER_TICK = 1;
+  let sfmDispatched = 0;
+  const deferred: DroneJob[] = [];
+
   for (const job of jobs) {
+    if ((job.kind === "sfm" || job.kind === "sfm_run") && sfmDispatched >= MAX_SFM_PER_TICK) {
+      deferred.push(job);
+      continue;
+    }
+    if (job.kind === "sfm" || job.kind === "sfm_run") sfmDispatched++;
     try {
       const ok = await dispatchOne(admin, job);
       if (ok.ok) {
@@ -163,12 +192,23 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
+  // Release deferred SfM jobs back to 'pending' so the next dispatcher tick
+  // can claim them (otherwise they'd be stuck in 'running' from the claim).
+  if (deferred.length > 0) {
+    const ids = deferred.map((j) => j.id);
+    await admin
+      .from("drone_jobs")
+      .update({ status: "pending", started_at: null, attempt_count: deferred[0].attempt_count - 1 })
+      .in("id", ids);
+  }
+
   return jsonResponse(
     {
       success: true,
       claimed: jobs.length,
       dispatched,
       failed,
+      deferred: deferred.length,
       elapsed_ms: Date.now() - startedAt,
       results,
     },
@@ -268,15 +308,17 @@ async function callEdgeFunction(
   body: Record<string, unknown>,
 ): Promise<DispatchResult> {
   const url = `${SUPABASE_URL}/functions/v1/${fnName}`;
-  // Prefer DRONE_DISPATCHER_JWT (a real Supabase JWT for service role).
-  // SUPABASE_SERVICE_ROLE_KEY in this project's secrets store is a hashed
-  // value, not a JWT, so it fails getUserFromReq's JWT-format check.
-  const serviceKey =
-    Deno.env.get("DRONE_DISPATCHER_JWT") ||
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
-    "";
+  // DRONE_DISPATCHER_JWT must be a real Supabase JWT (HS256/ES256). The
+  // SUPABASE_SERVICE_ROLE_KEY env on this project is the new sb_secret_*
+  // hashed format which fails getUserFromReq's JWT structure check, so the
+  // previous fallback silently broke every dispatched call when the JWT was
+  // unset. Fail loud instead. (#29 audit fix)
+  const serviceKey = Deno.env.get("DRONE_DISPATCHER_JWT") || "";
   if (!serviceKey) {
-    return { ok: false, error: "DRONE_DISPATCHER_JWT/SUPABASE_SERVICE_ROLE_KEY not set" };
+    return {
+      ok: false,
+      error: "DRONE_DISPATCHER_JWT not set — cannot dispatch. Set it to a real Supabase service-role JWT (not the sb_secret_* env value).",
+    };
   }
   try {
     const resp = await fetch(url, {
@@ -341,18 +383,25 @@ async function markFailed(
   job: DroneJob,
   errMsg: string,
 ): Promise<void> {
-  const nextAttempt = (job.attempt_count || 0) + 1;
-  if (nextAttempt >= MAX_ATTEMPTS) {
+  // claim_drone_jobs already incremented attempt_count when it claimed the
+  // job, so job.attempt_count IS the count of attempts made (including this
+  // failed one). The previous nextAttempt = (...) + 1 was an off-by-one that
+  // killed jobs after MAX_ATTEMPTS-1 failures. (#31 audit fix)
+  const attemptsSoFar = job.attempt_count || 1;
+  if (attemptsSoFar >= MAX_ATTEMPTS) {
     await admin
       .from("drone_jobs")
       .update({
-        status: "dead",
+        // The drone_jobs CHECK constraint allows 'dead_letter', not 'dead'.
+        // The previous 'dead' value silently failed the UPDATE leaving the
+        // job stuck in 'running' forever. (#32 audit fix)
+        status: "dead_letter",
         finished_at: new Date().toISOString(),
         error_message: errMsg.slice(0, 1000),
       })
       .eq("id", job.id);
   } else {
-    const backoffSec = BACKOFF_SECONDS[Math.min(nextAttempt - 1, BACKOFF_SECONDS.length - 1)];
+    const backoffSec = BACKOFF_SECONDS[Math.min(attemptsSoFar - 1, BACKOFF_SECONDS.length - 1)];
     const next = new Date(Date.now() + backoffSec * 1000).toISOString();
     await admin
       .from("drone_jobs")

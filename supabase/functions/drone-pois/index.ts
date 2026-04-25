@@ -296,12 +296,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     );
   }
 
-  // 2. Cache hit?
+  // 2. Cache hit? Cache lookup must include radius_m so that a request with
+  // 5000m doesn't get a stale 1500m cached result. (#39 audit fix)
   if (!body.refresh) {
     const { data: cached } = await admin
       .from('drone_pois_cache')
       .select('*')
       .eq('project_id', body.project_id)
+      .eq('radius_m', radiusM)
       .gt('expires_at', new Date().toISOString())
       .order('fetched_at', { ascending: false })
       .limit(1)

@@ -13,12 +13,15 @@
  */
 
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
-import { handleCors, getCorsHeaders, jsonResponse, getAdminClient } from "../_shared/supabase.ts";
+import { handleCors, getCorsHeaders, jsonResponse, getAdminClient, getUserFromReq } from "../_shared/supabase.ts";
 import { dropboxApi, getMetadata } from "../_shared/dropbox.ts";
 
 const OLD_PREFIX = "/FlexMedia/Projects/";
 const NEW_PREFIX = "/Flex Media Team Folder/Projects/";
 const NEW_PARENT = "/Flex Media Team Folder";
+
+// Destructive: moves Dropbox folders + rewrites DB rows. Lock to admin/master.
+const ALLOWED_ROLES = new Set(["master_admin", "admin"]);
 
 function err(msg: string, status: number, req: Request) {
   return new Response(JSON.stringify({ error: msg }), {
@@ -40,6 +43,14 @@ serve(async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
   if (req.method !== "POST") return err("POST only", 405, req);
+
+  // ── Auth: master_admin/admin or service_role only. ────────────────────────
+  const user = await getUserFromReq(req).catch(() => null);
+  if (!user) return err("Authentication required", 401, req);
+  const isService = user.id === "__service_role__";
+  if (!isService && !ALLOWED_ROLES.has(user.role || "")) {
+    return err(`Role ${user.role || "(none)"} not permitted`, 403, req);
+  }
 
   const body = await req.json().catch(() => ({}));
   const projectId: string = body.project_id;

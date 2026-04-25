@@ -136,12 +136,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse('Invalid JSON body', 400, req);
   }
 
+  const user = await getUserFromReq(req).catch(() => null);
+  if (!user) return errorResponse('Authentication required', 401, req);
+
+  // Health check post-auth — see drone-render-approve for rationale. (#1 audit fix)
   if (body._health_check) {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
   }
-
-  const user = await getUserFromReq(req).catch(() => null);
-  if (!user) return errorResponse('Authentication required', 401, req);
 
   const shootId = body.shoot_id?.trim();
   const edits = Array.isArray(body.edits) ? body.edits : [];
@@ -189,10 +190,57 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
   const shoot = shootRow as ShootRow;
 
+  // Validate every pixel_anchored_shot_id in the edit set actually belongs
+  // to this shoot. Without this an attacker could pass a shot UUID from a
+  // different project and the FK would happily accept it. (#46 audit fix)
+  const pixelShotIds = Array.from(
+    new Set(
+      edits
+        .filter((e) => e && typeof e === 'object' && (e as BaseEdit).pixel_anchored_shot_id)
+        .map((e) => (e as BaseEdit).pixel_anchored_shot_id as string),
+    ),
+  );
+  if (pixelShotIds.length > 0) {
+    const { data: validShots, error: shotErr } = await admin
+      .from('drone_shots')
+      .select('id')
+      .eq('shoot_id', shootId)
+      .in('id', pixelShotIds);
+    if (shotErr) {
+      console.error(`[${GENERATOR}] shot membership check failed:`, shotErr);
+      return errorResponse('Shot membership check failed', 500, req);
+    }
+    const validSet = new Set((validShots || []).map((s) => s.id));
+    const stranger = pixelShotIds.find((id) => !validSet.has(id));
+    if (stranger) {
+      return errorResponse(
+        `pixel_anchored_shot_id ${stranger} does not belong to shoot ${shootId}`,
+        400,
+        req,
+      );
+    }
+  }
+
   let creates = 0;
   let updates = 0;
   let deletes = 0;
   const errors: string[] = [];
+
+  // Pre-validate: a pixel-anchored pin can never legitimately scope to
+  // 'all_shots' — its meaning is per-shot pixel coords. Previously this
+  // combination was silently swallowed by normalisePinPayload returning null.
+  // Reject up-front so the UI surfaces the operator's mistake. (#75 audit fix)
+  for (const e of edits) {
+    if (e?.action === 'delete') continue;
+    const isPixel = !!e?.pixel_anchored_shot_id;
+    if (isPixel && e?.scope === 'all_shots') {
+      return errorResponse(
+        "scope='all_shots' is not valid for pixel-anchored pins (use a world pin to apply to all shots)",
+        400,
+        req,
+      );
+    }
+  }
 
   for (const e of edits) {
     if (!e || typeof e !== 'object') continue;

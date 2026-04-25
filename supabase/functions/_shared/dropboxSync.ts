@@ -91,16 +91,25 @@ export async function processDropboxDelta(
     }
   }
 
+  // Cursor advance policy: only persist the new cursor when ALL entries in
+  // this batch processed cleanly. If any entry threw (DB outage, audit-event
+  // insert failure, etc.) we keep the OLD cursor so the next webhook/reconcile
+  // pass re-processes the failed entries. Without this, transient failures
+  // silently lose file events forever. (#54 audit fix)
+  const cursorToPersist = errors.length === 0 ? cursor : (state?.cursor as string | null) ?? cursor;
   const { error: updErr } = await admin
     .from('dropbox_sync_state')
     .update({
-      cursor,
+      cursor: cursorToPersist,
       last_run_at: new Date().toISOString(),
       last_changes_count: emitted,
       updated_at: new Date().toISOString(),
     })
     .eq('watch_path', watchPath);
   if (updErr) console.warn(`[dropboxSync] cursor update failed: ${updErr.message}`);
+  if (errors.length > 0) {
+    console.warn(`[dropboxSync] ${errors.length} entry error(s) — cursor held back so next sync retries`);
+  }
 
   return {
     watchPath,

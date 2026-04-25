@@ -370,12 +370,31 @@ export async function deleteFile(path: string): Promise<void> {
  * Copy a file or folder. Used by drone-render-approve to promote a render
  * from 06_ENRICHMENT/drone_renders_proposed/ to 07_FINAL_DELIVERY/drones/
  * while preserving the original.
+ *
+ * If the destination exists we delete-then-copy rather than autorename. The
+ * previous autorename:true left orphans on un-approve/re-approve cycles —
+ * 07_FINAL_DELIVERY/drones/foo.jpg, foo (1).jpg, foo (2).jpg... and the DB
+ * only tracks the first path, so cleanup misses the siblings. (#22 audit fix)
  */
 export async function copyFile(fromPath: string, toPath: string): Promise<DropboxFileMetadata> {
+  try {
+    return await tryCopy(fromPath, toPath);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // path/conflict/file: dest exists → overwrite by deleting first then re-copying.
+    if (msg.includes('to/conflict') || msg.includes('path/conflict') || msg.includes('conflict/file')) {
+      await deleteFile(toPath);
+      return await tryCopy(fromPath, toPath);
+    }
+    throw err;
+  }
+}
+
+async function tryCopy(fromPath: string, toPath: string): Promise<DropboxFileMetadata> {
   const res = await dropboxApi<{ metadata: DropboxFileMetadata }>('/files/copy_v2', {
     from_path: fromPath,
     to_path: toPath,
-    autorename: true,            // suffix conflict → ` (1)` etc rather than fail
+    autorename: false,
     allow_shared_folder: false,
     allow_ownership_transfer: false,
   });
