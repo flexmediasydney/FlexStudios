@@ -92,6 +92,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
+import DroneLightbox from "@/components/drone/DroneLightbox";
 import { SHARED_THUMB_CACHE, enqueueFetch, fetchMediaProxy } from "@/utils/mediaPerf";
 
 const COLUMNS = [
@@ -147,8 +148,9 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
 
   // Confirmation dialog state for reject (destructive)
   const [confirmReject, setConfirmReject] = useState(null); // { render }
-  // Lightbox state for thumbnail click-to-preview
-  const [preview, setPreview] = useState(null); // { path, label }
+  // Lightbox state — stores { columnKey, index } so the viewer can flick
+  // through items in that column without leaving the page.
+  const [lightbox, setLightbox] = useState(null); // { columnKey, index }
   // Drag state — tracks which render is mid-drag so we can highlight valid
   // drop targets and ignore invalid drops without a network round-trip.
   const [dragRender, setDragRender] = useState(null); // { id, fromColumn }
@@ -322,6 +324,71 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
     }
     return m;
   }, [grouped.preview]);
+
+  // Per-column ordered list of lightbox items. Built once and indexed by the
+  // column key so a click on any card can resolve to (columnKey, index) and
+  // open DroneLightbox at that position. Items only include cards with a
+  // resolvable dropbox_path — anything without a path won't open the lightbox.
+  const lightboxItemsByColumn = useMemo(() => {
+    const out = {};
+    // Shot columns: walk the shots array preserving display order, prefer the
+    // AI-preview path (what the operator triages on), fall back to raw.
+    const shotColumnItems = (shots) =>
+      shots
+        .map((s) => {
+          const path = previewPathByShotId.get(s.id) || s.dropbox_path || null;
+          if (!path) return null;
+          return {
+            id: s.id,
+            dropbox_path: path,
+            filename: s.filename || null,
+            shot_role: SHOT_ROLE_LABEL[s.shot_role] || s.shot_role || null,
+            ai_recommended: Boolean(s.is_ai_recommended),
+            status: null,
+          };
+        })
+        .filter(Boolean);
+
+    // Render columns: items[].variants is sorted newest-first. Use the first
+    // (primary) variant for the lightbox payload — the swimlane card itself
+    // shows that primary thumbnail by default; multi-variant selection only
+    // affects download/transition targets, not the visible preview.
+    const renderColumnItems = (groups, columnKey) =>
+      groups
+        .map((g) => {
+          const r = g.variants?.[0];
+          const path = r?.dropbox_path;
+          if (!path) return null;
+          const shot = shotsById.get(g.shot_id);
+          return {
+            id: r.id,
+            dropbox_path: path,
+            filename: shot?.filename || r.kind || null,
+            shot_role: SHOT_ROLE_LABEL[shot?.shot_role] || shot?.shot_role || null,
+            ai_recommended: Boolean(shot?.is_ai_recommended),
+            status:
+              columnKey === "proposed"
+                ? "AI Proposed"
+                : columnKey === "adjustments"
+                ? "Adjustments"
+                : columnKey === "final"
+                ? "Final"
+                : null,
+          };
+        })
+        .filter(Boolean);
+
+    out.raw_proposed = shotColumnItems(grouped.raw_proposed);
+    out.raw_accepted = shotColumnItems(grouped.raw_accepted);
+    out.proposed = renderColumnItems(grouped.proposed, "proposed");
+    out.adjustments = renderColumnItems(grouped.adjustments, "adjustments");
+    out.final = renderColumnItems(grouped.final, "final");
+    out.rejected = renderColumnItems(grouped.rejected, "rejected").map((it) => ({
+      ...it,
+      status: "Rejected",
+    }));
+    return out;
+  }, [grouped, shotsById, previewPathByShotId]);
 
   // ── Transition action (generalised) ───────────────────────────────────────
   // pendingAction map values are short verbs the buttons read to render their
@@ -738,7 +805,11 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
               onTransition={callTransition}
               onMutateShot={mutateShotLifecycle}
               onConfirmReject={(render) => setConfirmReject({ render })}
-              onPreview={(info) => setPreview(info)}
+              onPreview={({ columnKey, itemId }) => {
+                const items = lightboxItemsByColumn[columnKey] || [];
+                const idx = items.findIndex((it) => it.id === itemId);
+                if (idx >= 0) setLightbox({ columnKey, index: idx });
+              }}
               dragRender={dragRender}
               setDragRender={setDragRender}
               staleByRenderId={staleByRenderId}
@@ -771,7 +842,11 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
                     pendingAction={pendingAction}
                     onTransition={callTransition}
                     onConfirmReject={() => {}}
-                    onPreview={(info) => setPreview(info)}
+                    onPreview={({ itemId }) => {
+                      const items = lightboxItemsByColumn.rejected || [];
+                      const idx = items.findIndex((it) => it.id === itemId);
+                      if (idx >= 0) setLightbox({ columnKey: "rejected", index: idx });
+                    }}
                     staleByRenderId={staleByRenderId}
                     onReRenderShot={reRenderShot}
                     pendingRerenderShotId={pendingRerenderShotId}
@@ -783,30 +858,23 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
         )}
       </div>
 
-      {/* Lightbox preview dialog (full-resolution, lazy-fetched) */}
-      <Dialog
-        open={Boolean(preview)}
-        onOpenChange={(o) => !o && setPreview(null)}
-      >
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle className="text-sm truncate">
-              {preview?.label || "Preview"}
-            </DialogTitle>
-          </DialogHeader>
-          {preview?.path && (
-            <div className="bg-black/80 rounded-md overflow-hidden">
-              <DroneThumbnail
-                dropboxPath={preview.path}
-                mode="proxy"
-                alt={preview.label || "drone preview"}
-                aspectRatio="aspect-[3/2]"
-                className="object-contain"
-              />
-            </div>
+      {/* Lightbox — flick through items in the active column without leaving
+          the page. Per-column item lists are precomputed in
+          lightboxItemsByColumn so we just hand off (items, initialIndex). */}
+      {lightbox && (lightboxItemsByColumn[lightbox.columnKey] || []).length > 0 && (
+        <DroneLightbox
+          items={lightboxItemsByColumn[lightbox.columnKey]}
+          initialIndex={Math.min(
+            lightbox.index,
+            lightboxItemsByColumn[lightbox.columnKey].length - 1,
           )}
-        </DialogContent>
-      </Dialog>
+          groupLabel={
+            COLUMNS.find((c) => c.key === lightbox.columnKey)?.label ||
+            (lightbox.columnKey === "rejected" ? "Rejected" : "")
+          }
+          onClose={() => setLightbox(null)}
+        />
+      )}
 
       {/* Reject confirm dialog */}
       <Dialog
@@ -959,7 +1027,11 @@ function PipelineColumn({
               canEdit={canEdit}
               pendingShotAction={pendingShotAction}
               onMutateShot={onMutateShot}
-              onPreview={onPreview}
+              // Inject columnKey so the parent can resolve the index into
+              // the right column's lightbox item list.
+              onPreview={({ itemId }) =>
+                onPreview && onPreview({ columnKey: column.key, itemId })
+              }
             />
           ))
         ) : (
@@ -975,7 +1047,9 @@ function PipelineColumn({
               pendingAction={pendingAction}
               onTransition={onTransition}
               onConfirmReject={onConfirmReject}
-              onPreview={onPreview}
+              onPreview={({ itemId }) =>
+                onPreview && onPreview({ columnKey: column.key, itemId })
+              }
               setDragRender={setDragRender}
               staleByRenderId={staleByRenderId}
               onReRenderShot={onReRenderShot}
@@ -1021,7 +1095,7 @@ function ShotLifecycleCard({
         type="button"
         onClick={() => {
           if (clickPath && onPreview) {
-            onPreview({ path: clickPath, label: shot.filename });
+            onPreview({ itemId: shot.id });
           }
         }}
         disabled={!clickPath}
@@ -1261,12 +1335,20 @@ function RenderCard({
       }}
       onDragEnd={() => setDragRender && setDragRender(null)}
     >
-      {/* Thumbnail (lazy via mediaPerf proxy). Click → lightbox preview */}
+      {/* Thumbnail (lazy via mediaPerf proxy). Click → lightbox preview.
+          The lightbox payload is keyed by the primary variant's id; the
+          parent's lightboxItemsByColumn memo also keys on that id, so
+          (column, primary-variant-id) round-trips cleanly. */}
       <button
         type="button"
         onClick={() => {
           if (r.dropbox_path && onPreview) {
-            onPreview({ path: r.dropbox_path, label: shot?.filename || r.kind });
+            // r is the currently SELECTED variant; the parent's lightbox item
+            // list keys off the primary (newest) variant's id. They match for
+            // single-variant cards, and for multi-variant cards the primary
+            // is what's shown in the column thumbnail by default.
+            const primaryId = orderedVariants[0]?.id || r.id;
+            onPreview({ itemId: primaryId });
           }
         }}
         disabled={!r.dropbox_path}

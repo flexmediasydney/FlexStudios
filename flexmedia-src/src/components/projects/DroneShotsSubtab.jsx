@@ -44,10 +44,12 @@ import {
   AlertTriangle,
   Loader2,
   AlertCircle,
+  Info,
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
+import DroneLightbox from "@/components/drone/DroneLightbox";
 
 const ROLE_LABEL = {
   nadir_grid: "Nadir grid",
@@ -77,6 +79,8 @@ export default function DroneShotsSubtab({ shoot }) {
 
   const [roleFilter, setRoleFilter] = useState("all");
   const [openShot, setOpenShot] = useState(null);
+  // Lightbox: open at a shot index within the currently filtered list.
+  const [lightboxIndex, setLightboxIndex] = useState(null);
 
   // Fetch shots for this shoot
   const shotsKey = ["drone_shots", shootId];
@@ -197,27 +201,50 @@ export default function DroneShotsSubtab({ shoot }) {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {filteredShots.map((shot) => (
+          {filteredShots.map((shot, idx) => (
             <ShotCard
               key={shot.id}
               shot={shot}
-              onClick={() => setOpenShot(shot)}
+              onClick={() => setLightboxIndex(idx)}
+              onShowDetails={() => setOpenShot(shot)}
             />
           ))}
         </div>
       )}
 
-      {/* Detail dialog */}
+      {/* Detail dialog (EXIF / SfM / metadata) */}
       <ShotDetailDialog
         shot={openShot}
         onClose={() => setOpenShot(null)}
       />
+
+      {/* Lightbox — flick through the filtered shots without leaving the page */}
+      {lightboxIndex !== null && filteredShots.length > 0 && (
+        <DroneLightbox
+          items={filteredShots.map((s) => ({
+            id: s.id,
+            dropbox_path: s.dropbox_path,
+            filename: s.filename,
+            shot_role: ROLE_LABEL[s.shot_role] || s.shot_role || null,
+            ai_recommended: Boolean(s.is_ai_recommended),
+            status: null,
+          }))}
+          initialIndex={Math.min(lightboxIndex, filteredShots.length - 1)}
+          groupLabel={
+            roleFilter === "all"
+              ? "All roles"
+              : ROLE_LABEL[roleFilter] || roleFilter
+          }
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </div>
   );
 }
 
 // ── ShotCard ─────────────────────────────────────────────────────────────────
-function ShotCard({ shot, onClick }) {
+// Card body click → lightbox; the small Info button → EXIF / metadata dialog.
+function ShotCard({ shot, onClick, onShowDetails }) {
   const role = shot.shot_role || "unclassified";
   const flightRoll = shot.flight_roll;
   const flightRollWarn =
@@ -227,11 +254,18 @@ function ShotCard({ shot, onClick }) {
   const pitch = shot.gimbal_pitch;
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick?.();
+        }
+      }}
       className={cn(
-        "rounded-md border bg-card text-left overflow-hidden hover:bg-muted/50 transition-colors",
+        "rounded-md border bg-card text-left overflow-hidden hover:bg-muted/50 transition-colors cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-ring",
         flightRollWarn && "ring-1 ring-amber-400/60",
       )}
     >
@@ -264,12 +298,28 @@ function ShotCard({ shot, onClick }) {
               ) : null}
             </div>
           </div>
-          {shot.registered_in_sfm && (
-            <CheckCircle2
-              className="h-3 w-3 text-emerald-600 flex-shrink-0 mt-0.5"
-              title="Registered in SfM"
-            />
-          )}
+          <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+            {shot.registered_in_sfm && (
+              <CheckCircle2
+                className="h-3 w-3 text-emerald-600"
+                title="Registered in SfM"
+              />
+            )}
+            {onShowDetails && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onShowDetails();
+                }}
+                className="text-muted-foreground hover:text-foreground p-0.5 rounded hover:bg-muted"
+                title="Show EXIF / metadata"
+                aria-label="Show EXIF and metadata"
+              >
+                <Info className="h-3 w-3" />
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-1 flex-wrap">
@@ -298,7 +348,7 @@ function ShotCard({ shot, onClick }) {
           {pitch != null && <span title="Gimbal pitch">∠ {Number(pitch).toFixed(0)}°</span>}
         </div>
       </div>
-    </button>
+    </div>
   );
 }
 
