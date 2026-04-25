@@ -200,6 +200,9 @@ async function dispatchOne(
       return await callEdgeFunction("drone-render", {
         shoot_id: job.payload?.shoot_id || job.shoot_id,
         kind: job.payload?.kind || "poi_plus_boundary",
+        // Pass-through `reason` so drone-render can route Pin Editor saves
+        // to the drone_renders_adjusted/ folder + adjustments column state.
+        reason: job.payload?.reason,
       });
     // We accept both 'sfm_run' (legacy/dispatcher-canonical) and 'sfm' (the
     // value that drone-ingest enqueues per migration 225 CHECK constraint).

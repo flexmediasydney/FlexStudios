@@ -13,7 +13,7 @@
     "anchor_line": {
       "type": "object",
       "properties": {
-        "shape": { "type": "string", "enum": ["thin", "thick_bar", "dashed"] },
+        "shape": { "type": "string", "enum": ["thin", "thick_bar", "dashed", "gradient", "none"] },
         "width_px": { "type": "integer", "minimum": 1 },
         "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
         "opacity": { "type": "number", "minimum": 0, "maximum": 1, "default": 1.0 },
@@ -118,7 +118,9 @@
             "text_color": { "type": "string" },
             "text_font": { "type": "string" },
             "text_size_px": { "type": "integer" },
-            "icon_color": { "type": "string" }
+            "icon_color": { "type": "string" },
+            "content_b64": { "type": "string", "description": "Base64-encoded SVG bytes — used by property_pin.mode=custom_svg" },
+            "url": { "type": "string", "description": "https URL to fetch SVG — used by property_pin.mode=custom_svg" }
           }
         },
         "address_label": {

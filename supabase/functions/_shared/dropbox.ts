@@ -352,6 +352,21 @@ export async function moveFile(fromPath: string, toPath: string): Promise<Dropbo
 }
 
 /**
+ * Delete a file or folder. Idempotent: a path/not_found error is treated as
+ * success (file already gone). Used by drone-render-approve when un-approving
+ * a Final render to clean up the orphaned copy in 07_FINAL_DELIVERY/drones/.
+ */
+export async function deleteFile(path: string): Promise<void> {
+  try {
+    await dropboxApi('/files/delete_v2', { path });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('path_lookup/not_found') || msg.includes('not_found')) return;
+    throw err;
+  }
+}
+
+/**
  * Copy a file or folder. Used by drone-render-approve to promote a render
  * from 06_ENRICHMENT/drone_renders_proposed/ to 07_FINAL_DELIVERY/drones/
  * while preserving the original.

@@ -460,8 +460,29 @@ function ShootCard({ shoot, selected, onClick }) {
 
 // ── ShootDetail ──────────────────────────────────────────────────────────────
 function ShootDetail({ shoot, sfmRun, activeSubtab, onSubtabChange, projectId }) {
+  // Plan §4.4: surface a UI warning when the pilot uploaded ≥10 images but
+  // <10 of them are nadir-grid (gimbal pitch ≤ -85°). Suggests they skipped
+  // the nadir grid step and SfM will fall back to GPS-only renders.
+  const NADIR_GRID_MIN_SHOTS = 10;
+  const enoughImagesForGrid = (shoot?.image_count ?? 0) >= NADIR_GRID_MIN_SHOTS;
+  const missingNadirGrid = enoughImagesForGrid && shoot?.has_nadir_grid === false;
   return (
     <div className="space-y-3">
+      {missingNadirGrid && (
+        <div className="rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 flex items-start gap-2">
+          <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+          <div className="text-xs text-amber-800 dark:text-amber-200">
+            <p className="font-medium">No nadir grid detected</p>
+            <p className="mt-0.5 leading-snug">
+              This shoot has {shoot.image_count} images but none of them are
+              nadir (camera pointing straight down at ≤-85°). SfM needs a
+              nadir grid for accurate pose recovery — renders will fall back
+              to GPS-only positioning, which is less precise. Re-fly with a
+              ~10-image nadir sweep over the property to enable SfM.
+            </p>
+          </div>
+        </div>
+      )}
       {/* Status pipeline strip */}
       <PipelineStrip shoot={shoot} sfmRun={sfmRun} />
 

@@ -138,8 +138,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     needsBoundary(kind) ? fetchCadastral(req, project.id) : Promise.resolve(null),
   ]);
 
-  // ── Output folder path ────────────────────────────────────────────
-  const outFolder = await getFolderPath(project.id, "enrichment_drone_renders_proposed");
+  // ── Output folder path + initial column_state ─────────────────────
+  // When the render is triggered by a Pin Editor save, write to the
+  // adjustments folder and seed the row at column_state='adjustments' so the
+  // operator's edits show up in the right swimlane column directly. All other
+  // triggers (auto-render after ingest, manual re-render) go to proposed/.
+  const isAdjustedRender = body?.reason === "pin_edit_saved" || body?.column_state === "adjustments";
+  const outFolderKind = isAdjustedRender
+    ? "enrichment_drone_renders_adjusted"
+    : "enrichment_drone_renders_proposed";
+  const initialColumnState = isAdjustedRender ? "adjustments" : "proposed";
+  const outFolder = await getFolderPath(project.id, outFolderKind);
 
   // ── Update shoot status to 'rendering' ───────────────────────────
   await admin.from("drone_shoots").update({ status: "rendering" }).eq("id", shoot.id);
@@ -264,7 +273,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
           const { error: insErr } = await admin.from("drone_renders").insert({
             shot_id: shot.id,
-            column_state: "proposed",
+            column_state: initialColumnState,
             kind,
             dropbox_path: uploadRes.path_lower,
             theme_id: themeChain[0]?.theme_id || null,

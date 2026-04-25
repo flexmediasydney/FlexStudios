@@ -213,6 +213,27 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
+  // ── On un-approve (final → adjustments): delete the orphaned final-delivery
+  // copy. Without this, a Final approval that gets rolled back leaves a stale
+  // file in 07_FINAL_DELIVERY/drones/ that downstream delivery would treat as
+  // approved. Idempotent — deleteFile swallows path/not_found.
+  let finalDeleteError: string | null = null;
+  if (fromState === 'final' && toState === 'adjustments' && projectId && render.dropbox_path) {
+    try {
+      const { deleteFile } = await import('../_shared/dropbox.ts');
+      const { getFolderPath } = await import('../_shared/projectFolders.ts');
+      const finalFolder = await getFolderPath(projectId, 'final_delivery_drones');
+      const filename = render.dropbox_path.split('/').pop() ?? `render_${body.render_id}.jpg`;
+      const targetPath = `${finalFolder}/${filename}`;
+      await deleteFile(targetPath);
+    } catch (delErr) {
+      // Don't reject the rollback if cleanup fails — flag in audit so an
+      // operator can manually delete from Dropbox.
+      finalDeleteError = delErr instanceof Error ? delErr.message : String(delErr);
+      console.error(`[${GENERATOR}] final-delivery cleanup failed: ${finalDeleteError}`);
+    }
+  }
+
   // ── Emit audit event (best-effort — don't block on failure) ────────────────
   const eventType =
     toState === 'final' ? 'render_approved'
@@ -236,6 +257,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           kind: render.kind,
           ...(finalDropboxPath ? { final_dropbox_path: finalDropboxPath } : {}),
           ...(finalCopyError ? { final_copy_error: finalCopyError } : {}),
+          ...(finalDeleteError ? { final_delete_error: finalDeleteError } : {}),
         },
       });
     if (evErr) {

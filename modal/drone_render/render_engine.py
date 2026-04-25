@@ -215,6 +215,39 @@ def _draw_anchor_line(img: np.ndarray, x_top, y_top, x_bot, y_bot, style: dict):
             y1 = y_top + sign * i * (dash_len + gap)
             y2 = y1 + sign * dash_len
             cv2.line(img, (x_top, int(y1)), (x_top, int(y2)), color, width, cv2.LINE_AA)
+    elif shape == "gradient":
+        # Vertical(-ish) gradient from marker end (x_bot,y_bot, full alpha)
+        # to label end (x_top,y_top, ~30% alpha). PIL has no native gradient
+        # line, so we composite alpha-blended segments via an RGBA layer.
+        h_img, w_img = img.shape[:2]
+        overlay = Image.new("RGBA", (w_img, h_img), (0, 0, 0, 0))
+        gdraw = ImageDraw.Draw(overlay)
+        # color comes as BGR (or None) — convert back to RGB for PIL
+        if color is None:
+            r_g_b = (255, 255, 255)
+        else:
+            r_g_b = (color[2], color[1], color[0])
+        steps = max(24, int(math.hypot(x_top - x_bot, y_top - y_bot) // 4))
+        a_start = 255  # alpha at marker end
+        a_end = int(255 * 0.30)  # alpha at label end
+        for i in range(steps):
+            t0 = i / steps
+            t1 = (i + 1) / steps
+            sx = x_bot + (x_top - x_bot) * t0
+            sy = y_bot + (y_top - y_bot) * t0
+            ex = x_bot + (x_top - x_bot) * t1
+            ey = y_bot + (y_top - y_bot) * t1
+            # interpolate alpha along the line: full at i=0 (marker), faded at i=steps (label)
+            t_mid = (t0 + t1) / 2
+            a = int(a_start + (a_end - a_start) * t_mid)
+            gdraw.line(
+                [(sx, sy), (ex, ey)],
+                fill=(r_g_b[0], r_g_b[1], r_g_b[2], a),
+                width=max(1, int(width)),
+            )
+        # Composite back onto BGR canvas in-place
+        composed = _composite_overlay_onto_bgr(img, overlay)
+        img[:, :, :] = composed
     else:  # "thin"
         cv2.line(img, (x_top, y_top), (x_bot, y_bot), color, width, cv2.LINE_AA)
 
@@ -497,6 +530,73 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
         if sw > 0:
             cv2.circle(canvas_bgr, (x, y), 8, stroke, max(2, sw), cv2.LINE_AA)
         cv2.line(canvas_bgr, (x, by2), (x, y - 8), fill, 2, cv2.LINE_AA)
+
+    elif mode == "custom_svg":
+        # Rasterise an SVG (provided as base64 in content.content_b64, or
+        # https URL in content.url — v1 favours content_b64 to avoid network
+        # calls from Modal). Draw at the pin's pixel position with the
+        # configured size_px (taken as the target width; height preserves AR).
+        svg_bytes: Optional[bytes] = None
+        b64 = content.get("content_b64")
+        if b64:
+            try:
+                import base64 as _b64
+                svg_bytes = _b64.b64decode(b64)
+            except Exception as e:
+                print(f"custom_svg: invalid content_b64 ({e}); skipping pin")
+                return canvas_bgr
+        elif content.get("url"):
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    content["url"],
+                    headers={"User-Agent": "flexstudios-drone-render/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    svg_bytes = r.read()
+            except Exception as e:
+                print(f"custom_svg: url fetch failed ({e}); skipping pin")
+                return canvas_bgr
+        if not svg_bytes:
+            print("custom_svg: no svg source provided; skipping pin")
+            return canvas_bgr
+
+        try:
+            import cairosvg  # type: ignore
+        except ImportError:
+            print("custom_svg: cairosvg not installed; skipping pin")
+            return canvas_bgr
+
+        target_w = max(8, int(size))
+        try:
+            png_bytes = cairosvg.svg2png(
+                bytestring=svg_bytes,
+                output_width=target_w,
+            )
+        except Exception as e:
+            print(f"custom_svg: rasterise failed ({e}); skipping pin")
+            return canvas_bgr
+
+        try:
+            svg_img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        except Exception as e:
+            print(f"custom_svg: png decode failed ({e}); skipping pin")
+            return canvas_bgr
+
+        sw_img = svg_img.size[0]
+        sh_img = svg_img.size[1]
+        # Anchor: pin tip = (x, y). We treat (x, y) as bottom-centre of the SVG
+        # so a typical map pin's tip lands on the pixel.
+        paste_x = x - sw_img // 2
+        paste_y = y - sh_img
+        if paste_x < 0 or paste_y < 0 or paste_x + sw_img > w or paste_y + sh_img > h:
+            # Clamp into frame (best-effort; oversize SVG would clip)
+            paste_x = max(0, min(paste_x, w - sw_img))
+            paste_y = max(0, min(paste_y, h - sh_img))
+
+        overlay, _ = _bgr_to_rgba_overlay(w, h)
+        overlay.paste(svg_img, (paste_x, paste_y), svg_img)
+        canvas_bgr = _composite_overlay_onto_bgr(canvas_bgr, overlay)
 
     elif mode == "line_up_with_house_icon":
         line_top_y = y - 260
@@ -921,8 +1021,16 @@ def _validate_theme(theme: dict) -> None:
     if pin and pin.get("mode") and pin["mode"] not in valid_modes:
         raise ThemeValidationError(f"property_pin.mode must be one of {valid_modes}, got {pin['mode']}")
     al = theme.get("anchor_line", {})
-    if al.get("shape") and al["shape"] not in {"thin", "thick_bar", "dashed"}:
+    if al.get("shape") and al["shape"] not in {"thin", "thick_bar", "dashed", "gradient", "none"}:
         raise ThemeValidationError(f"anchor_line.shape invalid: {al['shape']}")
+    # custom_svg pin requires either content_b64 or url in pin.content
+    if pin and pin.get("mode") == "custom_svg":
+        c = pin.get("content", {}) or {}
+        if not (c.get("content_b64") or c.get("url")):
+            raise ThemeValidationError(
+                "property_pin.mode=custom_svg requires content.content_b64 (base64 SVG) "
+                "or content.url (https URL)"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

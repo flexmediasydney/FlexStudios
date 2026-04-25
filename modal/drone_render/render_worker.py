@@ -31,12 +31,15 @@ THIS_DIR = Path(__file__).resolve().parent
 # /root/drone_render and finds fonts/themes correctly.
 render_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("libgl1", "libglib2.0-0")
+    # libcairo2 is required by cairosvg (SVG -> PNG rasterisation for
+    # the property_pin custom_svg mode).
+    .apt_install("libgl1", "libglib2.0-0", "libcairo2")
     .pip_install(
         "Pillow==10.4.0",
         "opencv-python-headless==4.10.0.84",
         "numpy<2",
         "fastapi[standard]",
+        "cairosvg==2.7.1",
     )
     .add_local_dir(str(THIS_DIR), remote_path="/root/drone_render")
 )
