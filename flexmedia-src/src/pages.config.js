@@ -83,6 +83,7 @@ const IndustryPulse = React.lazy(() => import('./pages/IndustryPulse'));
 const SalesCommand = React.lazy(() => import('./pages/SalesCommand'));
 const SalesMap = React.lazy(() => import('./pages/SalesMap'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
+const DronePinEditor = React.lazy(() => import('./pages/DronePinEditor'));
 const Feedback = React.lazy(() => import('./pages/Feedback'));
 const FieldMode = React.lazy(() => import('./pages/FieldMode'));
 const NotificationsPage = React.lazy(() => import('./pages/NotificationsPage'));
@@ -139,6 +140,7 @@ export const PAGES = {
     "SalesCommand": SalesCommand,
     "SalesMap": SalesMap,
     "Dashboard": Dashboard,
+    "DronePinEditor": DronePinEditor,
     "EdgeFunctionHealth": EdgeFunctionHealth,
     "EdgeFunctionAuditLog": EdgeFunctionAuditLog,
     "EmailSyncSettings": EmailSyncSettings,

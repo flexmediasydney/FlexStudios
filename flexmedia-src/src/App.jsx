@@ -178,8 +178,8 @@ const AuthenticatedApp = () => {
       <Route path="/EmployeeUtilization" element={<Navigate to="/Dashboard?tab=team" replace />} />
       <Route path="/TeamPulsePage" element={<Navigate to="/Dashboard?tab=team" replace />} />
       {Object.entries(Pages).map(([path, Page]) => {
-        // Field Mode renders full-screen without the desktop Layout wrapper
-        if (path === 'FieldMode') {
+        // Field Mode + Drone Pin Editor render full-screen without the desktop Layout wrapper
+        if (path === 'FieldMode' || path === 'DronePinEditor') {
           return (
             <Route
               key={path}

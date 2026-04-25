@@ -23,6 +23,7 @@ export const ROUTE_ACCESS = {
   // ── PROJECTS (all levels) ─────────────────────────────────
   Projects: ALL_LEVELS,
   ProjectDetails: ALL_LEVELS,
+  DronePinEditor: EMPLOYEE_AND_ABOVE,
   Tasks: ALL_LEVELS,
   Goals: ALL_LEVELS,
   GoalDetails: ALL_LEVELS,
