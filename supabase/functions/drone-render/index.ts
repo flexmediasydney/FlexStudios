@@ -183,8 +183,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse("project has no usable coordinates (confirmed or geocoded)", 400, req);
   }
 
+  const themeRadius = Number(themeForKind?.poi_selection?.radius_m);
+  const radiusToUse = Number.isFinite(themeRadius) && themeRadius > 0 ? themeRadius : undefined;
   const [pois, cadastral] = await Promise.all([
-    needsPois(kind) ? fetchPois(req, project.id) : Promise.resolve([]),
+    needsPois(kind) ? fetchPois(req, project.id, radiusToUse) : Promise.resolve([]),
     needsBoundary(kind) ? fetchCadastral(req, project.id) : Promise.resolve(null),
   ]);
 
@@ -641,13 +643,13 @@ async function loadThemeChain(
 // the per-user RLS check (e.g. accept ?internal=1 + service-role JWT). Until
 // that lands, dispatcher-chained renders won't show POIs/boundary even when
 // the data exists. Tracking: see audit finding #8.
-async function fetchPois(req: Request, projectId: string): Promise<any[]> {
+async function fetchPois(req: Request, projectId: string, radiusM?: number): Promise<any[]> {
   const baseUrl = req.url.replace(/\/drone-render(\?.*)?$/, "/drone-pois");
   const auth = req.headers.get("Authorization");
   const r = await fetch(baseUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
-    body: JSON.stringify({ project_id: projectId }),
+    body: JSON.stringify({ project_id: projectId, ...(radiusM ? { radius_m: radiusM } : {}) }),
   });
   if (!r.ok) {
     console.warn(`drone-pois sub-call failed ${r.status}`);

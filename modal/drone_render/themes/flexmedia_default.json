@@ -21,6 +21,7 @@
   },
 
   "poi_label": {
+    "enabled": true,
     "shape": "rectangle",
     "corner_radius_px": 0,
     "fill": "#FFFFFF",
@@ -33,11 +34,12 @@
     "letter_spacing": 0,
     "line_height": 1.2,
     "text_template": "{name}",
-    "secondary_text": { "enabled": false, "template": "{distance}", "color": "#666666" },
-    "show_distance_as_secondary": false
+    "secondary_text": { "enabled": true, "template": "{distance}", "color": "#666666" },
+    "show_distance_as_secondary": true
   },
 
   "property_pin": {
+    "enabled": true,
     "mode": "line_up_with_house_icon",
     "size_px": 120,
     "fill_color": "#FFFFFF",

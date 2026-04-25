@@ -83,6 +83,7 @@ const IndustryPulse = React.lazy(() => import('./pages/IndustryPulse'));
 const SalesCommand = React.lazy(() => import('./pages/SalesCommand'));
 const SalesMap = React.lazy(() => import('./pages/SalesMap'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
+const AdminDroneThemes = React.lazy(() => import('./pages/AdminDroneThemes'));
 const DroneCommandCenter = React.lazy(() => import('./pages/DroneCommandCenter'));
 const DronePinEditor = React.lazy(() => import('./pages/DronePinEditor'));
 const ProjectLocationPage = React.lazy(() => import('./pages/ProjectLocationPage'));
@@ -130,6 +131,7 @@ const Users = React.lazy(() => import('./pages/Users'));
 
 
 export const PAGES = {
+    "AdminDroneThemes": AdminDroneThemes,
     "AdminTodoList": AdminTodoList,
     "AIAuditLog": AIAuditLog,
     "BountyBoard": BountyBoard,

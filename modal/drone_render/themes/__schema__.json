@@ -36,6 +36,11 @@
     "poi_label": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master toggle. When false, no POI labels are drawn at all on rendered shots, regardless of pois[] payload size or other knobs."
+        },
         "shape": { "type": "string", "enum": ["rectangle", "rounded_rectangle", "pill"] },
         "corner_radius_px": { "type": "integer", "default": 0 },
         "fill": { "type": ["string", "null"] },
@@ -91,6 +96,11 @@
     "property_pin": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master toggle. When false, no property pin is drawn (regardless of mode / size / address_label)."
+        },
         "mode": {
           "type": "string",
           "enum": [

@@ -110,18 +110,24 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
     if (isMasterAdmin) return true;
     if (ownerKind === "organisation" && isAdminOrAbove) return true;
     if (ownerKind === "person" && selfPersonMatch) return true;
+    // ownerKind === "system" is master-admin-only — caller (e.g. AdminDroneThemes)
+    // already gates the route, but we double-check here.
     return false;
   }, [isMasterAdmin, isAdminOrAbove, ownerKind, selfPersonMatch]);
+
+  // System-level themes have a NULL owner_id by design — they're the global
+  // fallback. So gate the queries on ownerKind alone, then conditionally
+  // include owner_id only for non-system owners.
+  const isSystemOwner = ownerKind === "system";
 
   // ── Themes for this owner ────────────────────────────────────────────────
   const themesQuery = useQuery({
     queryKey: ["drone_themes", ownerKind, ownerId],
     queryFn: async () => {
-      const rows = await api.entities.DroneTheme.filter(
-        { owner_kind: ownerKind, owner_id: ownerId },
-        "-updated_at",
-        100,
-      );
+      const filter = isSystemOwner
+        ? { owner_kind: "system" }
+        : { owner_kind: ownerKind, owner_id: ownerId };
+      const rows = await api.entities.DroneTheme.filter(filter, "-updated_at", 100);
       // Surface the most-recently-edited active theme first; archived last.
       return [...rows].sort((a, b) => {
         const aArchived = a.status === "archived";
@@ -131,7 +137,7 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
         return new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime();
       });
     },
-    enabled: !!ownerId && !!ownerKind,
+    enabled: !!ownerKind && (isSystemOwner || !!ownerId),
     staleTime: 15 * 1000,
   });
 
@@ -145,6 +151,8 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
     queryKey: ["theme_preview_sample_project", ownerKind, ownerId],
     queryFn: async () => {
       try {
+        // No per-owner sample project for system themes — preview is N/A.
+        if (isSystemOwner) return null;
         if (ownerKind === "organisation") {
           const rows = await api.entities.Project.filter(
             { agency_id: ownerId }, "-created_date", 1,
@@ -165,7 +173,7 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
         return null;
       }
     },
-    enabled: !!ownerId && !!ownerKind,
+    enabled: !!ownerKind && !isSystemOwner && !!ownerId,
     staleTime: 60 * 1000,
   });
 
@@ -321,7 +329,9 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
             <span className="font-medium text-foreground">{ownerName}</span>.{" "}
             {ownerKind === "person"
               ? "Person-level themes override the organisation default."
-              : "Organisation-level themes override the FlexMedia default."}
+              : ownerKind === "organisation"
+                ? "Organisation-level themes override the FlexMedia default."
+                : "System-level themes are the global FlexMedia fallback for every render."}
           </p>
         </div>
         {canEdit && (
@@ -336,7 +346,7 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
         <div className="rounded-md border border-amber-200 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 flex items-start gap-2 text-xs">
           <AlertCircle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
           <p className="text-amber-700 dark:text-amber-200">
-            View only — your role doesn't permit editing themes for this {ownerKind === "organisation" ? "organisation" : "person"}.
+            View only — your role doesn't permit editing {ownerKind === "system" ? "the FlexMedia system theme" : `themes for this ${ownerKind === "organisation" ? "organisation" : "person"}`}.
           </p>
         </div>
       )}
@@ -375,8 +385,9 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
             <div>
               <p className="text-sm font-medium">No themes yet</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Create one to override the FlexMedia default for this{" "}
-                {ownerKind === "organisation" ? "organisation" : "person"}.
+                {ownerKind === "system"
+                  ? "Create the FlexMedia system theme — it's the global fallback for every render."
+                  : `Create one to override the FlexMedia default for this ${ownerKind === "organisation" ? "organisation" : "person"}.`}
               </p>
             </div>
             {canEdit && (
@@ -403,7 +414,9 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
         </div>
       )}
 
-      {/* Resolved-theme preview */}
+      {/* Resolved-theme preview — only meaningful for non-system owners
+          (system has no upstream chain to resolve from). */}
+      {!isSystemOwner && (
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -444,6 +457,7 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
           )}
         </CardContent>
       </Card>
+      )}
     </div>
   );
 }

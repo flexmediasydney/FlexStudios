@@ -221,12 +221,29 @@ export default function PinEditor({
 
   const resolvedTheme = theme?.resolved_config || theme || {};
 
+  // Master toggles from the resolved theme. Default true when missing —
+  // never assume false-by-default. When false, the corresponding overlay
+  // layer is hidden in the editor preview (matching the rendered output).
+  // Form inputs / drag handles remain enabled so edits are still saved.
+  const poisEnabled = resolvedTheme?.poi_label?.enabled !== false;
+  const pinEnabled = resolvedTheme?.property_pin?.enabled !== false;
+
   // Items that should be visible on the active shot (after world→pixel projection).
   const projectedItems = useMemo(() => {
     if (!activeShot) return [];
     const out = [];
     for (const item of items) {
       if (hiddenIds.has(item.id)) continue;
+      // Master-toggle suppression of overlay markers. Property pin is the
+      // virtual "property" item; POIs are theme POIs + any manual poi_manual
+      // pin (world or pixel anchored).
+      if (!pinEnabled && item.virtual === "property") continue;
+      if (
+        !poisEnabled &&
+        (item.virtual === "theme_poi" || item.subtype === "poi_manual")
+      ) {
+        continue;
+      }
       let pixel = null;
       if (item.kind === "world") {
         if (
@@ -249,7 +266,7 @@ export default function PinEditor({
       out.push({ ...item, _pixel: pixel });
     }
     return out;
-  }, [items, hiddenIds, activeShot, pose]);
+  }, [items, hiddenIds, activeShot, pose, pinEnabled, poisEnabled]);
 
   // ── Canvas / image refs ─────────────────────────────────────────────────
   const containerRef = useRef(null);
@@ -1064,6 +1081,20 @@ export default function PinEditor({
             ref={containerRef}
             className="relative flex-1 min-w-0 overflow-hidden bg-slate-200 dark:bg-slate-900"
           >
+            {/* Theme-toggle suppression banner (top-left, non-blocking) */}
+            {(!poisEnabled || !pinEnabled) && (
+              <div className="absolute top-3 left-3 z-10 max-w-[60%] text-[11px] px-2 py-1 rounded bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 text-amber-800 dark:text-amber-200 mb-2">
+                Theme overrides hide{" "}
+                {!poisEnabled && !pinEnabled
+                  ? "POIs and the property pin"
+                  : !poisEnabled
+                    ? "POI labels"
+                    : "the property pin"}
+                . Edits made here are still saved but won&apos;t appear in renders
+                until the theme toggle is re-enabled.
+              </div>
+            )}
+
             {/* Toolbar (top-right) */}
             <div className="absolute top-3 right-3 z-10 flex items-center gap-1 bg-background/90 backdrop-blur rounded-md border border-border shadow-sm p-1">
               <ToolButton

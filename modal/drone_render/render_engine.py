@@ -1290,26 +1290,37 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
         "show_distance_as_secondary", False
     )
 
-    for poi in pois[:6]:
-        px = _gps_to_px(
-            poi["lat"], poi["lon"],
-            scene["lat"], scene["lon"], scene["alt"],
-            scene["yaw"], scene["pitch"], w, h,
-            intrinsics=intrinsics,
-        )
-        if px is None:
-            continue
-        if not (-200 < px[0] < w + 200 and -200 < px[1] < h + 200):
-            continue
-        x, y = int(px[0]), int(px[1])
-        secondary = None
-        if show_dist and "distance_m" in poi:
-            d = poi["distance_m"]
-            secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
-        canvas = _draw_poi_label(canvas, x, y, poi["name"], label_style, anchor_style, secondary, w, h)
+    # Master toggle: skip the entire POI loop when poi_label.enabled is false.
+    # Defaults to True so existing themes without the field still render POIs.
+    poi_labels_enabled = label_style.get("enabled", True)
+    if poi_labels_enabled:
+        # Per-shot pin cap from theme (clamped 0-50). 0 → no POIs rendered.
+        max_pins = int(theme_config.get("poi_selection", {}).get("max_pins_per_shot", 6))
+        max_pins = max(0, min(50, max_pins))
+        for poi in pois[:max_pins]:
+            px = _gps_to_px(
+                poi["lat"], poi["lon"],
+                scene["lat"], scene["lon"], scene["alt"],
+                scene["yaw"], scene["pitch"], w, h,
+                intrinsics=intrinsics,
+            )
+            if px is None:
+                continue
+            if not (-200 < px[0] < w + 200 and -200 < px[1] < h + 200):
+                continue
+            x, y = int(px[0]), int(px[1])
+            secondary = None
+            if show_dist and "distance_m" in poi:
+                d = poi["distance_m"]
+                secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
+            canvas = _draw_poi_label(canvas, x, y, poi["name"], label_style, anchor_style, secondary, w, h)
 
     # ───── Property pin ─────
-    if "property_lat" in scene and "property_lon" in scene:
+    # Master toggle: skip the entire property-pin block when property_pin.enabled is false.
+    # Defaults to True so existing themes without the field still render the pin.
+    property_pin_cfg = theme_config.get("property_pin", {})
+    property_pin_enabled = property_pin_cfg.get("enabled", True)
+    if property_pin_enabled and "property_lat" in scene and "property_lon" in scene:
         pp = _gps_to_px(
             scene["property_lat"], scene["property_lon"],
             scene["lat"], scene["lon"], scene["alt"],
@@ -1317,7 +1328,7 @@ def render(image_bytes: bytes, theme_config: dict, scene: dict) -> bytes:
             intrinsics=intrinsics,
         )
         if pp and 0 < pp[0] < w and 0 < pp[1] < h:
-            canvas = _draw_property_pin(canvas, int(pp[0]), int(pp[1]), theme_config.get("property_pin", {}), w, h)
+            canvas = _draw_property_pin(canvas, int(pp[0]), int(pp[1]), property_pin_cfg, w, h)
 
     # ───── Encode JPEG ─────
     ok, buf = cv2.imencode(".jpg", canvas, [cv2.IMWRITE_JPEG_QUALITY, 92])

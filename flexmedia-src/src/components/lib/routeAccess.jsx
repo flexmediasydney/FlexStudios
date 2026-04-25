@@ -31,6 +31,7 @@ export const ROUTE_ACCESS = {
 
   // ── DRONE MODULE ──────────────────────────────────────────
   DroneCommandCenter: ADMIN_AND_ABOVE,
+  AdminDroneThemes: OWNER_ONLY, // global system theme — master_admin only
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,

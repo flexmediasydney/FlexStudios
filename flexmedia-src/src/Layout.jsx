@@ -39,6 +39,7 @@ import {
   Upload,
   MessageSquareWarning,
   Plane,
+  Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -283,7 +284,12 @@ function LayoutContent({ currentPageName, children }) {
               can("TonomoPulse") && { name: "Live Feed", href: "TonomoPulse", icon: Rss },
             ].filter(Boolean)
           },
-          can("DroneCommandCenter") && { name: "Drones", href: "DroneCommandCenter", icon: Plane },
+          can("DroneCommandCenter") && {
+            name: "Drones", href: "DroneCommandCenter", icon: Plane,
+            children: [
+              can("AdminDroneThemes") && { name: "System Themes", href: "AdminDroneThemes", icon: Palette },
+            ].filter(Boolean),
+          },
         ].filter(Boolean)
       },
       (can("ClientAgents") || can("Organisations") || can("People") || can("Teams")) && {

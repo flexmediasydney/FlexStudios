@@ -1115,7 +1115,16 @@ export default function ThemeEditor({
               onToggle={setOpenSection}
               canReset={canEdit}
               onReset={() => resetSection("property_pin")}
+              badge={config.property_pin?.enabled !== false ? "On" : "Off"}
             >
+              <FieldRow label="Enabled" hint="Master switch — turn off to hide the property pin">
+                <SwitchField
+                  value={config.property_pin?.enabled !== false}
+                  onChange={(v) => update(["property_pin", "enabled"], v)}
+                />
+              </FieldRow>
+              {config.property_pin?.enabled !== false && (
+              <>
               <FieldRow label="Mode">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
                   {PROPERTY_PIN_MODES.map((m) => (
@@ -1321,6 +1330,8 @@ export default function ThemeEditor({
                   </>
                 )}
               </div>
+              </>
+              )}
             </SectionAccordion>
 
             {/* Boundary */}
