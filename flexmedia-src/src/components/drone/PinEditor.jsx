@@ -45,6 +45,16 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   ArrowLeft,
   Save as SaveIcon,
   Eye,
@@ -130,6 +140,7 @@ export default function PinEditor({
   const [hiddenIds, setHiddenIds] = useState(new Set());
   const [view, setView] = useState({ zoom: 1, panX: 0, panY: 0 });
   const [isSaving, setIsSaving] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageNatural, setImageNatural] = useState({
     w: CAMERA_DEFAULTS.w,
@@ -137,6 +148,8 @@ export default function PinEditor({
   });
   // Track folded layer groups
   const [foldedGroups, setFoldedGroups] = useState(new Set());
+  // Confirmation modals: 'apply_all' | 'cancel_unsaved' | null
+  const [confirm, setConfirm] = useState(null);
 
   // Edit history is keyed off the local items state; we keep simple
   // undo/redo stacks of snapshots.
@@ -617,8 +630,13 @@ export default function PinEditor({
           shootId: shoot.id,
           scope,
         });
+        if (edits.length === 0) {
+          toast.info("Nothing to save");
+          return;
+        }
         const callable = api.functions?.invoke;
         let result;
+        let usedFallback = false;
         if (callable) {
           // Try the optional drone-pins-save edge function. If it's not
           // deployed yet we fall back to direct entity mutations so v1
@@ -628,20 +646,44 @@ export default function PinEditor({
               shoot_id: shoot.id,
               edits,
             });
-            result = resp;
+            result = resp?.data || resp;
+            // Surface partial-failure (HTTP 207-style) errors
+            if (Array.isArray(result?.errors) && result.errors.length > 0) {
+              toast.warning(
+                `${result.errors.length} edit${result.errors.length === 1 ? "" : "s"} failed; see console`,
+              );
+              console.warn("[PinEditor] partial save errors:", result.errors);
+            }
           } catch (err) {
             console.warn(
               "[PinEditor] drone-pins-save invoke failed; falling back to direct entity writes:",
               err?.message || err,
             );
             result = await directEntityFallback({ edits });
+            usedFallback = true;
           }
         } else {
           result = await directEntityFallback({ edits });
+          usedFallback = true;
         }
 
+        const totalApplied =
+          (result?.applied?.creates ?? result?.creates ?? 0) +
+          (result?.applied?.updates ?? result?.updates ?? 0) +
+          (result?.applied?.deletes ?? result?.deletes ?? 0);
+
         toast.success(
-          `Saved ${edits.length} change${edits.length === 1 ? "" : "s"}`,
+          `Saved ${totalApplied || edits.length} change${
+            (totalApplied || edits.length) === 1 ? "" : "s"
+          }`,
+          {
+            description:
+              !usedFallback && result?.job_id
+                ? "Re-render queued — your renders will refresh shortly."
+                : usedFallback
+                ? "Edge function unavailable — saved direct (no re-render queued)."
+                : undefined,
+          },
         );
         if (typeof onSave === "function") onSave({ scope, edits, result });
       } catch (err) {
@@ -653,6 +695,68 @@ export default function PinEditor({
     },
     [items, shoot?.id, onSave],
   );
+
+  // Preview-only render: hits drone-render-preview for fast iteration.
+  const handlePreview = useCallback(async () => {
+    if (!theme) {
+      toast.warning("No theme loaded — preview unavailable");
+      return;
+    }
+    setIsPreviewing(true);
+    try {
+      const themeConfig = theme?.resolved_config || theme || {};
+      const resp = await api.functions.invoke("drone-render-preview", {
+        theme_config: themeConfig,
+      });
+      const data = resp?.data;
+      if (!data?.success || !data?.image_b64) {
+        throw new Error(data?.error || "Preview render failed");
+      }
+      // Open in a new tab so we don't disturb the editing canvas.
+      const win = window.open("");
+      if (win) {
+        win.document.title = "Pin Editor — Preview";
+        win.document.body.style.margin = "0";
+        win.document.body.style.background = "#000";
+        const img = win.document.createElement("img");
+        img.src = `data:image/${(data.format || "JPEG").toLowerCase()};base64,${data.image_b64}`;
+        img.style.maxWidth = "100vw";
+        img.style.maxHeight = "100vh";
+        img.style.display = "block";
+        img.style.margin = "0 auto";
+        win.document.body.appendChild(img);
+      } else {
+        toast.warning("Pop-up blocked — allow pop-ups to view preview");
+      }
+    } catch (err) {
+      console.error("[PinEditor] preview failed", err);
+      toast.error(`Preview failed: ${err?.message || err}`);
+    } finally {
+      setIsPreviewing(false);
+    }
+  }, [theme]);
+
+  // Cancel button: warn about unsaved changes via confirm modal.
+  const requestCancel = useCallback(() => {
+    const dirty = items.some((i) => i._dirty || i._delete || i._new);
+    if (dirty) {
+      setConfirm("cancel_unsaved");
+    } else {
+      onCancel?.();
+    }
+  }, [items, onCancel]);
+
+  // Warn before window unload if unsaved.
+  useEffect(() => {
+    const beforeUnload = (e) => {
+      const dirty = items.some((i) => i._dirty || i._delete || i._new);
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => window.removeEventListener("beforeunload", beforeUnload);
+  }, [items]);
 
   // ── UI ──────────────────────────────────────────────────────────────────
   const selectedItem = useMemo(
@@ -683,7 +787,7 @@ export default function PinEditor({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => onCancel?.()}
+            onClick={requestCancel}
             disabled={isSaving}
             className="gap-2"
           >
@@ -714,8 +818,23 @@ export default function PinEditor({
             <Button
               variant="outline"
               size="sm"
+              disabled={isSaving || isPreviewing}
+              onClick={handlePreview}
+              className="gap-2"
+              title="Render a low-res preview using the current theme"
+            >
+              {isPreviewing ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Eye className="h-4 w-4" />
+              )}
+              <span className="hidden sm:inline">Preview</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               disabled={isSaving}
-              onClick={() => onCancel?.()}
+              onClick={requestCancel}
             >
               Cancel
             </Button>
@@ -778,6 +897,13 @@ export default function PinEditor({
                       {group.items.length}
                     </span>
                   </button>
+                  {!folded && group.items.length === 0 && (
+                    <p className="pl-5 text-[11px] text-muted-foreground italic mt-1">
+                      {key === "world"
+                        ? "Property + theme POIs (GPS-anchored)"
+                        : "Text, ribbons, address overlays (per-shot)"}
+                    </p>
+                  )}
                   {!folded && (
                     <ul className="mt-1 space-y-0.5 pl-2">
                       {group.items.map((it) => {
@@ -832,20 +958,33 @@ export default function PinEditor({
             <div className="border-t border-border pt-3 mt-2 space-y-1">
               <Button
                 size="sm"
-                variant="ghost"
+                variant={tool === TOOLS.ADD_PIN ? "secondary" : "ghost"}
                 className="w-full justify-start gap-1 text-xs"
                 onClick={() => setTool(TOOLS.ADD_PIN)}
+                title={
+                  poseAvailable
+                    ? "Click on canvas to drop a world-anchored pin (GPS)"
+                    : "SfM unavailable — pin will be pixel-anchored to this shot"
+                }
               >
                 <Plus className="h-3 w-3" /> Add POI pin
               </Button>
               <Button
                 size="sm"
-                variant="ghost"
+                variant={tool === TOOLS.ADD_TEXT ? "secondary" : "ghost"}
                 className="w-full justify-start gap-1 text-xs"
                 onClick={() => setTool(TOOLS.ADD_TEXT)}
+                title="Click on canvas to drop a pixel-anchored text label on this shot"
               >
                 <TextIcon className="h-3 w-3" /> Add text
               </Button>
+              <p className="text-[10px] text-muted-foreground pl-1 leading-tight pt-1">
+                <span className="font-medium">World</span> pins move with GPS
+                across all shots.
+                <br />
+                <span className="font-medium">Pixel</span> labels stay on a
+                single shot.
+              </p>
             </div>
           </aside>
 
@@ -966,8 +1105,14 @@ export default function PinEditor({
                   }}
                 />
               ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-                  No image available for this shot
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-muted-foreground p-6 text-center">
+                  <ImageIconLucide className="h-10 w-10 opacity-30" />
+                  <p className="font-medium">No render available for this shot</p>
+                  <p className="text-xs max-w-md">
+                    {shots.length === 0
+                      ? "Run drone-ingest first to load shots into this shoot."
+                      : "Run a render job (drone-render or drone-render-preview) so the editor has an image to draw pins on."}
+                  </p>
                 </div>
               )}
 
@@ -1007,10 +1152,12 @@ export default function PinEditor({
               <Inspector
                 item={selectedItem}
                 pose={pose}
+                shotsCount={shots.length}
+                poseAvailable={poseAvailable}
                 onChange={(patch) => updateItem(selectedItem.id, patch)}
                 onDelete={() => handleDelete(selectedItem.id)}
                 onResetTheme={() => resetToTheme(selectedItem.id)}
-                onApplyAll={() => handleSave("all_shots")}
+                onApplyAll={() => setConfirm("apply_all")}
                 resolvedTheme={resolvedTheme}
                 disabled={isSaving}
               />
@@ -1020,36 +1167,124 @@ export default function PinEditor({
 
         {/* ── SHOT STRIP ──────────────────────────────────── */}
         <div className="border-t border-border bg-background overflow-x-auto shrink-0">
-          <div className="flex items-center gap-2 p-2">
-            {shots.map((s, idx) => {
-              const active = s.id === activeShotId;
-              return (
-                <button
-                  type="button"
-                  key={s.id}
-                  onClick={() => {
-                    setActiveShotId(s.id);
-                    setSelectedItemId(null);
-                  }}
-                  className={cn(
-                    "flex flex-col items-center gap-0.5 rounded border px-2 py-1 text-[10px] shrink-0 transition",
-                    active
-                      ? "border-blue-500 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
-                      : "border-border hover:bg-muted",
-                  )}
-                  title={s.filename}
-                >
-                  <div className="w-12 h-9 bg-muted rounded flex items-center justify-center text-muted-foreground">
-                    <ImageIconLucide className="h-3.5 w-3.5" />
-                  </div>
-                  <span className="font-mono">
-                    {s.dji_index ?? idx + 1}
-                  </span>
-                </button>
-              );
-            })}
+          <div className="flex items-center gap-2 p-2 min-h-[58px]">
+            {shots.length === 0 ? (
+              <div className="text-xs text-muted-foreground px-2">
+                No shots in this shoot — run drone-ingest first.
+              </div>
+            ) : (
+              shots.map((s, idx) => {
+                const active = s.id === activeShotId;
+                return (
+                  <button
+                    type="button"
+                    key={s.id}
+                    onClick={() => {
+                      setActiveShotId(s.id);
+                      setSelectedItemId(null);
+                    }}
+                    className={cn(
+                      "flex flex-col items-center gap-0.5 rounded border px-2 py-1 text-[10px] shrink-0 transition",
+                      active
+                        ? "border-blue-500 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300"
+                        : "border-border hover:bg-muted",
+                    )}
+                    title={s.filename}
+                  >
+                    <div className="w-12 h-9 bg-muted rounded flex items-center justify-center text-muted-foreground">
+                      <ImageIconLucide className="h-3.5 w-3.5" />
+                    </div>
+                    <span className="font-mono">
+                      {s.dji_index ?? idx + 1}
+                    </span>
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
+
+        {/* ── CONFIRMATION DIALOGS ──────────────────────────── */}
+        <AlertDialog
+          open={confirm === "apply_all"}
+          onOpenChange={(open) => {
+            if (!open) setConfirm(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-blue-600" />
+                Apply to all shots?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                World-anchored pins are stored as a single GPS coord. Saving
+                with{" "}
+                <span className="font-semibold">
+                  &quot;all shots&quot;
+                </span>{" "}
+                scope re-projects this pin onto every render in the shoot
+                ({shots.length} shot{shots.length === 1 ? "" : "s"}). Per-shot
+                positions for this pin will be overwritten by the inverse
+                projection.
+                <br />
+                <br />
+                <span className="text-xs">
+                  Pixel-anchored pins (text, ribbons) are unaffected — they
+                  remain on their original shot.
+                </span>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={isSaving}>
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setConfirm(null);
+                  handleSave("all_shots");
+                }}
+                disabled={isSaving}
+              >
+                Apply to all {shots.length} shot
+                {shots.length === 1 ? "" : "s"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog
+          open={confirm === "cancel_unsaved"}
+          onOpenChange={(open) => {
+            if (!open) setConfirm(null);
+          }}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                Discard unsaved changes?
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                You have {dirtyCount} unsaved change
+                {dirtyCount === 1 ? "" : "s"}. Leaving the editor will lose
+                them.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Keep editing</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setConfirm(null);
+                  onCancel?.();
+                }}
+                className="bg-destructive hover:bg-destructive/90"
+              >
+                Discard
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </TooltipProvider>
   );
@@ -1124,6 +1359,8 @@ function PinMarker({ item, x, y, isSelected }) {
 function Inspector({
   item,
   pose,
+  shotsCount = 0,
+  poseAvailable = true,
   onChange,
   onDelete,
   onResetTheme,
@@ -1131,6 +1368,7 @@ function Inspector({
   resolvedTheme,
   disabled,
 }) {
+  void resolvedTheme;
   const [labelDraft, setLabelDraft] = useState(item.label || "");
   useEffect(() => setLabelDraft(item.label || ""), [item.id, item.label]);
 
@@ -1211,6 +1449,25 @@ function Inspector({
         </div>
       </div>
 
+      {item.kind === "world" && !poseAvailable && (
+        <div className="rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-200 flex items-start gap-1">
+          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>
+            SfM not available — using raw EXIF GPS prior. Pin position may
+            drift across shots.
+          </span>
+        </div>
+      )}
+      {item.kind === "world" && !pose && (
+        <div className="rounded border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-200 flex items-start gap-1">
+          <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span>
+            This shot is missing pose (GPS / yaw / pitch). Move via inverse
+            projection unavailable on this frame.
+          </span>
+        </div>
+      )}
+
       <div className="border-t border-border pt-2 space-y-1">
         {item.themeDefaults && (
           <Button
@@ -1227,11 +1484,13 @@ function Inspector({
           <Button
             size="sm"
             variant="outline"
-            className="w-full"
+            className="w-full gap-1"
             onClick={onApplyAll}
             disabled={disabled}
+            title={`Save and re-project this pin onto all ${shotsCount} shots`}
           >
-            Apply edit to all shots
+            <Globe className="h-3.5 w-3.5" />
+            Apply to all {shotsCount} shot{shotsCount === 1 ? "" : "s"}
           </Button>
         )}
         <Button

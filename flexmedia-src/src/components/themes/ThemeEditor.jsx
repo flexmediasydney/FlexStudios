@@ -52,6 +52,7 @@ import {
   Trash2,
   ShieldAlert,
   RefreshCw,
+  Palette,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -260,6 +261,28 @@ const setDeep = (obj, path, value) => {
 
 const isHex = (v) => typeof v === "string" && /^#([0-9a-fA-F]{3}){1,2}$/.test(v);
 
+// Walk the config and count any value at *_color / fill / color keys that is
+// neither null, "transparent", nor a valid hex. Used to gate Save and surface
+// where to look. Pure: no side-effects.
+const countInvalidColors = (obj, path = "") => {
+  if (obj == null || typeof obj !== "object") return 0;
+  if (Array.isArray(obj)) {
+    return obj.reduce((sum, v, i) => sum + countInvalidColors(v, `${path}[${i}]`), 0);
+  }
+  let n = 0;
+  for (const [k, v] of Object.entries(obj)) {
+    const looksLikeColor =
+      /color/i.test(k) || k === "fill" || k === "bg_color" || k === "stroke_color";
+    if (looksLikeColor && typeof v === "string") {
+      // Allow null, transparent, empty (treated as inherit)
+      if (v && v !== "transparent" && !isHex(v)) n += 1;
+    } else if (typeof v === "object" && v !== null) {
+      n += countInvalidColors(v, `${path}.${k}`);
+    }
+  }
+  return n;
+};
+
 // Read-only display for system safety rules. Editing is out of scope for v1.
 const SYSTEM_SAFETY_RULES = [
   {
@@ -389,33 +412,52 @@ function TextField({ value, onChange, placeholder, mono }) {
   );
 }
 
-function SectionAccordion({ id, label, openId, onToggle, children, badge }) {
+function SectionAccordion({ id, label, openId, onToggle, children, badge, onReset, canReset }) {
   const open = openId === id;
   return (
     <Collapsible open={open} onOpenChange={(next) => onToggle(next ? id : null)}>
-      <CollapsibleTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left rounded-md transition-colors",
-            open ? "bg-muted" : "hover:bg-muted/50",
-          )}
-        >
-          <span className="flex items-center gap-2 text-sm font-medium">
-            {open ? (
-              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+      <div
+        className={cn(
+          "w-full flex items-center gap-1 px-1 rounded-md transition-colors",
+          open ? "bg-muted" : "hover:bg-muted/50",
+        )}
+      >
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex-1 flex items-center justify-between gap-2 px-2 py-2.5 text-left"
+          >
+            <span className="flex items-center gap-2 text-sm font-medium">
+              {open ? (
+                <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+              )}
+              {label}
+            </span>
+            {badge && (
+              <Badge variant="outline" className="text-[9px] font-normal">
+                {badge}
+              </Badge>
             )}
-            {label}
-          </span>
-          {badge && (
-            <Badge variant="outline" className="text-[9px] font-normal">
-              {badge}
-            </Badge>
-          )}
-        </button>
-      </CollapsibleTrigger>
+          </button>
+        </CollapsibleTrigger>
+        {canReset && onReset && (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              onReset();
+            }}
+            title="Reset this section to FlexMedia defaults"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground shrink-0 mr-1"
+          >
+            <RefreshCw className="h-3 w-3" />
+          </Button>
+        )}
+      </div>
       <CollapsibleContent>
         <div className="px-3 pb-3 pt-1 space-y-1 border-l-2 border-muted ml-2 mt-0.5">
           {children}
@@ -440,10 +482,15 @@ export default function ThemeEditor({
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [isDefault, setIsDefault] = useState(false);
   const [version, setVersion] = useState(null);
+  const [status, setStatus] = useState("active");
   const [openSection, setOpenSection] = useState("anchor_line");
   const [loading, setLoading] = useState(!!themeId);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState(null);
+
+  // Count invalid hex colors anywhere in the config. Used to gate Save and
+  // surface a banner; recomputed on every edit (cheap walk).
+  const invalidColorCount = useMemo(() => countInvalidColors(config), [config]);
 
   // ── Live preview state (right column) ────────────────────────────────────
   // Wired to drone-render-preview Edge Function. Debounced 800ms after the
@@ -463,6 +510,7 @@ export default function ThemeEditor({
         setConfig({ ...DEFAULT_CONFIG, ...(initialTheme.config || {}) });
         setIsDefault(!!initialTheme.is_default);
         setVersion(initialTheme.version || null);
+        setStatus(initialTheme.status || "active");
         return;
       }
       if (!themeId) return;
@@ -475,6 +523,7 @@ export default function ThemeEditor({
         setConfig({ ...DEFAULT_CONFIG, ...(row.config || {}) });
         setIsDefault(!!row.is_default);
         setVersion(row.version || null);
+        setStatus(row.status || "active");
       } catch (e) {
         if (!cancelled) setLoadError(e?.message || "Failed to load theme");
       } finally {
@@ -501,6 +550,12 @@ export default function ThemeEditor({
       }
       if (!canEdit) {
         toast.error("You don't have permission to save this theme");
+        return;
+      }
+      if (invalidColorCount > 0) {
+        toast.error(
+          `Fix ${invalidColorCount} invalid colour value${invalidColorCount === 1 ? "" : "s"} before saving`,
+        );
         return;
       }
       setSaving(true);
@@ -534,7 +589,34 @@ export default function ThemeEditor({
         setSaving(false);
       }
     },
-    [name, config, isDefault, themeId, ownerKind, ownerId, canEdit, onSaved],
+    [name, config, isDefault, themeId, ownerKind, ownerId, canEdit, onSaved, invalidColorCount],
+  );
+
+  // Reset the entire form to FlexMedia defaults — useful when a theme has been
+  // heavily customised and the user wants to start over without leaving the
+  // editor. Doesn't save until the user clicks Save.
+  const resetToDefaults = useCallback(() => {
+    if (!canEdit) return;
+    if (typeof window !== "undefined" && !window.confirm(
+      "Reset every field back to FlexMedia defaults? This won't be saved until you click Save.",
+    )) return;
+    setConfig({ ...DEFAULT_CONFIG });
+    toast.info("Reset to FlexMedia defaults — click Save to persist.");
+  }, [canEdit]);
+
+  // Reset just one section (top-level config key) back to its FlexMedia
+  // default. Wired into each accordion header.
+  const resetSection = useCallback(
+    (sectionKey) => {
+      if (!canEdit) return;
+      const def = DEFAULT_CONFIG[sectionKey];
+      if (def === undefined) return;
+      if (typeof window !== "undefined" && !window.confirm(
+        `Reset "${sectionKey}" to FlexMedia defaults? Other sections won't change.`,
+      )) return;
+      setConfig((prev) => ({ ...prev, [sectionKey]: JSON.parse(JSON.stringify(def)) }));
+    },
+    [canEdit],
   );
 
   // ── Live preview fetch ───────────────────────────────────────────────────
@@ -701,6 +783,15 @@ export default function ThemeEditor({
                 v{version}
               </Badge>
             )}
+            {status === "archived" && (
+              <Badge
+                variant="outline"
+                className="text-[10px] font-normal text-muted-foreground"
+                title="Archived themes are kept for history but not used in renders"
+              >
+                Archived
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={onCancel} disabled={saving}>
@@ -711,8 +802,12 @@ export default function ThemeEditor({
                 variant="outline"
                 size="sm"
                 onClick={() => saveTheme({ saveAsNew: true })}
-                disabled={saving || !name.trim()}
-                title="Save as a new theme (preserves the original)"
+                disabled={saving || !name.trim() || invalidColorCount > 0}
+                title={
+                  invalidColorCount > 0
+                    ? `Fix ${invalidColorCount} invalid colour value${invalidColorCount === 1 ? "" : "s"} first`
+                    : "Save as a new theme (preserves the original)"
+                }
               >
                 {saving ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" /> : null}
                 Save as new
@@ -722,7 +817,12 @@ export default function ThemeEditor({
               <Button
                 size="sm"
                 onClick={() => saveTheme({ saveAsNew: false })}
-                disabled={saving || !name.trim()}
+                disabled={saving || !name.trim() || invalidColorCount > 0}
+                title={
+                  invalidColorCount > 0
+                    ? `Fix ${invalidColorCount} invalid colour value${invalidColorCount === 1 ? "" : "s"} first`
+                    : undefined
+                }
               >
                 {saving ? (
                   <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
@@ -736,6 +836,44 @@ export default function ThemeEditor({
         </CardContent>
       </Card>
 
+      {/* Inheritance + validation hints. Helps users understand the chain
+          (Person → Org → FlexMedia default) and surfaces blocking errors
+          before they hit Save. */}
+      <div className="flex flex-col gap-2">
+        {ownerKind !== "system" && (
+          <div className="rounded-md border border-input bg-muted/30 px-3 py-2 flex items-start gap-2 text-xs">
+            <Palette className="h-3.5 w-3.5 text-muted-foreground mt-0.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <p className="text-foreground">
+                Editing a <span className="font-medium">{ownerKind === "person" ? "person-level" : "organisation-level"}</span> theme.
+                Any field you leave at the FlexMedia default value will continue to inherit
+                {ownerKind === "person" ? " from this person's organisation, then from FlexMedia's system default." : " from FlexMedia's system default."}
+              </p>
+              {canEdit && (
+                <button
+                  type="button"
+                  onClick={resetToDefaults}
+                  className="text-[11px] text-primary hover:underline mt-1"
+                >
+                  Reset every field to FlexMedia defaults
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        {invalidColorCount > 0 && (
+          <div
+            role="alert"
+            className="rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 px-3 py-2 flex items-start gap-2 text-xs"
+          >
+            <AlertCircle className="h-3.5 w-3.5 text-red-600 mt-0.5 shrink-0" />
+            <p className="text-red-700 dark:text-red-200">
+              {invalidColorCount} colour{invalidColorCount === 1 ? "" : "s"} {invalidColorCount === 1 ? "is" : "are"} not a valid hex value (e.g. #FFFFFF). Save is disabled until fixed.
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* ── Two-pane layout: form left, preview placeholder right ────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3">
         {/* Form column */}
@@ -747,6 +885,8 @@ export default function ThemeEditor({
               label="Anchor line"
               openId={openSection}
               onToggle={setOpenSection}
+              canReset={canEdit}
+              onReset={() => resetSection("anchor_line")}
             >
               <FieldRow label="Shape">
                 <SelectField
@@ -828,6 +968,8 @@ export default function ThemeEditor({
               label="POI label"
               openId={openSection}
               onToggle={setOpenSection}
+              canReset={canEdit}
+              onReset={() => resetSection("poi_label")}
             >
               <FieldRow label="Shape">
                 <SelectField
@@ -971,6 +1113,8 @@ export default function ThemeEditor({
               label="Property pin"
               openId={openSection}
               onToggle={setOpenSection}
+              canReset={canEdit}
+              onReset={() => resetSection("property_pin")}
             >
               <FieldRow label="Mode">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
@@ -1186,6 +1330,8 @@ export default function ThemeEditor({
               openId={openSection}
               onToggle={setOpenSection}
               badge={config.boundary?.enabled ? "On" : "Off"}
+              canReset={canEdit}
+              onReset={() => resetSection("boundary")}
             >
               <FieldRow label="Enabled">
                 <SwitchField
@@ -1404,6 +1550,8 @@ export default function ThemeEditor({
               label="POI selection"
               openId={openSection}
               onToggle={setOpenSection}
+              canReset={canEdit}
+              onReset={() => resetSection("poi_selection")}
             >
               <FieldRow label="Radius" hint="metres">
                 <NumberField
@@ -1511,6 +1659,8 @@ export default function ThemeEditor({
               openId={openSection}
               onToggle={setOpenSection}
               badge={config.branding_ribbon?.enabled ? "On" : "Off"}
+              canReset={canEdit}
+              onReset={() => resetSection("branding_ribbon")}
             >
               <FieldRow label="Enabled">
                 <SwitchField
@@ -1600,6 +1750,8 @@ export default function ThemeEditor({
               openId={openSection}
               onToggle={setOpenSection}
               badge={`${variants.length}`}
+              canReset={canEdit}
+              onReset={() => resetSection("output_variants")}
             >
               <div className="space-y-2">
                 {variants.length === 0 && (

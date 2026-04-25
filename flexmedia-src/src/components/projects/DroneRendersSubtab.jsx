@@ -33,6 +33,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -54,12 +55,16 @@ import {
 import {
   Pencil,
   Check,
+  ChevronRight,
+  ChevronLeft,
+  RotateCcw,
   X,
   Download,
   Loader2,
   AlertCircle,
   Layers,
 } from "lucide-react";
+import { createPageUrl } from "@/utils";
 import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -80,9 +85,19 @@ const COLUMN_HEADER_TONE = {
   final:        "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
 };
 
-// projectId is part of the spec'd props but currently unused — reserved for future
-// use (e.g. cross-shoot operations, project-scoped activity log integration).
-export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
+// Mirrors ALLOWED_TRANSITIONS in drone-render-approve. RAW is not a real
+// column_state (RAW shows shots without renders), so it can't be a drag source
+// or target. Drops onto the same column are no-ops.
+const VALID_DROP_TARGETS = {
+  proposed:    new Set(["adjustments", "rejected"]),
+  adjustments: new Set(["proposed", "final", "rejected"]),
+  final:       new Set(["adjustments", "rejected"]),
+  // 'rejected' restores via dedicated button — not via drag (no destination column).
+};
+
+// projectId threads through to RenderCard so the Edit-Pin link can build a
+// /DronePinEditor URL.
+export default function DroneRendersSubtab({ shoot, projectId }) {
   const queryClient = useQueryClient();
   const shootId = shoot?.id;
   const { isManagerOrAbove } = usePermissions();
@@ -91,6 +106,9 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
   const [confirmReject, setConfirmReject] = useState(null); // { render }
   // Lightbox state for thumbnail click-to-preview
   const [preview, setPreview] = useState(null); // { path, label }
+  // Drag state — tracks which render is mid-drag so we can highlight valid
+  // drop targets and ignore invalid drops without a network round-trip.
+  const [dragRender, setDragRender] = useState(null); // { id, fromColumn }
 
   // ── Fetch shots (needed for the RAW column) ─────────────────────────────────
   const shotsKey = ["drone_shots_for_renders", shootId];
@@ -199,21 +217,38 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
     };
   }, [renders, shots]);
 
-  // ── Approve / Reject action ────────────────────────────────────────────────
-  const [pendingAction, setPendingAction] = useState({}); // { [renderId]: 'approving'|'rejecting' }
+  // ── Transition action (generalised) ───────────────────────────────────────
+  // pendingAction map values are short verbs the buttons read to render their
+  // spinners ('approving' | 'rejecting' | 'moving' | 'restoring').
+  const [pendingAction, setPendingAction] = useState({});
 
-  const callApprove = useCallback(
+  const TOAST_FOR_TARGET = {
+    proposed:    "Sent back to Proposed",
+    adjustments: "Moved to Adjustments",
+    final:       "Approved → Final",
+    rejected:    "Rejected",
+    restore:     "Restored from Rejected",
+  };
+  const VERB_FOR_TARGET = {
+    proposed:    "moving",
+    adjustments: "moving",
+    final:       "approving",
+    rejected:    "rejecting",
+    restore:     "restoring",
+  };
+
+  const callTransition = useCallback(
     async (renderId, targetState) => {
-      setPendingAction((p) => ({ ...p, [renderId]: targetState === "final" ? "approving" : "rejecting" }));
+      setPendingAction((p) => ({ ...p, [renderId]: VERB_FOR_TARGET[targetState] || "moving" }));
       try {
         const data = await api.functions.invoke("drone-render-approve", {
           render_id: renderId,
           target_state: targetState,
         });
         if (!data?.success) {
-          throw new Error(data?.error || `Failed to ${targetState === "final" ? "approve" : "reject"}`);
+          throw new Error(data?.error || `Failed to ${targetState}`);
         }
-        toast.success(targetState === "final" ? "Approved → Final" : "Rejected");
+        toast.success(TOAST_FOR_TARGET[targetState] || `Moved to ${targetState}`);
         queryClient.invalidateQueries({ queryKey: ["drone_renders", shootId] });
       } catch (err) {
         toast.error(err?.message || "Action failed");
@@ -278,14 +313,15 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
               items={grouped[col.key] || []}
               isRaw={col.key === "raw"}
               shotsById={shotsById}
+              projectId={projectId}
+              shootId={shootId}
               canEdit={isManagerOrAbove}
               pendingAction={pendingAction}
-              onApprove={(renderId) => callApprove(renderId, "final")}
-              onReject={(render) => setConfirmReject({ render })}
-              onEditPin={() => {
-                /* disabled in v1 */
-              }}
+              onTransition={callTransition}
+              onConfirmReject={(render) => setConfirmReject({ render })}
               onPreview={(info) => setPreview(info)}
+              dragRender={dragRender}
+              setDragRender={setDragRender}
             />
           ))}
         </div>
@@ -307,11 +343,12 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
                     variants={g.variants}
                     shot={shotsById.get(g.shot_id)}
                     column="rejected"
+                    projectId={projectId}
+                    shootId={shootId}
                     canEdit={isManagerOrAbove}
                     pendingAction={pendingAction}
-                    onApprove={() => {}}
-                    onReject={() => {}}
-                    onEditPin={() => {}}
+                    onTransition={callTransition}
+                    onConfirmReject={() => {}}
                     onPreview={(info) => setPreview(info)}
                   />
                 ))}
@@ -355,8 +392,8 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
           <DialogHeader>
             <DialogTitle>Reject this render?</DialogTitle>
             <DialogDescription>
-              The render will be moved to the Rejected list. Re-rendering or
-              re-classifying can move it back into the pipeline.
+              The render moves to the Rejected list. You can restore it back
+              to its previous column from there if it was rejected by mistake.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -373,7 +410,7 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
                 const id = confirmReject?.render?.id;
                 if (!id) return;
                 setConfirmReject(null);
-                await callApprove(id, "rejected");
+                await callTransition(id, "rejected");
               }}
               disabled={Boolean(pendingAction[confirmReject?.render?.id])}
             >
@@ -397,15 +434,57 @@ function PipelineColumn({
   items,
   isRaw,
   shotsById,
+  projectId,
+  shootId,
   canEdit,
   pendingAction,
-  onApprove,
-  onReject,
-  onEditPin,
+  onTransition,
+  onConfirmReject,
   onPreview,
+  dragRender,
+  setDragRender,
 }) {
+  // A column is a valid drop target only if there's an active drag from a
+  // different column AND the transition (fromCol → thisCol) is allowed by the
+  // backend's transition rules.
+  const validTargets = dragRender ? VALID_DROP_TARGETS[dragRender.fromColumn] : null;
+  const isValidDropTarget = Boolean(
+    canEdit &&
+    dragRender &&
+    !isRaw &&
+    column.key !== dragRender.fromColumn &&
+    validTargets?.has(column.key)
+  );
+  const [isOver, setIsOver] = useState(false);
+
+  const handleDragOver = (e) => {
+    if (!isValidDropTarget) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (!isOver) setIsOver(true);
+  };
+  const handleDragLeave = () => setIsOver(false);
+  const handleDrop = (e) => {
+    setIsOver(false);
+    if (!isValidDropTarget || !dragRender) return;
+    e.preventDefault();
+    const target = column.key === "rejected" ? "rejected" : column.key;
+    onTransition(dragRender.id, target);
+    setDragRender(null);
+  };
+
   return (
-    <div className={cn("rounded-md border-2 bg-card", column.tone)}>
+    <div
+      className={cn(
+        "rounded-md border-2 bg-card transition-colors",
+        column.tone,
+        isOver && "ring-2 ring-primary/60 border-primary/40",
+        dragRender && !isValidDropTarget && !isRaw && column.key !== dragRender.fromColumn && "opacity-60",
+      )}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div
         className={cn(
           "px-2 py-1.5 text-xs font-semibold flex items-center justify-between rounded-t-sm",
@@ -418,7 +497,7 @@ function PipelineColumn({
       <div className="p-2 space-y-2 min-h-[120px] max-h-[480px] overflow-y-auto">
         {items.length === 0 ? (
           <div className="text-center py-6 text-[11px] text-muted-foreground">
-            {isRaw ? "All shots have renders" : "Empty"}
+            {isRaw ? "All shots have renders" : isOver ? "Drop here" : "Empty"}
           </div>
         ) : isRaw ? (
           // RAW column: items are shots, not renders
@@ -432,12 +511,14 @@ function PipelineColumn({
               variants={g.variants}
               shot={shotsById.get(g.shot_id)}
               column={column.key}
+              projectId={projectId}
+              shootId={shootId}
               canEdit={canEdit}
               pendingAction={pendingAction}
-              onApprove={(renderId) => onApprove(renderId)}
-              onReject={(render) => onReject(render)}
-              onEditPin={(render) => onEditPin(render)}
+              onTransition={onTransition}
+              onConfirmReject={onConfirmReject}
               onPreview={onPreview}
+              setDragRender={setDragRender}
             />
           ))
         )}
@@ -488,12 +569,14 @@ function RenderCard({
   variants,
   shot,
   column,
+  projectId,
+  shootId,
   canEdit,
   pendingAction,
-  onApprove,
-  onReject,
-  onEditPin,
+  onTransition,
+  onConfirmReject,
   onPreview,
+  setDragRender,
 }) {
   const orderedVariants = useMemo(() => variants || [], [variants]);
   const [selectedVariantId, setSelectedVariantId] = useState(
@@ -533,8 +616,25 @@ function RenderCard({
     ? `https://www.dropbox.com/home${encodeURI(r.dropbox_path)}`
     : null;
 
+  // Cards in the rejected drawer aren't draggable — they only restore via the
+  // dedicated Restore button (drag has no meaningful destination column).
+  const isDraggable = canEdit && !isRejected && Boolean(setDragRender);
+
   return (
-    <div className="rounded-md border bg-card overflow-hidden hover:border-primary/40 transition-colors">
+    <div
+      className={cn(
+        "rounded-md border bg-card overflow-hidden hover:border-primary/40 transition-colors",
+        isDraggable && "cursor-grab active:cursor-grabbing",
+      )}
+      draggable={isDraggable}
+      onDragStart={(e) => {
+        if (!isDraggable) return;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", r.id); // Firefox needs payload
+        setDragRender({ id: r.id, fromColumn: column });
+      }}
+      onDragEnd={() => setDragRender && setDragRender(null)}
+    >
       {/* Thumbnail (lazy via mediaPerf proxy). Click → lightbox preview */}
       <button
         type="button"
@@ -623,37 +723,51 @@ function RenderCard({
         </div>
 
         {/* Actions — operate on the CURRENTLY SELECTED variant */}
-        <div className="flex items-center gap-1 pt-1">
-          {/* PROPOSED → Edit (disabled in v1) */}
-          {isProposed && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span tabIndex={0}>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-6 text-[10px] px-1.5"
-                    disabled
-                    onClick={() => onEditPin && onEditPin(r)}
-                  >
-                    <Pencil className="h-2.5 w-2.5 mr-1" />
-                    Edit
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top">
-                Pin Editor coming Wave 3
-              </TooltipContent>
-            </Tooltip>
+        <div className="flex items-center gap-1 flex-wrap pt-1">
+          {/* PROPOSED → Edit in Pin Editor (now enabled — wired to /DronePinEditor) */}
+          {isProposed && canEdit && projectId && shootId && r.shot_id && (
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] px-1.5"
+              title="Open this render in Pin Editor"
+            >
+              <Link
+                to={createPageUrl(`DronePinEditor?project=${projectId}&shoot=${shootId}&shot=${r.shot_id}&render=${r.id}`)}
+              >
+                <Pencil className="h-2.5 w-2.5 mr-1" />
+                Edit
+              </Link>
+            </Button>
           )}
 
-          {/* ADJUSTMENTS → Approve */}
+          {/* PROPOSED → forward to Adjustments (skip Pin Editor when no edits needed) */}
+          {isProposed && canEdit && (
+            <Button
+              variant="default"
+              size="sm"
+              className="h-6 text-[10px] px-2"
+              onClick={() => onTransition(r.id, "adjustments")}
+              disabled={Boolean(action)}
+              title="Looks good — move to Adjustments for final approval"
+            >
+              {action === "moving" ? (
+                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+              ) : (
+                <ChevronRight className="h-2.5 w-2.5 mr-1" />
+              )}
+              Approve
+            </Button>
+          )}
+
+          {/* ADJUSTMENTS → Approve (to Final) */}
           {isAdjustments && canEdit && (
             <Button
               variant="default"
               size="sm"
               className="h-6 text-[10px] px-2"
-              onClick={() => onApprove(r.id)}
+              onClick={() => onTransition(r.id, "final")}
               disabled={Boolean(action)}
             >
               {action === "approving" ? (
@@ -665,13 +779,64 @@ function RenderCard({
             </Button>
           )}
 
+          {/* ADJUSTMENTS → send back to Proposed */}
+          {isAdjustments && canEdit && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[10px] px-1.5"
+              onClick={() => onTransition(r.id, "proposed")}
+              disabled={Boolean(action)}
+              title="Send back to Proposed"
+            >
+              <ChevronLeft className="h-2.5 w-2.5" />
+            </Button>
+          )}
+
+          {/* FINAL → un-approve back to Adjustments */}
+          {isFinal && canEdit && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 text-[10px] px-1.5"
+              onClick={() => onTransition(r.id, "adjustments")}
+              disabled={Boolean(action)}
+              title="Un-approve and move back to Adjustments"
+            >
+              {action === "moving" ? (
+                <Loader2 className="h-2.5 w-2.5 animate-spin" />
+              ) : (
+                <ChevronLeft className="h-2.5 w-2.5" />
+              )}
+            </Button>
+          )}
+
+          {/* REJECTED → Restore (back to where it came from) */}
+          {isRejected && canEdit && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-6 text-[10px] px-2"
+              onClick={() => onTransition(r.id, "restore")}
+              disabled={Boolean(action)}
+              title="Restore to its previous column"
+            >
+              {action === "restoring" ? (
+                <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+              ) : (
+                <RotateCcw className="h-2.5 w-2.5 mr-1" />
+              )}
+              Restore
+            </Button>
+          )}
+
           {/* Reject (any non-rejected, non-final column) */}
           {!isRejected && !isFinal && canEdit && (
             <Button
               variant="ghost"
               size="sm"
               className="h-6 text-[10px] px-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
-              onClick={() => onReject(r)}
+              onClick={() => onConfirmReject(r)}
               disabled={Boolean(action)}
               title="Reject this render"
             >

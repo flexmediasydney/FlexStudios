@@ -84,7 +84,13 @@ const PER_COLUMN_LIMIT = 6;
 const ACTIVITY_LIMIT = 100;
 
 // Alerts thresholds.
-const FLIGHT_ROLL_DANGER_DEG = 10;
+// IMPLEMENTATION_PLAN_V2 §6.2 alerts: flag flight rolls >15° from horizontal —
+// SfM/photogrammetry tolerates small banking but >15° usually means motion-blur
+// or uncorrectable parallax errors when reconstructing roof geometry.
+const FLIGHT_ROLL_DANGER_DEG = 15;
+// Statuses considered "completed" for the missing-nadir alert. Only completed
+// shoots merit operator follow-up — early-stage shoots may still be uploading.
+const COMPLETED_SHOOT_STATUSES = ["final_ready", "delivered"];
 
 function fmtTime(iso) {
   if (!iso) return "—";
@@ -168,15 +174,30 @@ function PipelineKanban({ shoots, projectsById }) {
     );
   };
 
+  const totalActive = useMemo(
+    () => (shoots || []).filter((s) => PIPELINE_COLUMNS.some((c) => c.statuses.includes(s.status))).length,
+    [shoots],
+  );
+
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center gap-2">
           <Activity className="h-4 w-4" />
           Pipeline
+          <span className="text-muted-foreground font-normal">({totalActive} active)</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="p-0">
+        {totalActive === 0 ? (
+          <div className="px-4 py-8 text-center">
+            <Plane className="h-8 w-8 text-muted-foreground/40 mx-auto mb-2" />
+            <p className="text-sm font-medium text-muted-foreground">No active drone shoots</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Pipeline appears once a shoot moves past ingestion.
+            </p>
+          </div>
+        ) : (
         <div className="overflow-x-auto">
           <div className="grid gap-2 p-3 min-w-[860px]" style={{ gridTemplateColumns: `repeat(${PIPELINE_COLUMNS.length}, minmax(140px, 1fr))` }}>
             {PIPELINE_COLUMNS.map((col) => {
@@ -228,6 +249,7 @@ function PipelineKanban({ shoots, projectsById }) {
             })}
           </div>
         </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -609,8 +631,13 @@ export default function DroneCommandCenter() {
   const missingNadirQuery = useQuery({
     queryKey: ["drone_missing_nadir"],
     queryFn: () =>
+      // Only flag completed shoots — in-flight uploads might not have synced
+      // their nadir-grid metadata yet, so they'd be false-positives.
       api.entities.DroneShoot.filter(
-        { has_nadir_grid: false },
+        {
+          has_nadir_grid: false,
+          status: { $in: COMPLETED_SHOOT_STATUSES },
+        },
         "-created_at",
         50,
       ),
@@ -721,6 +748,7 @@ export default function DroneCommandCenter() {
           tone="bg-blue-500/15 text-blue-600 dark:text-blue-400"
           label="Today's shoots"
           value={isLoadingStats ? "…" : num(stats.shoots_today, 0)}
+          hint={!isLoadingStats && (stats.shoots_today === 0 || stats.shoots_today == null) ? "no flights yet" : null}
         />
         <StatCard
           icon={ListChecks}

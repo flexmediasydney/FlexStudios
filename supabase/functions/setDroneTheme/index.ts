@@ -151,6 +151,34 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const admin = getAdminClient();
 
+  /**
+   * Clear is_default on every other theme for this (owner_kind, owner_id)
+   * tuple. Required because the resolver assumes exactly one default per
+   * level — a second `is_default=true` would silently shadow the prior one
+   * and `.maybeSingle()` would error or pick arbitrarily.
+   *
+   * Excludes `excludeThemeId` so the row we're about to set/insert isn't
+   * itself reset. Best-effort: a failure here is logged but not fatal —
+   * the user's primary save shouldn't fail because of cleanup.
+   */
+  async function clearOtherDefaults(excludeThemeId: string | null) {
+    let q = admin
+      .from('drone_themes')
+      .update({ is_default: false })
+      .eq('owner_kind', body.owner_kind!)
+      .eq('is_default', true);
+    if (body.owner_kind === 'system') {
+      q = q.is('owner_id', null);
+    } else {
+      q = q.eq('owner_id', body.owner_id!);
+    }
+    if (excludeThemeId) q = q.neq('id', excludeThemeId);
+    const { error } = await q;
+    if (error) {
+      console.warn(`[${GENERATOR}] clearOtherDefaults failed: ${error.message}`);
+    }
+  }
+
   // ── UPDATE path ────────────────────────────────────────────────────────────
   if (body.theme_id) {
     const { data: priorTheme, error: fetchErr } = await admin
@@ -178,6 +206,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       (priorTheme.config || {}) as Record<string, unknown>,
       serialisedConfig,
     );
+
+    // If this save flips is_default ON, clear it on every sibling first so
+    // the resolver continues to see exactly one default per level.
+    if (body.is_default === true) {
+      await clearOtherDefaults(body.theme_id);
+    }
 
     const { error: updErr } = await admin
       .from('drone_themes')
@@ -219,6 +253,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── INSERT path ────────────────────────────────────────────────────────────
+  // If the new theme is being created as default, clear it on every sibling
+  // first (no exclude — the new row doesn't exist yet).
+  if (body.is_default === true) {
+    await clearOtherDefaults(null);
+  }
+
   const { data: inserted, error: insErr } = await admin
     .from('drone_themes')
     .insert({

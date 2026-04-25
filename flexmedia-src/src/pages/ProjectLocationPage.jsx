@@ -92,13 +92,34 @@ function parseCoord(v) {
   return isFinite(n) ? n : null;
 }
 
-// Helper: pan map to position when it changes meaningfully.
-function MapRecenter({ center, zoom }) {
+// Helper: pan map to a center position only when the trigger key changes.
+// We deliberately depend on `triggerKey` (e.g. project.id) and NOT on the
+// center coords — otherwise dragging the marker would re-snap the map view
+// back to the marker on every dragend.
+function MapRecenter({ center, zoom, triggerKey }) {
   const map = useMap();
   useEffect(() => {
     if (!center) return;
     map.setView(center, zoom ?? map.getZoom());
-  }, [center?.[0], center?.[1], zoom, map]);
+    // Defensive: ensure leaflet recalculates size if the parent flex/grid
+    // settled after first paint (common cause of "grey tiles" on first load).
+    setTimeout(() => { try { map.invalidateSize(); } catch { /* noop */ } }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [triggerKey]);
+  return null;
+}
+
+// Helper: fit map to drone shoot bbox bounds when they appear (lets ops
+// confirm the pin sits within the actual flight area without manual zoom).
+function FitToBounds({ bounds, triggerKey }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!bounds) return;
+    try {
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 19 });
+    } catch { /* invalid bounds */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [triggerKey]);
   return null;
 }
 
@@ -348,7 +369,14 @@ export default function ProjectLocationPage() {
               attributionControl={true}
             >
               <TileLayer url={TILE_LIGHT} attribution={TILE_ATTR} />
-              <MapRecenter center={pinPos ? [pinPos.lat, pinPos.lng] : null} />
+              <MapRecenter
+                center={pinPos ? [pinPos.lat, pinPos.lng] : null}
+                triggerKey={project.id}
+              />
+              {/* When drone bbox arrives (after initial center), pan/zoom to fit. */}
+              {shootBbox && (
+                <FitToBounds bounds={shootBbox} triggerKey={`${project.id}-bbox-${shotsQuery.dataUpdatedAt}`} />
+              )}
 
               {/* Drone shoot GPS bbox overlay */}
               {shootBbox && (

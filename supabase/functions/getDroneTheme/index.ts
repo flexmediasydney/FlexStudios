@@ -55,12 +55,17 @@ async function fetchDefaultTheme(
   ownerKind: OwnerKind,
   ownerId: string | null,
 ): Promise<ThemeRow | null> {
+  // Deterministic tie-breaker: order by updated_at desc so the most-recently-
+  // edited default wins if (despite setDroneTheme's clearOtherDefaults guard)
+  // a duplicate ever slips in. Using `.limit(1)` + array select instead of
+  // `.maybeSingle()` so we never error on >1 rows (defence in depth).
   let q = admin
     .from('drone_themes')
     .select('id, name, owner_kind, owner_id, config, version, is_default, status')
     .eq('owner_kind', ownerKind)
     .eq('is_default', true)
     .eq('status', 'active')
+    .order('updated_at', { ascending: false })
     .limit(1);
 
   if (ownerKind === 'system') {
@@ -71,12 +76,13 @@ async function fetchDefaultTheme(
     return null; // non-system kind without an owner_id can't match
   }
 
-  const { data, error } = await q.maybeSingle();
+  const { data, error } = await q;
   if (error) {
     console.warn(`[${GENERATOR}] fetch ${ownerKind} theme failed: ${error.message}`);
     return null;
   }
-  return (data as ThemeRow) || null;
+  const row = Array.isArray(data) && data.length > 0 ? data[0] : null;
+  return (row as ThemeRow) || null;
 }
 
 serveWithAudit(GENERATOR, async (req: Request) => {

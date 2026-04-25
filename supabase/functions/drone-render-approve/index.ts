@@ -37,13 +37,23 @@ import {
 
 const GENERATOR = 'drone-render-approve';
 
-type TargetState = 'final' | 'rejected';
+type TargetState = 'proposed' | 'adjustments' | 'final' | 'rejected' | 'restore';
 
 interface Body {
   render_id?: string;
   target_state?: TargetState;
   _health_check?: boolean;
 }
+
+// Allowed transitions. 'restore' is a magic value — server reads the most
+// recent render_rejected event for this render and puts the row back at the
+// from_state recorded there.
+const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  proposed:    ['adjustments', 'rejected'],
+  adjustments: ['proposed', 'final', 'rejected'],
+  final:       ['adjustments', 'rejected'],
+  rejected:    ['restore'],
+};
 
 const ALLOWED_ROLES = ['master_admin', 'admin', 'manager', 'employee'];
 
@@ -76,9 +86,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (!body.render_id || typeof body.render_id !== 'string') {
     return errorResponse('render_id required', 400, req);
   }
-  if (body.target_state !== 'final' && body.target_state !== 'rejected') {
+  const validTargets: TargetState[] = ['proposed', 'adjustments', 'final', 'rejected', 'restore'];
+  if (!validTargets.includes(body.target_state as TargetState)) {
     return errorResponse(
-      "target_state must be 'final' or 'rejected'",
+      `target_state must be one of: ${validTargets.join(', ')}`,
       400, req,
     );
   }
@@ -99,24 +110,50 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (!render) return errorResponse('render_id not found', 404, req);
 
   const fromState = render.column_state as string;
-  const toState = body.target_state;
+  let toState = body.target_state as TargetState;
 
-  // Transition rules
-  if (toState === 'final') {
-    if (fromState !== 'adjustments') {
+  // Resolve 'restore' → look up the most recent render_rejected event and
+  // put the row back at whatever column it was in before being rejected.
+  if (toState === 'restore') {
+    if (fromState !== 'rejected') {
       return errorResponse(
-        `Cannot approve to 'final' from '${fromState}' — must be in 'adjustments'`,
+        `'restore' is only valid for currently-rejected renders (got '${fromState}')`,
         400, req,
       );
     }
-  }
-  if (toState === 'rejected') {
-    if (fromState === 'rejected') {
-      return errorResponse('Render is already rejected', 400, req);
+    const admin0 = getAdminClient();
+    const { data: lastReject } = await admin0
+      .from('drone_events')
+      .select('payload, created_at')
+      .eq('event_type', 'render_rejected')
+      .filter('payload->>render_id', 'eq', body.render_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const restored = (lastReject?.payload as { from_state?: string } | null)?.from_state;
+    if (!restored || !['proposed', 'adjustments', 'final'].includes(restored)) {
+      // No prior reject event recorded — fall back to 'proposed' so the user
+      // can recover something rather than be stuck.
+      toState = 'proposed' as TargetState;
+    } else {
+      toState = restored as TargetState;
     }
   }
+
+  // Transition allow-list. Same-state requests are no-ops.
   if (fromState === toState) {
     return errorResponse(`Render is already in '${toState}'`, 400, req);
+  }
+  const allowed = ALLOWED_TRANSITIONS[fromState] || [];
+  // 'restore' was already resolved above to a concrete state, so its target
+  // (proposed/adjustments/final) needs to be checked against the rejected →
+  // restore edge specifically.
+  const isRestoreEdge = body.target_state === 'restore' && fromState === 'rejected';
+  if (!isRestoreEdge && !allowed.includes(body.target_state as string)) {
+    return errorResponse(
+      `Cannot transition '${fromState}' → '${body.target_state}' (allowed: ${allowed.join(', ') || 'none'})`,
+      400, req,
+    );
   }
 
   // ── Resolve project_id (for the audit event) via shot → shoot ──────────────
@@ -177,6 +214,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Emit audit event (best-effort — don't block on failure) ────────────────
+  const eventType =
+    toState === 'final' ? 'render_approved'
+    : toState === 'rejected' ? 'render_rejected'
+    : body.target_state === 'restore' ? 'render_restored'
+    : 'render_moved';
   if (projectId) {
     const { error: evErr } = await admin
       .from('drone_events')
@@ -184,7 +226,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         project_id: projectId,
         shoot_id: shotRow?.shoot_id ?? null,
         shot_id: render.shot_id,
-        event_type: toState === 'final' ? 'render_approved' : 'render_rejected',
+        event_type: eventType,
         actor_type: 'user',
         actor_id: user.id === '__service_role__' ? null : user.id,
         payload: {

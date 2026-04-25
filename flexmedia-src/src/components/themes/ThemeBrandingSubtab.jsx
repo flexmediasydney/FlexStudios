@@ -198,20 +198,28 @@ export default function ThemeBrandingSubtab({ ownerKind, ownerId, ownerName }) {
   const handleSetDefault = useCallback(async (theme) => {
     if (!canEdit) return;
     try {
-      // Clear is_default on every other theme for this owner first
-      // (matches the unique-per-owner-by-name constraint + the resolver
-      // assumption that exactly one default exists per level).
-      const others = themes.filter(t => t.id !== theme.id && t.is_default);
-      for (const t of others) {
-        await api.entities.DroneTheme.update(t.id, { is_default: false });
+      // Route through setDroneTheme so the server-side clearOtherDefaults
+      // guard runs atomically (instead of the prior client-side loop, which
+      // could leave the system in a half-state on partial failure). Also
+      // ensures the revision row is written and audit lineage is preserved.
+      const result = await api.functions.invoke("setDroneTheme", {
+        theme_id: theme.id,
+        owner_kind: theme.owner_kind,
+        owner_id: theme.owner_id,
+        name: theme.name,
+        config: theme.config || {},
+        is_default: true,
+      });
+      const data = result?.data;
+      if (!data?.success) {
+        throw new Error(data?.error || "Set-default failed");
       }
-      await api.entities.DroneTheme.update(theme.id, { is_default: true });
       toast.success(`"${theme.name}" set as default`);
       refresh();
     } catch (e) {
       toast.error(e?.message || "Failed to set default");
     }
-  }, [canEdit, themes, refresh]);
+  }, [canEdit, refresh]);
 
   const handleArchive = useCallback(async (theme) => {
     if (!canEdit) return;
