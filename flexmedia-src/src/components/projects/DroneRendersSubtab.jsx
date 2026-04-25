@@ -1499,14 +1499,18 @@ function RenderCard({
 
         {/* Actions — operate on the CURRENTLY SELECTED variant */}
         <div className="flex items-center gap-1 flex-wrap pt-1">
-          {/* PROPOSED → Edit in Pin Editor (now enabled — wired to /DronePinEditor) */}
-          {isProposed && canEdit && projectId && shootId && r.shot_id && (
+          {/* PROPOSED + ADJUSTMENTS → Edit in Pin Editor (Final/Rejected stay locked) */}
+          {(isProposed || isAdjustments) && canEdit && projectId && shootId && r.shot_id && (
             <Button
               asChild
               variant="outline"
               size="sm"
               className="h-6 text-[10px] px-1.5"
-              title="Open this render in Pin Editor"
+              title={
+                isAdjustments
+                  ? "Edit pins on this adjustments render — re-saves into Adjustments"
+                  : "Edit pins on this AI-proposed render"
+              }
             >
               <Link
                 to={createPageUrl(`DronePinEditor?project=${projectId}&shoot=${shootId}&shot=${r.shot_id}&render=${r.id}`)}
