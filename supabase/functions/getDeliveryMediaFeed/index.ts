@@ -1,8 +1,21 @@
 import { handleCors, getCorsHeaders, jsonResponse, getAdminClient } from '../_shared/supabase.ts';
-import { getDropboxAccessToken } from '../_shared/dropbox.ts';
+import { getDropboxAccessToken, getOrCreateSharedLink } from '../_shared/dropbox.ts';
 
 const DROPBOX_API = 'https://api.dropboxapi.com/2';
 const DROPBOX_CONTENT = 'https://content.dropboxapi.com/2';
+
+/**
+ * Dropbox-API-Path-Root header. Required for every API call when the connected
+ * account is a Dropbox Business team member — without it, calls scope to the
+ * user's personal home namespace and team folders are invisible. Set
+ * DROPBOX_TEAM_NAMESPACE_ID to root_info.root_namespace_id from
+ * /users/get_current_account.
+ */
+function dbxPathRootHeader(): Record<string, string> {
+  const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
+  if (!ns) return {};
+  return { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) };
+}
 const SKIP_EXTS = new Set(['dng','cr2','cr3','arw','nef','orf','raf','rw2','raw','nrw']);
 const IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','bmp','tiff','tif','heic','heif']);
 const VIDEO_EXTS = new Set(['mp4','mov','avi','webm','mkv','m4v','wmv']);
@@ -153,7 +166,7 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
   const doRequest = async (t: string) => {
     const res = await fetchWithTimeout(`${DROPBOX_API}${endpoint}`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${t}`, 'Content-Type': 'application/json' },
+      headers: { 'Authorization': `Bearer ${t}`, 'Content-Type': 'application/json', ...dbxPathRootHeader() },
       body: JSON.stringify(body),
     });
     return res;
@@ -374,6 +387,72 @@ function stripPrefix(filePath: string, pathPrefix: string): string {
   return rel;
 }
 
+// ─── Per-project share-link resolver ────────────────────────────────────────
+//
+// Drone module files live under /Flex Media Team Folder/Projects/<uuid>_<slug>/...
+// (canonical case). Dropbox returns path_lower in API responses, so the file_path
+// arriving here is usually lowercased: /flex media team folder/projects/<uuid>_...
+//
+// The legacy parent share URL only covers /flex media team folder/tonomo, so files
+// outside that subtree need their own per-project shared link. We mint one against
+// projects.dropbox_root_path (cached via dropbox_root_shared_link) and serve files
+// inside it via /sharing/get_shared_link_file with a path relative to the project root.
+
+const PROJECTS_PATH_RE = /^\/flex media team folder\/projects\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})_[^/]+\//i;
+
+interface ProjectShare {
+  share_url: string;
+  /** Path relative to the project root, with leading slash. */
+  rel_path: string;
+}
+
+/**
+ * If `filePath` lives under /Flex Media Team Folder/Projects/<uuid>_*, return
+ * the project's root shared link + the path relative to that root. Mints the
+ * shared link on demand and persists it to projects.dropbox_root_shared_link.
+ * Returns null if the path is not a project-tree path.
+ */
+async function resolveProjectShare(filePath: string): Promise<ProjectShare | null> {
+  const m = PROJECTS_PATH_RE.exec(filePath);
+  if (!m) return null;
+  const projectId = m[1];
+  const admin = getAdminClient();
+  const { data: proj, error } = await admin
+    .from('projects')
+    .select('dropbox_root_path, dropbox_root_shared_link')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (error) {
+    console.warn(`[resolveProjectShare] db error for ${projectId}:`, error.message);
+    return null;
+  }
+  if (!proj?.dropbox_root_path) {
+    console.warn(`[resolveProjectShare] no dropbox_root_path for ${projectId}`);
+    return null;
+  }
+
+  let shareUrl = proj.dropbox_root_shared_link as string | null;
+  if (!shareUrl) {
+    try {
+      shareUrl = await getOrCreateSharedLink(proj.dropbox_root_path as string);
+      await admin
+        .from('projects')
+        .update({ dropbox_root_shared_link: shareUrl })
+        .eq('id', projectId);
+    } catch (e) {
+      console.warn(`[resolveProjectShare] mint failed for ${projectId} at ${proj.dropbox_root_path}:`, e instanceof Error ? e.message : e);
+      return null;
+    }
+  }
+
+  // Compute path relative to project root (case-insensitive prefix strip).
+  const rootLower = (proj.dropbox_root_path as string).toLowerCase();
+  const fileLower = filePath.toLowerCase();
+  let rel = fileLower.startsWith(rootLower) ? fileLower.slice(rootLower.length) : filePath;
+  if (!rel.startsWith('/')) rel = '/' + rel;
+  return { share_url: shareUrl, rel_path: rel };
+}
+
 // ─── Path validation ────────────────────────────────────────────────────────
 
 /** Reject file_path values that attempt traversal or are obviously invalid. */
@@ -509,7 +588,7 @@ Deno.serve(async (req) => {
       const arg = JSON.stringify({ url: parentShareUrl, path: rel });
       const dbxRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg },
+        headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
       }, );
 
       if (!dbxRes.ok) {
@@ -518,7 +597,7 @@ Deno.serve(async (req) => {
           const newToken = await refreshAccessToken();
           const retryRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${newToken}`, 'Dropbox-API-Arg': arg },
+            headers: { 'Authorization': `Bearer ${newToken}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
           });
           if (!retryRes.ok) return errResponse('STREAM_FAILED', 'Could not stream file', 502, req);
           const retryExt = (streamPath.split('.').pop() || '').toLowerCase();
@@ -588,7 +667,111 @@ Deno.serve(async (req) => {
 
     // Safe debug — only shows token status, not the token itself
     if (body?._debug) {
-      return jsonResponse({ token_set: token.length > 100, token_length: token.length, token_starts: token.substring(0, 10) }, 200, req);
+      const debugInfo: Record<string, unknown> = {
+        token_set: token.length > 100,
+        token_length: token.length,
+        token_starts: token.substring(0, 10),
+        path_prefix: pathPrefix,
+        share_url_set: !!parentShareUrl,
+        share_url_starts: parentShareUrl ? parentShareUrl.substring(0, 60) : null,
+      };
+      if (body?._listroot) {
+        try {
+          const lsPath = typeof body._lspath === 'string' ? body._lspath : '';
+          const lr = await fetch(`${DROPBOX_API}/files/list_folder`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', ...dbxPathRootHeader() },
+            body: JSON.stringify({ path: lsPath, recursive: false, limit: 100 }),
+          });
+          const lrTxt = await lr.text();
+          debugInfo.list_status = lr.status;
+          try {
+            const lrJson = JSON.parse(lrTxt);
+            debugInfo.root_entries = (lrJson.entries || []).map((e: { '.tag': string; name: string; path_display?: string }) => ({ tag: e['.tag'], name: e.name, path_display: e.path_display }));
+          } catch {
+            debugInfo.list_raw = lrTxt;
+          }
+        } catch (e) {
+          debugInfo.list_error = e instanceof Error ? e.message : String(e);
+        }
+        return jsonResponse(debugInfo, 200, req);
+      }
+      if (body?._whoami) {
+        try {
+          const acctRes = await fetch(`${DROPBOX_API}/users/get_current_account`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+          });
+          const acctTxt = await acctRes.text();
+          debugInfo.account_status = acctRes.status;
+          try {
+            const acct = JSON.parse(acctTxt);
+            debugInfo.account_email = acct?.email;
+            debugInfo.account_name = acct?.name?.display_name;
+            debugInfo.account_type = acct?.account_type?.['.tag'];
+            debugInfo.is_team_member = !!acct?.team;
+            debugInfo.team_name = acct?.team?.name;
+            debugInfo.team_id = acct?.team?.id;
+            debugInfo.root_namespace_id = acct?.root_info?.root_namespace_id;
+            debugInfo.home_namespace_id = acct?.home_namespace_id;
+          } catch {
+            debugInfo.account_raw = acctTxt;
+          }
+        } catch (e) {
+          debugInfo.account_error = e instanceof Error ? e.message : String(e);
+        }
+        return jsonResponse(debugInfo, 200, req);
+      }
+      if (body.file_path) {
+        debugInfo.input_path = body.file_path;
+        const m = PROJECTS_PATH_RE.exec(body.file_path);
+        debugInfo.regex_matched = !!m;
+        debugInfo.regex_project_id = m?.[1] || null;
+        // Inline diagnostics — bypass try/catch in resolveProjectShare so we can
+        // see exactly which step fails.
+        if (m) {
+          const adminD = getAdminClient();
+          const { data: dProj, error: dErr } = await adminD.from('projects').select('dropbox_root_path, dropbox_root_shared_link').eq('id', m[1]).maybeSingle();
+          debugInfo.db_err = dErr?.message || null;
+          debugInfo.db_root_path = dProj?.dropbox_root_path || null;
+          debugInfo.db_existing_share = dProj?.dropbox_root_shared_link || null;
+          if (dProj?.dropbox_root_path && !dProj.dropbox_root_shared_link) {
+            try {
+              const minted = await getOrCreateSharedLink(dProj.dropbox_root_path as string);
+              debugInfo.mint_url_starts = minted.substring(0, 60);
+              await adminD.from('projects').update({ dropbox_root_shared_link: minted }).eq('id', m[1]);
+            } catch (mintErr) {
+              debugInfo.mint_error = mintErr instanceof Error ? mintErr.message : String(mintErr);
+            }
+          }
+        }
+        const projShare = await resolveProjectShare(body.file_path).catch((e) => {
+          debugInfo.resolver_error = e instanceof Error ? e.message : String(e);
+          return null;
+        });
+        debugInfo.resolver = projShare ? { share_url_starts: projShare.share_url.substring(0, 60), rel_path: projShare.rel_path } : null;
+        const useShareUrl = projShare?.share_url || parentShareUrl;
+        const relPath = projShare?.rel_path || stripPrefix(body.file_path, pathPrefix);
+        debugInfo.use_share_url_starts = useShareUrl ? useShareUrl.substring(0, 60) : null;
+        debugInfo.rel_path = relPath;
+        try {
+          const proxyArg = JSON.stringify({ url: useShareUrl, path: relPath });
+          const proxyRes = await fetch(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Dropbox-API-Arg': proxyArg, ...dbxPathRootHeader() },
+          });
+          debugInfo.proxy_status = proxyRes.status;
+          if (!proxyRes.ok) {
+            debugInfo.proxy_body = await proxyRes.text();
+          } else {
+            await proxyRes.body?.cancel();
+            debugInfo.proxy_ok = true;
+          }
+        } catch (e) {
+          debugInfo.proxy_error = e instanceof Error ? e.message : String(e);
+        }
+      }
+      return jsonResponse(debugInfo, 200, req);
     }
 
     // ─── Validate file_path for proxy/thumb/stream actions ──────────────
@@ -645,11 +828,15 @@ Deno.serve(async (req) => {
         }
       }
 
-      // 2. Not cached — fetch from Dropbox
-      const relPath = stripPrefix(body.file_path, pathPrefix);
+      // 2. Not cached — fetch from Dropbox.
+      // Drone module files live outside the legacy parent share — resolve a
+      // per-project shared link first, fall back to the parent share URL.
+      const projShare = await resolveProjectShare(body.file_path);
+      const useShareUrl = projShare?.share_url || parentShareUrl;
+      const relPath = projShare?.rel_path || stripPrefix(body.file_path, pathPrefix);
       const size = body.size || 'w480h320';
       const arg = JSON.stringify({
-        resource: { '.tag': 'link', url: parentShareUrl, path: relPath },
+        resource: { '.tag': 'link', url: useShareUrl, path: relPath },
         format: 'jpeg',
         size,
         mode: 'bestfit',
@@ -660,7 +847,7 @@ Deno.serve(async (req) => {
       try {
         dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/files/get_thumbnail_v2`, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+          headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
         });
       } catch (_err: unknown) {
         return errResponse('DROPBOX_TIMEOUT', 'Thumbnail request timed out', 504, req);
@@ -675,7 +862,7 @@ Deno.serve(async (req) => {
           try {
             dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/files/get_thumbnail_v2`, {
               method: 'POST',
-              headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+              headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
             });
           } catch (_err: unknown) {
             return errResponse('DROPBOX_TIMEOUT', 'Thumbnail request timed out', 504, req);
@@ -739,10 +926,11 @@ Deno.serve(async (req) => {
       console.warn(`Thumbnail failed (${dbxRes.status}), falling back to proxy`);
       await dbxRes.body?.cancel();
 
-      const proxyArg = JSON.stringify({ url: parentShareUrl, path: relPath });
+      // Reuse the same per-project share resolution as the thumbnail attempt.
+      const proxyArg = JSON.stringify({ url: useShareUrl, path: relPath });
       let proxyRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': proxyArg },
+        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': proxyArg, ...dbxPathRootHeader() },
       }, DBX_CONTENT_TIMEOUT_MS);
       // Retry server-side on 401
       if (proxyRes.status === 401) {
@@ -751,7 +939,7 @@ Deno.serve(async (req) => {
           activeToken = refreshed.newToken;
           proxyRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': proxyArg },
+            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': proxyArg, ...dbxPathRootHeader() },
           }, DBX_CONTENT_TIMEOUT_MS);
         } else if (refreshed instanceof Response) {
           return refreshed;
@@ -781,16 +969,18 @@ Deno.serve(async (req) => {
 
     // ─── Action: stream_url — proxy with streaming headers for video ─────
     if (action === 'stream_url' && body.file_path) {
-      if (!parentShareUrl) return errResponse('CONFIG_ERROR', 'Dropbox share link not configured', 500, req);
+      const projShare = await resolveProjectShare(body.file_path);
+      const useShareUrl = projShare?.share_url || parentShareUrl;
+      if (!useShareUrl) return errResponse('CONFIG_ERROR', 'Dropbox share link not configured', 500, req);
 
-      const relPath = stripPrefix(body.file_path, pathPrefix);
-      const arg = JSON.stringify({ url: parentShareUrl, path: relPath });
+      const relPath = projShare?.rel_path || stripPrefix(body.file_path, pathPrefix);
+      const arg = JSON.stringify({ url: useShareUrl, path: relPath });
 
       // Use longer timeout for video content which can be large
       let activeToken = token;
       let dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
       }, DBX_CONTENT_TIMEOUT_MS);
 
       // Server-side retry on 401 instead of bouncing 503 to client
@@ -800,7 +990,7 @@ Deno.serve(async (req) => {
           activeToken = refreshed.newToken;
           dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
           }, DBX_CONTENT_TIMEOUT_MS);
         } else if (refreshed instanceof Response) {
           return refreshed;
@@ -836,15 +1026,17 @@ Deno.serve(async (req) => {
 
     // ─── Action: proxy — serve full file via parent share link ───────────
     if (action === 'proxy' && body.file_path) {
-      if (!parentShareUrl) return errResponse('CONFIG_ERROR', 'Dropbox share link not configured', 500, req);
+      const projShare = await resolveProjectShare(body.file_path);
+      const useShareUrl = projShare?.share_url || parentShareUrl;
+      if (!useShareUrl) return errResponse('CONFIG_ERROR', 'Dropbox share link not configured', 500, req);
 
-      const relPath = stripPrefix(body.file_path, pathPrefix);
-      const arg = JSON.stringify({ url: parentShareUrl, path: relPath });
+      const relPath = projShare?.rel_path || stripPrefix(body.file_path, pathPrefix);
+      const arg = JSON.stringify({ url: useShareUrl, path: relPath });
 
       let activeToken = token;
       let dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+        headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
       }, DBX_CONTENT_TIMEOUT_MS);
 
       // Server-side retry on 401 instead of bouncing 503 to client
@@ -854,7 +1046,7 @@ Deno.serve(async (req) => {
           activeToken = refreshed.newToken;
           dbxRes = await fetchWithTimeout(`${DROPBOX_CONTENT}/sharing/get_shared_link_file`, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg },
+            headers: { 'Authorization': `Bearer ${activeToken}`, 'Dropbox-API-Arg': arg, ...dbxPathRootHeader() },
           }, DBX_CONTENT_TIMEOUT_MS);
         } else if (refreshed instanceof Response) {
           return refreshed;

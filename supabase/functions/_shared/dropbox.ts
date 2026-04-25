@@ -107,6 +107,24 @@ interface DropboxApiOpts {
  * Call a Dropbox RPC endpoint (https://api.dropboxapi.com/2/...).
  * Handles auth, refresh-on-401, 429 backoff, 5xx retry. Returns parsed JSON.
  */
+/**
+ * Path-root header for team-folder access.
+ *
+ * On a Dropbox Business account, calls default to the user's personal home
+ * namespace (where their My Files live). Team folders sit in the team root
+ * namespace and are only visible if every API call carries:
+ *
+ *   Dropbox-API-Path-Root: {".tag":"root","root":"<team_root_namespace_id>"}
+ *
+ * Set DROPBOX_TEAM_NAMESPACE_ID = the team's root_namespace_id (from
+ * /users/get_current_account → root_info.root_namespace_id) to enable.
+ */
+function pathRootHeader(): Record<string, string> {
+  const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
+  if (!ns) return {};
+  return { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) };
+}
+
 export async function dropboxApi<T = unknown>(
   endpoint: string,
   body: Record<string, unknown> | null,
@@ -124,6 +142,7 @@ export async function dropboxApi<T = unknown>(
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
+        ...pathRootHeader(),
         ...(body !== null ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== null ? JSON.stringify(body) : undefined,
@@ -199,6 +218,7 @@ export async function dropboxContent(
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${token}`,
       'Dropbox-API-Arg': JSON.stringify(args),
+      ...pathRootHeader(),
     };
     if (body !== null) headers['Content-Type'] = 'application/octet-stream';
 
@@ -359,9 +379,11 @@ export async function getOrCreateSharedLink(path: string): Promise<string> {
   });
   if (existing.links.length > 0) return existing.links[0].url;
 
+  // Omit `settings` entirely — explicit `requested_visibility: team_only` returns
+  // settings_error/not_authorized on apps without team-link scope. Default
+  // visibility is whatever the workspace policy allows.
   const created = await dropboxApi<{ url: string }>('/sharing/create_shared_link_with_settings', {
     path,
-    settings: { requested_visibility: 'team_only' },
   });
   return created.url;
 }

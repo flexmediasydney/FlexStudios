@@ -2,7 +2,7 @@
  * dropbox-webhook
  * ───────────────
  * Receives Dropbox file change notifications and emits project_folder_events
- * for files inside our managed `/FlexMedia/Projects/` tree.
+ * for files inside our managed `/Flex Media Team Folder/Projects/` tree.
  *
  * Dropbox webhook protocol:
  *   GET ?challenge=X  →  return X as text/plain (verification handshake on
@@ -32,7 +32,7 @@ import {
 import { processDropboxDelta } from '../_shared/dropboxSync.ts';
 
 const GENERATOR = 'dropbox-webhook';
-const WATCH_PATH = '/FlexMedia/Projects';
+const WATCH_PATH = '/Flex Media Team Folder/Projects';
 // 2-min debounce so a 50-image bulk upload of a drone shoot collapses into
 // a single ingest job rather than 50× back-to-back runs. See migration 228
 // (uniq_drone_jobs_pending_ingest_per_project) for the constraint that

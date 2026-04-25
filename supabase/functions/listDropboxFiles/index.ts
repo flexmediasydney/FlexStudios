@@ -21,6 +21,8 @@ serveWithAudit('listDropboxFiles', async (req) => {
     let cursor: string | null = null;
     let hasMore = true;
 
+    const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
+    const pathRoot = ns ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) } : {};
     while (hasMore) {
       let response: Response;
       if (!cursor) {
@@ -29,6 +31,7 @@ serveWithAudit('listDropboxFiles', async (req) => {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
+            ...pathRoot,
           },
           body: JSON.stringify({
             path: path,
@@ -44,6 +47,7 @@ serveWithAudit('listDropboxFiles', async (req) => {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
+            ...pathRoot,
           },
           body: JSON.stringify({ cursor }),
           signal: AbortSignal.timeout(DROPBOX_TIMEOUT_MS),

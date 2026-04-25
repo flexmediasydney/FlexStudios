@@ -8,7 +8,7 @@
  *
  * Folder skeleton per IMPLEMENTATION_PLAN_V2.md §1.1:
  *
- *   /FlexMedia/Projects/<projectId>_<slug>/
+ *   /Flex Media Team Folder/Projects/<projectId>_<slug>/
  *     ├── 01_RAW_WORKING/photos        ← raw_photos
  *     ├── 01_RAW_WORKING/drones        ← raw_drones
  *     ├── 01_RAW_WORKING/videos        ← raw_videos
@@ -40,7 +40,7 @@ import { getAdminClient } from './supabase.ts';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const PROJECTS_BASE = '/FlexMedia/Projects';
+const PROJECTS_BASE = '/Flex Media Team Folder/Projects';
 const SLUG_MAX_CHARS = 40;
 
 export type FolderKind =

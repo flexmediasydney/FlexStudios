@@ -104,9 +104,11 @@ const refreshAccessToken = () => getDropboxAccessToken({ forceRefresh: true });
 
 async function dbxPost(token: string, endpoint: string, body: Record<string, unknown>) {
   const doRequest = async (t: string) => {
+    const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
+    const pathRoot = ns ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) } : {};
     return await fetchWithTimeout(`${DROPBOX_API}${endpoint}`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${t}`, 'Content-Type': 'application/json' },
+      headers: { 'Authorization': `Bearer ${t}`, 'Content-Type': 'application/json', ...pathRoot },
       body: JSON.stringify(body),
     });
   };

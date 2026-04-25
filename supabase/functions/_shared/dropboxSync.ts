@@ -127,7 +127,7 @@ async function processEntry(entry: DropboxEntry, actorType: 'webhook' | 'system'
   if (rpcErr) throw rpcErr;
   const match = (matches && matches[0]) || null;
   if (!match) {
-    // Path is inside /FlexMedia/Projects but not in any tracked folder
+    // Path is inside /Flex Media Team Folder/Projects but not in any tracked folder
     // (e.g., reserved 02-05 folders or the project root itself). Skip.
     return false;
   }

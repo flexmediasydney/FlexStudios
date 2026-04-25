@@ -265,9 +265,15 @@ async function callEdgeFunction(
   body: Record<string, unknown>,
 ): Promise<DispatchResult> {
   const url = `${SUPABASE_URL}/functions/v1/${fnName}`;
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+  // Prefer DRONE_DISPATCHER_JWT (a real Supabase JWT for service role).
+  // SUPABASE_SERVICE_ROLE_KEY in this project's secrets store is a hashed
+  // value, not a JWT, so it fails getUserFromReq's JWT-format check.
+  const serviceKey =
+    Deno.env.get("DRONE_DISPATCHER_JWT") ||
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
+    "";
   if (!serviceKey) {
-    return { ok: false, error: "SUPABASE_SERVICE_ROLE_KEY not set" };
+    return { ok: false, error: "DRONE_DISPATCHER_JWT/SUPABASE_SERVICE_ROLE_KEY not set" };
   }
   try {
     const resp = await fetch(url, {

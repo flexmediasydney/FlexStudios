@@ -28,7 +28,7 @@ import {
 import { processDropboxDelta } from '../_shared/dropboxSync.ts';
 
 const GENERATOR = 'dropbox-reconcile';
-const WATCH_PATH = '/FlexMedia/Projects';
+const WATCH_PATH = '/Flex Media Team Folder/Projects';
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);

@@ -434,7 +434,7 @@ export default function ProjectFilesTab({ project }) {
                   id="override-path"
                   value={overridePath}
                   onChange={(e) => setOverridePath(e.target.value)}
-                  placeholder="/FlexMedia/Projects/abc_address/01_RAW_WORKING/photos"
+                  placeholder="/Flex Media Team Folder/Projects/abc_address/01_RAW_WORKING/photos"
                   disabled={overrideSaving}
                   className="font-mono text-xs"
                 />
@@ -467,7 +467,7 @@ export default function ProjectFilesTab({ project }) {
             <DialogTitle>Re-sync Dropbox?</DialogTitle>
             <DialogDescription>
               Triggers <code className="text-xs">dropbox-reconcile</code>: a
-              full delta scan of <code className="text-xs">/FlexMedia/Projects</code>.
+              full delta scan of <code className="text-xs">/Flex Media Team Folder/Projects</code>.
               Any file events the webhook missed will be back-filled across all
               projects (not just this one). Safe to run — this runs nightly via
               cron.

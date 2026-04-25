@@ -19,11 +19,13 @@ serveWithAudit('getDropboxFilePreview', async (req) => {
     if (!token) return errorResponse('Dropbox API token not configured', 500);
 
     // Get temporary download link
+    const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
     const response = await fetch('https://api.dropboxapi.com/2/files/get_temporary_link', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
+        ...(ns ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) } : {}),
       },
       body: JSON.stringify({ path: filePath }),
       signal: AbortSignal.timeout(DROPBOX_TIMEOUT_MS),

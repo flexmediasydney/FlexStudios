@@ -17,11 +17,13 @@ serveWithAudit('listDropboxFolders', async (req) => {
     const path = body.path ? (body.path.startsWith('/') ? body.path : '/' + body.path) : '';
 
     // Fetch folder contents from Dropbox
+    const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
     const response = await fetch('https://api.dropboxapi.com/2/files/list_folder', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
+        ...(ns ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) } : {}),
       },
       body: JSON.stringify({
         path: path,
