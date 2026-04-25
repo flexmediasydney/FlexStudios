@@ -393,6 +393,14 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // "stuck for 600ms then jumps". The overlay is cleared on server success
   // (the realtime refetch then carries the authoritative truth) or on
   // failure (rollback shows the card back in the source column).
+  //
+  // CRITICAL: these MUST be declared above `grouped` (which reads them in
+  // its dep array). Previously they sat ~160 lines lower → TDZ violation
+  // → minified runtime error "Cannot access 'n' before initialization" on
+  // every drone-tab mount. Don't move them back down.
+  const [optimisticRenderColumns, setOptimisticRenderColumns] = useState({});
+  const [optimisticShotStates, setOptimisticShotStates] = useState({});
+
   const grouped = useMemo(() => {
     const cols = {
       preview: new Map(),
@@ -548,16 +556,8 @@ export default function DroneRendersSubtab({ shoot, projectId }) {
   // spinners ('approving' | 'rejecting' | 'moving' | 'restoring').
   const [pendingAction, setPendingAction] = useState({});
 
-  // (QC3 #4) Optimistic transitions for renders. Keyed by render id; value is
-  // the target column_state. Applied as a derived view layer on top of the
-  // server data so a drag-drop moves the card visually IMMEDIATELY rather
-  // than waiting ~600ms for the realtime event. Cleared on successful server
-  // confirmation OR on rollback (server failure).
-  const [optimisticRenderColumns, setOptimisticRenderColumns] = useState({});
-
-  // (QC3 #4) Same pattern for shot lifecycle flips. Keyed by shot id; value
-  // is the target lifecycle_state.
-  const [optimisticShotStates, setOptimisticShotStates] = useState({});
+  // (QC3 #4) Optimistic state declarations moved up — see comment block
+  // above `grouped`. Don't redeclare here.
 
   const TOAST_FOR_TARGET = {
     proposed:    "Sent back to Proposed",
