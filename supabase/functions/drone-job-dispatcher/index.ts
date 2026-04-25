@@ -179,9 +179,46 @@ async function callEdgeFunction(
       },
       body: JSON.stringify(body),
     });
+
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
       return { ok: false, error: `${fnName} returned ${resp.status}: ${text.slice(0, 300)}` };
+    }
+
+    // Body inspection: catch the case where the Edge Function returned 200
+    // but its own work-unit-level result was a failure. drone-render and
+    // drone-ingest both expose shots_total / shots_rendered (or similar)
+    // in their response body — if shots_rendered === 0 with shots_total > 0,
+    // that's a per-job failure even though HTTP was 200.
+    try {
+      const bodyJson = await resp.json();
+      if (bodyJson && typeof bodyJson === "object") {
+        if (
+          typeof bodyJson.shots_total === "number" &&
+          typeof bodyJson.shots_rendered === "number" &&
+          bodyJson.shots_total > 0 &&
+          bodyJson.shots_rendered === 0
+        ) {
+          // Pull a representative per-shot error if present.
+          const firstErr = Array.isArray(bodyJson.results)
+            ? bodyJson.results.find((r: { ok: boolean }) => r && r.ok === false)?.error
+            : undefined;
+          return {
+            ok: false,
+            error: `${fnName}: 0/${bodyJson.shots_total} shots rendered. ${
+              firstErr ? `First error: ${String(firstErr).slice(0, 200)}` : ""
+            }`.trim(),
+          };
+        }
+        if (bodyJson.success === false) {
+          return {
+            ok: false,
+            error: `${fnName}: success=false, error=${bodyJson.error || "unknown"}`,
+          };
+        }
+      }
+    } catch {
+      // Not JSON — accept HTTP-200 as success.
     }
     return { ok: true };
   } catch (err) {

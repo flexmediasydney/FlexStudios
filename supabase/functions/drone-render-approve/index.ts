@@ -155,6 +155,27 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`Failed to update render: ${updErr.message}`, 500, req);
   }
 
+  // ── On final transition: copy file from proposed/ to final delivery ────────
+  let finalDropboxPath: string | null = null;
+  let finalCopyError: string | null = null;
+  if (toState === 'final' && projectId && render.dropbox_path) {
+    try {
+      const { copyFile } = await import('../_shared/dropbox.ts');
+      const { getFolderPath } = await import('../_shared/projectFolders.ts');
+
+      const finalFolder = await getFolderPath(projectId, 'final_delivery_drones');
+      // Strip the proposed-folder filename from the source path so we can re-mount it
+      const filename = render.dropbox_path.split('/').pop() ?? `render_${body.render_id}.jpg`;
+      const targetPath = `${finalFolder}/${filename}`;
+      const meta = await copyFile(render.dropbox_path, targetPath);
+      finalDropboxPath = meta.path_lower ?? targetPath.toLowerCase();
+    } catch (copyErr) {
+      // Don't reject the approval if the copy fails — log + flag.
+      finalCopyError = copyErr instanceof Error ? copyErr.message : String(copyErr);
+      console.error(`[${GENERATOR}] final-delivery copy failed: ${finalCopyError}`);
+    }
+  }
+
   // ── Emit audit event (best-effort — don't block on failure) ────────────────
   if (projectId) {
     const { error: evErr } = await admin
@@ -171,6 +192,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           from_state: fromState,
           to_state: toState,
           kind: render.kind,
+          ...(finalDropboxPath ? { final_dropbox_path: finalDropboxPath } : {}),
+          ...(finalCopyError ? { final_copy_error: finalCopyError } : {}),
         },
       });
     if (evErr) {

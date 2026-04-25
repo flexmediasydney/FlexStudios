@@ -332,6 +332,22 @@ export async function moveFile(fromPath: string, toPath: string): Promise<Dropbo
 }
 
 /**
+ * Copy a file or folder. Used by drone-render-approve to promote a render
+ * from 06_ENRICHMENT/drone_renders_proposed/ to 07_FINAL_DELIVERY/drones/
+ * while preserving the original.
+ */
+export async function copyFile(fromPath: string, toPath: string): Promise<DropboxFileMetadata> {
+  const res = await dropboxApi<{ metadata: DropboxFileMetadata }>('/files/copy_v2', {
+    from_path: fromPath,
+    to_path: toPath,
+    autorename: true,            // suffix conflict → ` (1)` etc rather than fail
+    allow_shared_folder: false,
+    allow_ownership_transfer: false,
+  });
+  return res.metadata;
+}
+
+/**
  * Get an existing shared link for a path, or create one if none exists.
  * Returns the public URL.
  */
