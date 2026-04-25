@@ -50,6 +50,7 @@ import {
 import { toast } from "sonner";
 import { formatDistanceToNow, format } from "date-fns";
 import { cn } from "@/lib/utils";
+import ProjectFilesActivityLog from "./ProjectFilesActivityLog";
 
 // ── Folder taxonomy (mirrors supabase/functions/_shared/projectFolders.ts) ──
 const ALL_FOLDER_KINDS = [
@@ -456,10 +457,8 @@ export default function ProjectFilesTab({ project }) {
         </Card>
       )}
 
-      {/* Reserved slot for ActivityLog (PR7c) */}
-      <div className="mt-6">
-        {/* ActivityLog placeholder — implemented in PR7c */}
-      </div>
+      {/* Activity log (PR7c) */}
+      <ProjectFilesActivityLog projectId={project?.id} />
 
       {/* Re-sync confirm dialog */}
       <Dialog open={showResyncDialog} onOpenChange={setShowResyncDialog}>
