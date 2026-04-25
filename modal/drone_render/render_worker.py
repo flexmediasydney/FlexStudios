@@ -36,6 +36,7 @@ render_image = (
         "Pillow==10.4.0",
         "opencv-python-headless==4.10.0.84",
         "numpy<2",
+        "fastapi[standard]",
     )
     .add_local_dir(str(THIS_DIR), remote_path="/root/drone_render")
 )
@@ -187,6 +188,84 @@ def run_render_with_variants(
     if not out:
         out["default"] = full_bytes
     return out
+
+
+# ──────────────────────────────────────────────────────────────────
+# HTTP endpoint — for invocation from Supabase Edge Functions / external clients
+# ──────────────────────────────────────────────────────────────────
+@app.function(
+    cpu=2,
+    memory=2048,
+    timeout=240,
+    secrets=[modal.Secret.from_name("flexstudios-render-token")],
+)
+@modal.fastapi_endpoint(method="POST", requires_proxy_auth=False)
+def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
+    """
+    HTTP-callable wrapper around run_render.
+
+    POST body:
+        {
+            "image_b64":  base64-encoded source image,
+            "theme":      theme config dict,
+            "scene":      scene dict (lat, lon, alt, yaw, pitch, ...)
+        }
+
+    Auth: shared-secret bearer token in `Authorization: Bearer <token>` header,
+    matching the Modal secret FLEXSTUDIOS_RENDER_TOKEN (also stored as a
+    Supabase secret of the same name for the drone-render Edge Function).
+
+    Response:
+        { "image_b64": str, "format": "JPEG" }
+    """
+    import base64
+    import os
+    import sys
+    from fastapi import Header, HTTPException
+
+    expected = os.environ.get("FLEXSTUDIOS_RENDER_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=500, detail="server token not configured")
+
+    # FastAPI passes the Authorization header to the function as a kwarg
+    # if declared. Since `payload` was already declared as the first arg,
+    # we re-read the header from the request via fastapi.Request — which
+    # we can't here without restructuring. Instead we accept the token in
+    # the JSON body as `_token` (gateway pattern) for simplicity.
+    body_token = (payload or {}).get("_token") if isinstance(payload, dict) else None
+    if not body_token or body_token != expected:
+        raise HTTPException(status_code=401, detail="invalid or missing _token")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON object required")
+
+    image_b64 = payload.get("image_b64")
+    theme = payload.get("theme")
+    scene = payload.get("scene")
+
+    if not image_b64 or not isinstance(image_b64, str):
+        raise HTTPException(status_code=400, detail="image_b64 required (base64 string)")
+    if not isinstance(theme, dict):
+        raise HTTPException(status_code=400, detail="theme required (dict)")
+    if not isinstance(scene, dict):
+        raise HTTPException(status_code=400, detail="scene required (dict)")
+
+    try:
+        image_bytes = base64.b64decode(image_b64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"image_b64 invalid: {e}")
+
+    sys.path.insert(0, "/root/drone_render")
+    from render_engine import render  # type: ignore  # noqa: E402
+
+    try:
+        result_bytes = render(image_bytes, theme, scene)
+        return {
+            "image_b64": base64.b64encode(result_bytes).decode("ascii"),
+            "format": "JPEG",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"render failed: {e}")
 
 
 # ──────────────────────────────────────────────────────────────────
