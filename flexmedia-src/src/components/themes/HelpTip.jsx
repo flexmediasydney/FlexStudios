@@ -15,14 +15,15 @@
  * liberally without crashing the editor when help text is still being
  * authored.
  *
- * Reuses the shadcn Tooltip primitive (which already has dark-on-light
- * styling fixed at the primitive level — see components/ui/tooltip.jsx).
- * The TooltipProvider is mounted globally in App.jsx, so we don't need to
- * wrap each instance.
+ * Reuses the shadcn Tooltip primitive. We wrap each HelpTip in its own
+ * TooltipProvider — the app does not mount a global provider, so any
+ * unwrapped <Tooltip> throws "Tooltip must be used within TooltipProvider"
+ * at render time and the entire Theme Editor crashes. Local providers nest
+ * safely (Radix supports it) and the cost is negligible.
  */
 
 import { Info } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { THEME_HELP_TEXT } from "./themeHelpText";
 
@@ -30,6 +31,7 @@ export function HelpTip({ fieldKey, className, side = "right" }) {
   const help = THEME_HELP_TEXT[fieldKey];
   if (!help) return null;
   return (
+    <TooltipProvider delayDuration={150}>
     <Tooltip>
       <TooltipTrigger asChild>
         <button
@@ -58,6 +60,7 @@ export function HelpTip({ fieldKey, className, side = "right" }) {
         )}
       </TooltipContent>
     </Tooltip>
+    </TooltipProvider>
   );
 }
 
