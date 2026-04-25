@@ -202,26 +202,40 @@ def run_render_with_variants(
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=False)
 def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
     """
-    HTTP-callable wrapper around run_render.
+    HTTP-callable wrapper around run_render / run_render_with_variants.
 
     POST body:
         {
             "image_b64":  base64-encoded source image,
             "theme":      theme config dict,
-            "scene":      scene dict (lat, lon, alt, yaw, pitch, ...)
+            "scene":      scene dict (lat, lon, alt, yaw, pitch, ...),
+            "variants":   (optional bool) — when true AND theme.output_variants
+                          is non-empty, returns multi-variant payload.
         }
 
-    Auth: shared-secret bearer token in `Authorization: Bearer <token>` header,
-    matching the Modal secret FLEXSTUDIOS_RENDER_TOKEN (also stored as a
-    Supabase secret of the same name for the drone-render Edge Function).
+    Auth: shared-secret token passed in body as `_token` matching the Modal
+    secret FLEXSTUDIOS_RENDER_TOKEN (also stored as a Supabase secret of the
+    same name for the drone-render Edge Function).
 
-    Response:
+    Response (single-variant — default):
         { "image_b64": str, "format": "JPEG" }
+
+    Response (multi-variant — variants:true with theme output_variants set):
+        {
+          "format": "JPEG",
+          "variants": {
+            "<variant_name>": { "image_b64": str, "format": "JPEG"|"PNG"|"TIFF" },
+            ...
+          }
+        }
+
+      If `variants:true` is requested but the theme has no `output_variants`,
+      the response degrades to a single-variant response with name "default".
     """
     import base64
     import os
     import sys
-    from fastapi import Header, HTTPException
+    from fastapi import HTTPException
 
     expected = os.environ.get("FLEXSTUDIOS_RENDER_TOKEN", "")
     if not expected:
@@ -242,6 +256,7 @@ def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
     image_b64 = payload.get("image_b64")
     theme = payload.get("theme")
     scene = payload.get("scene")
+    want_variants = bool(payload.get("variants"))
 
     if not image_b64 or not isinstance(image_b64, str):
         raise HTTPException(status_code=400, detail="image_b64 required (base64 string)")
@@ -259,11 +274,132 @@ def render_http(payload: Dict[str, Any], authorization: Optional[str] = None):
     from render_engine import render  # type: ignore  # noqa: E402
 
     try:
-        result_bytes = render(image_bytes, theme, scene)
+        # First: render at full source resolution (single high-quality pass)
+        full_bytes = render(image_bytes, theme, scene)
+
+        variants_cfg = theme.get("output_variants") if want_variants else None
+        if not want_variants or not variants_cfg:
+            # Single-variant path — preserve legacy response shape
+            return {
+                "image_b64": base64.b64encode(full_bytes).decode("ascii"),
+                "format": "JPEG",
+            }
+
+        # Multi-variant: mirror run_render_with_variants() logic
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+
+        arr = np.frombuffer(full_bytes, dtype=np.uint8)
+        full_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if full_img is None:
+            # Fallback to single-variant if decode fails
+            return {
+                "image_b64": base64.b64encode(full_bytes).decode("ascii"),
+                "format": "JPEG",
+                "variants": {
+                    "default": {
+                        "image_b64": base64.b64encode(full_bytes).decode("ascii"),
+                        "format": "JPEG",
+                    }
+                },
+            }
+
+        src_h, src_w = full_img.shape[:2]
+        variants_out: Dict[str, Dict[str, str]] = {}
+
+        for v in variants_cfg:
+            try:
+                name = v.get("name") or "variant"
+                target_w = int(v.get("target_width_px") or src_w)
+                quality = int(v.get("quality") or 90)
+                aspect = v.get("aspect") or "preserve"
+                max_bytes = int(v.get("max_bytes") or 0)
+                fmt = (v.get("format") or "JPEG").upper()
+
+                # Resize / crop to target
+                if aspect == "preserve":
+                    target_h = int(round(src_h * target_w / src_w))
+                    resized = cv2.resize(full_img, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                elif aspect == "crop_1_1":
+                    short = min(src_w, src_h)
+                    cy = (src_h - short) // 2
+                    cx = (src_w - short) // 2
+                    resized = cv2.resize(
+                        full_img[cy : cy + short, cx : cx + short],
+                        (target_w, target_w),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                elif aspect == "crop_16_9":
+                    target_h = int(round(target_w * 9 / 16))
+                    band_h = int(round(src_w * 9 / 16))
+                    if band_h <= src_h:
+                        cy = (src_h - band_h) // 2
+                        cropped = full_img[cy : cy + band_h, :, :]
+                    else:
+                        cropped = full_img
+                    resized = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                elif aspect == "crop_4_5":
+                    target_h = int(round(target_w * 5 / 4))
+                    band_w = int(round(src_h * 4 / 5))
+                    if band_w <= src_w:
+                        cx = (src_w - band_w) // 2
+                        cropped = full_img[:, cx : cx + band_w, :]
+                    else:
+                        cropped = full_img
+                    resized = cv2.resize(cropped, (target_w, target_h), interpolation=cv2.INTER_AREA)
+                else:
+                    target_h = int(round(src_h * target_w / src_w))
+                    resized = cv2.resize(full_img, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+                # Encode
+                if fmt == "PNG":
+                    ext = ".png"
+                    params = [cv2.IMWRITE_PNG_COMPRESSION, 6]
+                else:
+                    # JPEG (and TIFF — opencv lacks TIFF quality, so we fall back to JPEG)
+                    ext = ".jpg"
+                    params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+                    if fmt == "TIFF":
+                        # Surface TIFF as JPEG-effective so downstream upload still works.
+                        # If/when we need true TIFF, swap in libtiff via Pillow here.
+                        fmt = "JPEG"
+
+                ok, buf = cv2.imencode(ext, resized, params)
+                if not ok:
+                    continue
+                data = buf.tobytes()
+
+                # Step quality down to honour max_bytes (JPEG only)
+                if max_bytes > 0 and fmt == "JPEG" and len(data) > max_bytes:
+                    q = quality
+                    while len(data) > max_bytes and q > 50:
+                        q -= 5
+                        ok, buf = cv2.imencode(".jpg", resized, [cv2.IMWRITE_JPEG_QUALITY, q])
+                        if not ok:
+                            break
+                        data = buf.tobytes()
+
+                variants_out[name] = {
+                    "image_b64": base64.b64encode(data).decode("ascii"),
+                    "format": fmt,
+                }
+            except Exception as ex:
+                # Per-variant failures are non-fatal; log + continue
+                print(f"variant {v.get('name', '?')} failed: {ex}")
+
+        if not variants_out:
+            # All variants failed; fall back to default full-size
+            variants_out["default"] = {
+                "image_b64": base64.b64encode(full_bytes).decode("ascii"),
+                "format": "JPEG",
+            }
+
         return {
-            "image_b64": base64.b64encode(result_bytes).decode("ascii"),
             "format": "JPEG",
+            "variants": variants_out,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"render failed: {e}")
 

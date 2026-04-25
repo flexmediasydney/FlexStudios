@@ -151,6 +151,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     ok: boolean;
     out_path?: string;
     error?: string;
+    variants?: Array<{ variant: string; out_path: string }>;
   }> = [];
 
   for (const shot of shots) {
@@ -184,6 +185,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         scene.polygon_latlon = cadastral.polygon.map((v: { lat: number; lng: number }) => [v.lat, v.lng]);
       }
 
+      // Determine if this theme requested multi-variant output
+      const variantsCfg = Array.isArray(themeForKind?.output_variants)
+        ? (themeForKind.output_variants as Array<Record<string, unknown>>)
+        : [];
+      const wantVariants = variantsCfg.length > 0;
+
       // POST to Modal HTTP endpoint
       const modalResp = await fetch(MODAL_RENDER_URL, {
         method: "POST",
@@ -193,6 +200,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           image_b64: base64Encode(srcBytes),
           theme: themeForKind,
           scene,
+          variants: wantVariants,
         }),
       });
 
@@ -207,60 +215,116 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         continue;
       }
       const modalJson = await modalResp.json();
-      const outBytes = base64Decode(modalJson.image_b64);
 
-      // Upload rendered output to Dropbox
-      const outName = filenameForRender(shot.filename, kind);
-      const outDropboxPath = `${outFolder}/${outName}`;
-      const uploadRes = await uploadFile(outDropboxPath, outBytes, "overwrite");
-      if (!uploadRes || !uploadRes.path_lower) {
+      // Build a uniform list of {name, bytes, format} regardless of single/multi.
+      type Variant = { name: string; bytes: Uint8Array; format: string };
+      const variants: Variant[] = [];
+      if (modalJson.variants && typeof modalJson.variants === "object") {
+        for (const [name, v] of Object.entries(modalJson.variants as Record<string, any>)) {
+          if (v?.image_b64) {
+            variants.push({
+              name,
+              bytes: base64Decode(v.image_b64),
+              format: (v.format || "JPEG").toUpperCase(),
+            });
+          }
+        }
+      }
+      if (variants.length === 0 && modalJson.image_b64) {
+        variants.push({
+          name: "default",
+          bytes: base64Decode(modalJson.image_b64),
+          format: (modalJson.format || "JPEG").toUpperCase(),
+        });
+      }
+      if (variants.length === 0) {
         renderResults.push({
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
-          error: "Dropbox upload returned no path",
+          error: "Modal returned no usable image payload",
         });
         continue;
       }
 
-      // Insert drone_renders row
-      const { error: insErr } = await admin.from("drone_renders").insert({
-        shot_id: shot.id,
-        column_state: "proposed",
-        kind,
-        dropbox_path: uploadRes.path_lower,
-        theme_id: themeChain[0]?.theme_id || null,
-        theme_snapshot: themeForKind,
-        property_coord_used: { source: project.confirmed_lat ? "confirmed" : "geocoded", ...projectCoord },
-        pin_overrides: null,
-        output_variant: "default",
-      });
-      if (insErr) {
+      // Upload + insert per variant
+      const variantResults: Array<{ variant: string; out_path: string }> = [];
+      let anyVariantFailed = false;
+      let firstError: string | null = null;
+      for (const v of variants) {
+        try {
+          const outName = filenameForRender(shot.filename, kind, v.name, v.format);
+          const outDropboxPath = `${outFolder}/${outName}`;
+          const uploadRes = await uploadFile(outDropboxPath, v.bytes, "overwrite");
+          if (!uploadRes || !uploadRes.path_lower) {
+            anyVariantFailed = true;
+            firstError = firstError || `Dropbox upload (${v.name}) returned no path`;
+            continue;
+          }
+
+          const { error: insErr } = await admin.from("drone_renders").insert({
+            shot_id: shot.id,
+            column_state: "proposed",
+            kind,
+            dropbox_path: uploadRes.path_lower,
+            theme_id: themeChain[0]?.theme_id || null,
+            theme_snapshot: themeForKind,
+            property_coord_used: {
+              source: project.confirmed_lat ? "confirmed" : "geocoded",
+              ...projectCoord,
+            },
+            pin_overrides: null,
+            output_variant: v.name,
+          });
+          if (insErr) {
+            anyVariantFailed = true;
+            firstError = firstError || `drone_renders insert (${v.name}) failed: ${insErr.message}`;
+            continue;
+          }
+
+          // Per-variant audit event
+          await admin.from("drone_events").insert({
+            project_id: project.id,
+            shoot_id: shot.shoot_id,
+            shot_id: shot.id,
+            event_type: "render_proposed",
+            actor_type: isService ? "system" : "user",
+            actor_id: isService ? null : user?.id,
+            payload: {
+              kind,
+              dropbox_path: uploadRes.path_lower,
+              theme_chain_levels: themeChain.length,
+              output_variant: v.name,
+            },
+          });
+
+          variantResults.push({ variant: v.name, out_path: uploadRes.path_lower });
+        } catch (vErr) {
+          anyVariantFailed = true;
+          firstError =
+            firstError || (vErr instanceof Error ? vErr.message : String(vErr));
+        }
+      }
+
+      if (variantResults.length === 0) {
         renderResults.push({
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
-          error: `drone_renders insert failed: ${insErr.message}`,
+          error: firstError || "All variants failed",
         });
         continue;
       }
-
-      // Audit
-      await admin.from("drone_events").insert({
-        project_id: project.id,
-        shoot_id: shot.shoot_id,
-        shot_id: shot.id,
-        event_type: "render_proposed",
-        actor_type: isService ? "system" : "user",
-        actor_id: isService ? null : user?.id,
-        payload: { kind, dropbox_path: uploadRes.path_lower, theme_chain_levels: themeChain.length },
-      });
 
       renderResults.push({
         shot_id: shot.id,
         filename: shot.filename,
-        ok: true,
-        out_path: uploadRes.path_lower,
+        ok: !anyVariantFailed,
+        out_path: variantResults[0].out_path,
+        ...(variantResults.length > 1
+          ? { variants: variantResults }
+          : {}),
+        ...(anyVariantFailed ? { error: firstError || undefined } : {}),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -321,11 +385,27 @@ function applyKindToTheme(theme: any, kind: RenderKind): any {
   return t;
 }
 
-function filenameForRender(srcFilename: string, kind: RenderKind): string {
-  // Strip extension, append _render_<kind>.jpg
+function filenameForRender(
+  srcFilename: string,
+  kind: RenderKind,
+  variantName?: string,
+  format?: string,
+): string {
+  // Strip extension, append _<kind>[__<variant>].<ext>
   const dot = srcFilename.lastIndexOf(".");
   const base = dot > 0 ? srcFilename.slice(0, dot) : srcFilename;
-  return `${base}__${kind}.jpg`;
+  const ext =
+    (format || "JPEG").toUpperCase() === "PNG"
+      ? "png"
+      : (format || "JPEG").toUpperCase() === "TIFF"
+        ? "tif"
+        : "jpg";
+  // Skip the variant suffix for the legacy "default" name to preserve
+  // pre-variant filenames (no churn for existing renders).
+  if (!variantName || variantName === "default") {
+    return `${base}__${kind}.${ext}`;
+  }
+  return `${base}__${kind}__${variantName}.${ext}`;
 }
 
 async function loadThemeChain(
