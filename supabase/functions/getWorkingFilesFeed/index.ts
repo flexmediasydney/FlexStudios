@@ -1,4 +1,5 @@
 import { handleCors, getCorsHeaders, jsonResponse, getAdminClient, getUserFromReq, serveWithAudit } from '../_shared/supabase.ts';
+import { getDropboxAccessToken } from '../_shared/dropbox.ts';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -95,56 +96,9 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = DBX_
   }
 }
 
-// ─── Dropbox OAuth ──────────────────────────────────────────────────────────
-
-let cachedAccessToken: string | null = null;
-let refreshPromise: Promise<string> | null = null;
-
-async function getAccessToken(): Promise<string> {
-  if (cachedAccessToken) return cachedAccessToken;
-  cachedAccessToken = Deno.env.get('DROPBOX_API_TOKEN') || '';
-  return cachedAccessToken;
-}
-
-async function refreshAccessToken(): Promise<string> {
-  if (refreshPromise) return refreshPromise;
-
-  refreshPromise = (async () => {
-    const refreshToken = Deno.env.get('DROPBOX_REFRESH_TOKEN');
-    const appKey = Deno.env.get('DROPBOX_APP_KEY');
-    const appSecret = Deno.env.get('DROPBOX_APP_SECRET');
-
-    if (!refreshToken || !appKey || !appSecret) {
-      throw new Error('Missing DROPBOX_REFRESH_TOKEN, DROPBOX_APP_KEY, or DROPBOX_APP_SECRET');
-    }
-
-    const res = await fetch('https://api.dropboxapi.com/oauth2/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': 'Basic ' + btoa(`${appKey}:${appSecret}`),
-      },
-      body: `grant_type=refresh_token&refresh_token=${refreshToken}`,
-    });
-
-    if (!res.ok) {
-      const txt = await res.text().catch(() => '');
-      throw new Error(`Token refresh failed: ${res.status} ${txt.slice(0, 200)}`);
-    }
-
-    const data = await res.json();
-    cachedAccessToken = data.access_token;
-    console.log(`Dropbox token refreshed, expires in ${data.expires_in}s`);
-    return cachedAccessToken!;
-  })();
-
-  try {
-    const token = await refreshPromise;
-    return token;
-  } finally {
-    refreshPromise = null;
-  }
-}
+// Dropbox auth — token mgmt + OAuth refresh live in `_shared/dropbox.ts`.
+const getAccessToken = () => getDropboxAccessToken();
+const refreshAccessToken = () => getDropboxAccessToken({ forceRefresh: true });
 
 // ─── Dropbox API call with auto-refresh ─────────────────────────────────────
 
