@@ -65,8 +65,23 @@ Deno.test('classifyShotRole: 50m altitude + -45° pitch → oblique_hero', () =>
   assertEquals(classifyShotRole({ gimbal_pitch: -45, relative_altitude: 50 }), 'oblique_hero');
 });
 
-Deno.test('classifyShotRole: low altitude → ground_level even with mild pitch', () => {
-  assertEquals(classifyShotRole({ gimbal_pitch: -20, relative_altitude: 5 }), 'ground_level');
+Deno.test('classifyShotRole: very low altitude → ground_level (alt < 5m)', () => {
+  // Threshold tightened from <10 to <5 when building_hero was added — true
+  // ground-level (drone on ground, person walking past) only.
+  assertEquals(classifyShotRole({ gimbal_pitch: -20, relative_altitude: 4.9 }), 'ground_level');
+  assertEquals(classifyShotRole({ gimbal_pitch: -45, relative_altitude: 0 }), 'ground_level');
+});
+
+Deno.test('classifyShotRole: 5-30m alt + near-horizontal pitch → building_hero', () => {
+  // The Everton case: alt 21-25m, pitch -7° to -11° (façade hero shots).
+  assertEquals(classifyShotRole({ gimbal_pitch: -7.5, relative_altitude: 21.4 }), 'building_hero');
+  assertEquals(classifyShotRole({ gimbal_pitch: -10.9, relative_altitude: 23.2 }), 'building_hero');
+  // Boundaries
+  assertEquals(classifyShotRole({ gimbal_pitch: 0, relative_altitude: 5 }), 'building_hero');
+  assertEquals(classifyShotRole({ gimbal_pitch: -25, relative_altitude: 30 }), 'building_hero');
+  // Just outside the building_hero pitch band (-26° < -25°): falls through
+  // to unclassified because no other rule fits at alt=30, pitch=-26.
+  assertEquals(classifyShotRole({ gimbal_pitch: -26, relative_altitude: 30 }), 'unclassified');
 });
 
 Deno.test('classifyShotRole: missing data → unclassified, never throws', () => {
@@ -75,10 +90,11 @@ Deno.test('classifyShotRole: missing data → unclassified, never throws', () =>
   assertEquals(classifyShotRole({ gimbal_pitch: -20, relative_altitude: null }), 'unclassified');
 });
 
-Deno.test('classifyShotRole: 30m altitude + 0° pitch → unclassified (level hover)', () => {
-  // The pitch band excludes 0..-5° from "orbital" because that's typically a
-  // static/hover frame, not an orbiting capture.
-  assertEquals(classifyShotRole({ gimbal_pitch: 0, relative_altitude: 30 }), 'unclassified');
+Deno.test('classifyShotRole: 30m+ altitude + level pitch → unclassified (above building_hero band)', () => {
+  // building_hero caps at 30m. Above that with a near-level pitch is
+  // neither orbital (needs >40m and pitch -30..-5) nor oblique_hero
+  // (needs pitch <-30) — drop to unclassified for operator review.
+  assertEquals(classifyShotRole({ gimbal_pitch: 0, relative_altitude: 35 }), 'unclassified');
   assertEquals(classifyShotRole({ gimbal_pitch: -2, relative_altitude: 50 }), 'unclassified');
 });
 

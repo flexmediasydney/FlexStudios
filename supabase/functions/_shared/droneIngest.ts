@@ -15,11 +15,24 @@
  *     does not match the DJI pattern.
  *   - classifyShotRole(): pure rule-based classifier. Per
  *     IMPLEMENTATION_PLAN_V2 §2.3 ingestion rules:
- *       gimbal_pitch ≤ -85°                              → nadir_grid
- *       relative_altitude > 40m AND -30° ≤ pitch ≤ -5°   → orbital
- *       relative_altitude > 25m AND pitch < -30°         → oblique_hero
- *       relative_altitude < 10m                          → ground_level
- *       otherwise                                        → unclassified
+ *       gimbal_pitch ≤ -85°                                       → nadir_grid
+ *       relative_altitude < 5m                                    → ground_level
+ *       relative_altitude 5-30m AND -25° ≤ pitch ≤ 0°             → building_hero
+ *       relative_altitude > 40m AND -30° ≤ pitch ≤ -5°            → orbital
+ *       relative_altitude > 25m AND pitch < -30°                  → oblique_hero
+ *       otherwise                                                 → unclassified
+ *
+ *     The `building_hero` bucket was added 2026-04-25 to capture façade /
+ *     ground-hero shots flown at human-scale altitudes (5-30m) with the
+ *     gimbal roughly horizontal. Without it those shots fell through every
+ *     other rule and ended up `unclassified`, which the renderer then
+ *     mistakenly excluded from delivery (drone-render's old whitelist treated
+ *     unclassified as a render-eligible bucket but operators couldn't filter
+ *     them by role in the swimlane).
+ *
+ *     `ground_level` was tightened from <10m to <5m so the building_hero
+ *     band starts cleanly at 5m. Pure ground-level shots (e.g. drone on
+ *     ground, person walking past) stay separate.
  *   - groupShotsIntoShoots(): clusters shots by their captured_at timestamp.
  *     A gap > 30 minutes between consecutive shots starts a new shoot.
  *
@@ -65,6 +78,7 @@ export type ShotRole =
   | 'nadir_grid'
   | 'orbital'
   | 'oblique_hero'
+  | 'building_hero'
   | 'ground_level'
   | 'unclassified';
 
@@ -271,9 +285,17 @@ export function extractExifFromBytes(bytes: Uint8Array | ArrayBuffer): Extracted
  * Notes on the boundary conditions (intentional, not lazy):
  *   - The ≤ -85° nadir threshold accommodates DJI grid missions which are
  *     spec'd at -90° but typically read -85.x° to -89.x° at rest.
- *   - The orbital pitch band is -30° to -5° (inclusive). Pitches between 0°
- *     and -5° are typically static / hover (camera level) — we mark those
- *     unclassified rather than orbital.
+ *   - ground_level uses alt < 5 (was <10) so the building_hero band can start
+ *     at 5m without overlap.
+ *   - building_hero captures façade shots — alt 5-30m AND pitch -25° to 0°
+ *     (camera roughly horizontal looking at the building face). Operators
+ *     typically take 2-6 of these per shoot for unit blocks where the only
+ *     orbital context is at high altitude (100m+) and the building details
+ *     need a closer look.
+ *   - The orbital pitch band is -30° to -5° (inclusive). Building_hero is
+ *     checked BEFORE orbital so a shot at 28m + pitch -8° (which satisfies
+ *     building_hero's alt range) gets the more-specific label rather than
+ *     orbital. Orbital still wins above 30m.
  *   - We rely on relative_altitude (XMP RelativeAltitude). When that field is
  *     missing (older firmware, GPS lock failure), the classifier returns
  *     'unclassified' rather than guessing.
@@ -283,8 +305,9 @@ export function classifyShotRole(shot: ClassifiableShot): ShotRole {
   const alt = shot.relative_altitude;
 
   if (pitch !== null && pitch <= -85) return 'nadir_grid';
-  if (alt !== null && alt < 10) return 'ground_level';
+  if (alt !== null && alt < 5) return 'ground_level';
   if (pitch !== null && alt !== null) {
+    if (alt >= 5 && alt <= 30 && pitch >= -25 && pitch <= 0) return 'building_hero';
     if (alt > 40 && pitch >= -30 && pitch <= -5) return 'orbital';
     if (alt > 25 && pitch < -30) return 'oblique_hero';
   }

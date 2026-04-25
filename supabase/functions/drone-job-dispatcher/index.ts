@@ -3,15 +3,22 @@
  * ────────────────────
  * Pulls pending `drone_jobs` and dispatches them to the appropriate handler:
  *
- *   kind='ingest'  → POST to drone-ingest    payload: { project_id }
- *   kind='render'  → POST to drone-render    payload: { shoot_id, kind?, fallback? }
- *   kind='sfm'     → POST to Modal sfm_http  payload: { _token, shoot_id }
+ *   kind='ingest'    → POST to drone-ingest  payload: { project_id }
+ *   kind='render'    → POST to drone-render  payload: { shoot_id, kind?, fallback? }
+ *   kind='sfm'       → POST to Modal sfm_http payload: { _token, shoot_id }
+ *   kind='poi_fetch' → POST to drone-pois    payload: { project_id }
  *
- *     On SfM success the dispatcher chains a follow-up `kind='render'` job
- *     (debounced ~10s) for the same shoot, so the next dispatcher tick will
- *     render with the now-valid sfm_pose values. Chained at the dispatcher
- *     layer rather than inside the Modal endpoint to keep all queue logic
- *     in one place (and so retries of the SfM job don't re-fan-out renders).
+ *     Chain: ingest → sfm → poi_fetch → render
+ *
+ *     On SfM success the dispatcher chains a follow-up `kind='poi_fetch'` job
+ *     (debounced ~10s). On poi_fetch success it chains the `kind='render'` job
+ *     so the renderer's inline fetchPois() finds a warm drone_pois_cache row.
+ *     If poi_fetch FAILS (Google Places quota, missing project coords, etc.)
+ *     we still chain the render — POIs are nice-to-have, not blocking.
+ *
+ *     Chained at the dispatcher layer rather than inside the Modal/POI
+ *     endpoints to keep all queue logic in one place (and so retries of the
+ *     SfM job don't re-fan-out renders).
  *
  * Trigger: pg_cron every minute (migration 232).
  *
@@ -154,16 +161,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         results.push({ id: job.id, kind: job.kind, ok: true });
 
         // Chain: on a successful SfM dispatch where Modal also reported a
-        // valid reconstruction, enqueue a follow-up render job for the same
-        // shoot. The next dispatcher tick will render with the now-populated
-        // drone_shots.sfm_pose values. Shoots that exit cleanly with too few
-        // images (Modal returns ok=false but HTTP 200) do NOT trigger a
-        // chained render — they remain at status='sfm_failed' for review.
+        // valid reconstruction, enqueue a follow-up poi_fetch job for the
+        // project. poi_fetch success will in turn chain the render job, so
+        // the renderer's inline fetchPois() finds a warm drone_pois_cache row.
+        // Shoots that exit cleanly with too few images (Modal returns
+        // ok=false but HTTP 200) do NOT trigger chaining — they remain at
+        // status='sfm_failed' for review.
         //
         // Pin-edit guard (#33 audit): if the user kicked off a pin_edit_saved
         // render between SfM start and SfM success, the existing pending /
         // running render will pick up the new SfM pose itself. Skip the
-        // chained render so we don't clobber that work.
+        // chained poi_fetch+render so we don't clobber that work.
         if (isSfmKind && ok.sfm_ok === true) {
           const shootId =
             (job.payload?.shoot_id as string | undefined) || job.shoot_id;
@@ -181,28 +189,73 @@ serveWithAudit(GENERATOR, async (req: Request) => {
               .maybeSingle();
             if (priorRender) {
               console.log(
-                `[${GENERATOR}] sfm ${job.id} succeeded but render job ${priorRender.id} is already pending/running for shoot ${shootId} — skipping chained render (will pick up new SfM pose)`,
+                `[${GENERATOR}] sfm ${job.id} succeeded but render job ${priorRender.id} is already pending/running for shoot ${shootId} — skipping chained poi_fetch+render (will pick up new SfM pose)`,
               );
             } else {
+              // Resolve project_id: SfM payload only carries shoot_id, and
+              // claim_drone_jobs doesn't return the project_id column. Look
+              // it up via drone_shoots so we can hand it to drone-pois.
+              const projectId = await resolveProjectIdForShoot(admin, shootId);
               const scheduled = new Date(Date.now() + 10_000).toISOString();
-              const { error: enqErr } = await admin.from("drone_jobs").insert({
-                project_id: (job.payload?.project_id as string | null) ?? null,
-                shoot_id: shootId,
-                kind: "render",
-                status: "pending",
-                payload: {
+              if (projectId) {
+                const { error: enqErr } = await admin.from("drone_jobs").insert({
+                  project_id: projectId,
                   shoot_id: shootId,
-                  kind: "poi_plus_boundary",
-                  chained_from: job.id,
-                },
-                scheduled_for: scheduled,
-              });
-              if (enqErr) {
+                  kind: "poi_fetch",
+                  status: "pending",
+                  payload: {
+                    project_id: projectId,
+                    shoot_id: shootId,
+                    chained_from: job.id,
+                  },
+                  scheduled_for: scheduled,
+                });
+                if (enqErr) {
+                  console.warn(
+                    `[${GENERATOR}] failed to chain poi_fetch job after sfm ${job.id}: ${enqErr.message} — falling back to direct render`,
+                  );
+                  await enqueueRenderAfterPois(admin, {
+                    projectId,
+                    shootId,
+                    chainedFrom: job.id,
+                    poiFetchSkipped: "enqueue_failed",
+                  });
+                }
+              } else {
+                // No project_id resolvable — skip POI step, go straight to
+                // render so the user still gets output.
                 console.warn(
-                  `[${GENERATOR}] failed to chain render job after sfm ${job.id}: ${enqErr.message}`,
+                  `[${GENERATOR}] sfm ${job.id} succeeded but project_id unresolvable for shoot ${shootId} — skipping poi_fetch, enqueueing render directly`,
                 );
+                await enqueueRenderAfterPois(admin, {
+                  projectId: null,
+                  shootId,
+                  chainedFrom: job.id,
+                  poiFetchSkipped: "project_id_unresolvable",
+                });
               }
             }
+          }
+        }
+
+        // Chain: on a successful poi_fetch dispatch, enqueue the render. The
+        // cache is now warm so the renderer's inline fetchPois() will return
+        // pins to draw. Same shoot+payload shape as the prior sfm→render path.
+        if (job.kind === "poi_fetch") {
+          const shootId =
+            (job.payload?.shoot_id as string | undefined) || job.shoot_id;
+          const projectId = (job.payload?.project_id as string | undefined) ?? null;
+          if (shootId) {
+            await enqueueRenderAfterPois(admin, {
+              projectId,
+              shootId,
+              chainedFrom: job.id,
+              poiFetchSkipped: null,
+            });
+          } else {
+            console.warn(
+              `[${GENERATOR}] poi_fetch ${job.id} succeeded but shoot_id missing — cannot chain render`,
+            );
           }
         }
       } else {
@@ -279,8 +332,84 @@ async function dispatchOne(
       return await callModalSfm({
         shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
       });
+    case "poi_fetch":
+      // Hand the project_id to drone-pois. drone-pois reads its cache; if
+      // empty/expired it fetches from the upstream provider and writes the
+      // cache row. Either way the next render's inline fetchPois() finds
+      // a warm row. project_id may live on the job row OR on its payload
+      // (we always set it on payload when we enqueue from sfm-success).
+      return await callEdgeFunction("drone-pois", {
+        project_id:
+          (job.payload?.project_id as string | undefined) || job.project_id,
+      });
     default:
       return { ok: false, error: `unknown kind: ${job.kind}` };
+  }
+}
+
+// ── Chain helpers ─────────────────────────────────────────────────────────
+// resolveProjectIdForShoot: SfM job payloads only carry shoot_id, but the
+// poi_fetch endpoint needs project_id (it owns the per-project cache row).
+// The drone_jobs row claimed by claim_drone_jobs() also doesn't always have
+// project_id populated. Fetch from drone_shoots.
+async function resolveProjectIdForShoot(
+  admin: ReturnType<typeof getAdminClient>,
+  shootId: string,
+): Promise<string | null> {
+  try {
+    const { data, error } = await admin
+      .from("drone_shoots")
+      .select("project_id")
+      .eq("id", shootId)
+      .maybeSingle();
+    if (error) {
+      console.warn(
+        `[${GENERATOR}] resolveProjectIdForShoot(${shootId}) lookup failed: ${error.message}`,
+      );
+      return null;
+    }
+    return (data?.project_id as string | undefined) || null;
+  } catch (e) {
+    console.warn(
+      `[${GENERATOR}] resolveProjectIdForShoot(${shootId}) threw: ${e instanceof Error ? e.message : e}`,
+    );
+    return null;
+  }
+}
+
+// enqueueRenderAfterPois: insert the chained render job that consumes a now-
+// warm POI cache. Used both by the poi_fetch-success branch and by the
+// fallback paths (project_id unresolvable / poi_fetch enqueue failed) where
+// we want the operator to still get a render even without POIs drawn.
+async function enqueueRenderAfterPois(
+  admin: ReturnType<typeof getAdminClient>,
+  args: {
+    projectId: string | null;
+    shootId: string;
+    chainedFrom: string;
+    poiFetchSkipped: string | null;
+  },
+): Promise<void> {
+  const scheduled = new Date(Date.now() + 10_000).toISOString();
+  const { error } = await admin.from("drone_jobs").insert({
+    project_id: args.projectId,
+    shoot_id: args.shootId,
+    kind: "render",
+    status: "pending",
+    payload: {
+      shoot_id: args.shootId,
+      kind: "poi_plus_boundary",
+      chained_from: args.chainedFrom,
+      ...(args.poiFetchSkipped
+        ? { poi_fetch_skipped: args.poiFetchSkipped }
+        : {}),
+    },
+    scheduled_for: scheduled,
+  });
+  if (error) {
+    console.warn(
+      `[${GENERATOR}] failed to chain render job after poi_fetch ${args.chainedFrom}: ${error.message}`,
+    );
   }
 }
 

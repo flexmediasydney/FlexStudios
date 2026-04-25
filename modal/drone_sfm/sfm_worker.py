@@ -477,7 +477,9 @@ def sfm_http(payload: Dict[str, Any]):
                 _finalise_run(False, error_msg=msg)
                 _update_shoot_status("sfm_failed")
                 return {"ok": False, "shoot_id": shoot_id, "sfm_run_id": run_id, "error": msg}
-            shot_list = r.json().get("shots") or []
+            urls_resp = r.json()
+            shot_list = urls_resp.get("shots") or []
+            project_id: Optional[str] = urls_resp.get("project_id")
     except Exception as e:
         msg = f"drone-shot-urls call failed: {e}"
         _finalise_run(False, error_msg=msg)
@@ -585,6 +587,88 @@ def sfm_http(payload: Dict[str, Any]):
                 print(f"[sfm_http] sfm_pose PATCH exception for shot {sid}: {e}")
     if skipped_unknown:
         print(f"[sfm_http] skipped {skipped_unknown} cameras with no matching shot_id")
+
+    # ── Step 5b: compute property-pin centroid from registered nadir cameras ──
+    # The nadir grid is flown directly above the building, so the GPS centroid
+    # of the registered nadir cameras lands on the rooftop — much better than
+    # Google's geocode of the street address (which often falls on the kerb
+    # for unit blocks). PATCH projects.confirmed_lat/lng so the renderer
+    # prefers it over geocoded_lat/lng. Best-effort: never abort the SfM run
+    # on failure here; the renderer's geocoded fallback still works.
+    #
+    # Only writes when confirmed_source IS NULL (never confirmed) or
+    # 'sfm' (a previous auto-write) — operator manual confirmations are
+    # protected by the or= filter on the PATCH URL.
+    #
+    # Note on centroid math: simple unweighted mean of lat/lng. This is fine
+    # for sub-100m grids at non-polar latitudes — Sydney sits at ~-33.9, far
+    # from poles, and never near the antimeridian (+180°/-180° wrap) since
+    # AU is +110° to +154°. For a global rollout we'd switch to a great-circle
+    # midpoint or ECEF mean, but it's overkill for the property-pin use case.
+    if project_id and cameras:
+        # All registered cameras come from a nadir_grid-filtered shot list
+        # (drone-shot-urls is called with role_filter=['nadir_grid']), so by
+        # construction every entry in `cameras` is a nadir camera here. The
+        # `nadir_only` branch below is the same set; the fallback to "all
+        # cameras" is left as a defensive comment for future role expansion.
+        nadir_cameras = cameras  # already nadir_grid-only by upstream filter
+        n_nadir = len(nadir_cameras)
+        selected = nadir_cameras if n_nadir > 0 else cameras  # graceful degrade
+        n_selected = len(selected)
+
+        lats: List[float] = []
+        lngs: List[float] = []
+        for cam in selected:
+            wgs84 = cam.get("wgs84") or {}
+            lat = wgs84.get("lat")
+            lon = wgs84.get("lon")
+            if lat is None or lon is None:
+                continue
+            lats.append(float(lat))
+            lngs.append(float(lon))
+
+        if lats and lngs:
+            mean_lat = sum(lats) / len(lats)
+            mean_lng = sum(lngs) / len(lngs)
+            print(
+                f"[sfm] property centroid → ({mean_lat:.6f}, {mean_lng:.6f}) "
+                f"from {len(lats)} nadir cameras"
+            )
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    rp = client.patch(
+                        f"{supabase_url}/rest/v1/projects"
+                        f"?id=eq.{project_id}"
+                        f"&or=(confirmed_source.is.null,confirmed_source.eq.sfm)",
+                        headers={**rest_headers, "Prefer": "return=minimal"},
+                        json={
+                            "confirmed_lat": mean_lat,
+                            "confirmed_lng": mean_lng,
+                            "confirmed_source": "sfm",
+                            "confirmed_at": _iso_utc_now(),
+                            "confirmed_by": None,  # NULL = automated
+                        },
+                    )
+                    if rp.status_code >= 300:
+                        print(
+                            f"[sfm] property centroid PATCH failed: "
+                            f"{rp.status_code} {rp.text[:200]}"
+                        )
+                    else:
+                        print(f"[sfm] property centroid PATCH ok: {rp.status_code}")
+            except Exception as e:
+                # Best-effort: never abort the SfM run on this PATCH.
+                print(f"[sfm] property centroid PATCH exception: {e}")
+        else:
+            print(
+                f"[sfm] property centroid skipped: "
+                f"{n_selected} cameras selected but none had usable wgs84"
+            )
+    else:
+        if not project_id:
+            print("[sfm] property centroid skipped: no project_id from drone-shot-urls")
+        else:
+            print("[sfm] property centroid skipped: no registered cameras")
 
     # Mirror residual median to drone_shoots (UI surfaces it on shoot detail).
     try:
