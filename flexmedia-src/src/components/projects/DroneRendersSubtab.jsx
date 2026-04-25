@@ -52,7 +52,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Image as ImageIcon,
   Pencil,
   Check,
   X,
@@ -65,6 +64,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { usePermissions } from "@/components/auth/PermissionGuard";
+import DroneThumbnail from "@/components/drone/DroneThumbnail";
 
 const COLUMNS = [
   { key: "raw",          label: "Raw",          tone: "border-slate-300 dark:border-slate-700" },
@@ -89,6 +89,8 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
 
   // Confirmation dialog state for reject (destructive)
   const [confirmReject, setConfirmReject] = useState(null); // { render }
+  // Lightbox state for thumbnail click-to-preview
+  const [preview, setPreview] = useState(null); // { path, label }
 
   // ── Fetch shots (needed for the RAW column) ─────────────────────────────────
   const shotsKey = ["drone_shots_for_renders", shootId];
@@ -157,28 +159,43 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
     return m;
   }, [shots]);
 
-  // Group renders by column_state
+  // Group renders by column_state, then by shot_id within each column. With
+  // multi-variant rendering, multiple `drone_renders` rows can exist for one
+  // (shot, column_state) pair (one per output_variant). The UI shows ONE
+  // card per shot per column with a variant selector — primary variant is
+  // the most-recently-created within the group.
   const grouped = useMemo(() => {
-    const out = { proposed: [], adjustments: [], final: [], rejected: [] };
+    const cols = {
+      proposed: new Map(),
+      adjustments: new Map(),
+      final: new Map(),
+      rejected: new Map(),
+    };
     const shotsWithRender = new Set();
+
+    // Renders arrive newest-first (-created_at) so the first row encountered
+    // for each shot in a bucket is the primary variant.
     for (const r of renders) {
       const col = r.column_state || "proposed";
-      if (col === "rejected") {
-        out.rejected.push(r);
-      } else if (out[col]) {
-        out[col].push(r);
-      }
-      // Any non-rejected render counts as "shot has a render"
+      const bucket = cols[col];
+      if (!bucket) continue;
+      if (!bucket.has(r.shot_id)) bucket.set(r.shot_id, []);
+      bucket.get(r.shot_id).push(r);
       if (col !== "rejected") shotsWithRender.add(r.shot_id);
     }
-    // RAW column = shots that don't yet have any non-rejected render
-    const rawShots = shots.filter((s) => !shotsWithRender.has(s.id));
+
+    const toGroups = (m) =>
+      Array.from(m.values()).map((variants) => ({
+        shot_id: variants[0].shot_id,
+        variants,
+      }));
+
     return {
-      raw: rawShots,
-      proposed: out.proposed,
-      adjustments: out.adjustments,
-      final: out.final,
-      rejected: out.rejected,
+      raw: shots.filter((s) => !shotsWithRender.has(s.id)),
+      proposed: toGroups(cols.proposed),
+      adjustments: toGroups(cols.adjustments),
+      final: toGroups(cols.final),
+      rejected: toGroups(cols.rejected),
     };
   }, [renders, shots]);
 
@@ -268,6 +285,7 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
               onEditPin={() => {
                 /* disabled in v1 */
               }}
+              onPreview={(info) => setPreview(info)}
             />
           ))}
         </div>
@@ -283,17 +301,18 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
                 </h3>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                {grouped.rejected.map((r) => (
+                {grouped.rejected.map((g) => (
                   <RenderCard
-                    key={r.id}
-                    render={r}
-                    shot={shotsById.get(r.shot_id)}
+                    key={`rejected-${g.shot_id}`}
+                    variants={g.variants}
+                    shot={shotsById.get(g.shot_id)}
                     column="rejected"
                     canEdit={isManagerOrAbove}
                     pendingAction={pendingAction}
                     onApprove={() => {}}
                     onReject={() => {}}
                     onEditPin={() => {}}
+                    onPreview={(info) => setPreview(info)}
                   />
                 ))}
               </div>
@@ -301,6 +320,31 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
           </Card>
         )}
       </div>
+
+      {/* Lightbox preview dialog (full-resolution, lazy-fetched) */}
+      <Dialog
+        open={Boolean(preview)}
+        onOpenChange={(o) => !o && setPreview(null)}
+      >
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle className="text-sm truncate">
+              {preview?.label || "Preview"}
+            </DialogTitle>
+          </DialogHeader>
+          {preview?.path && (
+            <div className="bg-black/80 rounded-md overflow-hidden">
+              <DroneThumbnail
+                dropboxPath={preview.path}
+                mode="proxy"
+                alt={preview.label || "drone preview"}
+                aspectRatio="aspect-[3/2]"
+                className="object-contain"
+              />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Reject confirm dialog */}
       <Dialog
@@ -358,6 +402,7 @@ function PipelineColumn({
   onApprove,
   onReject,
   onEditPin,
+  onPreview,
 }) {
   return (
     <div className={cn("rounded-md border-2 bg-card", column.tone)}>
@@ -377,19 +422,22 @@ function PipelineColumn({
           </div>
         ) : isRaw ? (
           // RAW column: items are shots, not renders
-          items.map((shot) => <RawShotCard key={shot.id} shot={shot} />)
+          items.map((shot) => (
+            <RawShotCard key={shot.id} shot={shot} onPreview={onPreview} />
+          ))
         ) : (
-          items.map((r) => (
+          items.map((g) => (
             <RenderCard
-              key={r.id}
-              render={r}
-              shot={shotsById.get(r.shot_id)}
+              key={`${column.key}-${g.shot_id}`}
+              variants={g.variants}
+              shot={shotsById.get(g.shot_id)}
               column={column.key}
               canEdit={canEdit}
               pendingAction={pendingAction}
-              onApprove={() => onApprove(r.id)}
-              onReject={() => onReject(r)}
-              onEditPin={() => onEditPin(r)}
+              onApprove={(renderId) => onApprove(renderId)}
+              onReject={(render) => onReject(render)}
+              onEditPin={(render) => onEditPin(render)}
+              onPreview={onPreview}
             />
           ))
         )}
@@ -399,12 +447,24 @@ function PipelineColumn({
 }
 
 // ── RawShotCard (in RAW column — no render row yet) ──────────────────────────
-function RawShotCard({ shot }) {
+function RawShotCard({ shot, onPreview }) {
+  const clickable = Boolean(shot?.dropbox_path && onPreview);
+  const Tag = clickable ? "button" : "div";
   return (
-    <div className="rounded-md border bg-card overflow-hidden">
-      <div className="aspect-[4/3] bg-muted/40 flex items-center justify-center text-muted-foreground">
-        <ImageIcon className="h-6 w-6 opacity-40" />
-      </div>
+    <Tag
+      type={clickable ? "button" : undefined}
+      onClick={clickable ? () => onPreview({ path: shot.dropbox_path, label: shot.filename }) : undefined}
+      className={cn(
+        "rounded-md border bg-card overflow-hidden w-full text-left",
+        clickable && "hover:border-primary/40 transition-colors",
+      )}
+    >
+      <DroneThumbnail
+        dropboxPath={shot.dropbox_path}
+        mode="thumb"
+        alt={shot.filename || "raw drone shot"}
+        aspectRatio="aspect-[4/3]"
+      />
       <div className="p-2">
         <div className="text-[11px] font-medium truncate" title={shot.filename}>
           {shot.filename || "—"}
@@ -414,13 +474,18 @@ function RawShotCard({ shot }) {
           {shot.shot_role ? ` · ${shot.shot_role}` : ""}
         </div>
       </div>
-    </div>
+    </Tag>
   );
 }
 
 // ── RenderCard (cards in proposed / adjustments / final / rejected) ──────────
+//
+// Accepts a `variants` array (one or more `drone_renders` rows for the same
+// (shot, column_state) pair, sorted newest-first by the parent grouper).
+// When >1 variant is present, a small selector swaps the displayed thumbnail,
+// download link, and approve/reject target.
 function RenderCard({
-  render: r,
+  variants,
   shot,
   column,
   canEdit,
@@ -428,7 +493,28 @@ function RenderCard({
   onApprove,
   onReject,
   onEditPin,
+  onPreview,
 }) {
+  const orderedVariants = useMemo(() => variants || [], [variants]);
+  const [selectedVariantId, setSelectedVariantId] = useState(
+    orderedVariants[0]?.id || null,
+  );
+
+  // If the variant set changes (realtime update), keep the selection valid.
+  useEffect(() => {
+    if (!orderedVariants.length) return;
+    if (!orderedVariants.find((v) => v.id === selectedVariantId)) {
+      setSelectedVariantId(orderedVariants[0].id);
+    }
+  }, [orderedVariants, selectedVariantId]);
+
+  const r =
+    orderedVariants.find((v) => v.id === selectedVariantId) ||
+    orderedVariants[0];
+  if (!r) return null;
+
+  const hasMultiVariant = orderedVariants.length > 1;
+
   const themeName =
     (r.theme_snapshot && (r.theme_snapshot.name || r.theme_snapshot.theme_name)) ||
     (r.theme_snapshot && r.theme_snapshot.id ? "Theme" : null);
@@ -449,15 +535,32 @@ function RenderCard({
 
   return (
     <div className="rounded-md border bg-card overflow-hidden hover:border-primary/40 transition-colors">
-      {/* Thumbnail placeholder */}
-      <div className="aspect-[4/3] bg-muted/40 flex items-center justify-center text-muted-foreground relative">
-        <ImageIcon className="h-6 w-6 opacity-40" />
-        {r.kind && (
-          <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-background/80 text-foreground/80">
-            {r.kind}
-          </span>
-        )}
-      </div>
+      {/* Thumbnail (lazy via mediaPerf proxy). Click → lightbox preview */}
+      <button
+        type="button"
+        onClick={() => {
+          if (r.dropbox_path && onPreview) {
+            onPreview({ path: r.dropbox_path, label: shot?.filename || r.kind });
+          }
+        }}
+        disabled={!r.dropbox_path}
+        className="block w-full text-left disabled:cursor-default"
+        aria-label={`Preview ${r.kind || "render"}`}
+      >
+        <DroneThumbnail
+          dropboxPath={r.dropbox_path}
+          mode="thumb"
+          alt={shot?.filename || r.kind || "render preview"}
+          aspectRatio="aspect-[4/3]"
+          overlay={
+            r.kind ? (
+              <span className="absolute top-1 left-1 text-[9px] px-1 py-0.5 rounded bg-background/80 text-foreground/80 pointer-events-none">
+                {r.kind}
+              </span>
+            ) : null
+          }
+        />
+      </button>
 
       {/* Body */}
       <div className="p-2 space-y-1">
@@ -474,13 +577,37 @@ function RenderCard({
             </>
           ) : null}
         </div>
+
+        {/* Variant selector — only render when >1 variant exists for this card */}
+        {hasMultiVariant && (
+          <div className="pt-0.5">
+            <label className="sr-only" htmlFor={`variant-${r.shot_id}-${column}`}>
+              Output variant
+            </label>
+            <select
+              id={`variant-${r.shot_id}-${column}`}
+              className="w-full h-6 text-[10px] rounded border border-input bg-background px-1.5 py-0 focus:outline-none focus:ring-1 focus:ring-ring"
+              value={selectedVariantId || ""}
+              onChange={(e) => setSelectedVariantId(e.target.value)}
+              aria-label="Select output variant"
+            >
+              {orderedVariants.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.output_variant || "default"}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div className="flex items-center gap-1 flex-wrap">
           {poiCount != null && (
             <Badge variant="outline" className="text-[9px] h-4 px-1">
               {poiCount} POI
             </Badge>
           )}
-          {r.output_variant && (
+          {/* Show variant badge only when single-variant — selector covers multi case */}
+          {!hasMultiVariant && r.output_variant && r.output_variant !== "default" && (
             <Badge variant="outline" className="text-[9px] h-4 px-1">
               {r.output_variant}
             </Badge>
@@ -495,7 +622,7 @@ function RenderCard({
           )}
         </div>
 
-        {/* Actions */}
+        {/* Actions — operate on the CURRENTLY SELECTED variant */}
         <div className="flex items-center gap-1 pt-1">
           {/* PROPOSED → Edit (disabled in v1) */}
           {isProposed && (
@@ -507,7 +634,7 @@ function RenderCard({
                     size="sm"
                     className="h-6 text-[10px] px-1.5"
                     disabled
-                    onClick={onEditPin}
+                    onClick={() => onEditPin && onEditPin(r)}
                   >
                     <Pencil className="h-2.5 w-2.5 mr-1" />
                     Edit
@@ -526,7 +653,7 @@ function RenderCard({
               variant="default"
               size="sm"
               className="h-6 text-[10px] px-2"
-              onClick={onApprove}
+              onClick={() => onApprove(r.id)}
               disabled={Boolean(action)}
             >
               {action === "approving" ? (
@@ -544,7 +671,7 @@ function RenderCard({
               variant="ghost"
               size="sm"
               className="h-6 text-[10px] px-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
-              onClick={onReject}
+              onClick={() => onReject(r)}
               disabled={Boolean(action)}
               title="Reject this render"
             >

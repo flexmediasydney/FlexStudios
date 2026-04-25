@@ -12,9 +12,12 @@
  *     FlightRoll warning if > 10° (gimbal compensation limit)
  *   - Click → detail dialog with full EXIF JSON
  *
- * Thumbnails: v1 uses a placeholder (folder icon + filename). Future PR can
- * wire up Dropbox preview proxy once the dropbox_path → thumbnail URL helper
- * exists for drones (Stream G's drone-ingest hasn't shipped that helper yet).
+ * Thumbnails: rendered via the shared DroneThumbnail component which reuses
+ * the existing FlexStudios media-proxy infrastructure (getDeliveryMediaFeed
+ * Edge Function + mediaPerf.js LRU cache + concurrency limiter). Lazy-loaded
+ * via IntersectionObserver so a 1000-shot shoot doesn't fire 1000 fetches.
+ * The detail dialog upgrades to the full-resolution proxy variant for closer
+ * inspection.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -44,6 +47,7 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import DroneThumbnail from "@/components/drone/DroneThumbnail";
 
 const ROLE_LABEL = {
   nadir_grid: "Nadir grid",
@@ -227,10 +231,17 @@ function ShotCard({ shot, onClick }) {
         flightRollWarn && "ring-1 ring-amber-400/60",
       )}
     >
-      {/* Thumbnail placeholder */}
-      <div className="aspect-[4/3] bg-muted/40 flex items-center justify-center text-muted-foreground">
-        <ImageIcon className="h-8 w-8 opacity-40" />
-      </div>
+      {/* Thumbnail (lazy, served via existing media-proxy edge function) */}
+      <DroneThumbnail
+        dropboxPath={shot.dropbox_path}
+        mode="thumb"
+        alt={shot.filename || "drone shot"}
+        aspectRatio="aspect-[4/3]"
+      />
+      {/* Hidden ImageIcon kept for a11y/icon-fallback parity but suppressed visually */}
+      <span className="sr-only">
+        <ImageIcon aria-hidden="true" />
+      </span>
 
       {/* Body */}
       <div className="p-2 space-y-1">
@@ -308,7 +319,19 @@ function ShotDetailDialog({ shot, onClose }) {
           )}
         </DialogHeader>
         {shot && (
-          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+          <div className="space-y-3 max-h-[70vh] overflow-y-auto">
+            {/* Larger preview — fetched at proxy quality, lazy-loaded */}
+            {shot.dropbox_path && (
+              <DroneThumbnail
+                dropboxPath={shot.dropbox_path}
+                mode="thumb"
+                alt={shot.filename || "drone shot preview"}
+                aspectRatio="aspect-[3/2]"
+                rounded
+                className="object-contain bg-black/40"
+              />
+            )}
+
             {/* Top fields */}
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
               <DetailRow label="Role" value={ROLE_LABEL[shot.shot_role] || shot.shot_role || "—"} />
