@@ -72,50 +72,41 @@ import {
 const EXIF_PARTIAL_BYTES = 96 * 1024;
 
 /**
- * Fetch only the first EXIF_PARTIAL_BYTES of a Dropbox file via a temporary
- * link with an HTTP Range header. Falls back to a full downloadFile() when the
- * temp link can't be minted or the CDN ignores the Range header.
+ * Fetch only the first EXIF_PARTIAL_BYTES of a Dropbox file by streaming the
+ * full /files/download response and stopping after we've collected enough
+ * bytes. This avoids /files/get_temporary_link (10/min rate limit) and avoids
+ * loading the full ~10-20 MB JPG into memory. (#13 audit, post-live-test refit)
  */
 async function fetchExifBytes(path: string): Promise<Uint8Array> {
-  try {
-    const linkResp = await dropboxApi<{ link: string }>(
-      '/files/get_temporary_link',
-      { path },
-    );
-    const r = await fetch(linkResp.link, {
-      headers: { Range: `bytes=0-${EXIF_PARTIAL_BYTES - 1}` },
-    });
-    // 206 Partial Content (preferred) or 200 (CDN ignored Range — full body).
-    if (r.ok || r.status === 206) {
-      const buf = new Uint8Array(await r.arrayBuffer());
-      // Cancel any leftover stream eagerly to free buffers before next shot.
-      try {
-        r.body?.cancel();
-      } catch {
-        /* body already consumed */
-      }
-      return buf;
-    }
-    throw new Error(`temp-link fetch returned ${r.status}`);
-  } catch (rangeErr) {
-    // Last-ditch full download (still cheap relative to OOM); cap to the same
-    // partial slice so we don't OOM on a giant file.
-    console.warn(
-      `[drone-ingest] range-fetch failed for ${path}, falling back to full download: ${
-        rangeErr instanceof Error ? rangeErr.message : String(rangeErr)
-      }`,
-    );
-    const dlRes = await downloadFile(path);
-    const full = new Uint8Array(await dlRes.arrayBuffer());
-    try {
-      dlRes.body?.cancel();
-    } catch {
-      /* body already consumed */
-    }
-    return full.length > EXIF_PARTIAL_BYTES
-      ? full.subarray(0, EXIF_PARTIAL_BYTES)
-      : full;
+  const dlRes = await downloadFile(path);
+  if (!dlRes.ok || !dlRes.body) {
+    throw new Error(`Dropbox download ${dlRes.status}`);
   }
+  const reader = dlRes.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let collected = 0;
+  try {
+    while (collected < EXIF_PARTIAL_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      collected += value.byteLength;
+    }
+  } finally {
+    // Cancel the rest of the stream so the underlying socket + buffers free.
+    try { await reader.cancel(); } catch { /* noop */ }
+  }
+  // Stitch the partial chunks. We may have collected slightly more than the
+  // target due to chunk-size alignment — truncate to exactly the cap.
+  const out = new Uint8Array(Math.min(collected, EXIF_PARTIAL_BYTES));
+  let off = 0;
+  for (const c of chunks) {
+    const take = Math.min(c.byteLength, out.length - off);
+    out.set(c.subarray(0, take), off);
+    off += take;
+    if (off >= out.length) break;
+  }
+  return out;
 }
 
 const GENERATOR = 'drone-ingest';
@@ -282,32 +273,51 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
   let filesConsidered = 0;
   let filesAlreadyIndexed = 0;
 
+  // Build the per-file work list first — eligible JPG/DNGs that aren't already
+  // indexed.
+  const toProcess: Array<{ path: string; name: string }> = [];
   for (const file of files) {
-    // Sanity gate — only process JPGs / DNGs.
     if (!/\.(jpe?g|dng)$/i.test(file.name)) continue;
     filesConsidered++;
-
     if (existingByPath.has(file.path)) {
       filesAlreadyIndexed++;
       continue;
     }
+    toProcess.push({ path: file.path, name: file.name });
+  }
 
-    try {
-      const buf = await fetchExifBytes(file.path);
-      const exif = extractExifFromBytes(buf);
-      const dji = parseDjiFilename(file.name);
-      const shot_role = classifyShotRole(exif);
-      newShots.push({
-        dropbox_path: file.path,
-        filename: file.name,
-        dji_index: dji?.dji_index ?? null,
-        exif,
-        shot_role,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[${GENERATOR}] failed to ingest ${file.path}: ${msg}`);
-      exifFailures++;
+  // Process in small chunks with explicit async yields between batches.
+  // npm:exifreader holds internal state across calls and accumulates buffers
+  // when run many times in a tight sequential loop — for 30+ files this OOMs
+  // the Edge Function's 256 MB cap. Chunked processing keeps peak memory low
+  // and lets V8 GC between iterations. (#13 follow-up after live test failure)
+  const CHUNK = 4;
+  for (let i = 0; i < toProcess.length; i += CHUNK) {
+    const slice = toProcess.slice(i, i + CHUNK);
+    for (const f of slice) {
+      try {
+        const buf = await fetchExifBytes(f.path);
+        const exif = extractExifFromBytes(buf);
+        const dji = parseDjiFilename(f.name);
+        const shot_role = classifyShotRole(exif);
+        newShots.push({
+          dropbox_path: f.path,
+          filename: f.name,
+          dji_index: dji?.dji_index ?? null,
+          exif,
+          shot_role,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] failed to ingest ${f.path}: ${msg}`);
+        exifFailures++;
+      }
+    }
+    // Yield to the event loop so V8 can run idle GC between chunks. Even a
+    // 0ms timeout is enough to break the synchronous-ish run-to-completion
+    // pattern that prevents incremental GC.
+    if (i + CHUNK < toProcess.length) {
+      await new Promise((r) => setTimeout(r, 0));
     }
   }
 

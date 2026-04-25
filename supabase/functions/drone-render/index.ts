@@ -110,11 +110,44 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Skip ground_level shots — projection math doesn't fit horizontal cameras well
   shotQ = shotQ.in("shot_role", ["nadir_grid", "orbital", "oblique_hero", "unclassified"]);
 
-  const { data: shots, error: shotsErr } = await shotQ;
+  const { data: shotsAll, error: shotsErr } = await shotQ;
   if (shotsErr) return errorResponse(`shots query failed: ${shotsErr.message}`, 500, req);
-  if (!shots || shots.length === 0) {
+  if (!shotsAll || shotsAll.length === 0) {
     return errorResponse("no eligible shots found for shoot", 400, req);
   }
+
+  // Skip shots that ALREADY have an active render row for this kind. The
+  // unique partial index from migration 233 covers (shot_id,kind,variant,state)
+  // so duplicates would 500 the insert anyway — pre-filter saves the work +
+  // lets us split a 34-shot ingest across multiple Edge Function invocations
+  // (each capped at 145s wall-clock).
+  const { data: existingRenders } = await admin
+    .from("drone_renders")
+    .select("shot_id")
+    .eq("kind", kind)
+    .in("column_state", ["proposed", "adjustments", "final"])
+    .in("shot_id", shotsAll.map((s) => s.id));
+  const alreadyRenderedSet = new Set((existingRenders || []).map((r) => r.shot_id));
+  const shots = shotsAll.filter((s) => !alreadyRenderedSet.has(s.id));
+  if (shots.length === 0) {
+    return jsonResponse({
+      success: true,
+      shoot_id: shoot.id,
+      kind,
+      shots_total: shotsAll.length,
+      shots_rendered: 0,
+      shots_already_rendered: shotsAll.length,
+      results: [],
+    }, 200, req);
+  }
+  // Cap per-invocation work to avoid OOM. Each shot's source download (~10MB),
+  // base64-encode (~13MB string), Modal request (~13MB body), Modal response
+  // (~4MB for 2 variants), and upload buffers each occupy memory simultaneously
+  // in flight. Even with concurrency=1, V8's GC can lag behind, so a hard cap
+  // of 2 shots per invocation is the safest. Continuation jobs handle the rest.
+  const PER_INVOCATION_CAP = 2;
+  const shotsCapped = shots.slice(0, PER_INVOCATION_CAP);
+  const moreRemaining = shots.length - shotsCapped.length;
 
   // ── Resolve theme via inheritance chain ──────────────────────────
   // loadThemeChain returns highest-priority first ([person, org, system]).
@@ -178,7 +211,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     variants?: Array<{ variant: string; out_path: string }>;
   };
   const renderResults: RenderResult[] = [];
-  const RENDER_CONCURRENCY = 3;
+  // Concurrency 1 — each shot's source download (~10-20MB) + base64 encode
+  // (~25MB) + Modal response (~4MB for 2 variants) blows the Edge Function's
+  // 256MB cap with concurrency >1. Sequential keeps peak memory bounded.
+  // (Post-live-test refit of #9.)
+  const RENDER_CONCURRENCY = 1;
 
   // Honour fallback='gps_only' from the dispatcher payload — when set, we
   // skip the per-shot SfM pose lookup and project everything via GPS-only
@@ -417,16 +454,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   };
 
-  for (let i = 0; i < shots.length; i += RENDER_CONCURRENCY) {
-    const chunk = shots.slice(i, i + RENDER_CONCURRENCY);
+  for (let i = 0; i < shotsCapped.length; i += RENDER_CONCURRENCY) {
+    const chunk = shotsCapped.slice(i, i + RENDER_CONCURRENCY);
     const settled = await Promise.allSettled(chunk.map(renderOneShot));
     for (let j = 0; j < settled.length; j++) {
       const r = settled[j];
       if (r.status === "fulfilled") {
         renderResults.push(r.value);
       } else {
-        // Defensive — renderOneShot already wraps errors; this branch shouldn't
-        // fire, but emit a structured error so we'd see it if it did.
         const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
         const shot = chunk[j];
         console.error(
@@ -450,13 +485,27 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const successCount = renderResults.filter((r) => r.ok).length;
 
-  // Update shoot status based on results. Total failure transitions to
-  // 'render_failed' so the dispatcher / Command Center can surface it as an
-  // alert and so a retry policy can pick it up. The previous code left the
-  // shoot stuck at 'rendering' forever on total failure. (#2 audit fix)
+  // If there are still unrendered shots, immediately re-enqueue another
+  // render job so the dispatcher picks it up next tick. Without this, a
+  // 34-shot shoot would only get 6 rendered before drone-render returned
+  // 'success' and the operator would think the rest had failed.
+  if (moreRemaining > 0) {
+    await admin.from("drone_jobs").insert({
+      project_id: project.id,
+      shoot_id: shoot.id,
+      kind: "render",
+      status: "pending",
+      payload: { shoot_id: shoot.id, kind, reason: "render_continuation" },
+      scheduled_for: new Date(Date.now() + 5_000).toISOString(),
+    });
+  }
+
+  // Update shoot status. Move to 'proposed_ready' only when ALL shots are done
+  // (partial progress keeps it at 'rendering' so the UI shows a spinner).
   let nextStatus = shoot.status;
-  if (successCount > 0) nextStatus = "proposed_ready"; // any success counts as ready
-  else nextStatus = "render_failed";
+  if (moreRemaining === 0 && successCount > 0) nextStatus = "proposed_ready";
+  else if (moreRemaining === 0 && successCount === 0) nextStatus = "render_failed";
+  // else leave at 'rendering' — there's still more to do
 
   await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
 
@@ -465,9 +514,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       success: true,
       shoot_id: shoot.id,
       kind,
-      shots_total: shots.length,
-      shots_rendered: successCount,
-      shots_failed: shots.length - successCount,
+      shots_total: shotsAll.length,
+      shots_rendered_this_run: successCount,
+      shots_already_rendered: shotsAll.length - shots.length,
+      shots_failed_this_run: shotsCapped.length - successCount,
+      shots_remaining: moreRemaining,
       results: renderResults,
     },
     200,

@@ -540,56 +540,49 @@ def sfm_http(payload: Dict[str, Any]):
     residual_median = residuals.get("median_m")
     residual_max = residuals.get("max_m")
 
-    # Build a single bulk-upsert body for drone_shots — PostgREST treats a
-    # POST with `Prefer: resolution=merge-duplicates` on a primary-key
-    # collision as an UPDATE, so we replace what was previously N+1 PATCHes
-    # (one per registered image) with a single round-trip.
+    # Per-row PATCH for sfm_pose. Subagent X's bulk POST + merge-duplicates
+    # attempt fails because drone_shots has NOT NULL columns (shoot_id,
+    # dropbox_path, filename, etc.) — PostgREST attempts INSERT first before
+    # conflict resolution kicks in, and the INSERT rejects on missing fields.
+    # PATCH-by-id avoids that entirely. (Post-live-test refit of #67.)
     cameras = result.get("cameras", [])
-    bulk_rows: List[Dict[str, Any]] = []
-    skipped_unknown = 0
-    for cam in cameras:
-        name = cam.get("name")
-        sid = filename_to_shot_id.get(name)
-        if not sid:
-            skipped_unknown += 1
-            continue
-        pose_payload = {
-            "image_id": cam.get("image_id"),
-            "camera_id": cam.get("camera_id"),
-            "world_xyz_sfm": cam.get("world_xyz_sfm"),
-            "enu_xyz_m": cam.get("enu_xyz_m"),
-            "wgs84": cam.get("wgs84"),
-            "rotation_world_to_cam": cam.get("rotation_world_to_cam"),
-            "translation_world_to_cam": cam.get("translation_world_to_cam"),
-            "residual_m": cam.get("residual_m"),
-        }
-        bulk_rows.append({
-            "id": sid,
-            "sfm_pose": pose_payload,
-            "registered_in_sfm": True,
-        })
-
     pose_failures = 0
-    if bulk_rows:
-        try:
-            with httpx.Client(timeout=120.0) as client:
-                rr = client.post(
-                    f"{supabase_url}/rest/v1/drone_shots",
-                    headers={
-                        **rest_headers,
-                        "Prefer": "resolution=merge-duplicates,return=minimal",
+    skipped_unknown = 0
+    with httpx.Client(timeout=30.0) as client:
+        for cam in cameras:
+            name = cam.get("name")
+            sid = filename_to_shot_id.get(name)
+            if not sid:
+                skipped_unknown += 1
+                continue
+            pose_payload = {
+                "image_id": cam.get("image_id"),
+                "camera_id": cam.get("camera_id"),
+                "world_xyz_sfm": cam.get("world_xyz_sfm"),
+                "enu_xyz_m": cam.get("enu_xyz_m"),
+                "wgs84": cam.get("wgs84"),
+                "rotation_world_to_cam": cam.get("rotation_world_to_cam"),
+                "translation_world_to_cam": cam.get("translation_world_to_cam"),
+                "residual_m": cam.get("residual_m"),
+            }
+            try:
+                rr = client.patch(
+                    f"{supabase_url}/rest/v1/drone_shots?id=eq.{sid}",
+                    headers={**rest_headers, "Prefer": "return=minimal"},
+                    json={
+                        "sfm_pose": pose_payload,
+                        "registered_in_sfm": True,
                     },
-                    json=bulk_rows,
                 )
                 if rr.status_code >= 300:
-                    pose_failures = len(bulk_rows)
+                    pose_failures += 1
                     print(
-                        f"[sfm_http] bulk sfm_pose upsert failed "
-                        f"({len(bulk_rows)} rows): {rr.status_code} {rr.text[:300]}"
+                        f"[sfm_http] sfm_pose PATCH failed for shot {sid}: "
+                        f"{rr.status_code} {rr.text[:200]}"
                     )
-        except Exception as e:
-            pose_failures = len(bulk_rows)
-            print(f"[sfm_http] bulk sfm_pose upsert exception: {e}")
+            except Exception as e:
+                pose_failures += 1
+                print(f"[sfm_http] sfm_pose PATCH exception for shot {sid}: {e}")
     if skipped_unknown:
         print(f"[sfm_http] skipped {skipped_unknown} cameras with no matching shot_id")
 
