@@ -30,6 +30,7 @@ import TonomoPendingDeltaBanner from "@/components/projects/TonomoPendingDeltaBa
 import TaskManagement from "@/components/projects/TaskManagement";
 import ProjectMediaGallery from "@/components/projects/ProjectMediaGallery";
 import ProjectFilesTab from "@/components/projects/ProjectFilesTab";
+import ProjectDronesTab from "@/components/projects/ProjectDronesTab";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
 import EffortLoggingTab from "@/components/projects/EffortLoggingTab";
 import ProjectCalendarEvents from "@/components/projects/ProjectCalendarEvents";
@@ -61,7 +62,7 @@ import AIChat from "@/components/ai/AIChat";
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
 const statuses = PROJECT_STAGES;
-const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'files', 'tonomo']);
+const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'files', 'drones', 'tonomo']);
 
 const serviceLabels = {
   photography: "📷 Photography",
@@ -1571,6 +1572,7 @@ export default function ProjectDetails() {
                 <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
                 <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
                 <TabsTrigger value="files"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Files</TabsTrigger>
+                <TabsTrigger value="drones"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Drones</TabsTrigger>
                 {project.source === 'tonomo' && (
                   <TabsTrigger value="tonomo"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tonomo</TabsTrigger>
                 )}
@@ -1618,6 +1620,14 @@ export default function ProjectDetails() {
             <TabsContent value="files" className="mt-4">
               {mountedTabs.has("files") ? (
                 <ErrorBoundary><ProjectFilesTab project={project} /></ErrorBoundary>
+              ) : (
+                <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="drones" className="mt-4">
+              {mountedTabs.has("drones") ? (
+                <ErrorBoundary><ProjectDronesTab project={project} /></ErrorBoundary>
               ) : (
                 <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
               )}
