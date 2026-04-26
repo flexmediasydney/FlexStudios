@@ -5,13 +5,15 @@
  * ProjectDronesTab.jsx (S3 owns mounting).
  *
  * Four states (architect Section C):
- *   1. Active     — current stage running/pending: blue border, ~48px tall card,
- *                   countdown elapsed/ETA, [Force fire now] + [Re-run this stage ▾]
- *   2. Failed     — any stage failed / shoot.status='sfm_failed' / active job in
- *                   dead_letter: red border, error message, [Re-run] + [Open
- *                   Dead Letter Inspector]
- *   3. System down— system.dispatcher_health !== 'ok': amber border, "Dispatcher
- *                   hasn't ticked in 4 min". admin+ sees [Trigger dispatcher manually]
+ *   1. Active     — current stage running/queued/debouncing/pending: blue (or
+ *                   amber if slow) border, ~48px tall card, countdown
+ *                   elapsed/ETA, [Force fire now] + [Re-run this stage ▾]
+ *   2. Failed     — any stage failed/dead_letter / shoot.status='sfm_failed' /
+ *                   active job in dead_letter: red border, error message,
+ *                   [Re-run] + [Open Dead Letter Inspector]
+ *   3. System down— system.dispatcher_health !== 'ok' (i.e. 'stale' or 'down'):
+ *                   amber border, "Dispatcher hasn't ticked in 4 min". admin+
+ *                   sees [Trigger dispatcher manually]
  *   4. Idle       — operator_actions_unlocked=true, no active jobs: returns null
  *
  * Implementation details:
@@ -22,6 +24,13 @@
  *
  * Data contract: consumes the full hook from useDronePipelineState — does NOT
  * call api directly so it's trivially mockable for tests via hookOverride.
+ *
+ * RPC contract source of truth: supabase/migrations/301_drone_pipeline_state_rpc.sql
+ *   stage_key values: ingest | sfm | poi | cadastral | raw_render |
+ *                     operator_triage | editor_handoff | edited_render |
+ *                     edited_curate | final | delivered
+ *   stage status:     completed | running | queued | debouncing | pending |
+ *                     failed | dead_letter | ready
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -71,22 +80,43 @@ import { createPageUrl } from '@/utils';
 import { cn } from '@/lib/utils';
 
 // ── Stage metadata: human label + Modal cost note (architect Section D) ────
+// stage_key values come from migration 301_drone_pipeline_state_rpc.sql:282-375
+// We display the function_name (from the stage row) when present, else label.
 const STAGE_META = {
-  'drone-ingest':         { label: 'drone-ingest',         note: 'Dropbox → storage transfer' },
-  'drone-shot-paths':     { label: 'drone-shot-paths',     note: 'Reconcile shot paths from Dropbox' },
-  'drone-sfm':            { label: 'drone-sfm',            note: 'Modal pycolmap, ~3-5 min typical' },
-  'drone-pois':           { label: 'drone-pois',           note: 'OSM POIs lookup' },
-  'drone-cadastral':      { label: 'drone-cadastral',      note: 'NSW cadastral boundary fetch' },
-  'drone-boundary':       { label: 'drone-boundary',       note: 'Operator-approved boundary' },
-  'drone-shortlist':      { label: 'drone-shortlist',      note: 'AI shortlister' },
-  'drone-render':         { label: 'drone-render',         note: 'Modal render, ~1-2 min/shot' },
-  'drone-render-edited':  { label: 'drone-render-edited',  note: 'Photographer-edited renders' },
-  'drone-render-approve': { label: 'drone-render-approve', note: 'Final approval' },
-  'drone-deliver':        { label: 'drone-deliver',        note: 'Push to delivery folder' },
+  ingest:          { label: 'Ingest',          function_name: 'drone-ingest',        note: 'Dropbox → storage transfer (~30s typical)' },
+  sfm:             { label: 'SfM',             function_name: 'drone-sfm',           note: 'Modal pycolmap, ~3-5 min typical' },
+  poi:             { label: 'POIs',            function_name: 'drone-pois',          note: 'OSM POIs lookup (~30s)' },
+  cadastral:       { label: 'Cadastral',       function_name: 'drone-cadastral',     note: 'NSW cadastral boundary fetch (~15s)' },
+  raw_render:      { label: 'Raw render',      function_name: 'drone-raw-preview',   note: 'Modal raw preview render, ~2 min typical' },
+  operator_triage: { label: 'Operator triage', function_name: null,                  note: 'Waiting on operator boundary + shortlist approval' },
+  editor_handoff:  { label: 'Editor handoff',  function_name: null,                  note: 'Awaiting photographer-side edit' },
+  edited_render:   { label: 'Edited render',   function_name: 'drone-render-edited', note: 'Photographer-edited renders (~90s)' },
+  edited_curate:   { label: 'Edited curate',   function_name: null,                  note: 'Operator curates final shortlist' },
+  final:           { label: 'Final render',    function_name: 'drone-render',        note: 'Modal final render, ~1-2 min/shot' },
+  delivered:       { label: 'Delivered',       function_name: null,                  note: 'Pushed to delivery folder' },
 };
 
-function stageMeta(key) {
-  return STAGE_META[key] || { label: key || 'unknown', note: '' };
+// Stages drone-stage-rerun edge fn accepts (per Stream 1 contract:
+// supabase/functions/drone-stage-rerun/index.ts:33).
+const RERUN_ELIGIBLE_STAGES = new Set([
+  'ingest', 'sfm', 'poi', 'cadastral', 'raw_render', 'edited_render',
+]);
+
+// Stages that incur a Modal compute cost — disclosure shown in re-run dialog.
+const COSTED_STAGES = new Set(['sfm', 'raw_render', 'edited_render']);
+
+function stageMeta(stageRowOrKey) {
+  // Accept either the full stage row (preferred — uses function_name from RPC)
+  // or just the stage_key string.
+  if (stageRowOrKey && typeof stageRowOrKey === 'object') {
+    const key = stageRowOrKey.stage_key;
+    const fnName = stageRowOrKey.function_name || STAGE_META[key]?.function_name || null;
+    const meta = STAGE_META[key] || { label: key || 'unknown', note: '' };
+    return { ...meta, function_name: fnName, displayName: fnName || meta.label };
+  }
+  const key = stageRowOrKey;
+  const meta = STAGE_META[key] || { label: key || 'unknown', function_name: null, note: '' };
+  return { ...meta, displayName: meta.function_name || meta.label };
 }
 
 // ── Format helpers ─────────────────────────────────────────────────────────
@@ -105,24 +135,35 @@ function fmtClock(ms) {
 function formatCountdown(stageRow, now = Date.now()) {
   if (!stageRow) return { text: '', tone: 'gray' };
   const status = stageRow.status;
-  if (status === 'failed') return { text: 'failed', tone: 'red' };
-  if (status === 'pending') {
-    const queued = stageRow.scheduled_for ? new Date(stageRow.scheduled_for).getTime() : null;
-    if (queued && queued > now) {
-      return { text: `fires in ${fmtClock(queued - now)}`, tone: 'gray' };
+  if (status === 'failed' || status === 'dead_letter') return { text: 'failed', tone: 'red' };
+  if (status === 'debouncing') {
+    const fireAt = stageRow.scheduled_for || stageRow.debounced_until;
+    const fireMs = fireAt ? new Date(fireAt).getTime() : null;
+    if (fireMs && fireMs > now) {
+      return { text: `fires in ${fmtClock(fireMs - now)}`, tone: 'gray' };
     }
+    return { text: 'debouncing', tone: 'gray' };
+  }
+  if (status === 'queued' || status === 'pending') {
     return { text: 'queued — waiting on dispatcher', tone: 'gray' };
   }
   if (status === 'running') {
     const started = stageRow.started_at ? new Date(stageRow.started_at).getTime() : null;
-    const elapsedMs = started ? now - started : 0;
-    const etaMs = Number.isFinite(stageRow.eta_ms) ? stageRow.eta_ms : null;
-    let text = `${fmtClock(Math.max(0, elapsedMs))} elapsed`;
-    if (etaMs && etaMs > 0) {
+    const elapsedMs = started ? Math.max(0, now - started) : 0;
+    // RPC returns ETA in seconds — convert to ms for fmtClock.
+    const etaSec = Number.isFinite(stageRow.eta_seconds_remaining)
+      ? stageRow.eta_seconds_remaining
+      : null;
+    const etaMs = etaSec !== null ? etaSec * 1000 : null;
+    let text = `${fmtClock(elapsedMs)} elapsed`;
+    if (etaMs !== null && etaMs > 0) {
       text += ` · ETA ${fmtClock(etaMs)}`;
     }
-    // Slow → amber if elapsed exceeds ETA by >50% (or >10 min absolute when no ETA)
-    const slow = (etaMs && elapsedMs > etaMs * 1.5) || (!etaMs && elapsedMs > 10 * 60_000);
+    // Slow → amber if ETA already 0 and we're still running >1min, or no ETA
+    // and elapsed > 10 min.
+    const slow =
+      (etaMs !== null && etaMs <= 0 && elapsedMs > 60_000) ||
+      (etaMs === null && elapsedMs > 10 * 60_000);
     return { text, tone: slow ? 'amber' : 'blue' };
   }
   return { text: '', tone: 'gray' };
@@ -150,12 +191,10 @@ function RerunStageDialog({ open, onOpenChange, stageKey, onConfirm }) {
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Re-run {meta.label} for this shoot?</AlertDialogTitle>
+          <AlertDialogTitle>Re-run {meta.displayName} for this shoot?</AlertDialogTitle>
           <AlertDialogDescription>
-            Will enqueue a fresh {meta.label} job
-            {stageKey === 'drone-sfm' || stageKey === 'drone-render'
-              ? ' (typical Modal cost ~$0.01)'
-              : ''}.
+            Will enqueue a fresh {meta.displayName} job
+            {COSTED_STAGES.has(stageKey) ? ' (typical Modal cost ~$0.01)' : ''}.
             {meta.note && <span className="block mt-1 text-muted-foreground">{meta.note}</span>}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -247,7 +286,6 @@ export default function DronePipelineBanner({
   const [rerunDialogStage, setRerunDialogStage] = useState(null);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
-  // ── Derive UI state ──────────────────────────────────────────────────────
   // tick is read here so the "elapsed" string updates each second without
   // server round-trips. eslint sees it as unused — that's fine, it's the
   // re-render trigger.
@@ -259,18 +297,28 @@ export default function DronePipelineBanner({
     const currentStageKey = pipelineState.current_stage;
     const currentStage = stages.find((s) => s?.stage_key === currentStageKey);
 
-    const failedStage = stages.find((s) => s?.status === 'failed');
+    const failedStage = stages.find(
+      (s) => s?.status === 'failed' || s?.status === 'dead_letter',
+    );
     const sfmFailed = pipelineState.shoot_status === 'sfm_failed';
-    const activeJobInDeadLetter =
-      pipelineState.active_job?.status === 'dead_letter' ||
-      (Number.isFinite(pipelineState.dead_letter_count) && pipelineState.dead_letter_count > 0);
+
+    const activeJobs = pipelineState.active_jobs || [];
+    // Pick the running job first, else the first pending — for force-fire CTA.
+    const activeJob =
+      activeJobs.find((j) => j?.status === 'running') ||
+      activeJobs.find((j) => j?.status === 'pending') ||
+      null;
+    const activeJobInDeadLetter = activeJobs.some((j) => j?.status === 'dead_letter');
 
     const dispatcherHealth = pipelineState.system?.dispatcher_health || 'ok';
-
+    // RPC values: 'ok' | 'stale' | 'down' — only 'ok' is healthy.
     const isFailed = Boolean(failedStage || sfmFailed || activeJobInDeadLetter);
     const isSystemDown = dispatcherHealth !== 'ok';
     const isActive =
-      currentStage?.status === 'running' || currentStage?.status === 'pending';
+      currentStage?.status === 'running' ||
+      currentStage?.status === 'queued' ||
+      currentStage?.status === 'debouncing' ||
+      currentStage?.status === 'pending';
     const isIdle =
       Boolean(pipelineState.operator_actions_unlocked) && !isActive && !isFailed && !isSystemDown;
 
@@ -280,12 +328,16 @@ export default function DronePipelineBanner({
       failedStage,
       activeJobInDeadLetter,
       dispatcherHealth,
-      lastTickAt: pipelineState.system?.last_tick_at || null,
+      lastTickAt:
+        pipelineState.system?.dispatcher_last_tick_at ||
+        pipelineState.system?.last_tick_at ||
+        null,
+      secsSinceTick: pipelineState.system?.dispatcher_secs_since_tick ?? null,
       isFailed,
       isSystemDown,
       isActive,
       isIdle,
-      activeJob: pipelineState.active_job || null,
+      activeJob,
       stages,
     };
   }, [pipelineState]);
@@ -367,18 +419,19 @@ function ActiveBanner({
   setCancelDialogOpen,
 }) {
   const stage = derived.currentStage;
-  const meta = stageMeta(derived.currentStageKey);
+  const meta = stageMeta(stage || derived.currentStageKey);
   const countdown = formatCountdown(stage);
   const canManage = isManagerPlus(role);
   const canCancel = isAdminPlus(role);
-  const activeJobId = derived.activeJob?.id;
+  // RPC active_jobs row uses `job_id` (not `id`); stage row uses `active_job_id`.
+  const activeJobId = derived.activeJob?.job_id || stage?.active_job_id || null;
 
   return (
     <TooltipProvider delayDuration={150}>
       <Card
         role="status"
         aria-live="polite"
-        aria-label={`Pipeline active: ${meta.label}`}
+        aria-label={`Pipeline active: ${meta.displayName}`}
         className={cn(
           'border-l-4 p-3 flex items-center gap-3 min-h-[48px]',
           TONE_BORDER[countdown.tone] || TONE_BORDER.blue,
@@ -390,11 +443,11 @@ function ActiveBanner({
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="font-medium text-sm">
-                Running <span className="font-mono">{meta.label}</span>
+                Running <span className="font-mono">{meta.displayName}</span>
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs max-w-xs">
-              <div className="font-mono font-semibold">{meta.label}</div>
+              <div className="font-mono font-semibold">{meta.displayName}</div>
               {meta.note && <div className="text-muted-foreground">{meta.note}</div>}
               {Number.isFinite(stage?.attempt_count) && (
                 <div className="text-muted-foreground">attempt: {stage.attempt_count}</div>
@@ -461,16 +514,20 @@ function ActiveBanner({
                 <DropdownMenuLabel>Re-run a stage</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {derived.stages
-                  .filter((s) => s?.stage_key && s.status !== 'future')
-                  .map((s) => (
-                    <DropdownMenuItem
-                      key={s.stage_key}
-                      onClick={() => setRerunDialogStage(s.stage_key)}
-                      className="font-mono text-xs"
-                    >
-                      {s.stage_key}
-                    </DropdownMenuItem>
-                  ))}
+                  // Only show stages drone-stage-rerun accepts (per Stream 1 contract).
+                  .filter((s) => RERUN_ELIGIBLE_STAGES.has(s?.stage_key))
+                  .map((s) => {
+                    const m = stageMeta(s);
+                    return (
+                      <DropdownMenuItem
+                        key={s.stage_key}
+                        onClick={() => setRerunDialogStage(s.stage_key)}
+                        className="font-mono text-xs"
+                      >
+                        {m.displayName}
+                      </DropdownMenuItem>
+                    );
+                  })}
                 {canCancel && (
                   <>
                     <DropdownMenuSeparator />
@@ -501,12 +558,18 @@ function ActiveBanner({
           onOpenChange={setCancelDialogOpen}
           projectName={projectName}
           onConfirm={async () => {
+            // cancel_drone_cascade RPC was added by Stream 1 in migration 301.
+            // It accepts (p_cascade_kind, p_project_id, p_shoot_id) and is
+            // admin-gated server-side. We pass 'sfm' as the canonical
+            // cascade kind for now — the RPC understands ingest/sfm/render etc.
             try {
-              const result = await api.functions.invoke('drone-cascade-cancel', {
-                project_id: derived.activeJob?.project_id || undefined,
+              const data = await api.rpc('cancel_drone_cascade', {
+                p_cascade_kind: 'sfm',
+                p_project_id: derived.activeJob?.project_id || undefined,
+                p_shoot_id: undefined,
               });
-              if (result?.data?.error) throw new Error(result.data.error);
-              toast.success('Cascade cancelled');
+              const cancelled = data?.cancelled_count ?? 0;
+              toast.success(`Cascade cancelled (${cancelled} jobs stopped)`);
             } catch (e) {
               toast.error(e?.message || 'Cancel cascade failed');
             }
@@ -526,12 +589,13 @@ function FailedBanner({
   isRerunning,
 }) {
   const stage = derived.failedStage;
-  const meta = stageMeta(stage?.stage_key);
+  const meta = stageMeta(stage || stage?.stage_key);
   const errorMessage =
     stage?.error_message ||
     derived.activeJob?.error_message ||
     'Pipeline failed (see Dead Letter Inspector for details)';
   const canManage = isManagerPlus(role);
+  const canRerunThisStage = stage?.stage_key && RERUN_ELIGIBLE_STAGES.has(stage.stage_key);
 
   return (
     <>
@@ -547,7 +611,7 @@ function FailedBanner({
           <AlertOctagon className="h-5 w-5 text-red-500 shrink-0 mt-0.5" aria-hidden="true" />
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm text-red-800">
-              <span className="font-mono">{meta.label}</span> failed
+              <span className="font-mono">{meta.displayName}</span> failed
             </div>
             <div className="text-xs text-red-700 truncate" title={errorMessage}>
               {errorMessage}
@@ -555,7 +619,7 @@ function FailedBanner({
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          {canManage && stage?.stage_key && (
+          {canManage && canRerunThisStage && (
             <Button
               size="sm"
               variant="outline"
@@ -589,7 +653,12 @@ function SystemDownBanner({ derived, role, triggerDispatcherManually }) {
   const lastTick = derived.lastTickAt
     ? (() => { try { return new Date(derived.lastTickAt).toLocaleTimeString(); } catch { return null; } })()
     : null;
+  const minsSince =
+    Number.isFinite(derived.secsSinceTick) && derived.secsSinceTick > 0
+      ? Math.round(derived.secsSinceTick / 60)
+      : null;
   const canTrigger = isAdminPlus(role);
+  const isStale = derived.dispatcherHealth === 'stale';
 
   return (
     <Card
@@ -604,7 +673,9 @@ function SystemDownBanner({ derived, role, triggerDispatcherManually }) {
         <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
         <div className="flex-1 min-w-0">
           <div className="font-medium text-sm text-amber-900">
-            Dispatcher hasn't ticked in 4 min — automated steps may be paused.
+            {isStale
+              ? `Dispatcher hasn't ticked in ${minsSince ?? '4+'} min — automated steps may be paused.`
+              : 'Dispatcher appears down — automated steps are paused.'}
           </div>
           <div className="text-xs text-amber-700">
             Retry in 1 min or contact admin.

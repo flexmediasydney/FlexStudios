@@ -1,22 +1,29 @@
 /**
  * DroneStageProgress — Wave 9 S2
  * ─────────────────────────────────
- * Visual stage stepper with up to 11 stages (architect Section A.1).
+ * Visual stage stepper with the 11 pipeline stages (architect Section A.1).
  *
  * Modes:
  *   compact={false} (default): horizontal chevron pills with stage names + duration/ETA below
  *   compact={true}: single-line pill row, hover tooltips with details
  *
  * Per stage:
- *   done                   → emerald-filled with check
+ *   completed              → emerald-filled with check
  *   running                → blue-filled with spinner
- *   blocked-on-operator    → slate with lock icon
- *   future                 → muted hollow circle
- *   failed                 → red-filled with alert
+ *   queued/pending/debouncing → soft blue with spinner
+ *   ready                  → slate-filled (operator action ready)
+ *   failed/dead_letter     → red-filled with alert
+ *   future (no row)        → muted hollow circle
  *
  * Below each pill: 11px gray text "X:XX" duration if complete, "ETA X:XX" if running.
  * Wraps to 2 rows below 768px.
- * Tooltip on hover: job_id, scheduled_for, attempt_count.
+ * Tooltip on hover: function_name (or stage label), job_id, scheduled_for, attempt_count,
+ *                  error_message.
+ *
+ * RPC contract source of truth: supabase/migrations/301_drone_pipeline_state_rpc.sql
+ *   stage_key values match exactly: ingest, sfm, poi, cadastral, raw_render,
+ *   operator_triage, editor_handoff, edited_render, edited_curate, final, delivered.
+ *   eta is in seconds (eta_seconds_remaining), not ms.
  */
 
 import { useMemo } from 'react';
@@ -36,25 +43,25 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Canonical stage order — matches architect Section A.1 (11 stages).
+// Canonical 11-stage order — matches migration 301:282-375 exactly.
 // Each shoot rolls through these; if a stage isn't applicable to a given
 // shoot it appears as 'future' and is grey.
 const DEFAULT_STAGE_ORDER = [
-  { key: 'drone-ingest',          label: 'Ingest' },
-  { key: 'drone-shot-paths',      label: 'Shot paths' },
-  { key: 'drone-sfm',             label: 'SfM' },
-  { key: 'drone-pois',            label: 'POIs' },
-  { key: 'drone-cadastral',       label: 'Cadastral' },
-  { key: 'drone-boundary',        label: 'Boundary' },
-  { key: 'drone-shortlist',       label: 'Shortlist' },
-  { key: 'drone-render',          label: 'Render' },
-  { key: 'drone-render-edited',   label: 'Edited' },
-  { key: 'drone-render-approve',  label: 'Approve' },
-  { key: 'drone-deliver',         label: 'Deliver' },
+  { key: 'ingest',          label: 'Ingest',          function_name: 'drone-ingest' },
+  { key: 'sfm',             label: 'SfM',             function_name: 'drone-sfm' },
+  { key: 'poi',             label: 'POIs',            function_name: 'drone-pois' },
+  { key: 'cadastral',       label: 'Cadastral',       function_name: 'drone-cadastral' },
+  { key: 'raw_render',      label: 'Raw render',      function_name: 'drone-raw-preview' },
+  { key: 'operator_triage', label: 'Operator triage', function_name: null },
+  { key: 'editor_handoff',  label: 'Editor handoff',  function_name: null },
+  { key: 'edited_render',   label: 'Edited render',   function_name: 'drone-render-edited' },
+  { key: 'edited_curate',   label: 'Edited curate',   function_name: null },
+  { key: 'final',           label: 'Final render',    function_name: 'drone-render' },
+  { key: 'delivered',       label: 'Delivered',       function_name: null },
 ];
 
 // ── helpers ────────────────────────────────────────────────────────────────
-function fmtMs(ms) {
+function fmtClock(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '';
   const totalSec = Math.floor(ms / 1000);
   const m = Math.floor(totalSec / 60);
@@ -64,7 +71,7 @@ function fmtMs(ms) {
 
 function statusStyles(status) {
   switch (status) {
-    case 'done':
+    case 'completed':
       return {
         pill: 'bg-emerald-500 text-white border-emerald-500',
         icon: <Check className="h-3 w-3" aria-hidden="true" />,
@@ -76,25 +83,30 @@ function statusStyles(status) {
         icon: <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />,
         srLabel: 'running',
       };
+    case 'queued':
     case 'pending':
-      // Treat pending (queued) as a soft blue — same family as running but
-      // not yet picked up by dispatcher.
+    case 'debouncing':
+      // Queued / debouncing — same family as running but not yet picked up
+      // by the dispatcher.
       return {
         pill: 'bg-blue-100 text-blue-800 border-blue-300',
         icon: <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />,
-        srLabel: 'pending',
+        srLabel: status,
       };
-    case 'blocked-on-operator':
+    case 'ready':
+      // Operator-action stages with a green-light status (e.g.
+      // operator_triage at proposed_ready). Slate with a subtle highlight.
       return {
-        pill: 'bg-slate-500 text-white border-slate-500',
+        pill: 'bg-slate-700 text-white border-slate-700',
         icon: <Lock className="h-3 w-3" aria-hidden="true" />,
-        srLabel: 'waiting on operator',
+        srLabel: 'ready for operator',
       };
     case 'failed':
+    case 'dead_letter':
       return {
         pill: 'bg-red-500 text-white border-red-500',
         icon: <AlertTriangle className="h-3 w-3" aria-hidden="true" />,
-        srLabel: 'failed',
+        srLabel: status === 'dead_letter' ? 'dead-letter' : 'failed',
       };
     case 'future':
     default:
@@ -114,7 +126,7 @@ function statusStyles(status) {
 export default function DroneStageProgress({ pipelineState, compact = false }) {
   // Normalise: merge RPC stages (when supplied) with the canonical 11-stage
   // order so the strip always shows the full pipeline. Missing stages render
-  // as 'future'.
+  // as 'future'. Status defaults to 'future' for unmatched rows.
   const stages = useMemo(() => {
     const byKey = new Map();
     (pipelineState?.stages || []).forEach((s) => {
@@ -122,12 +134,19 @@ export default function DroneStageProgress({ pipelineState, compact = false }) {
     });
     return DEFAULT_STAGE_ORDER.map((meta) => {
       const row = byKey.get(meta.key) || {};
-      return { ...meta, ...row, stage_key: meta.key };
+      return {
+        ...meta,
+        ...row,
+        // canonical key wins so a malformed RPC row can't break the layout
+        stage_key: meta.key,
+        // RPC may omit function_name for rows where there's no underlying job
+        function_name: row.function_name || meta.function_name || null,
+      };
     });
   }, [pipelineState]);
 
-  // Cold render still shows the full strip in 'future' state so the layout
-  // doesn't pop in once data arrives — return strip whether or not state exists.
+  // Cold render still shows the full 11-stage strip in 'future' state so the
+  // layout doesn't pop in once data arrives.
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -142,28 +161,37 @@ export default function DroneStageProgress({ pipelineState, compact = false }) {
         {stages.map((stage, idx) => {
           const styles = statusStyles(stage.status || 'future');
           const isLast = idx === stages.length - 1;
+          const displayName = stage.function_name || stage.label;
 
           // Sub-text: duration if complete, ETA if running, blank otherwise.
+          // RPC: completed_at + started_at gives duration; eta_seconds_remaining
+          // is the ETA in seconds.
           let subText = '';
-          if (stage.status === 'done' && Number.isFinite(stage.duration_ms)) {
-            subText = fmtMs(stage.duration_ms);
-          } else if (stage.status === 'running' && Number.isFinite(stage.eta_ms) && stage.eta_ms > 0) {
-            subText = `ETA ${fmtMs(stage.eta_ms)}`;
-          } else if (stage.status === 'failed') {
-            subText = 'failed';
-          } else if (stage.status === 'pending') {
+          if (stage.status === 'completed' && stage.started_at && stage.completed_at) {
+            const durMs = new Date(stage.completed_at).getTime() - new Date(stage.started_at).getTime();
+            if (durMs > 0) subText = fmtClock(durMs);
+          } else if (stage.status === 'running' && Number.isFinite(stage.eta_seconds_remaining) && stage.eta_seconds_remaining > 0) {
+            subText = `ETA ${fmtClock(stage.eta_seconds_remaining * 1000)}`;
+          } else if (stage.status === 'failed' || stage.status === 'dead_letter') {
+            subText = stage.status === 'dead_letter' ? 'dead-letter' : 'failed';
+          } else if (stage.status === 'queued' || stage.status === 'pending') {
             subText = 'queued';
+          } else if (stage.status === 'debouncing') {
+            subText = 'debouncing';
+          } else if (stage.status === 'ready') {
+            subText = 'ready';
           }
 
           // Tooltip body — show what we know about the underlying job.
           const tipLines = [];
-          if (stage.job_id) tipLines.push(`job_id: ${String(stage.job_id).slice(0, 8)}…`);
+          const jobId = stage.active_job_id || stage.job_id;
+          if (jobId) tipLines.push(`job_id: ${String(jobId).slice(0, 8)}…`);
           if (stage.scheduled_for) {
             try {
               tipLines.push(`scheduled: ${new Date(stage.scheduled_for).toLocaleTimeString()}`);
             } catch { /* invalid date */ }
           }
-          if (Number.isFinite(stage.attempt_count)) {
+          if (Number.isFinite(stage.attempt_count) && stage.attempt_count > 0) {
             tipLines.push(`attempt: ${stage.attempt_count}`);
           }
           if (stage.error_message) {
@@ -174,7 +202,7 @@ export default function DroneStageProgress({ pipelineState, compact = false }) {
           const pill = (
             <div
               role="listitem"
-              aria-label={`${stage.label}: ${styles.srLabel}`}
+              aria-label={`${displayName}: ${styles.srLabel}`}
               className="flex flex-col items-center min-w-[60px]"
             >
               <span
@@ -201,19 +229,15 @@ export default function DroneStageProgress({ pipelineState, compact = false }) {
 
           return (
             <div key={stage.key} className="flex items-center gap-1">
-              {tipLines.length > 0 ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>{pill}</TooltipTrigger>
-                  <TooltipContent side="bottom" className="text-xs">
-                    <div className="font-semibold">{stage.label}</div>
-                    {tipLines.map((line, i) => (
-                      <div key={i} className="text-muted-foreground">{line}</div>
-                    ))}
-                  </TooltipContent>
-                </Tooltip>
-              ) : (
-                pill
-              )}
+              <Tooltip>
+                <TooltipTrigger asChild>{pill}</TooltipTrigger>
+                <TooltipContent side="bottom" className="text-xs max-w-xs">
+                  <div className="font-mono font-semibold">{displayName}</div>
+                  {tipLines.map((line, i) => (
+                    <div key={i} className="text-muted-foreground">{line}</div>
+                  ))}
+                </TooltipContent>
+              </Tooltip>
               {!isLast && (
                 <ChevronRight
                   className="h-3 w-3 shrink-0 text-muted-foreground/40"

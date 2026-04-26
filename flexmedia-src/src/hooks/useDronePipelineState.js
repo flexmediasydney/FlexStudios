@@ -7,7 +7,7 @@
  *   - drone-job-fire-now / drone-stage-rerun edge function mutations
  *   - 1-second tick for countdown/ETA components
  *
- * Adaptive polling: 10s while a stage is running/pending, 60s when idle, off when delivered.
+ * Adaptive polling: 10s while any stage is hot, 60s when idle, off when delivered.
  *
  * Important integration notes (from supabaseClient.js audit):
  *   - api.rpc() returns data DIRECTLY, not { data, error } — wraps PostgREST and throws on error.
@@ -15,23 +15,36 @@
  *   - api.entities.X.subscribe(cb) returns an UNSUBSCRIBE FUNCTION (not an object with .unsubscribe()).
  *   - .subscribe() has no built-in filter option — we filter in the callback against payload data.
  *
- * Expected RPC shape (per architect Section A.2 — Stream 1 contract):
+ * Actual RPC shape (verified against migration 301_drone_pipeline_state_rpc.sql):
  *   {
  *     project_id, shoot_id, shoot_status,
- *     current_stage,             // e.g. 'drone-sfm'
+ *     current_stage,             // bare key e.g. 'sfm', 'ingest', 'edited_render'
  *     operator_actions_unlocked, // boolean — true once initial pipeline finished
  *     stages: [
- *       { stage_key: 'drone-ingest',
- *         status: 'done'|'running'|'pending'|'blocked-on-operator'|'failed'|'future',
- *         started_at, completed_at, duration_ms, eta_ms,
- *         job_id, scheduled_for, attempt_count,
- *         error_message },
+ *       { index, stage_key, function_name,         // function_name e.g. 'drone-sfm'
+ *         status,                                  // see STATUS_VALUES below
+ *         started_at, completed_at,
+ *         eta_seconds_remaining,                   // seconds, not ms
+ *         active_job_id, active_job_payload,
+ *         scheduled_for, attempt_count,
+ *         debounced_until, error_message },
  *       ...
  *     ],
- *     active_job: { id, function_name, scheduled_for, attempt_count, status, error_message } | null,
- *     dead_letter_count: number,
- *     system: { dispatcher_health: 'ok'|'degraded'|'down', last_tick_at }
+ *     active_jobs: [                               // PLURAL, sorted running first
+ *       { job_id, kind, status, pipeline, scheduled_for, started_at, finished_at,
+ *         attempt_count, error_message, payload }
+ *     ],
+ *     system: { dispatcher_health: 'ok'|'stale'|'down',
+ *               dispatcher_last_tick_at,
+ *               dispatcher_secs_since_tick,
+ *               debounce_window_remaining_sec },
+ *     stage_avg_seconds: { ingest, sfm, poi, cadastral, raw_preview_render, render_edited, render },
+ *     generated_at
  *   }
+ *
+ * Stage status values (per stage):
+ *   'completed' | 'running' | 'queued' | 'debouncing' | 'pending' |
+ *   'failed' | 'dead_letter' | 'ready'
  *
  * Public API (consumed by S3):
  *   const {
@@ -39,9 +52,10 @@
  *     isLoading,
  *     error,            // Error or null
  *     refetch,          // () => Promise<QueryObserverResult>
- *     tick,             // increments every 1s while a stage is running/pending
+ *     tick,             // increments every 1s while ANY stage is hot
  *     forceFireNow,     // (jobId) => void  — fire-and-forget, toasts on success/failure
- *     rerunStage,       // (stage) => void  — fire-and-forget, toasts on success/failure
+ *     rerunStage,       // (stage) => void  — stage is bare key ('sfm','ingest','poi',
+ *                       //                   'cadastral','raw_render','edited_render')
  *     isFiring,         // mutation pending
  *     isRerunning,      // mutation pending
  *   } = useDronePipelineState(projectId, shootId);
@@ -51,6 +65,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 import { toast } from 'sonner';
+
+// Statuses considered "hot" (something is moving — poll 10s + tick countdown).
+const HOT_STATUSES = new Set(['running', 'queued', 'debouncing', 'pending']);
+
+function anyStageHot(data) {
+  return (data?.stages || []).some((s) => HOT_STATUSES.has(s?.status));
+}
 
 export function useDronePipelineState(projectId, shootId) {
   const queryClient = useQueryClient();
@@ -78,18 +99,11 @@ export function useDronePipelineState(projectId, shootId) {
     refetchInterval: (query) => {
       const data = query?.state?.data;
       if (!data) return 30_000; // unknown shape — moderate cadence
-      const stage = data?.current_stage;
-      const stageRow = (data?.stages || []).find((s) => s?.stage_key === stage);
-      const status = stageRow?.status;
-      // Terminal — stop polling entirely
-      if (data?.shoot_status === 'delivered') return false;
-      // Hot — running or queued
-      if (status === 'running' || status === 'pending') return 10_000;
-      // Cold — idle / waiting on operator / done-but-not-delivered
-      return 60_000;
+      if (data?.shoot_status === 'delivered') return false; // terminal
+      return anyStageHot(data) ? 10_000 : 60_000;
     },
     staleTime: 5_000,
-    retry: 1, // RPC may be missing while Stream 1 not deployed — fail fast
+    retry: 1, // RPC may be missing in dev — fail fast
   });
 
   // ── Realtime subscriptions ─────────────────────────────────────────────────
@@ -107,8 +121,8 @@ export function useDronePipelineState(projectId, shootId) {
       const unsubJobs = api.entities.DroneJob.subscribe((evt) => {
         if (!evt) return;
         // DELETE events have evt.data === null — invalidate anyway, the
-        // RPC re-derives the active job. Cheaper than maintaining a job
-        // index on the client.
+        // RPC re-derives the active jobs list. Cheaper than maintaining a
+        // job index on the client.
         if (evt.type === 'delete' || evt?.data?.project_id === projectId) {
           invalidate();
         }
@@ -164,11 +178,7 @@ export function useDronePipelineState(projectId, shootId) {
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const data = stateQuery.data;
-    if (!data) return undefined;
-    const stage = data?.current_stage;
-    const stageRow = (data?.stages || []).find((s) => s?.stage_key === stage);
-    const status = stageRow?.status;
-    if (status !== 'running' && status !== 'pending') return undefined;
+    if (!data || !anyStageHot(data)) return undefined;
     const interval = setInterval(() => setTick((t) => (t + 1) % 1_000_000), 1000);
     return () => clearInterval(interval);
   }, [stateQuery.data]);
@@ -196,6 +206,8 @@ export function useDronePipelineState(projectId, shootId) {
   const rerunStageMutation = useMutation({
     mutationFn: async ({ stage }) => {
       if (!stage) throw new Error('stage is required');
+      // stage must be one of the bare keys drone-stage-rerun accepts:
+      // 'ingest','sfm','poi','cadastral','raw_render','edited_render'.
       const result = await api.functions.invoke('drone-stage-rerun', {
         stage,
         project_id: projectId,
