@@ -538,7 +538,11 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
 
   const hasRawProposed = grouped.raw_proposed.length > 0;
   const hasRawAccepted = grouped.raw_accepted.length > 0;
-  const showLockBtn = isManagerOrAbove && hasRawAccepted && hasRawProposed;
+  // QC3-6 S3 fix: drop hasRawProposed gate — once every shot is accepted (the
+  // natural successful case) the operator MUST still be able to lock the
+  // shortlist to trigger editor handoff. Previously the button vanished as
+  // soon as Pool emptied → workflow dead-end.
+  const showLockBtn = isManagerOrAbove && hasRawAccepted;
   const rejectedShotCount = grouped.rejected.length;
   const staleCount = staleRenderIds.length;
   const showRerenderAllBtn = isManagerOrAbove && staleCount > 0;
