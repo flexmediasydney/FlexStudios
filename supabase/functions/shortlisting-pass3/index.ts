@@ -449,7 +449,12 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
       (project?.property_address as string | undefined) || 'Project';
     const gapCount = unfilledMandatory.length;
 
-    await fireNotif({
+    // Burst 22 WW1: fireNotif returns false on internal failure rather than
+    // throwing, so the catch below NEVER fires for notification glitches —
+    // the warnings array stayed empty + the return payload showed the round
+    // as healthy even when ops never got the alert. Capture the return
+    // value and surface it explicitly.
+    const notifOk = await fireNotif({
       type: 'shortlist_ready_for_review',
       category: 'workflow',
       severity: 'info',
@@ -464,10 +469,15 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
       // by the recipient-side dedup, hiding actual delivery problems.
       idempotencyKey: `shortlist-ready-${roundId}-r${pass3RunCount}`,
     });
+    if (!notifOk) {
+      warnings.push(
+        'notification fire returned false (notificationService rejected or unreachable — see edge logs)',
+      );
+    }
   } catch (notifErr) {
     const msg = notifErr instanceof Error ? notifErr.message : String(notifErr);
-    console.warn(`[${GENERATOR}] notification fire failed: ${msg}`);
-    warnings.push(`notification fire failed: ${msg}`);
+    console.warn(`[${GENERATOR}] notification fire threw: ${msg}`);
+    warnings.push(`notification fire threw: ${msg}`);
   }
 
   return {
