@@ -188,16 +188,27 @@ async function ingest(
 
   const fileCount = filePaths.length;
 
+  // Burst 15 X2: refuse to create a round when the folder is empty. Without
+  // this, ingest happily INSERTs a status='processing' shortlisting_rounds
+  // row with zero extract jobs, the dispatcher does nothing, and the round
+  // is stuck forever — visible to ops as a permanently-processing round
+  // that no one can clear without SQL surgery. The frontend's
+  // hasInflightRound guard then ALSO blocks "Run Shortlist Now" until a
+  // human resolves the orphan. Returning a clear 400 keeps DB clean and
+  // tells the photographer/operator to put files in the folder first.
+  if (fileCount === 0) {
+    throw new Error(
+      `Photos shortlist folder is empty for project ${projectId} (folder='${folderPath}'). ` +
+      `Drop CR3/CR2/ARW/NEF/RAF/DNG files into the folder before triggering a round.`,
+    );
+  }
+
   // 3. Sanity check — drift > ±10 % from expected range.
-  if (fileCount > 0) {
-    const { low, high } = expectedFileCountRange(packageCeiling);
-    if (fileCount < low) {
-      warnings.push(`File count ${fileCount} below expected lower bound ${low} for package '${packageType ?? 'unknown'}'`);
-    } else if (fileCount > high) {
-      warnings.push(`File count ${fileCount} above expected upper bound ${high} for package '${packageType ?? 'unknown'}'`);
-    }
-  } else {
-    warnings.push('Photos shortlist folder is empty — no CR3 files to ingest');
+  const { low, high } = expectedFileCountRange(packageCeiling);
+  if (fileCount < low) {
+    warnings.push(`File count ${fileCount} below expected lower bound ${low} for package '${packageType ?? 'unknown'}'`);
+  } else if (fileCount > high) {
+    warnings.push(`File count ${fileCount} above expected upper bound ${high} for package '${packageType ?? 'unknown'}'`);
   }
 
   // 4. Determine next round_number for this project.
