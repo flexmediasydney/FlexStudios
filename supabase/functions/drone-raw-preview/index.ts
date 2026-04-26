@@ -24,16 +24,18 @@
  *       Service role (called by drone-job-dispatcher).
  *
  * Idempotent: skips shots that already have a preview render row in
- * drone_renders with column_state='preview' (migration 243). The smart
- * shortlist runs every invocation and overwrites is_ai_recommended for the
- * full eligible set so re-runs converge to the algorithm's current verdict.
+ * drone_renders with column_state='pool' (post-mig-282; was 'preview' pre-
+ * mig-282 — backfilled to 'pool' by that migration). The smart shortlist
+ * runs every invocation and overwrites is_ai_recommended for the full
+ * eligible set so re-runs converge to the algorithm's current verdict.
  *
- * Render chain: drone-raw-preview internally enqueues kind='render' jobs
- * with column_state='preview' for each shot — actually no, it calls
- * drone-render directly with column_state='preview' so the render output
- * lands in the previews folder + the row is seeded with column_state='preview'
- * (which migration 243 added to the CHECK and excluded from the active-per-
- * variant uniqueness scope so they can stack freely).
+ * Render chain: drone-raw-preview calls drone-render directly with
+ * column_state='pool' + allow_raw_source=true so the render output lands
+ * in the drones_raws_shortlist_proposed_previews/ folder and the row is
+ * seeded with column_state='pool' (the post-mig-282 raw-pipeline starting
+ * lane). Pre-mig-282 this was column_state='preview'; QC4 NB-1 caught the
+ * stale value still being sent post-deploy → drone-render rejected with
+ * 502 → entire raw render generation pipeline was dead.
  */
 
 import {
@@ -220,9 +222,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   });
 
   // ── Dispatch the render call ────────────────────────────────────
-  // Call drone-render directly with column_state='preview' + allow_raw_source.
-  // drone-render understands the preview lane (output folder, row state,
-  // status flip suppression) — see the lane comment block in drone-render.
+  // Call drone-render directly with column_state='pool' + allow_raw_source.
+  // QC4 NB-1 fix: pre-mig-282 this used 'preview', but mig 282 changed the
+  // raw-pipeline column_state vocab to (pool, accepted, rejected). 'preview'
+  // is no longer a legal value and was being rejected by drone-render with
+  // "column_state 'preview' not allowed on raw pipeline" → 502 → entire raw
+  // render generation pipeline was dead. mig 282 backfilled all existing
+  // 'preview' rows to 'pool', so swimlane queries already align.
   // We forward the original Authorization header so the service-role JWT
   // (or the user's JWT, if invoked manually) propagates and drone-render's
   // auth check sees the same principal.
@@ -231,7 +237,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const renderPayload = {
     shoot_id: shoot.id,
     kind: "poi_plus_boundary" as const,
-    column_state: "preview" as const,
+    column_state: "pool" as const,
     allow_raw_source: true,
     reason: "raw_preview_render",
   };
