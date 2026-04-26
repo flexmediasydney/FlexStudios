@@ -43,6 +43,7 @@ import {
   getUserFromReq,
   serveWithAudit,
   getAdminClient,
+  callerHasProjectAccess,
 } from '../_shared/supabase.ts';
 
 const GENERATOR = 'shortlisting-overrides';
@@ -83,6 +84,12 @@ interface OverrideEventInput {
   alternative_offered?: boolean;
   alternative_selected?: boolean;
   variant_count?: number | null;
+  // Burst 4 J1: monotonic client-side counter set by the swimlane on each
+  // emission. Used by shortlist-lock to order overrides by the user's actual
+  // emission order rather than the order they happened to land in the DB.
+  // Optional — legacy clients may omit it (the capture endpoint stores NULL,
+  // and shortlist-lock's NULLS-LAST ordering handles the legacy fallthrough).
+  client_sequence?: number | null;
 }
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -173,6 +180,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     const confirmedWithReview =
       reviewSecs == null ? false : reviewSecs > CONFIRMED_REVIEW_THRESHOLD_SECONDS;
 
+    // Burst 8 N1: persist client_sequence (mig 333). Burst 4 added the
+    // swimlane-side emission of this counter and updated shortlist-lock to
+    // order by it, but THIS endpoint silently dropped the value because the
+    // input interface didn't include it. Result: every new override row had
+    // client_sequence=NULL and the lock-fn ordering fix never kicked in.
+    // Coerce defensively — the swimlane emits a positive integer, but legacy
+    // or unexpected clients might send strings/floats/negatives.
+    const clientSeqRaw = e.client_sequence;
+    const clientSequence =
+      typeof clientSeqRaw === 'number' && Number.isFinite(clientSeqRaw) && clientSeqRaw > 0
+        ? Math.floor(clientSeqRaw)
+        : null;
+
     rows.push({
       project_id: e.project_id,
       round_id: e.round_id,
@@ -196,7 +216,30 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           : null,
       alternative_offered: !!e.alternative_offered,
       alternative_selected: !!e.alternative_selected,
+      client_sequence: clientSequence,
     });
+  }
+
+  // Burst 8 N2: project-access guard. After role-gating above, also verify
+  // the caller has access to every project_id referenced in the batch.
+  // master_admin/admin/service_role pass through callerHasProjectAccess;
+  // managers must own each project. Without this, a manager from project A
+  // could record overrides against project B by submitting a crafted batch.
+  // We collect the unique project_ids and check them in parallel.
+  if (!isService) {
+    const uniqueProjectIds = Array.from(new Set(rows.map((r) => r.project_id as string)));
+    const accessChecks = await Promise.all(
+      uniqueProjectIds.map((pid) => callerHasProjectAccess(user, pid)),
+    );
+    for (let i = 0; i < uniqueProjectIds.length; i++) {
+      if (!accessChecks[i]) {
+        return errorResponse(
+          `Forbidden — caller has no access to project ${uniqueProjectIds[i]}`,
+          403,
+          req,
+        );
+      }
+    }
   }
 
   const admin = getAdminClient();
