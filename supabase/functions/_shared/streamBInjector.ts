@@ -89,6 +89,27 @@ const HARDCODED_FALLBACK: StreamBAnchors = {
  * reproduce a classification's exact prompt ex post.
  */
 export async function getActiveStreamBAnchors(): Promise<StreamBAnchors> {
+  // Audit defect #58: fallback paths now emit a shortlisting_events row in
+  // addition to console.warn so ops can surface fallback usage on dashboards
+  // (the warn-only signal was silent on the Tonomo monitoring stack).
+  const logFallback = async (
+    reason: string,
+    fellBackTiers: string[],
+    detail?: Record<string, unknown>,
+  ) => {
+    try {
+      const admin = getAdminClient();
+      await admin.from('shortlisting_events').insert({
+        event_type: 'stream_b_anchors_fallback',
+        actor_type: 'system',
+        payload: { reason, tiers_fell_back: fellBackTiers, ...(detail || {}) },
+      });
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      console.warn(`[streamBInjector] fallback event insert failed: ${m}`);
+    }
+  };
+
   try {
     const admin = getAdminClient();
     const { data, error } = await admin
@@ -101,9 +122,13 @@ export async function getActiveStreamBAnchors(): Promise<StreamBAnchors> {
       console.warn(
         `[streamBInjector] anchors query failed (${error.message}) — using hardcoded defaults`,
       );
+      await logFallback('query_failed', ['S', 'P', 'A'], { error: error.message });
       return HARDCODED_FALLBACK;
     }
-    if (!data || data.length === 0) return HARDCODED_FALLBACK;
+    if (!data || data.length === 0) {
+      await logFallback('no_active_rows', ['S', 'P', 'A']);
+      return HARDCODED_FALLBACK;
+    }
 
     // Highest-version-wins per tier.
     const byTier = new Map<string, { descriptor: string; version: number }>();
@@ -121,6 +146,15 @@ export async function getActiveStreamBAnchors(): Promise<StreamBAnchors> {
     const pRow = byTier.get('P');
     const aRow = byTier.get('A');
 
+    // Track which tiers fell back so partial-fallback is still observable.
+    const fellBack: string[] = [];
+    if (!sRow) fellBack.push('S');
+    if (!pRow) fellBack.push('P');
+    if (!aRow) fellBack.push('A');
+    if (fellBack.length > 0) {
+      await logFallback('tier_missing', fellBack);
+    }
+
     const versions = [sRow?.version, pRow?.version, aRow?.version]
       .filter((v): v is number => typeof v === 'number');
     const maxVersion = versions.length > 0 ? Math.max(...versions) : 0;
@@ -134,6 +168,7 @@ export async function getActiveStreamBAnchors(): Promise<StreamBAnchors> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`[streamBInjector] threw (${msg}) — using hardcoded defaults`);
+    await logFallback('exception_thrown', ['S', 'P', 'A'], { error: msg });
     return HARDCODED_FALLBACK;
   }
 }

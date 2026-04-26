@@ -286,23 +286,18 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
   // 4. Concurrent classification sweep.
   const results = await classifyAll(compositions, prompt, concurrency);
 
-  // 5. Failure-rate guard. If >20% failed, abort — leave classifications so far,
-  //    flag the round for retry. (Inserts already happened — we don't roll those
-  //    back; ops can resurrect a partial round by re-invoking Pass 1, the
-  //    pass1_ready_compositions RPC will only return the un-classified ones.)
+  // Audit defect #14: tag every per-run event with a unique pass1_run_id so
+  // retries are filterable in shortlisting_events.
+  const pass1RunId = crypto.randomUUID();
+
+  // Audit defects #10 + #18: ORDER MATTERS. Previously the failure-rate guard
+  // ran BEFORE persistence — when 20%+ failed, every successful classification
+  // was thrown away (full Sonnet cost, zero rows inserted). Now we persist
+  // successes FIRST, then evaluate the failure rate. On retry, the
+  // pass1_ready_compositions RPC only returns the still-unclassified groups,
+  // so we don't re-bill for the ones that already landed.
   const failures = results.filter((r) => r.error || !r.classification).length;
   const failureRate = failures / results.length;
-  if (failureRate > MAX_FAILURE_RATE) {
-    const sampleErrors = results
-      .filter((r) => r.error)
-      .slice(0, 3)
-      .map((r) => `comp ${r.composition.group_index}: ${r.error}`)
-      .join('; ');
-    throw new Error(
-      `Pass 1 failure rate ${(failureRate * 100).toFixed(1)}% exceeds ${MAX_FAILURE_RATE * 100}% threshold ` +
-        `(${failures}/${results.length}). Sample: ${sampleErrors}. Round retryable.`,
-    );
-  }
 
   // 6. Persist classifications + log per-comp failure events.
   let inserted = 0;
@@ -323,6 +318,7 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
             group_index: r.composition.group_index,
             stem: r.composition.best_bracket_stem,
             model: SONNET_MODEL,
+            pass1_run_id: pass1RunId,
           },
         });
       if (evtErr) warnings.push(`failure-event insert failed for ${r.composition.id}: ${evtErr.message}`);
@@ -385,12 +381,39 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
   }
 
   // 7. Round update — only Pass 1 cost. Status stays 'processing' until Pass 2.
-  const roundedCost = Math.round(totalCostUsd * 1_000_000) / 1_000_000;
+  // Audit defect #5 sibling fix for Pass 1: accumulate cost across retries
+  // rather than overwriting (Pass 1 retry-on-partial-failure scenario).
+  const { data: priorRoundCost } = await admin
+    .from('shortlisting_rounds')
+    .select('pass1_cost_usd')
+    .eq('id', roundId)
+    .maybeSingle();
+  const priorPass1Cost = typeof priorRoundCost?.pass1_cost_usd === 'number'
+    ? priorRoundCost.pass1_cost_usd
+    : 0;
+  const accumulatedCost = priorPass1Cost + totalCostUsd;
+  const roundedCost = Math.round(accumulatedCost * 1_000_000) / 1_000_000;
   const { error: roundUpdErr } = await admin
     .from('shortlisting_rounds')
     .update({ pass1_cost_usd: roundedCost })
     .eq('id', roundId);
   if (roundUpdErr) warnings.push(`round update failed: ${roundUpdErr.message}`);
+
+  // Audit defects #10 + #18: failure-rate guard runs AFTER persistence so
+  // successful classifications survive even when the overall run is judged
+  // unhealthy. The dispatcher will retry; pass1_ready_compositions only
+  // returns un-classified groups.
+  if (failureRate > MAX_FAILURE_RATE) {
+    const sampleErrors = results
+      .filter((r) => r.error)
+      .slice(0, 3)
+      .map((r) => `comp ${r.composition.group_index}: ${r.error}`)
+      .join('; ');
+    throw new Error(
+      `Pass 1 failure rate ${(failureRate * 100).toFixed(1)}% exceeds ${MAX_FAILURE_RATE * 100}% threshold ` +
+        `(${failures}/${results.length}, ${inserted} successes persisted). Sample: ${sampleErrors}. Round retryable.`,
+    );
+  }
 
   // 8. pass1_complete event.
   const avgCombined = inserted > 0
@@ -419,6 +442,7 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
         prompt_override_version: dbSystem?.version ?? null,
         average_combined_score: avgCombined != null ? Math.round(avgCombined * 100) / 100 : null,
         concurrency,
+        pass1_run_id: pass1RunId,
       },
     });
   if (evtErr) warnings.push(`pass1_complete event insert failed: ${evtErr.message}`);
