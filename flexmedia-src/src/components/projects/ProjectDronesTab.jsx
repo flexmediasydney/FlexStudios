@@ -21,10 +21,8 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { createPageUrl } from "@/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,12 +36,12 @@ import {
   CheckCircle2,
   Clock,
   RefreshCw,
-  Pencil,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
 import DroneShotsSubtab from "./DroneShotsSubtab";
 import DroneRendersSubtab from "./DroneRendersSubtab";
+import DroneEditsSubtab from "./DroneEditsSubtab";
 
 // ── Status pipeline ──────────────────────────────────────────────────────────
 // Ordered chain — first 4 are linear ingestion/processing, last 4 are pipeline columns.
@@ -143,7 +141,10 @@ export default function ProjectDronesTab({ project }) {
   );
   const [activeSubtab, setActiveSubtab] = useState(() => {
     const t = readSearchParam("subtab");
-    return t === "renders" ? "renders" : "shots";
+    // Wave 5 P2: 'edits' joins 'renders' as a valid subtab. 'shots' stays the
+    // default (and is omitted from the URL so default views read cleanly).
+    if (t === "renders" || t === "edits") return t;
+    return "shots";
   });
 
   // Persist URL on changes
@@ -298,40 +299,11 @@ export default function ProjectDronesTab({ project }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* #16: Discoverability — Pin Editor was previously only reachable
-              from a PROPOSED render's "Edit" button, leaving operators
-              stranded if no proposed renders existed yet. Surface a top-level
-              entry point at the shoot scope. Disabled until at least one
-              shoot exists. */}
-          <Button
-            variant="outline"
-            size="sm"
-            asChild={shoots.length > 0 && Boolean(selectedShootId)}
-            disabled={shoots.length === 0 || !selectedShootId}
-            title={
-              shoots.length === 0
-                ? "No shoots yet — upload drone images first"
-                : !selectedShootId
-                  ? "Select a shoot to edit pins"
-                  : "Open the Pin Editor for this shoot"
-            }
-          >
-            {shoots.length > 0 && selectedShootId ? (
-              <Link
-                to={createPageUrl(
-                  `DronePinEditor?project=${projectId}&shoot=${selectedShootId}`,
-                )}
-              >
-                <Pencil className="h-4 w-4 mr-2" />
-                Open Pin Editor
-              </Link>
-            ) : (
-              <span className="inline-flex items-center">
-                <Pencil className="h-4 w-4 mr-2" />
-                Open Pin Editor
-              </span>
-            )}
-          </Button>
+          {/* Wave 5 P2 S6: project-level "Open Pin Editor" was removed —
+              Pin Editor is now per-card on Edited cards only (S4's contract).
+              Boundary Editor is also per-card on Edits cards (operator
+              launches from a specific edited card so they have visual
+              context). */}
           <Button
             variant="outline"
             size="sm"
@@ -550,14 +522,17 @@ function ShootDetail({ shoot, sfmRun, activeSubtab, onSubtabChange, projectId })
       {/* Status pipeline strip */}
       <PipelineStrip shoot={shoot} sfmRun={sfmRun} />
 
-      {/* Sub-tabs */}
+      {/* Sub-tabs (Wave 5 P2 S6: Edits added) */}
       <Tabs value={activeSubtab} onValueChange={onSubtabChange} className="w-full">
-        <TabsList className="grid grid-cols-2 w-full max-w-xs">
+        <TabsList className="grid grid-cols-3 w-full max-w-md">
           <TabsTrigger value="shots" className="text-xs">
             Shots
           </TabsTrigger>
           <TabsTrigger value="renders" className="text-xs">
             Renders
+          </TabsTrigger>
+          <TabsTrigger value="edits" className="text-xs">
+            Edits
           </TabsTrigger>
         </TabsList>
 
@@ -567,6 +542,10 @@ function ShootDetail({ shoot, sfmRun, activeSubtab, onSubtabChange, projectId })
 
         <TabsContent value="renders" className="mt-3">
           <DroneRendersSubtab shoot={shoot} projectId={projectId} />
+        </TabsContent>
+
+        <TabsContent value="edits" className="mt-3">
+          <DroneEditsSubtab shoot={shoot} projectId={projectId} />
         </TabsContent>
       </Tabs>
     </div>
