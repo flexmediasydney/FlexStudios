@@ -36,6 +36,7 @@ import {
 } from "react";
 import { api } from "@/api/supabaseClient";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
+import PinLayersPanel from "@/components/drone/PinLayersPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -78,9 +79,6 @@ import {
   AlertTriangle,
   Globe,
   Image as ImageIconLucide,
-  Plus,
-  ChevronDown,
-  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -820,6 +818,32 @@ export default function PinEditor({
     [setItems],
   );
 
+  // F35: Un-suppress placeholder — wired to the Layers panel's Restore
+  // button extracted in this commit. The behavior fix (server un_suppress
+  // action + lifecycle mirror) lands in the post-extract behavior commit.
+  const handleUnsuppress = useCallback((_id) => {
+    void _id;
+  }, []);
+
+  // Layers panel callbacks (extracted to PinLayersPanel.jsx).
+  const handleToggleFold = useCallback((groupKey) => {
+    setFoldedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
+  const handleToggleVisibility = useCallback((itemId) => {
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }, []);
+
   // W3-PINS: Reset to AI — restore world coords + label from latest_ai_snapshot.
   // We just stamp _reset_to_ai; the server reloads the snapshot from the row.
   const handleResetToAi = useCallback(
@@ -1273,147 +1297,22 @@ export default function PinEditor({
 
         {/* ── MAIN ROW ──────────────────────────────────────── */}
         <div className={cn("flex flex-1 min-h-0", themeError && "opacity-50 pointer-events-none")}>
-          {/* Layers panel */}
-          <aside className="w-60 border-r border-border bg-background overflow-y-auto shrink-0 p-3 text-sm">
-            <div className="font-semibold text-xs uppercase text-muted-foreground mb-2">
-              Layers
-            </div>
-            {Object.entries(layerGroups).map(([key, group]) => {
-              const folded = foldedGroups.has(key);
-              return (
-                <div key={key} className="mb-3">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setFoldedGroups((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(key)) next.delete(key);
-                        else next.add(key);
-                        return next;
-                      })
-                    }
-                    className="flex items-center gap-1 w-full text-left text-xs font-medium text-foreground/80 hover:text-foreground"
-                  >
-                    {folded ? (
-                      <ChevronRight className="h-3 w-3" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3" />
-                    )}
-                    {key === "world" ? (
-                      <Globe className="h-3 w-3" />
-                    ) : key === "detected" ? (
-                      <PinIcon className="h-3 w-3" />
-                    ) : (
-                      <ImageIconLucide className="h-3 w-3" />
-                    )}
-                    {group.label}
-                    <span className="text-muted-foreground ml-auto">
-                      {group.items.length}
-                    </span>
-                  </button>
-                  {!folded && group.items.length === 0 && (
-                    <p className="pl-5 text-[11px] text-muted-foreground italic mt-1">
-                      {key === "world"
-                        ? "Property + theme POIs (GPS-anchored)"
-                        : key === "detected"
-                          ? "AI-detected nearby places (read-only)"
-                          : "Text, ribbons, address overlays (per-shot)"}
-                    </p>
-                  )}
-                  {!folded && (
-                    <ul className="mt-1 space-y-0.5 pl-2">
-                      {group.items.map((it) => {
-                        const isHidden = hiddenIds.has(it.id);
-                        const isSelected = it.id === selectedItemId;
-                        return (
-                          <li
-                            key={it.id}
-                            className={cn(
-                              "flex items-center gap-1 rounded px-1.5 py-1 text-xs cursor-pointer",
-                              isSelected
-                                ? "bg-blue-100 dark:bg-blue-950 text-blue-900 dark:text-blue-200"
-                                : "hover:bg-muted",
-                            )}
-                            onClick={() => setSelectedItemId(it.id)}
-                          >
-                            <span
-                              className="inline-block w-2 h-2 rounded-full shrink-0"
-                              style={{ backgroundColor: it.color || "#888" }}
-                            />
-                            <span className="truncate flex-1">
-                              {it.label || it.kindLabel || "Item"}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setHiddenIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(it.id)) next.delete(it.id);
-                                  else next.add(it.id);
-                                  return next;
-                                });
-                              }}
-                              className="opacity-50 hover:opacity-100 shrink-0"
-                              title={isHidden ? "Show" : "Hide"}
-                              aria-label={`${isHidden ? "Show" : "Hide"} ${
-                                it.label || it.kindLabel || "layer"
-                              }`}
-                            >
-                              {isHidden ? (
-                                <EyeOff className="h-3 w-3" />
-                              ) : (
-                                <Eye className="h-3 w-3" />
-                              )}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
-            <div className="border-t border-border pt-3 mt-2 space-y-1">
-              <Button
-                size="sm"
-                variant={tool === TOOLS.ADD_PIN ? "secondary" : "ghost"}
-                className="w-full justify-start gap-1 text-xs"
-                onClick={() => setTool(TOOLS.ADD_PIN)}
-                disabled={shots.length === 0}
-                title={
-                  shots.length === 0
-                    ? "No shots in this shoot — add shots first."
-                    : poseAvailable
-                      ? "Click on canvas to drop a world-anchored pin (GPS)"
-                      : "SfM unavailable — pin will be pixel-anchored to this shot"
-                }
-              >
-                <Plus className="h-3 w-3" /> Add POI pin
-              </Button>
-              <Button
-                size="sm"
-                variant={tool === TOOLS.ADD_TEXT ? "secondary" : "ghost"}
-                className="w-full justify-start gap-1 text-xs"
-                onClick={() => setTool(TOOLS.ADD_TEXT)}
-                disabled={shots.length === 0}
-                title={
-                  shots.length === 0
-                    ? "No shots in this shoot — add shots first."
-                    : "Click on canvas to drop a pixel-anchored text label on this shot"
-                }
-              >
-                <TextIcon className="h-3 w-3" /> Add text
-              </Button>
-              <p className="text-[10px] text-muted-foreground pl-1 leading-tight pt-1">
-                <span className="font-medium">World</span> pins move with GPS
-                across all shots.
-                <br />
-                <span className="font-medium">Pixel</span> labels stay on a
-                single shot.
-              </p>
-            </div>
-          </aside>
+          {/* Layers panel — extracted to PinLayersPanel.jsx (Wave 5 P2 S4) */}
+          <PinLayersPanel
+            layerGroups={layerGroups}
+            foldedGroups={foldedGroups}
+            onToggleFold={handleToggleFold}
+            selectedItemId={selectedItemId}
+            onSelectItem={setSelectedItemId}
+            hiddenIds={hiddenIds}
+            onToggleVisibility={handleToggleVisibility}
+            onUnsuppress={handleUnsuppress}
+            tool={tool}
+            onSetTool={setTool}
+            shotsCount={shots.length}
+            poseAvailable={poseAvailable}
+            TOOLS={TOOLS}
+          />
 
           {/* Canvas */}
           <main
