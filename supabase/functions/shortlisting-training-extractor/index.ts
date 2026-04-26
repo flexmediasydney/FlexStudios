@@ -324,12 +324,32 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // ── Build training_examples rows ───────────────────────────────────────
   const rows: Record<string, unknown>[] = [];
+  const skippedGroupIds: Array<{ group_id: string; reason: string }> = [];
   let totalWeight = 0;
   for (const groupId of confirmedIds) {
     const cls = classByGroup.get(groupId);
     const grp = groupById.get(groupId);
     const slot = slotByGroup.get(groupId);
     const ovr = overrideByGroup.get(groupId);
+
+    // Burst 13 V5: defensively skip groups missing critical context. A row
+    // with delivery_reference_stem=null, analysis=null, room_type=null is
+    // useless as a training example and may violate NOT NULL constraints on
+    // some columns (causing the entire chunk to fail). The skipped count is
+    // surfaced in the audit event so ops can reconcile.
+    if (!grp) {
+      skippedGroupIds.push({ group_id: groupId, reason: 'no composition_groups row' });
+      continue;
+    }
+    const stem = grp.delivery_reference_stem || grp.best_bracket_stem;
+    if (!stem) {
+      skippedGroupIds.push({ group_id: groupId, reason: 'no delivery/best stem' });
+      continue;
+    }
+    if (!cls) {
+      skippedGroupIds.push({ group_id: groupId, reason: 'no composition_classifications row' });
+      continue;
+    }
 
     const wasOverride = ovr?.was_override ?? false;
     // Bug G4 fix: preserve variant_count from prior row if one existed (the
@@ -350,8 +370,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
     rows.push({
       composition_group_id: groupId,
-      delivery_reference_stem:
-        grp?.delivery_reference_stem || grp?.best_bracket_stem || null,
+      // V5: stem guaranteed non-null by the skip-loop above.
+      delivery_reference_stem: stem,
       variant_count: variantCount,
       slot_id: slot?.slot_id ?? null,
       // Bug G2 fix: explicit phase column for ML signal differentiation.
@@ -361,11 +381,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       human_confirmed_score: humanConfirmedScore,
       ai_proposed_score: aiProposedScore,
       was_override: wasOverride,
-      analysis: cls?.analysis ?? null,
-      key_elements: cls?.key_elements ?? null,
-      zones_visible: cls?.zones_visible ?? null,
-      composition_type: cls?.composition_type ?? null,
-      room_type: cls?.room_type ?? null,
+      analysis: cls.analysis ?? null,
+      key_elements: cls.key_elements ?? null,
+      zones_visible: cls.zones_visible ?? null,
+      composition_type: cls.composition_type ?? null,
+      room_type: cls.room_type ?? null,
       weight,
       training_grade: false,
       excluded: false,
@@ -402,6 +422,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       count: inserted,
       attempted: rows.length,
       deleted_existing: deletedExisting,
+      // V5: surface skipped groups so ops can reconcile data integrity gaps.
+      skipped_count: skippedGroupIds.length,
+      skipped_sample: skippedGroupIds.slice(0, 10),
       total_weight: roundWeight(totalWeight),
     },
   });
