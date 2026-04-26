@@ -232,10 +232,16 @@ export default function ProjectFilesTab({ project }) {
       setFilesError((prev) => ({ ...prev, [kind]: null }));
 
       try {
-        const data = await api.functions.invoke("getProjectFolderFiles", {
+        // QC4 follow-up: api.functions.invoke wraps response as { data: <body> }
+        // (see api/supabaseClient.js:565). Reading `data.success` directly was
+        // always undefined → every successful 200 response threw "Failed to
+        // load files". Bug was masked pre-Wave-7 because the legacy folder
+        // taxonomy threw 500s on the server, so users assumed backend failure.
+        const result = await api.functions.invoke("getProjectFolderFiles", {
           project_id: project.id,
           folder_kind: kind,
         });
+        const data = result?.data;
         if (!data?.success) {
           throw new Error(data?.error || "Failed to load files");
         }
@@ -267,7 +273,8 @@ export default function ProjectFilesTab({ project }) {
   const handleResyncConfirm = async () => {
     setResyncing(true);
     try {
-      const data = await api.functions.invoke("dropbox-reconcile", {});
+      const result = await api.functions.invoke("dropbox-reconcile", {});
+      const data = result?.data;
       if (!data?.success) {
         throw new Error(data?.error || "Re-sync failed");
       }
@@ -301,11 +308,12 @@ export default function ProjectFilesTab({ project }) {
     }
     setOverrideSaving(true);
     try {
-      const data = await api.functions.invoke("setProjectFolderOverride", {
+      const result = await api.functions.invoke("setProjectFolderOverride", {
         project_id: project.id,
         folder_kind: overrideKind,
         new_path: overridePath.trim(),
       });
+      const data = result?.data;
       if (!data?.success) {
         throw new Error(data?.error || "Override failed");
       }
