@@ -1,21 +1,32 @@
 /**
  * drone-pois
  * ──────────
- * POST { project_id, refresh?: boolean, radius_m?: number }
- *   → { success, pois: [...], cached: boolean, fetched_at, source, total_count }
+ * POST { project_id, refresh?: boolean, radius_m?: number, type_quotas?, pipeline? }
+ *   → { success, pois: [...], cached: false, fetched_at, source, total_count, materialised }
  *
- * Fetches Points-of-Interest near a project's property location, using Google
- * Places Nearby Search. Results are cached for 30 days in drone_pois_cache to
- * keep both API cost and latency low (~$0.03 / property uncached, ~0ms cached).
+ * Fetches Points-of-Interest near a project's property location via Google
+ * Places Nearby Search and materialises the curated list into drone_custom_pins
+ * (source='ai') as the canonical AI-pin store.
  *
- * Architecture:
+ * Architecture (Wave 5 P2 S2 — post drone_pois_cache deprecation):
  *   1. Fetch project; resolve property_coord = confirmed_lat/lng OR geocoded_lat/lng.
- *   2. If !refresh and an active cache row exists for this project, return it.
- *   3. Else: call Google Places Nearby Search once per type (parallelised),
- *      merge + dedupe by place_id, curate per type quotas, sort by distance
- *      within type, persist new cache row.
+ *   2. Live-fetch Google Places Nearby Search once per type (parallelised),
+ *      merge + dedupe by place_id, curate per type quotas, sort by distance.
+ *   3. Smart-merge into drone_custom_pins:
+ *        - new place_id → INSERT
+ *        - existing active/superseded + operator-edited → preserve coords/content,
+ *          refresh latest_ai_snapshot only
+ *        - existing active/superseded + system-only → overwrite from fresh data
+ *        - existing 'deleted' + system-only → REACTIVATE (F37)
+ *        - existing 'deleted' + operator → preserve deletion
+ *      Then atomic-supersede any active row whose place_id is no longer in
+ *      the fresh fetch (operator-preserved if updated_by IS NOT NULL).
  *
- * POI types & quotas come from IMPLEMENTATION_PLAN_V2 §3.3 poi_selection.
+ * drone_pois_cache was deprecated in mig 285 (write-blocking trigger) and
+ * its read/write paths were removed from this file in Wave 5 P2 (S2).
+ * Live-fetching every call is acceptable: drone_custom_pins acts as the
+ * persistent cache, and we only fetch on operator-triggered refresh +
+ * editor-delivery webhook events.
  *
  * Auth: any authenticated user (same pattern as getProjectFolderFiles).
  *   - master_admin / admin: any project
@@ -377,6 +388,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
      * are normalised; unknown keys are dropped with a warn.
      */
     type_quotas?: TypeQuotaInput;
+    /**
+     * Wave 5 Phase 2 (S2): optional telemetry-only field. drone-pois treats
+     * both pipelines identically (same Google Places call, same
+     * drone_custom_pins materialisation), but logging the pipeline lets us
+     * trace which pipeline kicked off a given fetch. dropbox-webhook (S6)
+     * will pass `pipeline:'edited'` when it kicks off a fresh fetch on
+     * editor delivery.
+     */
+    pipeline?: 'raw' | 'edited';
     _health_check?: boolean;
   } = {};
   try {
@@ -390,6 +410,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   if (!body.project_id) return errorResponse('project_id required', 400, req);
+
+  // Wave 5 P2 (S2): telemetry-only log of the calling pipeline.
+  // drone-pois logic is pipeline-agnostic (same Google Places call, same
+  // materialisation). The pipeline field exists so dropbox-webhook (S6)
+  // can stamp 'edited' on the fresh-fetch it kicks off when an editor
+  // delivers; readers can correlate POI fetches with the pipeline that
+  // triggered them via the function logs.
+  if (body.pipeline) {
+    console.log(`[${GENERATOR}] invoked for pipeline=${body.pipeline} project=${body.project_id}`);
+  }
 
   const radiusM = (() => {
     const r = Number(body.radius_m);
@@ -445,43 +475,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(message, 400, req);
   }
 
-  // 2. Cache hit? Cache lookup must include (radius_m, type_quotas_hash) so
-  // different theme selections + radius combos don't share a slot. The
-  // type_quotas_hash column was added in migration 245 with default '' for
-  // pre-existing rows. Legacy callers (no body.type_quotas) get hash='', so
-  // legacy cache rows still hit. New callers with theme-driven type_quotas
-  // get a fresh row (cold cache miss) on first request — this is the
-  // intended cache-busting strategy. (#39 audit fix extended)
-  if (!body.refresh) {
-    const { data: cached } = await admin
-      .from('drone_pois_cache')
-      .select('*')
-      .eq('project_id', body.project_id)
-      .eq('radius_m', radiusM)
-      .eq('type_quotas_hash', resolvedQuotas.hash)
-      .gt('expires_at', new Date().toISOString())
-      .order('fetched_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (cached) {
-      return jsonResponse(
-        {
-          success: true,
-          cached: true,
-          pois: cached.pois,
-          total_count: cached.total_count,
-          fetched_at: cached.fetched_at,
-          expires_at: cached.expires_at,
-          source: cached.source,
-          radius_m: cached.radius_m,
-        },
-        200,
-        req,
-      );
-    }
-  }
+  // 2. drone_pois_cache is DEPRECATED (mig 285) and write-blocked by trigger.
+  // Wave 5 P2 (S2): the cache read path was removed in this commit. The
+  // canonical AI POI store is drone_custom_pins (source='ai'), populated by
+  // the materialise step at the end of this handler. drone-render reads
+  // from drone_custom_pins directly; nothing else queries drone_pois_cache
+  // post-W3-PINS. Live-fetching every call is acceptable because:
+  //   - Google Places per-call cost is ~$0.006 per type query
+  //   - We only fetch on POI refresh events (operator-triggered or
+  //     editor-delivery webhook), not on every render
+  //   - drone_custom_pins acts as the persistent cache; the AI snapshot
+  //     stored there survives until the next operator-triggered refresh
+  // body.refresh is now informational only — every call is a live fetch.
 
-  // 3. Cache miss — fetch live.
+  // 3. Live fetch.
   const apiKey = await resolveGooglePlacesKey();
   if (!apiKey) {
     return errorResponse(
@@ -519,40 +526,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const curated = curate(byType, propertyLat, propertyLng, resolvedQuotas.quotas);
 
-  // 4. Persist cache row. The (project_id, radius_m, type_quotas_hash)
-  // unique index from migration 245 collides on concurrent identical
-  // requests; we use upsert-on-conflict to swallow the duplicate (the
-  // first writer wins, the second silently re-uses the row).
-  //
-  // Mig 268 (W3-PINS): the cache table is now a RAW AUDIT LOG of Google
-  // Places responses (cost tracking + replay). The authoritative POI store
-  // for renders + Pin Editor is drone_custom_pins (source='ai'). We keep
-  // writing the cache row for back-compat while readers migrate; the
-  // materialise step below is what actually drives renders going forward.
+  // 4. drone_pois_cache writes REMOVED Wave 5 P2 (S2). Mig 285 installed a
+  // BEFORE INSERT/UPDATE/DELETE trigger that raises on any write to the
+  // deprecated table — the upsert that used to live here would now fail
+  // every time and only succeed at logging the failure. drone_custom_pins
+  // (source='ai') is the canonical store; the materialise step below is
+  // the only persistence we do for the curated POI list.
   const fetchedAt = new Date();
   const expiresAt = new Date(fetchedAt.getTime() + CACHE_TTL_DAYS * 24 * 60 * 60 * 1000);
-
-  const { error: insertErr } = await admin
-    .from('drone_pois_cache')
-    .upsert(
-      {
-        project_id: body.project_id,
-        property_lat: propertyLat,
-        property_lng: propertyLng,
-        radius_m: radiusM,
-        type_quotas_hash: resolvedQuotas.hash,
-        fetched_at: fetchedAt.toISOString(),
-        expires_at: expiresAt.toISOString(),
-        source: 'google_places',
-        pois: curated,
-        total_count: curated.length,
-      },
-      { onConflict: 'project_id,radius_m,type_quotas_hash' },
-    );
-  if (insertErr) {
-    // Cache write failure is non-fatal — return live data anyway.
-    console.warn(`[${GENERATOR}] cache insert failed: ${insertErr.message}`);
-  }
 
   // ── 4b. Materialise into drone_custom_pins (W3-PINS unified model) ─────
   // Each curated POI becomes a row in drone_custom_pins with source='ai'.
@@ -603,6 +584,8 @@ async function materialiseAiPins(
   inserted: number;
   refreshed_ai: number;
   preserved_operator_edits: number;
+  reactivated_ai: number;
+  preserved_operator_deletes: number;
   superseded: number;
   errors: number;
 }> {
@@ -610,6 +593,23 @@ async function materialiseAiPins(
     inserted: 0,
     refreshed_ai: 0,
     preserved_operator_edits: 0,
+    /**
+     * F37 (Wave 5 P2 S2): count of rows whose lifecycle was flipped from
+     * 'deleted' back to 'active' because Google returned the same
+     * external_ref AND no operator had touched the row (updated_by IS NULL).
+     * Pre-S2 these rows would silently stay deleted forever and the
+     * smart-merge would 23505-loop on every refresh because the unique
+     * partial index on (project_id, external_ref) WHERE source='ai' is
+     * INCLUDING the soft-deleted rows.
+     */
+    reactivated_ai: 0,
+    /**
+     * F37 (Wave 5 P2 S2): count of rows we left at lifecycle='deleted'
+     * because an operator deleted them intentionally (updated_by IS NOT
+     * NULL). Surfaced for telemetry — operators should be able to see at a
+     * glance that "yes I deleted these on purpose, the system respected it".
+     */
+    preserved_operator_deletes: 0,
     superseded: 0,
     errors: 0,
   };
@@ -640,23 +640,24 @@ async function materialiseAiPins(
     }
 
     // Load existing AI pins for this project so we can: (a) detect operator
-    // edits via updated_by, and (b) supersede anything no longer in the
-    // fresh fetch.
+    // edits via updated_by, (b) supersede anything no longer in the fresh
+    // fetch, AND (c) reactivate soft-deleted rows when a Google place
+    // reappears (Wave 5 P2 S2 F37 — see reactivation branch below).
     //
-    // Wave 5 P1 (QC2-1 #14): filter to lifecycle IN ('active','superseded')
-    // — soft-deleted ('deleted') and 'suppressed' rows must NOT poison the
-    // existingByRef map. Without this filter, refresh routes every
-    // existing-key match through the operator-edit branch even when the
-    // row was suppressed by the operator (correct for suppressed: re-bring
-    // it back if the data is fresh) or soft-deleted (incorrect: a deleted
-    // pin should be re-created). 'deleted' is excluded so the new INSERT
-    // path runs and the unique index 23505-rebuilds the row cleanly.
+    // Wave 5 P1 (QC2-1 #14): include 'superseded' so a previously-superseded
+    // row whose place reappears flips back to active.
+    // Wave 5 P2 (S2 F37): include 'deleted' so the new reactivation branch
+    // can flip system-deleted rows back to active. Pre-S2 these rows were
+    // EXCLUDED, which forced the INSERT path which then 23505-loop'd against
+    // the unique partial index on (project_id, external_ref) WHERE
+    // source='ai' AND external_ref IS NOT NULL — the index INCLUDES
+    // soft-deleted rows.
     const { data: existingRaw, error: exErr } = await admin
       .from('drone_custom_pins')
       .select('id, external_ref, updated_by, lifecycle, world_lat, world_lng')
       .eq('project_id', projectId)
       .eq('source', 'ai')
-      .in('lifecycle', ['active', 'superseded']);
+      .in('lifecycle', ['active', 'superseded', 'deleted']);
     if (exErr) {
       console.warn(`[${GENERATOR}] materialise: existing-row lookup failed: ${exErr.message}`);
       summary.errors += 1;
@@ -731,7 +732,53 @@ async function materialiseAiPins(
         continue;
       }
 
-      // Existing row — choose path based on operator-edit flag
+      // ── F37 reactivation branch (Wave 5 P2 S2) ─────────────────────
+      // When a Google place reappears that previously had lifecycle='deleted':
+      //   - updated_by IS NULL  → SYSTEM-deleted (e.g. previous supersede
+      //                           sweep + later soft-delete by maintenance
+      //                           script). Reactivate by flipping lifecycle
+      //                           to 'active' and refreshing world coords +
+      //                           content + snapshot from the fresh fetch.
+      //   - updated_by IS NOT NULL → OPERATOR deleted intentionally. Preserve
+      //                              the deletion — do NOT reactivate. This
+      //                              respects the operator's explicit choice
+      //                              even when Google keeps returning the
+      //                              place. The row stays at lifecycle='deleted'.
+      //
+      // Pre-S2 the smart-merge filtered 'deleted' OUT of existingByRef, so
+      // the unconditional INSERT path ran against the unique partial index
+      // (project_id, external_ref) WHERE source='ai' AND external_ref IS NOT
+      // NULL — and that index INCLUDES soft-deleted rows, so every refresh
+      // raised 23505 and the row stayed deleted forever. The 23505 was
+      // counted as `refreshed_ai += 1` (cosmetic accounting only — the row
+      // still didn't come back). This branch fixes that.
+      if (existing.lifecycle === 'deleted') {
+        if (existing.updated_by !== null) {
+          // Operator-preserved deletion — no DB write, just telemetry.
+          summary.preserved_operator_deletes += 1;
+          continue;
+        }
+        // System-deleted + place reappears → reactivate.
+        const { error } = await admin
+          .from('drone_custom_pins')
+          .update({
+            world_lat: poi.lat,
+            world_lng: poi.lng,
+            content,
+            latest_ai_snapshot: snapshot,
+            lifecycle: 'active',
+          })
+          .eq('id', existing.id);
+        if (error) {
+          console.warn(`[${GENERATOR}] materialise reactivate ${poi.place_id} failed: ${error.message}`);
+          summary.errors += 1;
+        } else {
+          summary.reactivated_ai += 1;
+        }
+        continue;
+      }
+
+      // Existing row (active or superseded) — choose path based on operator-edit flag
       const wasOperatorEdited = existing.updated_by !== null;
       if (wasOperatorEdited) {
         // Preserve world coords + content; refresh snapshot only so
