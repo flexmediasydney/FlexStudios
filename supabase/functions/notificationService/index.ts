@@ -150,6 +150,97 @@ async function resolveUserIds(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DYNAMIC ROUTING RULES RESOLVER (Wave 6 P1.5)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Reads `notification_routing_rules` for the active rule for `type` and
+// resolves it to a deduped list of public.users.id values. Falls back to
+// NOTIFICATION_TYPES[type].default_roles if no active rule exists.
+//
+// recipient_user_ids stores public.users.id directly (not auth.users.id) —
+// confirmed by the FK on notifications.user_id which references public.users.
+// We still verify each id exists in public.users before fan-out so a stale
+// admin-saved id doesn't FK-bomb the notification insert.
+async function resolveRecipients(
+  entities: any,
+  admin: any,
+  type: string,
+  projectId?: string
+): Promise<{ userIds: string[]; source: 'rule' | 'default_roles' | 'empty'; ruleId?: string }> {
+  if (!type) return { userIds: [], source: 'empty' };
+
+  // 1. Check for an active rule for this type. The partial unique index on
+  // is_active=TRUE guarantees at most one row, so .maybeSingle() is safe.
+  let rule: any = null;
+  try {
+    const { data } = await admin
+      .from('notification_routing_rules')
+      .select('id, recipient_roles, recipient_user_ids')
+      .eq('notification_type', type)
+      .eq('is_active', true)
+      .maybeSingle();
+    rule = data;
+  } catch (err: any) {
+    console.warn('resolveRecipients: rule lookup failed', { type, err: err?.message });
+  }
+
+  if (rule) {
+    const userIds = new Set<string>();
+
+    // a) Resolve recipient_roles → public.users.id list (using same project-
+    //    aware role resolver as create_for_roles).
+    const roles: string[] = Array.isArray(rule.recipient_roles) ? rule.recipient_roles : [];
+    if (roles.length > 0) {
+      const fromRoles = await resolveUserIds(entities, roles, projectId);
+      fromRoles.forEach((id) => id && userIds.add(id));
+    }
+
+    // b) Add specific recipient_user_ids — but only if they actually exist in
+    //    public.users (FK validation in app — table doesn't constrain this).
+    const explicitIds: string[] = Array.isArray(rule.recipient_user_ids) ? rule.recipient_user_ids : [];
+    if (explicitIds.length > 0) {
+      try {
+        const { data: validUsers } = await admin
+          .from('users')
+          .select('id')
+          .in('id', explicitIds);
+        // deno-lint-ignore no-explicit-any
+        ((validUsers || []) as any[]).forEach((u) => u?.id && userIds.add(u.id));
+        const validSet = new Set((validUsers || []).map((u: any) => u.id));
+        const orphaned = explicitIds.filter((id) => !validSet.has(id));
+        if (orphaned.length > 0) {
+          console.warn('resolveRecipients: dropping orphan recipient_user_ids', {
+            type,
+            orphaned,
+          });
+        }
+      } catch (err: any) {
+        console.warn('resolveRecipients: explicit user validation failed', {
+          type,
+          err: err?.message,
+        });
+      }
+    }
+
+    return {
+      userIds: Array.from(userIds).filter(Boolean),
+      source: 'rule',
+      ruleId: rule.id,
+    };
+  }
+
+  // 2. No rule — fall back to NOTIFICATION_TYPES[type].default_roles.
+  const typeConfig = NOTIFICATION_TYPES[type];
+  if (typeConfig && Array.isArray(typeConfig.default_roles) && typeConfig.default_roles.length > 0) {
+    const ids = await resolveUserIds(entities, typeConfig.default_roles, projectId);
+    return { userIds: ids, source: 'default_roles' };
+  }
+
+  // 3. Neither — empty (caller already warns).
+  return { userIds: [], source: 'empty' };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // PREFERENCE CHECK
 // ═══════════════════════════════════════════════════════════════════════════
 async function checkPreference(
@@ -348,8 +439,68 @@ serveWithAudit('notificationService', async (req) => {
     const { action, ...params } = body;
 
     if (action === 'create') {
-      const result = await createNotificationForUser(entities, params);
-      return jsonResponse(result);
+      // Wave 6 P1.5: dual-mode create.
+      //   - Direct userId path (back-compat): body.userId provided → fire one
+      //     notification to that user. UNCHANGED behaviour.
+      //   - Dynamic-routing path: body.userId omitted → resolve recipients
+      //     from notification_routing_rules (with default_roles fallback) and
+      //     fan out one notification per recipient. The caller's
+      //     idempotencyKey is suffixed with the recipient's user_id so the
+      //     dedup check fires per-user, not globally.
+      if (params.userId) {
+        const result = await createNotificationForUser(entities, params);
+        return jsonResponse(result);
+      }
+
+      // Fan-out path.
+      if (!params.type) {
+        return errorResponse('create requires either userId or type', 400);
+      }
+      const resolved = await resolveRecipients(entities, admin, params.type, params.projectId);
+      if (resolved.userIds.length === 0) {
+        console.warn('notificationService: fan-out produced 0 recipients', {
+          type: params.type,
+          source: resolved.source,
+        });
+        return jsonResponse({
+          created_count: 0,
+          skipped_count: 0,
+          recipients: [],
+          source: resolved.source,
+          rule_id: resolved.ruleId || null,
+        });
+      }
+
+      let createdCount = 0;
+      let skippedCount = 0;
+      const recipientResults: Array<{ user_id: string; created?: boolean; skipped?: boolean; reason?: string }> = [];
+
+      for (const recipientId of resolved.userIds) {
+        // Idempotency must be unique per recipient — otherwise the 2nd
+        // recipient's insert would dedupe-skip against the 1st recipient's
+        // existing row in the notifications table.
+        const idemKey = params.idempotencyKey
+          ? `${params.idempotencyKey}-${recipientId}`
+          : undefined;
+
+        const result = await createNotificationForUser(entities, {
+          ...params,
+          userId: recipientId,
+          idempotencyKey: idemKey,
+        });
+
+        if (result.created) createdCount++;
+        else skippedCount++;
+        recipientResults.push({ user_id: recipientId, ...result });
+      }
+
+      return jsonResponse({
+        created_count: createdCount,
+        skipped_count: skippedCount,
+        recipients: recipientResults,
+        source: resolved.source,
+        rule_id: resolved.ruleId || null,
+      });
     }
 
     if (action === 'create_for_roles') {
@@ -357,13 +508,17 @@ serveWithAudit('notificationService', async (req) => {
       return jsonResponse(result);
     }
 
-    if (action === 'get_type_registry') {
+    if (action === 'get_type_registry' || action === 'list_types') {
+      // Wave 6 P1.5: list_types alias added so admin Routing Rules UI can
+      // fetch the registry without coupling to the legacy name. Returns the
+      // same payload either way.
       return jsonResponse({ types: NOTIFICATION_TYPES });
     }
 
     // Tolerate legacy/broken callers: if no action, infer from payload shape.
     // - payload with userId -> treat as 'create'
     // - payload with roles array -> treat as 'create_for_roles'
+    // - payload with type-only -> treat as 'create' fan-out (Wave 6 P1.5)
     // - otherwise return 200 noop (not 400) so caller error rates stay clean.
     if (!action) {
       console.warn('notificationService: call missing action param', {
@@ -378,6 +533,39 @@ serveWithAudit('notificationService', async (req) => {
       if (Array.isArray(params.roles) && params.roles.length > 0 && params.type) {
         const result = await createNotificationsForRoles(entities, params);
         return jsonResponse({ ...result, inferred_action: 'create_for_roles' });
+      }
+      if (params.type && !params.userId) {
+        // Fan-out via routing rules. Mirrors the action='create' path above.
+        const resolved = await resolveRecipients(entities, admin, params.type, params.projectId);
+        if (resolved.userIds.length === 0) {
+          return jsonResponse({
+            created_count: 0,
+            skipped_count: 0,
+            recipients: [],
+            source: resolved.source,
+            inferred_action: 'create',
+          });
+        }
+        let createdCount = 0;
+        let skippedCount = 0;
+        for (const recipientId of resolved.userIds) {
+          const idemKey = params.idempotencyKey
+            ? `${params.idempotencyKey}-${recipientId}`
+            : undefined;
+          const result = await createNotificationForUser(entities, {
+            ...params,
+            userId: recipientId,
+            idempotencyKey: idemKey,
+          });
+          if (result.created) createdCount++;
+          else skippedCount++;
+        }
+        return jsonResponse({
+          created_count: createdCount,
+          skipped_count: skippedCount,
+          source: resolved.source,
+          inferred_action: 'create',
+        });
       }
       return jsonResponse({ skipped: true, reason: 'no_action_or_target', noop: true });
     }

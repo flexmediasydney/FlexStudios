@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, CheckCheck, Trash2, Search, ChevronRight,
-         AlertCircle, AlertTriangle, Info, RefreshCw, X } from "lucide-react";
+         AlertCircle, AlertTriangle, Info, RefreshCw, X, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { createPageUrl } from "@/utils";
 import { useNotifications } from "@/components/notifications/NotificationContext";
+// Wave 6 P1.5: Routing Rules sub-tab — master_admin only.
+import NotificationRoutingRulesAdmin from "@/components/notifications/NotificationRoutingRulesAdmin";
+import { useCurrentUser } from "@/components/auth/PermissionGuard";
+import { cn } from "@/lib/utils";
 
 const CATEGORY_TABS = [
   { value: "all",        label: "All" },
@@ -41,6 +45,41 @@ function relTime(ts) {
   return new Date(ts).toLocaleDateString("en-AU", { day:"numeric", month:"short", timeZone: "Australia/Sydney" });
 }
 
+// Wave 6 P1.5: lightweight pill-toggle between Inbox and Routing Rules.
+// Doesn't use Tabs primitive because the existing inbox view nests category
+// Tabs inside; nesting two Tabs primitives would conflict.
+function SectionToggle({ section, onChange, isMasterAdmin }) {
+  if (!isMasterAdmin) return null;
+  const opts = [
+    { value: "inbox", label: "Inbox", icon: Bell },
+    { value: "routing", label: "Routing Rules", icon: Settings },
+  ];
+  return (
+    <div className="inline-flex rounded-md border bg-background p-0.5">
+      {opts.map((o) => {
+        const Icon = o.icon;
+        const on = section === o.value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded px-3 py-1 text-xs transition-colors",
+              on
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground hover:bg-muted/40",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function NotificationsPage() {
   const { notifications, unreadCount, markRead, markAllRead, dismiss, refresh, loading } =
     useNotifications();
@@ -49,6 +88,13 @@ export default function NotificationsPage() {
   const [readFilter, setReadFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(new Set());
+  // Wave 6 P1.5: 'inbox' (existing user-facing list) | 'routing' (master_admin
+  // routing rules editor). The Tabs primitive is already used inside the
+  // inbox view for category filtering, so we use a separate sub-section
+  // toggle at the top of the page rather than nesting Tabs.
+  const [section, setSection] = useState("inbox");
+  const { data: currentUser } = useCurrentUser();
+  const isMasterAdmin = currentUser?.role === "master_admin";
 
   // Keyboard shortcut: Esc to clear search
   React.useEffect(() => {
@@ -174,8 +220,28 @@ export default function NotificationsPage() {
     );
   }
 
+  // Wave 6 P1.5: master_admin can swap to "Routing Rules" sub-section.
+  if (section === "routing" && isMasterAdmin) {
+    return (
+      <div className="p-6 lg:p-8 max-w-[1280px] mx-auto space-y-6">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+            <Bell className="h-7 w-7 text-primary" /> Notifications
+          </h1>
+          <SectionToggle section={section} onChange={setSection} isMasterAdmin={isMasterAdmin} />
+        </div>
+        <NotificationRoutingRulesAdmin currentUserRole={currentUser?.role} />
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 lg:p-8 max-w-4xl space-y-6">
+      {isMasterAdmin && (
+        <div className="flex justify-end">
+          <SectionToggle section={section} onChange={setSection} isMasterAdmin={isMasterAdmin} />
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">

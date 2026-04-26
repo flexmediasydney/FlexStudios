@@ -366,43 +366,38 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
     });
   if (completeErr) warnings.push(`pass3_complete event insert failed: ${completeErr.message}`);
 
-  // 11. Fire `shortlist_ready_for_review` notification to the project owner.
-  //     Idempotency key keyed on round_id prevents duplicate fires if pass3
-  //     re-runs (e.g. via dispatcher retry). Failure is non-fatal — we don't
-  //     want a notification glitch to flip the round status back. Wave 6 P5.
+  // 11. Fire `shortlist_ready_for_review` notification.
+  //     Wave 6 P1.5: recipient resolution moved to notification_routing_rules.
+  //     We drop the explicit userId here — the notificationService backend
+  //     reads the active rule for this type and fans out to all configured
+  //     recipients (master_admin by default per the migration 294 seed).
+  //     Idempotency key remains keyed on round_id; the backend appends each
+  //     recipient's user_id internally so per-user dedup still works.
+  //     Failure is non-fatal — we don't want a notification glitch to flip
+  //     the round status back.
   try {
     const { data: project } = await admin
       .from('projects')
-      .select('id, property_address, project_owner_id')
+      .select('id, property_address')
       .eq('id', projectId)
       .maybeSingle();
 
-    const recipient: string | null =
-      (project?.project_owner_id as string | undefined) || null;
     const projectName: string =
       (project?.property_address as string | undefined) || 'Project';
     const gapCount = unfilledMandatory.length;
 
-    if (recipient) {
-      await fireNotif({
-        userId: recipient,
-        type: 'shortlist_ready_for_review',
-        category: 'workflow',
-        severity: 'info',
-        title: `Shortlist ready: ${projectName}`,
-        message: `AI selected ${shortlistedGroupIds.size} shots from ${totalClassifications} compositions. ${overallCoveragePercent}% coverage. ${gapCount} gap${gapCount === 1 ? '' : 's'} flagged.`,
-        projectId,
-        projectName,
-        ctaLabel: 'Review shortlist',
-        source: GENERATOR,
-        idempotencyKey: `shortlist-ready-${roundId}`,
-      });
-    } else {
-      console.warn(
-        `[${GENERATOR}] no project_owner_id on project ${projectId} — skipping shortlist_ready_for_review notification`,
-      );
-      warnings.push('notification skipped: no project_owner_id');
-    }
+    await fireNotif({
+      type: 'shortlist_ready_for_review',
+      category: 'workflow',
+      severity: 'info',
+      title: `Shortlist ready: ${projectName}`,
+      message: `AI selected ${shortlistedGroupIds.size} shots from ${totalClassifications} compositions. ${overallCoveragePercent}% coverage. ${gapCount} gap${gapCount === 1 ? '' : 's'} flagged.`,
+      projectId,
+      projectName,
+      ctaLabel: 'Review shortlist',
+      source: GENERATOR,
+      idempotencyKey: `shortlist-ready-${roundId}`,
+    });
   } catch (notifErr) {
     const msg = notifErr instanceof Error ? notifErr.message : String(notifErr);
     console.warn(`[${GENERATOR}] notification fire failed: ${msg}`);

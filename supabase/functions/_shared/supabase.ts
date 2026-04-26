@@ -609,7 +609,20 @@ export async function invokeFunction(
 
 // ─── Notification helper ──────────────────────────────────────────────────────
 
-/** Fire a notification via the notificationService function. Returns false if notification failed. */
+/**
+ * Fire a notification via the notificationService function.
+ *
+ * Two modes (Wave 6 P1.5):
+ *   1. Direct: pass `userId` → notification is created for that user only.
+ *      This is the legacy back-compat path; existing callers are unchanged.
+ *   2. Fan-out: omit `userId` (pass `type` and content) → notificationService
+ *      reads `notification_routing_rules` for the active rule for `type` and
+ *      fans out one notification per resolved recipient. Falls back to
+ *      NOTIFICATION_TYPES[type].default_roles when no rule exists.
+ *
+ * Returns false if the invocation failed (does not distinguish 0 recipients
+ * from network failure — check edge function logs for fan-out details).
+ */
 export async function fireNotif(params: {
   userId?: string;
   type?: string;
@@ -624,10 +637,15 @@ export async function fireNotif(params: {
   idempotencyKey?: string;
 }): Promise<boolean> {
   try {
-    await invokeFunction('notificationService', {
-      action: 'create',
-      ...params,
-    } as Record<string, unknown>);
+    // Strip undefined/null userId so the backend takes the fan-out path
+    // unambiguously rather than treating an explicit-null as "create for null".
+    // deno-lint-ignore no-explicit-any
+    const payload: Record<string, unknown> = { action: 'create' };
+    for (const [k, v] of Object.entries(params)) {
+      if (v == null) continue;
+      payload[k] = v;
+    }
+    await invokeFunction('notificationService', payload);
     return true;
   } catch (err: any) {
     console.warn('fireNotif failed:', err?.message);
