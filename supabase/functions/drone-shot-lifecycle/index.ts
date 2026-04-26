@@ -114,9 +114,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
 
   // ── Load the shot (incl. shoot_id → project_id for audit attribution) ─────
+  // claimed_by is read so the W14-S2 auto-claim block below can decide
+  // whether to stamp ownership inside the same UPDATE that flips lifecycle_state.
   const { data: shot, error: fetchErr } = await admin
     .from('drone_shots')
-    .select('id, shoot_id, lifecycle_state, filename, dropbox_path, shot_role')
+    .select('id, shoot_id, lifecycle_state, filename, dropbox_path, shot_role, claimed_by')
     .eq('id', body.shot_id)
     .maybeSingle();
 
@@ -261,6 +263,25 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     projectId = shootRow?.project_id ?? null;
   }
 
+  // ── Wave 14 S2: auto-claim on first contractor lifecycle transition ──────
+  // When a contractor flips a shot whose claimed_by is currently NULL,
+  // stamp claimed_by=user.id + claimed_at=NOW() AS PART OF the same UPDATE
+  // that flips lifecycle_state. Atomic stamp avoids a race window where
+  // a second contractor on the same project could squeak in between a
+  // separate claim UPDATE and the lifecycle UPDATE.
+  //
+  // Service-role callers (dropbox-webhook etc.) skip the auto-claim — the
+  // shot owner is the human contractor, not the system. master_admin/admin/
+  // manager/employee also skip auto-claim (they're operators acting on
+  // behalf of the owner; their writes shouldn't masquerade as a claim).
+  //
+  // claimed_by stamp persists through the rest of the lifecycle as audit
+  // history — we don't NULL it on final/delivered (per spec).
+  const claimSet: { claimed_by?: string; claimed_at?: string } =
+    !isService && role === 'contractor' && shot.claimed_by === null
+      ? { claimed_by: user.id, claimed_at: new Date().toISOString() }
+      : {};
+
   // ── Update lifecycle_state (optimistic lock on fromState) ────────────────
   // QC2-1 #12: previously the UPDATE had no fromState predicate, so two
   // parallel POSTs racing the same shot from raw_proposed → raw_accepted /
@@ -276,7 +297,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // but .select() is more readable for "expecting 0 or 1 rows by predicate".
   const { data: updatedRows, error: updErr } = await admin
     .from('drone_shots')
-    .update({ lifecycle_state: target })
+    .update({ lifecycle_state: target, ...claimSet })
     .eq('id', body.shot_id)
     .eq('lifecycle_state', fromState)
     .select('*');
