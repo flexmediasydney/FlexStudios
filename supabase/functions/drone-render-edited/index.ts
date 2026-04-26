@@ -180,6 +180,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
      * (optionally) shoot_id NULL.
      */
     cascade?: boolean;
+    /**
+     * Cascade orchestration parent (Wave 10 S1, mig 302). When the
+     * dispatcher routes a kind='boundary_save_render_cascade' or a
+     * kind='render_edited' (cascade=true) row through to this function,
+     * it passes the orchestration row's id here so we can stamp it on
+     * each per-shot fan-out child via drone_jobs.parent_job_id. The
+     * mig 302 trigger then rolls children status into the parent's
+     * children_summary + terminal_status. Optional for back-compat with
+     * direct invocations; warning-logged if missing on a cascade.
+     */
+    parent_job_id?: string;
     /** Informational reason — drives column_state default + audit payload. */
     reason?: string;
     _health_check?: boolean;
@@ -244,6 +255,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       return errorResponse("cascade=true requires project_id", 400, req);
     }
 
+    // ── W10-S1: cascade orchestration parent (mig 302) ──────────────
+    // The dispatcher hands us body.parent_job_id when it routes a
+    // boundary_save_render_cascade / render_edited(cascade=true) job
+    // through. We stamp it on each fan-out child below so the mig 302
+    // trigger can roll children status into parent.children_summary +
+    // parent.terminal_status. Missing parent_job_id is back-compat with
+    // direct callers — log a warning so it's visible if the dispatcher
+    // somehow stops sending it.
+    const parentJobId = body.parent_job_id || null;
+    if (!parentJobId) {
+      console.warn(
+        `[${GENERATOR}] cascade fan-out without parent_job_id — orchestration roll-up disabled (project=${projectId} reason=${body.reason || '(none)'})`,
+      );
+    }
+
     // Resolve eligible shots: every shot in the project with
     // edited_dropbox_path NOT NULL. (Shots without an edited file would
     // defer in the dispatcher; we save the round-trip by skipping them
@@ -282,6 +308,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           kind: "render_edited",
           status: "pending",
           pipeline: PIPELINE,
+          // W10-S1: link child to orchestration parent (mig 302). Trigger
+          // trg_drone_jobs_refresh_parent_ins fires on this INSERT and
+          // refreshes parent.children_summary + parent.terminal_status.
+          ...(parentJobId ? { parent_job_id: parentJobId } : {}),
           payload: {
             shoot_id: shot.shoot_id,
             shot_id: shot.id,
@@ -290,6 +320,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             pipeline: PIPELINE,
             wipe_existing: true,
             column_state: cascadeColumnState,
+            // Mirror parent_job_id in payload too for downstream visibility
+            // (e.g. ad-hoc queries against payload, log lines that don't
+            // join to drone_jobs).
+            ...(parentJobId ? { parent_job_id: parentJobId } : {}),
           },
         })
         .select("id")
@@ -326,6 +360,53 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       }
     }
 
+    // ── W10-S1: write baseline children_summary on the parent ────────
+    // The mig 302 trigger fires per-INSERT so by the time we get here
+    // the parent's children_summary already reflects the most recent
+    // child insert. But: (1) the trigger uses COUNT(*) over the entire
+    // child set so it's authoritative regardless of ordering; (2) for
+    // the zero-children case (no eligible shots) the trigger never
+    // fires, so we must set terminal_status='succeeded' manually here
+    // so the orchestration row doesn't sit forever in NULL state.
+    //
+    // We always write a snapshot post-loop so the values are correct
+    // even if the trigger is somehow disabled (defensive). insertedCount
+    // is enqueued + debounced (debounced rows already exist as pending
+    // children of THIS or a prior cascade — for the parent_job_id
+    // contract a 23505 means the row is already linked to a different
+    // parent, which is pre-existing behaviour and not something we can
+    // fix here without breaking the dedup invariant).
+    if (parentJobId) {
+      const insertedCount = enqueued; // freshly-inserted children of THIS parent
+      const nowIso = new Date().toISOString();
+      const baselineSummary = {
+        total: insertedCount,
+        pending: insertedCount,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        dead_letter: 0,
+        last_updated_at: nowIso,
+        last_child_finished_at: null,
+      };
+      // terminal_status: 'in_progress' if we enqueued any children;
+      // 'succeeded' (graceful no-op) if zero children to avoid the
+      // orchestration row sitting forever in NULL state.
+      const baselineTerminal = insertedCount > 0 ? 'in_progress' : 'succeeded';
+      const { error: parentUpdErr } = await admin
+        .from("drone_jobs")
+        .update({
+          children_summary: baselineSummary,
+          terminal_status: baselineTerminal,
+        })
+        .eq("id", parentJobId);
+      if (parentUpdErr) {
+        console.warn(
+          `[${GENERATOR}] baseline children_summary update on parent ${parentJobId} failed (non-fatal): ${parentUpdErr.message}`,
+        );
+      }
+    }
+
     return jsonResponse(
       {
         success: true,
@@ -335,6 +416,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         shoot_id: shootIdScope,
         reason: cascadeReason,
         column_state: cascadeColumnState,
+        // W10-S1: surface parent linkage in the response for telemetry.
+        parent_job_id: parentJobId,
         cascaded_shoot_count: enqueuedShootIds.size,
         enqueued,
         debounced,
@@ -345,10 +428,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         // children, not to wait for them). But monitoring needs visibility
         // into whether the fan-out itself was clean. fan_out_failed counts
         // children that hit a non-23505 enqueue error; fan_out_summary
-        // gives a one-line health stamp. KNOWN LIMITATION: this snapshot
-        // only covers enqueue-time outcomes; child execution success/failure
-        // must be observed separately by querying drone_jobs by parent
-        // job_id (Wave 9 will surface this in the orchestration row).
+        // gives a one-line health stamp. W10-S1: superseded for cascade
+        // orchestration by parent.children_summary roll-up (mig 302) but
+        // kept here for back-compat with existing dashboards.
         fan_out_count: enqueued + debounced,
         fan_out_failed: failedToEnqueue,
         fan_out_errors: enqueueErrors.slice(0, 20),
