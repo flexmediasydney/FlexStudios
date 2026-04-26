@@ -1421,9 +1421,14 @@ def _draw_side_measurements(
     font = _get_font(_resolve_font_family(cfg.get("font_family"), bold=True), fs)
     position = cfg.get("position", "outside")
 
-    # Centroid for "outside" direction calc
-    cx = polygon_px[:, 0].mean()
-    cy = polygon_px[:, 1].mean()
+    # Per-edge outward direction is computed below from the edge unit vector
+    # rotated 90° CCW, then sign-flipped to point AWAY from the polygon
+    # interior. The previous "midpoint - centroid" heuristic broke on
+    # concave shapes (L-shaped corner blocks: ~30-40% of suburban properties)
+    # because the centroid sits in the inner notch, so the heuristic
+    # pointed INWARD for inner-notch edges and labels overlapped the
+    # boundary line. (QC2-2 #11.)
+    polygon_px_int = polygon_px.astype(np.int32)
 
     overlay, draw = _bgr_to_rgba_overlay(w, h)
     n = len(polygon_px)
@@ -1446,15 +1451,37 @@ def _draw_side_measurements(
 
         mx = (p1[0] + p2[0]) / 2
         my = (p1[1] + p2[1]) / 2
-        # Outward unit vector (away from centroid)
-        out_x = mx - cx
-        out_y = my - cy
-        out_len = (out_x ** 2 + out_y ** 2) ** 0.5 + 1e-6
-        ox = out_x / out_len
-        oy = out_y / out_len
+        # Per-edge outward normal:
+        #   1. edge vector (dx, dy) = p2 - p1
+        #   2. perpendicular (rotated 90° CCW): (-dy, dx)
+        #   3. test which side lies OUTSIDE the polygon by probing a small
+        #      step along the perpendicular and using cv2.pointPolygonTest
+        #      (returns >0 inside, <0 outside, 0 on boundary). Flip the
+        #      normal if the probe lands inside.
+        #
+        # This works for both convex AND concave polygons (L-shape inner-
+        # notch edges get the correct outward direction even though the
+        # centroid sits on the wrong side).
+        edge_dx = float(p2[0] - p1[0])
+        edge_dy = float(p2[1] - p1[1])
+        edge_len = math.sqrt(edge_dx * edge_dx + edge_dy * edge_dy) + 1e-6
+        # Rotated 90° CCW: (-dy/L, dx/L) is one valid normal.
+        nx = -edge_dy / edge_len
+        ny = edge_dx / edge_len
+        # Probe a small step along this normal from the midpoint.
+        EPS = 4.0  # pixels — large enough to escape the boundary line itself
+        probe = (float(mx + nx * EPS), float(my + ny * EPS))
+        # cv2.pointPolygonTest returns +1/-1/0 for inside/outside/on-edge.
+        # Use the int-cast polygon array (cv2 requires it) and ask for the
+        # measureDist=False fast path.
+        side = cv2.pointPolygonTest(polygon_px_int, probe, False)
+        if side > 0:
+            # Probe landed INSIDE → flip normal so the offset goes outward.
+            nx = -nx
+            ny = -ny
         offset = 28 if position == "outside" else -28
-        tx = int(mx + ox * offset)
-        ty = int(my + oy * offset)
+        tx = int(mx + nx * offset)
+        ty = int(my + ny * offset)
         # Operator nudge — add [dx, dy] to the centred anchor point.
         if isinstance(ov, dict):
             nudge = ov.get("label_offset_px")
