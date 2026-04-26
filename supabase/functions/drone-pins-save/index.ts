@@ -204,6 +204,113 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
   const shoot = shootRow as ShootRow;
 
+  // ── IDOR pre-validation (Wave 5 P1 backend fix — QC2-1 #5) ───────────────
+  // The per-edit handlers below mutate by pin_id directly via the admin
+  // client. Without validating that each referenced pin belongs to the
+  // SAME project as the validated shoot, a user with shoot access on
+  // project A could pass a pin_id from project B and silently mutate it.
+  //
+  // Build a single set of every pin_id referenced by update/delete/
+  // suppress/reset_to_ai edits (create has no pin_id), fetch the rows in
+  // ONE query, and assert each pin_id resolves to a row whose
+  //   - shoot.project_id == shoot.project_id  (shoot-scoped pin), OR
+  //   - project_id == shoot.project_id        (project-scoped AI pin)
+  //
+  // Reject the entire request with 403 if ANY foreign pin_id is present —
+  // partial application would leave the attacker with a half-mutated set.
+  const referencedPinIds = Array.from(
+    new Set(
+      edits
+        .filter(
+          (e) =>
+            e &&
+            typeof e === 'object' &&
+            ['update', 'delete', 'suppress', 'reset_to_ai'].includes(
+              (e as BaseEdit).action,
+            ) &&
+            typeof (e as BaseEdit).pin_id === 'string' &&
+            ((e as BaseEdit).pin_id as string).length > 0,
+        )
+        .map((e) => (e as BaseEdit).pin_id as string),
+    ),
+  );
+  if (referencedPinIds.length > 0) {
+    const { data: pinRows, error: pinErr } = await admin
+      .from('drone_custom_pins')
+      .select('id, project_id, shoot_id')
+      .in('id', referencedPinIds);
+    if (pinErr) {
+      console.error(`[${GENERATOR}] pin membership check failed:`, pinErr);
+      return errorResponse('Pin membership check failed', 500, req);
+    }
+    const foundIds = new Set<string>();
+    const pinShootIds = new Set<string>();
+    for (const r of (pinRows || []) as {
+      id: string;
+      project_id: string | null;
+      shoot_id: string | null;
+    }[]) {
+      foundIds.add(r.id);
+      // A pin belongs to this project if either:
+      //   - its project_id column matches directly, OR
+      //   - its shoot_id resolves to a shoot in this project (verified
+      //     against drone_shoots below in one bulk query).
+      if (r.project_id && r.project_id === shoot.project_id) continue;
+      if (r.shoot_id) pinShootIds.add(r.shoot_id);
+    }
+    // Resolve any indirect (shoot-scoped) pins via their shoot's project.
+    const validShootIds = new Set<string>();
+    if (pinShootIds.size > 0) {
+      const { data: shootProjects, error: shootProjErr } = await admin
+        .from('drone_shoots')
+        .select('id, project_id')
+        .in('id', Array.from(pinShootIds))
+        .eq('project_id', shoot.project_id);
+      if (shootProjErr) {
+        console.error(
+          `[${GENERATOR}] pin shoot-membership lookup failed:`,
+          shootProjErr,
+        );
+        return errorResponse('Pin shoot membership check failed', 500, req);
+      }
+      for (const s of (shootProjects || []) as { id: string }[]) {
+        validShootIds.add(s.id);
+      }
+    }
+    // Build the per-pin verdict.
+    const stranger = (pinRows || []).find((r) => {
+      const row = r as {
+        id: string;
+        project_id: string | null;
+        shoot_id: string | null;
+      };
+      if (row.project_id && row.project_id === shoot.project_id) return false;
+      if (row.shoot_id && validShootIds.has(row.shoot_id)) return false;
+      return true;
+    }) as { id: string } | undefined;
+    const missing = referencedPinIds.find((id) => !foundIds.has(id));
+    if (stranger) {
+      console.warn(
+        `[${GENERATOR}] IDOR attempt: pin_id ${stranger.id} does not belong to shoot ${shootId}'s project ${shoot.project_id} (user ${user.id})`,
+      );
+      return errorResponse(
+        `Forbidden — pin_id ${stranger.id} does not belong to this project`,
+        403,
+        req,
+      );
+    }
+    if (missing) {
+      // A pin_id with no row at all — also reject. Could be a stale client
+      // cache, could be an attacker probing for IDs; either way the safe
+      // response is to refuse the batch rather than no-op-skip the edit.
+      return errorResponse(
+        `Forbidden — pin_id ${missing} not found`,
+        403,
+        req,
+      );
+    }
+  }
+
   // Validate every pixel_anchored_shot_id in the edit set actually belongs
   // to this shoot. Without this an attacker could pass a shot UUID from a
   // different project and the FK would happily accept it. (#46 audit fix)
