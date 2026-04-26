@@ -790,6 +790,42 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
             tip_circle_r = max(3, int(round(8 * scale)))
         bw = tw + pad * 2
         bh = th + pad * 2
+
+        # Ellipsis truncation when the rendered text won't fit the canvas
+        # (QC2-2 #10). Without this, a wide address bar (5000 px text on a
+        # 1080 px canvas) lands bx1 deep negative after the second X-clamp;
+        # cv2.rectangle clips fine but PIL draw.text starts off-screen and
+        # the label is invisible. We fit the *rendered* text to (w - 40)
+        # accounting for the pill's pad on both sides, dropping characters
+        # from the end and appending "…" until it fits.
+        max_pill_w = max(40, int(w) - 40)
+        if bw > max_pill_w and len(t) > 1:
+            ellipsis = "…"
+            avail = max_pill_w - pad * 2
+            if avail < 0:
+                avail = 0
+            ell_w, _ = _measure_text(ellipsis, font)
+            # Binary search for the largest prefix that fits with the ellipsis.
+            lo, hi = 0, len(t) - 1
+            best = 0
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                cand = t[:mid].rstrip() + ellipsis
+                cw, _ = _measure_text(cand, font)
+                if cw <= avail:
+                    best = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            if best > 0:
+                t = t[:best].rstrip() + ellipsis
+            else:
+                # Even the ellipsis alone doesn't fit — render just the ellipsis.
+                t = ellipsis
+            tw, th = _measure_text(t, font)
+            bw = tw + pad * 2
+            bh = th + pad * 2
+
         bx1 = x - bw // 2
         bx2 = x + bw // 2
         by2 = y - tip_offset
