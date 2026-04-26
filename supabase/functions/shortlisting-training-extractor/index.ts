@@ -164,15 +164,30 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Idempotency: delete any existing training_examples rows for this round ─
   // We don't have a round_id column on training_examples; the only join is
   // composition_group_id → composition_groups → round_id. Delete by FK chain.
+  //
+  // Bug G4 fix: BEFORE delete, capture each existing row's variant_count so
+  // we can preserve it on re-insert. The finals-watcher bumps variant_count
+  // when an editor delivers multiple variants of the same composition (e.g.
+  // KELV4091 + KELV4091-2 + KELV4091-2-2 = variant_count=3). Without
+  // preservation, a re-extract (e.g. admin re-locks the round) resets every
+  // composition to variant_count=1 and the editor's variant signal is lost.
   let deletedExisting = 0;
+  const priorVariantCounts = new Map<string, number>();
   {
     const { data: existing, error: existingErr } = await admin
       .from('shortlisting_training_examples')
-      .select('id, composition_group_id')
+      .select('id, composition_group_id, variant_count')
       .in('composition_group_id', confirmedIds);
     if (existingErr) {
       console.warn(`[${GENERATOR}] existing-rows lookup failed: ${existingErr.message}`);
     } else if (existing && existing.length > 0) {
+      // Capture variant_counts BEFORE delete (G4).
+      for (const r of existing) {
+        const gid = r.composition_group_id as string;
+        const vc = typeof r.variant_count === 'number' ? r.variant_count : 1;
+        // Keep the MAX if the same group_id appears multiple times (legacy).
+        priorVariantCounts.set(gid, Math.max(priorVariantCounts.get(gid) ?? 1, vc));
+      }
       const idsToDelete = existing.map((r) => r.id as string);
       const { error: delErr } = await admin
         .from('shortlisting_training_examples')
@@ -184,6 +199,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         deletedExisting = idsToDelete.length;
       }
     }
+  }
+
+  // ── Bug G2 fix: pre-fetch active slot_definitions so we can map
+  //    slot_id → phase (1=mandatory, 2=conditional). Phase 3 free recs are
+  //    detected via event_type and slot_id will be null for them.
+  const slotPhaseByIdRes = await admin
+    .from('shortlisting_slot_definitions')
+    .select('slot_id, phase')
+    .eq('is_active', true);
+  const slotPhaseById = new Map<string, number>();
+  for (const s of slotPhaseByIdRes.data || []) {
+    if (typeof s.phase === 'number') slotPhaseById.set(s.slot_id as string, s.phase);
   }
 
   // ── Fetch context: classifications + groups + slot events + overrides ──
@@ -227,20 +254,28 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   for (const g of groups) groupById.set(g.id, g);
 
   // Slot events: prefer rank=1 winners over phase3 (rank=1 carries slot_id;
-  // phase3 is a recommendation without a slot). Map group_id → { slot_id, rank }.
-  const slotByGroup = new Map<string, { slot_id: string | null; rank: number | null }>();
+  // phase3 is a recommendation without a slot). Map group_id → { slot_id, rank, phase }.
+  // Bug G2 fix: capture `phase` (1/2/3) so the training_examples row can
+  // distinguish mandatory winners from conditional fills from free recs.
+  const slotByGroup = new Map<
+    string,
+    { slot_id: string | null; rank: number | null; phase: number | null }
+  >();
   for (const ev of slotEvents) {
     if (!ev.group_id) continue;
     const payload = ev.payload || {};
     const slotId = (payload.slot_id as string | undefined) ?? null;
     const rank = typeof payload.rank === 'number' ? (payload.rank as number) : null;
     if (ev.event_type === 'pass2_slot_assigned' && rank === 1) {
-      slotByGroup.set(ev.group_id, { slot_id: slotId, rank });
+      // Phase comes from slot_definitions (1=mandatory, 2=conditional).
+      const phase = slotId ? slotPhaseById.get(slotId) ?? null : null;
+      slotByGroup.set(ev.group_id, { slot_id: slotId, rank, phase });
     } else if (
       ev.event_type === 'pass2_phase3_recommendation' &&
       !slotByGroup.has(ev.group_id)
     ) {
-      slotByGroup.set(ev.group_id, { slot_id: null, rank });
+      // Phase 3 free rec — explicit phase=3, slot_id null by design.
+      slotByGroup.set(ev.group_id, { slot_id: null, rank, phase: 3 });
     }
   }
 
@@ -297,17 +332,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     const ovr = overrideByGroup.get(groupId);
 
     const wasOverride = ovr?.was_override ?? false;
-    const variantCount = 1; // bumped later by finals watcher
+    // Bug G4 fix: preserve variant_count from prior row if one existed (the
+    // finals-watcher may have bumped it). Default 1 for fresh extractions.
+    const variantCount = priorVariantCounts.get(groupId) ?? 1;
     const weight = roundWeight(1.0 + 0.2 * (variantCount - 1) + (wasOverride ? 0.3 : 0));
     totalWeight += weight;
 
     const aiProposedScore =
       ovr?.ai_proposed_score ?? cls?.combined_score ?? null;
-    // human_confirmed_score: if AI proposed and human kept, the "confirmation"
-    // value is the AI's own combined score (the human implicitly endorsed it).
-    // If human added/swapped, we still record combined_score as the proxy
-    // (we don't have a separate human grade in v1).
-    const humanConfirmedScore = cls?.combined_score ?? null;
+    // Bug G1 fix: human_confirmed_score should be NULL absent an actual human
+    // override. Previously we copied combined_score blindly, conflating
+    // "AI proposed and human silently accepted" with "human re-graded".
+    // Today we ONLY populate this on a real override (added_from_rejects /
+    // swapped). Future v2: a UI affordance to let humans grade an image
+    // directly will populate this without an override flag.
+    const humanConfirmedScore = wasOverride ? (cls?.combined_score ?? null) : null;
 
     rows.push({
       composition_group_id: groupId,
@@ -315,6 +354,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         grp?.delivery_reference_stem || grp?.best_bracket_stem || null,
       variant_count: variantCount,
       slot_id: slot?.slot_id ?? null,
+      // Bug G2 fix: explicit phase column for ML signal differentiation.
+      phase: slot?.phase ?? null,
       package_type: round.package_type ?? null,
       project_tier: projectTier,
       human_confirmed_score: humanConfirmedScore,
