@@ -493,8 +493,29 @@ export function serveWithAudit(
       if (!response.ok) {
         status = 'error';
         // Best-effort extract error message without consuming the response
-        // body the caller will receive. We use the status text as a safe proxy.
+        // body the caller will receive. Status line is the safe baseline; if
+        // we can clone-and-read the body too, append a sanitised excerpt so
+        // edge_fn_call_audit captures actionable failure detail (Wave 11 S2
+        // Cluster A — until now ~all rows just said "HTTP 4xx").
         errorMessage = `HTTP ${response.status} ${response.statusText || ''}`.trim();
+        try {
+          // Clone first so caller's response body stream is untouched.
+          const bodyText = await response.clone().text();
+          if (bodyText) {
+            // Strip control chars, collapse whitespace, truncate to 500 chars.
+            const cleaned = bodyText
+              .replace(/[\x00-\x1F\x7F]+/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+            const truncated = cleaned.length > 500
+              ? `${cleaned.slice(0, 500)}…[truncated ${cleaned.length - 500} chars]`
+              : cleaned;
+            if (truncated) errorMessage = `${errorMessage}: ${truncated}`;
+          }
+        } catch (_bodyErr) {
+          // Body read failed (already consumed, non-text, locked stream, etc) —
+          // fall back to status-line only. errorMessage stays as the HTTP NNN form.
+        }
       }
     } catch (err: any) {
       status = 'error';
