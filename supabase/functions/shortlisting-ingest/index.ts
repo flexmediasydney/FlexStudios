@@ -242,33 +242,57 @@ async function ingest(
   }
 
   // 7. Enqueue extract jobs (chunked).
+  // Burst 11 S4: atomically insert all chunks in ONE statement. The previous
+  // for-loop did one INSERT per chunk; if chunk N failed (network blip, RLS
+  // hiccup) we'd throw with chunks 1..N-1 already committed. The dispatcher's
+  // chain logic counts extract jobs in pending/running and fires pass0 once
+  // all of them complete — but a round with only 3 of 4 chunks ever enqueued
+  // would silently complete pass0 on incomplete data, dropping ~50 files
+  // from the universe. PostgREST's array-form INSERT is atomic — either all
+  // rows commit or none do — so a failure leaves a clean state.
   const jobIds: string[] = [];
   if (filePaths.length > 0) {
+    const chunkRows: Array<Record<string, unknown>> = [];
+    const chunkTotal = Math.ceil(filePaths.length / CHUNK_SIZE);
     for (let i = 0; i < filePaths.length; i += CHUNK_SIZE) {
       const chunk = filePaths.slice(i, i + CHUNK_SIZE);
-      const { data: jobRow, error: jobErr } = await admin
-        .from('shortlisting_jobs')
-        .insert({
+      chunkRows.push({
+        project_id: projectId,
+        round_id: roundId,
+        kind: 'extract',
+        status: 'pending',
+        payload: {
           project_id: projectId,
           round_id: roundId,
-          kind: 'extract',
-          status: 'pending',
-          payload: {
-            project_id: projectId,
-            round_id: roundId,
-            file_paths: chunk,
-            chunk_index: Math.floor(i / CHUNK_SIZE),
-            chunk_total: Math.ceil(filePaths.length / CHUNK_SIZE),
-          },
-          scheduled_for: new Date().toISOString(),
-        })
-        .select('id')
-        .single();
-      if (jobErr || !jobRow) {
-        throw new Error(`extract job insert failed (chunk ${i}): ${jobErr?.message || 'no row returned'}`);
-      }
-      jobIds.push(jobRow.id);
+          file_paths: chunk,
+          chunk_index: Math.floor(i / CHUNK_SIZE),
+          chunk_total: chunkTotal,
+        },
+        scheduled_for: new Date().toISOString(),
+      });
     }
+    const { data: insertedJobs, error: jobErr } = await admin
+      .from('shortlisting_jobs')
+      .insert(chunkRows)
+      .select('id, payload');
+    if (jobErr || !insertedJobs) {
+      throw new Error(`extract job batch insert failed (${chunkRows.length} chunks): ${jobErr?.message || 'no rows returned'}`);
+    }
+    if (insertedJobs.length !== chunkRows.length) {
+      throw new Error(
+        `extract job batch returned ${insertedJobs.length} rows but expected ${chunkRows.length}`,
+      );
+    }
+    // Sort by chunk_index so jobIds reflect file order — defensive against
+    // PostgREST returning rows in arbitrary order. Tests/audit consumers
+    // expect job_ids[0] = chunk 0.
+    // deno-lint-ignore no-explicit-any
+    const sorted = (insertedJobs as any[]).slice().sort((a, b) => {
+      const ai = Number(a?.payload?.chunk_index ?? 0);
+      const bi = Number(b?.payload?.chunk_index ?? 0);
+      return ai - bi;
+    });
+    for (const r of sorted) jobIds.push(r.id);
   }
 
   // 8. Audit event.

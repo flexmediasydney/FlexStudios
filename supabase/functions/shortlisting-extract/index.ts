@@ -241,20 +241,17 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
         .eq('id', input.jobId);
     } else if (errorMsg) {
       // HTTP-level error — surface for the dispatcher to retry.
-      const { data: jobRow } = await admin
-        .from('shortlisting_jobs')
-        .select('attempt_count, max_attempts')
-        .eq('id', input.jobId)
-        .maybeSingle();
-      const attemptCount = (jobRow?.attempt_count || 0) + 1;
-      const maxAttempts = jobRow?.max_attempts || 3;
-      const nextStatus = attemptCount >= maxAttempts ? 'failed' : 'pending';
+      // Burst 11 R2: previously this branch RE-INCREMENTED attempt_count and
+      // chose pending vs failed status itself. The dispatcher's claim_
+      // shortlisting_jobs RPC ALREADY incremented it once, and the
+      // dispatcher's markFailed handles the status transition. Doing both
+      // double-bumped attempt_count and burned 1/3 of the retry budget — a
+      // job got dead-lettered after 2 actual failures instead of 3. Now we
+      // just stash the error message; status + attempt accounting belong to
+      // the dispatcher.
       await admin
         .from('shortlisting_jobs')
         .update({
-          status: nextStatus,
-          attempt_count: attemptCount,
-          finished_at: nextStatus === 'failed' ? finishedAt : null,
           error_message: errorMsg.slice(0, 1000),
         })
         .eq('id', input.jobId);
