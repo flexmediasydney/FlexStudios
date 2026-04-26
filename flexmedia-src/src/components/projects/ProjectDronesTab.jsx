@@ -42,6 +42,17 @@ import { cn } from "@/lib/utils";
 import DroneShotsSubtab from "./DroneShotsSubtab";
 import DroneRendersSubtab from "./DroneRendersSubtab";
 import DroneEditsSubtab from "./DroneEditsSubtab";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import { ChevronDown, RotateCw } from "lucide-react";
+import { useDronePipelineState } from "@/hooks/useDronePipelineState";
+import DronePipelineBanner from "@/components/drone/DronePipelineBanner";
 
 // ── Status pipeline ──────────────────────────────────────────────────────────
 // Ordered chain — first 4 are linear ingestion/processing, last 4 are pipeline columns.
@@ -272,6 +283,62 @@ export default function ProjectDronesTab({ project }) {
     }
   }, [queryClient, projectId, selectedShootId]);
 
+  // ── Drone pipeline state (Wave 9 S2 hook) ─────────────────────────────────
+  // Owned by Stream 2; shim returns null pipelineState until S2 lands. Hook
+  // is invoked at top level so the Re-run split-button (header) and
+  // DronePipelineBanner (ShootDetail body) share a single subscription.
+  const {
+    pipelineState,
+    forceFireNow,
+    rerunStage,
+    isFiring,
+    isRerunning,
+  } = useDronePipelineState(projectId, selectedShootId);
+
+  // Which stages are meaningfully re-runnable for the selected shoot? When
+  // pipelineState is null (loading/no shoot) the menu lists every known
+  // stage but disables them — operator still sees the affordance.
+  //
+  // S2 RPC stage_key values are dash-prefixed (e.g. 'drone-sfm') and
+  // status uses 'done'|'running'|'pending'|'blocked-on-operator'|'failed'|'future'.
+  const rerunStageOptions = useMemo(() => {
+    const stageDefs = [
+      { key: "drone-ingest",      label: "Re-run Ingest",      requires: () => true },
+      { key: "drone-sfm",         label: "Re-run SfM",         requires: (st) => st.ingestDone },
+      { key: "drone-render",      label: "Re-run Render",      requires: (st) => st.sfmDone },
+      { key: "drone-proposed",    label: "Re-run Proposed",    requires: (st) => st.renderDone },
+      { key: "drone-adjustments", label: "Re-run Adjustments", requires: (st) => st.proposedDone },
+      { key: "drone-final",       label: "Re-run Final",       requires: (st) => st.adjustmentsDone },
+    ];
+
+    // Build a derived "what's done" snapshot from pipelineState.stages so
+    // disabled-state has real meaning. Treat both 'done' (S2 RPC) and
+    // 'complete' (older drafts) as completed.
+    const stages = Array.isArray(pipelineState?.stages) ? pipelineState.stages : [];
+    const isDone = (k) => {
+      const s = stages.find((x) => x?.stage_key === k)?.status;
+      return s === "done" || s === "complete";
+    };
+    const snapshot = pipelineState
+      ? {
+          ingestDone:       isDone("drone-ingest"),
+          sfmDone:          isDone("drone-sfm"),
+          renderDone:       isDone("drone-render"),
+          proposedDone:     isDone("drone-proposed"),
+          adjustmentsDone:  isDone("drone-adjustments"),
+        }
+      : null;
+
+    return stageDefs.map((def) => ({
+      key: def.key,
+      label: def.label,
+      // No selected shoot → all disabled. Loading state (pipelineState null)
+      // → everything enabled-for-display so the affordance is visible; the
+      // edge fn server-side decides whether the request is a no-op.
+      disabled: !selectedShootId || (snapshot ? !def.requires(snapshot) : false),
+    }));
+  }, [pipelineState, selectedShootId]);
+
   // ── Render ────────────────────────────────────────────────────────────────
   if (!projectId) {
     return (
@@ -304,6 +371,9 @@ export default function ProjectDronesTab({ project }) {
               Boundary Editor is also per-card on Edits cards (operator
               launches from a specific edited card so they have visual
               context). */}
+          {/* "Reload UI" — invalidates React-Query caches but does NOT
+              re-trigger any backend pipeline stage. (W9 S3 rename: was
+              "Refresh", which was easy to confuse with a pipeline re-run.) */}
           <Button
             variant="outline"
             size="sm"
@@ -315,8 +385,57 @@ export default function ProjectDronesTab({ project }) {
             ) : (
               <RefreshCw className="h-4 w-4 mr-2" />
             )}
-            Refresh
+            Reload UI
           </Button>
+          {/* "Re-run stage ▾" — triggers a backend re-run of a specific
+              pipeline stage for the selected shoot. Disabled entries grey
+              out when a stage is not meaningfully re-runnable yet (e.g.
+              "Re-run SfM" when no shots are ingested). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!selectedShootId || isRerunning}
+                aria-label="Re-run a drone pipeline stage"
+              >
+                {isRerunning ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RotateCw className="h-4 w-4 mr-2" />
+                )}
+                Re-run stage
+                <ChevronDown className="h-3.5 w-3.5 ml-1.5 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="text-xs">
+                Re-run a stage for this shoot
+              </DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {rerunStageOptions.map((opt) => (
+                <DropdownMenuItem
+                  key={opt.key}
+                  disabled={opt.disabled || isRerunning}
+                  onSelect={(e) => {
+                    e.preventDefault();
+                    if (opt.disabled || isRerunning) return;
+                    // S2's rerunStage is fire-and-forget (mutate, not
+                    // mutateAsync) — toasts on success/failure are handled
+                    // inside the hook. We just kick it.
+                    try {
+                      rerunStage(opt.key);
+                    } catch (err) {
+                      console.warn("[ProjectDronesTab] rerunStage threw:", err);
+                    }
+                  }}
+                  className="text-xs"
+                >
+                  {opt.label}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -393,6 +512,11 @@ export default function ProjectDronesTab({ project }) {
                     activeSubtab={activeSubtab}
                     onSubtabChange={setActiveSubtab}
                     projectId={projectId}
+                    pipelineState={pipelineState}
+                    forceFireNow={forceFireNow}
+                    rerunStage={rerunStage}
+                    isFiring={isFiring}
+                    isRerunning={isRerunning}
                   />
                 ) : (
                   <div className="flex items-center justify-center h-40 text-sm text-muted-foreground">
@@ -495,7 +619,18 @@ function ShootCard({ shoot, selected, onClick }) {
 }
 
 // ── ShootDetail ──────────────────────────────────────────────────────────────
-function ShootDetail({ shoot, sfmRun, activeSubtab, onSubtabChange, projectId }) {
+function ShootDetail({
+  shoot,
+  sfmRun,
+  activeSubtab,
+  onSubtabChange,
+  projectId,
+  pipelineState,
+  forceFireNow,
+  rerunStage,
+  isFiring,
+  isRerunning,
+}) {
   // Plan §4.4: surface a UI warning when the pilot uploaded ≥10 images but
   // <10 of them are nadir-grid (gimbal pitch ≤ -85°). Suggests they skipped
   // the nadir grid step and SfM will fall back to GPS-only renders.
@@ -522,6 +657,16 @@ function ShootDetail({ shoot, sfmRun, activeSubtab, onSubtabChange, projectId })
       {/* Status pipeline strip */}
       <PipelineStrip shoot={shoot} sfmRun={sfmRun} />
 
+      {/* W9 S2 banner — current stage / ETA / Force-fire / Re-run controls.
+          Owned by S2; renders null until S2 ships the real component. */}
+      <DronePipelineBanner
+        pipelineState={pipelineState}
+        onForceFire={forceFireNow}
+        onRerunStage={rerunStage}
+        isFiring={isFiring}
+        isRerunning={isRerunning}
+      />
+
       {/* Sub-tabs (Wave 5 P2 S6: Edits added) */}
       <Tabs value={activeSubtab} onValueChange={onSubtabChange} className="w-full">
         <TabsList className="grid grid-cols-3 w-full max-w-md">
@@ -537,11 +682,19 @@ function ShootDetail({ shoot, sfmRun, activeSubtab, onSubtabChange, projectId })
         </TabsList>
 
         <TabsContent value="shots" className="mt-3">
-          <DroneShotsSubtab shoot={shoot} />
+          <DroneShotsSubtab
+            shoot={shoot}
+            pipelineState={pipelineState}
+            onForceFire={forceFireNow}
+          />
         </TabsContent>
 
         <TabsContent value="renders" className="mt-3">
-          <DroneRendersSubtab shoot={shoot} projectId={projectId} />
+          <DroneRendersSubtab
+            shoot={shoot}
+            projectId={projectId}
+            pipelineState={pipelineState}
+          />
         </TabsContent>
 
         <TabsContent value="edits" className="mt-3">

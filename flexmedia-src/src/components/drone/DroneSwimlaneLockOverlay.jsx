@@ -29,14 +29,31 @@ export default function DroneSwimlaneLockOverlay({ pipelineState, children }) {
 
   if (!locked) return children;
 
+  // S2 RPC shape (architect Section A.2):
+  //   stages[].stage_key   — e.g. 'drone-sfm'
+  //   stages[].started_at  — ISO timestamp when stage entered running
+  //   stages[].eta_ms      — milliseconds remaining (per S1)
+  //   active_job.function_name — current edge function name when running
   const stages = Array.isArray(pipelineState?.stages) ? pipelineState.stages : [];
   const currentStage = stages.find((s) => s?.stage_key === pipelineState?.current_stage) || null;
-  const fnName = currentStage?.function_name || "processing";
+  // Prefer the live active_job's function name if available (it's the
+  // authoritative "what's executing right now"), fall back to stage_key.
+  const fnName =
+    pipelineState?.active_job?.function_name ||
+    currentStage?.stage_key ||
+    "processing";
   const startedAt = currentStage?.started_at;
   const elapsedSec = startedAt
     ? Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000))
     : 0;
-  const etaSec = currentStage?.eta_seconds_remaining;
+  // S2 returns eta_ms (milliseconds). Older drafts used eta_seconds_remaining
+  // — keep both readers so a partial S1 deploy doesn't break the overlay.
+  const etaSec =
+    typeof currentStage?.eta_ms === "number"
+      ? Math.round(currentStage.eta_ms / 1000)
+      : typeof currentStage?.eta_seconds_remaining === "number"
+      ? currentStage.eta_seconds_remaining
+      : null;
 
   return (
     <div className="relative">
