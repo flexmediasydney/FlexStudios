@@ -416,7 +416,14 @@ export default function DroneEditsSubtab({ shoot, projectId }) {
       return rows || [];
     },
     enabled: Boolean(projectId),
-    refetchInterval: (data) => (Array.isArray(data) && data.length > 0 ? CASCADE_POLL_MS : false),
+    // QC iter 6 C: TanStack v5 passes the QUERY object to refetchInterval, not
+    // the data directly (see useDronePipelineState.js:99-103 for the canonical
+    // pattern). Reading length on the query object always undefined → polling
+    // never engaged → CascadeBanner went stale until next manual interaction.
+    refetchInterval: (query) => {
+      const data = query?.state?.data;
+      return Array.isArray(data) && data.length > 0 ? CASCADE_POLL_MS : false;
+    },
     staleTime: 0,
   });
   const activeCascadeCount = (cascadeQ.data || []).length;
