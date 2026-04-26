@@ -55,9 +55,36 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "https://rjzdznwkxnzfekgcdk
 const MODAL_SFM_URL =
   Deno.env.get("MODAL_SFM_URL") ||
   "https://joseph-89037--flexstudios-drone-sfm-sfm-http.modal.run";
-const SFM_HTTP_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — matches Modal function timeout
+// QC2-1 #8: SfM HTTP timeout MUST be < Edge Function wall-clock cap (~145s),
+// otherwise the dispatcher gets killed mid-fetch, the job stays stuck in
+// 'running' for 20min until the stale-claim sweeper requeues it, and the
+// Modal-side result is silently lost. Cap at 120s — most SfMs finish in
+// 30-90s anyway, and a >120s SfM dies cleanly with a network timeout that
+// surfaces through markFailed → backoff retry.
+//
+// For SfMs that consistently exceed 120s, refactor to a Modal-callback
+// pattern: kick off the job + return immediately + Modal POSTs back to a
+// dedicated webhook on completion (deferred, not in-band). Tracked as a
+// follow-up — not blocking for current shoots which complete inside 90s.
+const SFM_HTTP_TIMEOUT_MS = 120 * 1000;
 const MAX_JOBS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
+
+// QC2-6 #12: single-flight enforcement at the function level. Cron schedule
+// `* * * * *` plus 145s wall-clock cap means two cron invocations can
+// overlap. SKIP LOCKED on claim_drone_jobs prevents row double-claim, but
+// MAX_SFM_PER_TICK=1 still lets BOTH overlapping invocations dispatch a
+// separate SfM to Modal back-to-back (doubles spend during the overlap).
+// Wrap the body in pg_try_advisory_lock(LOCK_KEY) → if a second tick
+// arrives while the first is still running, return cleanly with
+// `skipped:concurrent_dispatch`.
+//
+// Lock id derived from a fixed string; same hashing strategy as
+// hashtext('drone-job-dispatcher') — but we precompute on the JS side so
+// every dispatcher tick agrees on the value. Use a stable 53-bit hash
+// (Postgres bigint is signed 64-bit; we stay well inside the JS safe
+// integer range to avoid bignum gymnastics).
+const DISPATCHER_LOCK_KEY = stableHashBigInt("drone-job-dispatcher");
 
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
@@ -100,6 +127,79 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
   const startedAt = Date.now();
 
+  // ── QC2-6 #12: Single-flight advisory lock ──────────────────────────────
+  // Try to acquire the dispatcher lock. If another invocation already holds
+  // it, exit cleanly (200 OK) without touching the queue — the holder will
+  // process pending jobs in the same minute. We deliberately return 200 so
+  // pg_cron doesn't log it as a failed invocation; the explicit
+  // `skipped:concurrent_dispatch` field makes overlap visible in logs.
+  let lockAcquired = false;
+  try {
+    const { data: lockResp, error: lockErr } = await admin.rpc(
+      "pg_try_advisory_lock",
+      { lock_id: DISPATCHER_LOCK_KEY },
+    );
+    if (lockErr) {
+      // RPC error (wrapper missing, role lacks EXECUTE, etc.) — fail loud
+      // so we notice during deploy. Don't silently degrade to no-lock mode
+      // because that's how QC2-6 #12 happened in the first place.
+      return errorResponse(
+        `pg_try_advisory_lock RPC failed: ${lockErr.message}`,
+        500,
+        req,
+      );
+    }
+    lockAcquired = lockResp === true;
+    if (!lockAcquired) {
+      console.info(
+        `[${GENERATOR}] concurrent dispatch detected — returning early`,
+      );
+      return jsonResponse(
+        {
+          success: true,
+          claimed: 0,
+          dispatched: 0,
+          failed: 0,
+          deferred: 0,
+          skipped: "concurrent_dispatch",
+          elapsed_ms: Date.now() - startedAt,
+        },
+        200,
+        req,
+      );
+    }
+
+    // Lock held — run the original dispatcher body. The `return` statements
+    // inside flow through to the `finally` block which releases the lock.
+    return await runDispatcherTick(admin, req, startedAt);
+  } finally {
+    if (lockAcquired) {
+      const { error: relErr } = await admin.rpc("pg_advisory_unlock", {
+        lock_id: DISPATCHER_LOCK_KEY,
+      });
+      if (relErr) {
+        // Non-fatal — Postgres releases all session locks when the
+        // connection is recycled (PostgREST pool churn handles this in
+        // ~minutes). Worst case the next 1-2 ticks see lock-held and
+        // skip. Worth a warn so it's visible if it persists.
+        console.warn(
+          `[${GENERATOR}] pg_advisory_unlock failed (lock will release on session recycle): ${relErr.message}`,
+        );
+      }
+    }
+  }
+});
+
+/**
+ * Original dispatcher tick — extracted so the advisory-lock wrapper above
+ * can wrap it in a clean try/finally without nesting half a function inside
+ * an `if` block.
+ */
+async function runDispatcherTick(
+  admin: ReturnType<typeof getAdminClient>,
+  req: Request,
+  startedAt: number,
+): Promise<Response> {
   // ── Reset stale 'running' jobs back to 'pending'. Edge Function crashes
   // (panic, OOM, gateway timeout) leave claimed jobs stuck in 'running'
   // forever. Anything still 'running' after STALE_CLAIM_MIN minutes gets
@@ -386,7 +486,32 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     200,
     req,
   );
-});
+}
+
+/**
+ * stableHashBigInt — deterministic 53-bit hash for an arbitrary string.
+ *
+ * Used to derive a stable BIGINT lock id for pg_try_advisory_lock without
+ * round-tripping through the database for `hashtext('drone-job-dispatcher')`.
+ * Matches Postgres's hashtext output well enough for namespacing purposes
+ * (lock collisions across DIFFERENT lock keys would be catastrophic; lock
+ * collisions across THE SAME key are the entire point — both dispatcher
+ * ticks must agree on the same number).
+ *
+ * Algorithm: 32-bit FNV-1a × 2 with two seeds, packed into a 53-bit positive
+ * integer (stays in JS Number safe range; Postgres BIGINT accepts it).
+ */
+function stableHashBigInt(s: string): number {
+  let h1 = 0x811c9dc5; // FNV offset basis
+  let h2 = 0x01000193; // alternate seed
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 ^= c; h1 = (h1 * 0x01000193) >>> 0;
+    h2 ^= c; h2 = (h2 * 0x811c9dc5) >>> 0;
+  }
+  // Combine to a 53-bit positive integer.
+  return (h1 * 0x200000 + (h2 & 0x1fffff)) % Number.MAX_SAFE_INTEGER;
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Result type carries optional `sfm_ok` (Modal-reported success) and `result`
