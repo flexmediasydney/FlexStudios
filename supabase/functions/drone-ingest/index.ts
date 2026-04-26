@@ -629,7 +629,20 @@ async function ingestProject(projectId: string, actorId: string | null): Promise
           payload: { shoot_id: shoot.id, fallback: 'gps_only' },
         };
     const { error } = await admin.from('drone_jobs').insert(jobRow);
-    if (error) throw error;
+    if (error) {
+      // QC iter 6 Stream B: ingest can race other webhook ticks. mig 294b's
+      // idx_drone_jobs_unique_pending_render covers kind='render' per
+      // (shoot_id, pipeline, payload->>shot_id). Treat 23505 as debounced
+      // success so re-runs don't blow up the entire ingest after one shoot's
+      // job already exists. sfm has no partial unique → 23505 won't fire.
+      const code = (error as { code?: string }).code;
+      if (code === '23505') {
+        console.info(`[${GENERATOR}] downstream job debounced for shoot ${shoot.id} (existing pending ${jobRow.kind})`);
+        jobsEnqueued++;
+        continue;
+      }
+      throw error;
+    }
     jobsEnqueued++;
   }
 
