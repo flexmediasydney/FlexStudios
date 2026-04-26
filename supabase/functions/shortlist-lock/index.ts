@@ -336,23 +336,48 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let totalSkipped = 0;
   const allErrors: Array<{ group_id: string; file: string; message: string }> = [];
 
+  // Bug F (post-Sprint-2): parallelize per-group moves to fit within the
+  // Supabase Edge Function 150s idle timeout. A round with 31 confirmed +
+  // rejected groups × 5 brackets = 155 sequential Dropbox file moves at
+  // ~1.5s/move = 232s — exceeds the timeout, function killed mid-loop, DB
+  // never updated, files stranded in mixed state. With CONCURRENCY=6 groups
+  // running in parallel, total drops to ~30-40s. Conservative cap stays under
+  // Dropbox's app-wide 30req/s rate limit (6 groups × 5 moves × ~1/1.5s ≈
+  // 20 req/s peak). JS single-threaded so the shared counters are safe.
+  const groupsToProcess: Array<{
+    g: typeof groups[number];
+    dest: string;
+    bucket: 'approved' | 'rejected';
+  }> = [];
   for (const g of groups) {
     const files = g.files_in_group || [];
     if (files.length === 0) continue;
-
     if (approvedSet.has(g.id)) {
-      const r = await moveGroupFiles(g.id, files, g.exif_metadata, approvedDest);
-      movedApproved += r.moved;
-      totalSkipped += r.skipped;
-      for (const e of r.errors) allErrors.push({ group_id: g.id, ...e });
+      groupsToProcess.push({ g, dest: approvedDest, bucket: 'approved' });
     } else if (rejectedSet.has(g.id)) {
-      const r = await moveGroupFiles(g.id, files, g.exif_metadata, rejectedDest);
-      movedRejected += r.moved;
-      totalSkipped += r.skipped;
-      for (const e of r.errors) allErrors.push({ group_id: g.id, ...e });
+      groupsToProcess.push({ g, dest: rejectedDest, bucket: 'rejected' });
     }
     // else: undecided → leave in place
   }
+
+  const CONCURRENCY = 6;
+  let nextIdx = 0;
+  async function worker() {
+    while (true) {
+      const i = nextIdx++;
+      if (i >= groupsToProcess.length) return;
+      const { g, dest, bucket } = groupsToProcess[i];
+      const files = g.files_in_group || [];
+      const r = await moveGroupFiles(g.id, files, g.exif_metadata, dest);
+      if (bucket === 'approved') movedApproved += r.moved;
+      else movedRejected += r.moved;
+      totalSkipped += r.skipped;
+      for (const e of r.errors) allErrors.push({ group_id: g.id, ...e });
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, groupsToProcess.length) }, () => worker()),
+  );
 
   // ── Update round + project status (best-effort) ─────────────────────────
   const lockedAt = new Date().toISOString();
