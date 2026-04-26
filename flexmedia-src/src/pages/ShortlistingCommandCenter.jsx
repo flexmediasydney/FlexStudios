@@ -1063,11 +1063,21 @@ export default function ShortlistingCommandCenter() {
     return Array.from(set);
   }, [roundsQuery.data]);
 
+  // Burst 23 XX1: cache key was `[..., length, first-3-joined]` — if ids
+  // rotated but length stayed the same and the first 3 happened to remain,
+  // the cache wouldn't invalidate even though the resolved set differed.
+  // The same project_id set always produces the same sorted-join string,
+  // so this gives a stable + content-sensitive key without inflating it
+  // for huge id lists (each id is ~36 chars; sorted-join of 500 ids ≈ 18kb,
+  // larger than ideal but TanStack Query handles it fine in practice).
+  const projectIdsCacheKey = useMemo(
+    () => [...projectIds].sort().join(","),
+    [projectIds],
+  );
   const projectsQuery = useQuery({
     queryKey: [
       "shortlisting_command_center_projects",
-      projectIds.length,
-      projectIds.slice(0, 3).join(","),
+      projectIdsCacheKey,
     ],
     queryFn: async () => {
       if (projectIds.length === 0) return [];
@@ -1167,11 +1177,15 @@ export default function ShortlistingCommandCenter() {
     return Array.from(extra);
   }, [deadLetterQuery.data, projectIds]);
 
+  // Burst 23 XX1: same cache-key fix as projectsQuery above.
+  const deadLetterProjectIdsCacheKey = useMemo(
+    () => [...deadLetterProjectIds].sort().join(","),
+    [deadLetterProjectIds],
+  );
   const deadLetterProjectsQuery = useQuery({
     queryKey: [
       "shortlisting_dead_letter_projects",
-      deadLetterProjectIds.length,
-      deadLetterProjectIds.slice(0, 3).join(","),
+      deadLetterProjectIdsCacheKey,
     ],
     queryFn: async () => {
       if (deadLetterProjectIds.length === 0) return [];
