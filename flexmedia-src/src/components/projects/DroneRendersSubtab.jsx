@@ -151,16 +151,20 @@ const SHOT_ROLE_LABEL = {
   unclassified: "Unclassified",
 };
 
-// Wave 5 P2 S6: projectId is intentionally not consumed — Pin Editor entry
-// was removed (now edited-only on DroneEditsSubtab) and the Re-render Edge
-// Function takes shoot_id only. Prefix with _ so the lint rule lets it pass
-// while keeping the ProjectDronesTab call signature stable.
+// Wave 5 P2 S6: projectId was originally not consumed — Pin Editor entry was
+// removed (now edited-only on DroneEditsSubtab) and the Re-render Edge
+// Function takes shoot_id only.
 //
 // Wave 9 S3: pipelineState (from ProjectDronesTab → useDronePipelineState)
 // drives the swimlane lock + the in-context compact stage strip. When the
 // lock is active, all triage cards become non-interactive behind the
 // overlay (architect Section C.4).
-export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipelineState = null }) {
+//
+// Wave 14-mini Pick B: projectId is now consumed again — needed to invalidate
+// the ['drone_pipeline_state', projectId, shootId] query after lockShortlist
+// so the editor_handoff stage ticks over immediately instead of waiting up
+// to 60s for the next poll.
+export default function DroneRendersSubtab({ shoot, projectId, pipelineState = null }) {
   const queryClient = useQueryClient();
   const shootId = shoot?.id;
   const { isManagerOrAbove } = usePermissions();
@@ -456,13 +460,23 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
       }
       queryClient.invalidateQueries({ queryKey: ["drone_shots_for_renders", shootId] });
       queryClient.invalidateQueries({ queryKey: ["drone_renders_raw", shootId] });
+      // Wave 14-mini Pick B: invalidate pipeline_state so the editor_handoff
+      // stage ticks over IMMEDIATELY in the UI instead of waiting up to 60s
+      // for the next useDronePipelineState poll. The lock RPC server-side
+      // advances the stage, but without this invalidation the operator's
+      // "Lock" click looks like it did nothing for nearly a minute.
+      // Key matches useDronePipelineState.js:80 → ['drone_pipeline_state',
+      // projectId, shootId].
+      queryClient.invalidateQueries({
+        queryKey: ["drone_pipeline_state", projectId || null, shootId || null],
+      });
     } catch (err) {
       console.error("[DroneRendersSubtab] lockShortlist failed:", err);
       toast.error(err?.message || "Lock shortlist failed");
     } finally {
       setIsLocking(false);
     }
-  }, [shootId, queryClient]);
+  }, [shootId, projectId, queryClient]);
 
   // Lightbox safety: close on item-removed.
   useEffect(() => {
