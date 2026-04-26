@@ -153,10 +153,15 @@ async function enqueueIngestForRecentRawDrones(sinceIso: string): Promise<number
   // Window: events created at or after the webhook started (was: last 60s).
   // QC8 D-10 — see top of handler for rationale.
   const since = sinceIso;
+  // QC2-1 #11: dropped 'raw_drones' from the filter — that folder_kind was
+  // cleaned up in mig 247 (DELETE FROM project_folders WHERE folder_kind IN
+  // ('raw_drones', 'final_delivery_drones')) so no event will EVER carry
+  // it again. Keeping it in the filter just adds noise and risks a future
+  // typo confusing readers about what's still live.
   const { data, error } = await admin
     .from('project_folder_events')
     .select('project_id')
-    .in('folder_kind', ['drones_raws_shortlist_proposed', 'raw_drones'])
+    .eq('folder_kind', 'drones_raws_shortlist_proposed')
     .eq('event_type', 'file_added')
     .gte('created_at', since);
   if (error) throw error;
@@ -250,6 +255,33 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
     const dedupKey = `${projectId}|${fileName.toLowerCase()}`;
     if (seen.has(dedupKey)) continue;
     seen.add(dedupKey);
+
+    // ── E29 / FIX 7: cross-tick dedup ──────────────────────────────────────
+    // The webhook can fire multiple times in close succession for the same
+    // file (Dropbox emits file_modified for every metadata touch — content
+    // change, share-link refresh, even some no-op renames). Production
+    // observation: ×6 file_modified events for one file in 9hr. Without
+    // dedup each one re-inserts the same `editor_file_added` drone_events
+    // row and re-fans the same `render_edited` job.
+    //
+    // Skip if we already wrote an editor_file_added drone_events row for
+    // this (project_id, fullPath) in the last 60s. drone_events.payload
+    // stores edited_path, so we can match on that.
+    const { data: priorEvent } = await admin
+      .from('drone_events')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('event_type', 'editor_file_added')
+      .filter('payload->>edited_path', 'eq', fullPath)
+      .gte('created_at', new Date(Date.now() - 60_000).toISOString())
+      .limit(1)
+      .maybeSingle();
+    if (priorEvent) {
+      console.info(
+        `[${GENERATOR}] editor-link deduped: ${fileName} for project ${projectId} — already linked within 60s (event ${priorEvent.id})`,
+      );
+      continue;
+    }
 
     // Look up the matching raw shot via shoot.project_id JOIN. v1 = exact
     // match on filename. We need shot_id + shoot_id for the audit row +
