@@ -50,7 +50,12 @@ app = modal.App("flexstudios-drone-render", image=render_image)
 # ──────────────────────────────────────────────────────────────────
 # Main render function (deployed)
 # ──────────────────────────────────────────────────────────────────
-@app.function(cpu=2, memory=2048, timeout=180)
+@app.function(
+    cpu=2,
+    memory=4096,
+    timeout=180,
+    enable_memory_snapshot=True,
+)
 def run_render(image_bytes: bytes, theme_config: Dict[str, Any], scene: Dict[str, Any]) -> bytes:
     """
     Render one annotated drone image.
@@ -78,7 +83,12 @@ def run_render(image_bytes: bytes, theme_config: Dict[str, Any], scene: Dict[str
 # ──────────────────────────────────────────────────────────────────
 # Variant rendering — for output_variants in theme config
 # ──────────────────────────────────────────────────────────────────
-@app.function(cpu=2, memory=2048, timeout=240)
+@app.function(
+    cpu=2,
+    memory=4096,
+    timeout=240,
+    enable_memory_snapshot=True,
+)
 def run_render_with_variants(
     image_bytes: bytes,
     theme_config: Dict[str, Any],
@@ -194,8 +204,14 @@ def run_render_with_variants(
 # ──────────────────────────────────────────────────────────────────
 @app.function(
     cpu=2,
-    memory=2048,
+    memory=4096,
     timeout=240,
+    enable_memory_snapshot=True,
+    scaledown_window=600,
+    # Note: Modal v1.2.6 only supports max_inputs=1 (single-use containers).
+    # The 4GB memory bump is the primary fix for WORKER_RESOURCE_LIMIT during
+    # 8-shot batches; once Modal restores arbitrary max_inputs, set to 20 here
+    # to recycle containers and shed accumulated memory fragmentation.
     secrets=[modal.Secret.from_name("flexstudios-render-token")],
 )
 @modal.fastapi_endpoint(method="POST", requires_proxy_auth=False)
