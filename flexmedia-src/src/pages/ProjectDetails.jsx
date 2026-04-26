@@ -272,7 +272,7 @@ export default function ProjectDetails() {
    }, [projectId, navigate]);
 
    const queryClient = useQueryClient();
-   const { canSeePricing, canEditProject, canAccessProject, isMasterAdmin, isEmployee, user: permUser } = usePermissions();
+   const { canSeePricing, canEditProject, canAccessProject, isMasterAdmin, isEmployee, isEmployeeOrAbove, user: permUser } = usePermissions();
    const { canEdit: entityCanEdit, canView: entityCanView } = useEntityAccess('projects');
    const [showEditForm, setShowEditForm] = useState(false);
    const [showAgentSelector, setShowAgentSelector] = useState(false);
@@ -1587,14 +1587,24 @@ export default function ProjectDetails() {
 
           <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <div className="overflow-x-auto border-b bg-muted/30">
-              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${project.source === 'tonomo' ? 'sm:grid-cols-9' : 'sm:grid-cols-8'} h-auto bg-transparent`}>
+              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${(() => {
+                // 7 base tabs (tasks, revisions, effort, calendar, media, files, drones) + shortlisting (employee+) + tonomo (if source)
+                // Tailwind JIT needs static class names — enumerate every possibility.
+                const isTonomo = project.source === 'tonomo';
+                if (isEmployeeOrAbove && isTonomo) return 'sm:grid-cols-9';
+                if (isEmployeeOrAbove) return 'sm:grid-cols-8';
+                if (isTonomo) return 'sm:grid-cols-8';
+                return 'sm:grid-cols-7';
+              })()} h-auto bg-transparent`}>
                 <TabsTrigger value="tasks"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tasks</TabsTrigger>
                 <TabsTrigger value="revisions" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Requests</TabsTrigger>
                 <TabsTrigger value="effort"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Effort</TabsTrigger>
                 <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
                 <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
                 <TabsTrigger value="files"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Files</TabsTrigger>
-                <TabsTrigger value="shortlisting" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Shortlisting</TabsTrigger>
+                {isEmployeeOrAbove && (
+                  <TabsTrigger value="shortlisting" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Shortlisting</TabsTrigger>
+                )}
                 {hasDroneWork || hasDroneWorkLoading ? (
                   <TabsTrigger value="drones"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Drones</TabsTrigger>
                 ) : (
@@ -1671,13 +1681,15 @@ export default function ProjectDetails() {
               )}
             </TabsContent>
 
-            <TabsContent value="shortlisting" className="mt-4">
-              {mountedTabs.has("shortlisting") ? (
-                <ErrorBoundary><ProjectShortlistingTab project={project} /></ErrorBoundary>
-              ) : (
-                <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
-              )}
-            </TabsContent>
+            {isEmployeeOrAbove && (
+              <TabsContent value="shortlisting" className="mt-4">
+                {mountedTabs.has("shortlisting") ? (
+                  <ErrorBoundary><ProjectShortlistingTab project={project} /></ErrorBoundary>
+                ) : (
+                  <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
+                )}
+              </TabsContent>
+            )}
 
             <TabsContent value="drones" className="mt-4">
               {mountedTabs.has("drones") ? (

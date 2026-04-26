@@ -23,7 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CheckCircle2, Loader2, Trash2 } from "lucide-react";
+import { CheckCircle2, Loader2, RotateCcw, Trash2 } from "lucide-react";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -49,6 +49,7 @@ export default function ShortlistingQuarantine({ roundId }) {
   const [busyId, setBusyId] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [confirmNote, setConfirmNote] = useState("");
+  const [restoreDialog, setRestoreDialog] = useState(null);
 
   const qQuery = useQuery({
     queryKey: ["shortlisting_quarantine", roundId],
@@ -94,6 +95,41 @@ export default function ShortlistingQuarantine({ roundId }) {
     setConfirmDialog(row);
     setConfirmNote("");
   }, []);
+
+  const restoreToRound = useCallback(async () => {
+    if (!restoreDialog) return;
+    setBusyId(restoreDialog.id);
+    try {
+      // Delete the quarantine row — pass1_ready_compositions RPC will then
+      // return this group as eligible for re-classification (it filters
+      // out groups with a quarantine row).
+      await api.entities.ShortlistingQuarantine.delete(restoreDialog.id);
+      // Trigger pass1 for the round — it'll pick up just this group since
+      // already-classified compositions are excluded by the RPC.
+      try {
+        await api.functions.invoke("shortlisting-pass1", {
+          body: { round_id: roundId },
+        });
+        toast.success("Restored and re-classification triggered.");
+      } catch (passErr) {
+        // The delete succeeded; pass1 invoke is best-effort. Surface but don't fail.
+        console.warn("[ShortlistingQuarantine] pass1 invoke failed:", passErr);
+        toast.success("Restored. Run Pass 1 manually to re-classify.");
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["shortlisting_quarantine", roundId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["composition_classifications", roundId],
+      });
+      setRestoreDialog(null);
+    } catch (err) {
+      console.error("[ShortlistingQuarantine] restore failed:", err);
+      toast.error(err?.message || "Restore failed");
+    } finally {
+      setBusyId(null);
+    }
+  }, [restoreDialog, roundId, queryClient]);
 
   const confirmOutOfScope = useCallback(async () => {
     if (!confirmDialog) return;
@@ -210,20 +246,33 @@ export default function ShortlistingQuarantine({ roundId }) {
                       Resolved
                     </div>
                   ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="w-full h-7 text-[10px]"
-                      onClick={() => openConfirm(q)}
-                      disabled={busyId === q.id}
-                    >
-                      {busyId === q.id ? (
-                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                      )}
-                      Confirm out-of-scope
-                    </Button>
+                    <div className="grid grid-cols-2 gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-[10px]"
+                        onClick={() => openConfirm(q)}
+                        disabled={busyId === q.id}
+                      >
+                        {busyId === q.id ? (
+                          <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="h-3 w-3 mr-1" />
+                        )}
+                        Confirm OOS
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-[10px]"
+                        onClick={() => setRestoreDialog(q)}
+                        disabled={busyId === q.id}
+                        title="Restore to round and re-classify"
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1" />
+                        Restore
+                      </Button>
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -231,6 +280,40 @@ export default function ShortlistingQuarantine({ roundId }) {
           })}
         </div>
       )}
+
+      {/* Restore dialog */}
+      <Dialog
+        open={!!restoreDialog}
+        onOpenChange={(open) => !open && setRestoreDialog(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore to round</DialogTitle>
+            <DialogDescription>
+              {restoreDialog?.file_stem || "—"} was flagged as{" "}
+              <strong>{REASON_LABEL[restoreDialog?.reason] || restoreDialog?.reason}</strong>{" "}
+              by Pass 0. Restoring will delete the quarantine flag and
+              re-trigger Pass 1 classification just for this composition.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setRestoreDialog(null)}
+              disabled={busyId !== null}
+            >
+              Cancel
+            </Button>
+            <Button onClick={restoreToRound} disabled={busyId !== null}>
+              {busyId !== null && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              <RotateCcw className="h-4 w-4 mr-2" />
+              Restore + re-classify
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Confirm dialog */}
       <Dialog
@@ -243,8 +326,8 @@ export default function ShortlistingQuarantine({ roundId }) {
             <DialogDescription>
               {confirmDialog?.file_stem || "—"} · marked as{" "}
               <strong>{REASON_LABEL[confirmDialog?.reason] || confirmDialog?.reason}</strong>.
-              Confirming acknowledges the AI's call. (Restoring to the round
-              is a Phase 7 follow-up.)
+              Confirming acknowledges the AI's call. To bring this composition
+              back into the round, use Restore instead.
             </DialogDescription>
           </DialogHeader>
           <Textarea

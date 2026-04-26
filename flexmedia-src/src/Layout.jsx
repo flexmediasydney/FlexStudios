@@ -361,6 +361,7 @@ function LayoutContent({ currentPageName, children }) {
           can("ShortlistingCalibration") && { name: "Shortlist · Calibration", href: "ShortlistingCalibration", icon: Sparkles },
           can("SettingsShortlistingTraining") && { name: "Shortlist · Training", href: "SettingsShortlistingTraining", icon: Sparkles },
           can("SettingsShortlistingOverrides") && { name: "Shortlist · Overrides", href: "SettingsShortlistingOverrides", icon: Sparkles },
+          can("SettingsShortlistingPrompts") && { name: "Shortlist · Prompts", href: "SettingsShortlistingPrompts", icon: Sparkles },
         ].filter(Boolean)
       },
     ].filter(Boolean);

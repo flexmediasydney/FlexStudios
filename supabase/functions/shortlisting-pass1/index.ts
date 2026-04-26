@@ -53,6 +53,7 @@ import {
 import { getDropboxTempLink } from '../_shared/shortlistingFolders.ts';
 import { getActiveStreamBAnchors } from '../_shared/streamBInjector.ts';
 import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
+import { getActivePrompt } from '../_shared/promptLoader.ts';
 
 const GENERATOR = 'shortlisting-pass1';
 
@@ -255,7 +256,14 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
 
   // 3. Load Stream B anchors + build prompt.
   const anchors = await getActiveStreamBAnchors();
-  const prompt = buildPass1Prompt(anchors);
+  const builtPrompt = buildPass1Prompt(anchors);
+  // P8 follow-up: master_admin can override the system message via the
+  // SettingsShortlistingPrompts admin page (mig 296 / promptLoader.ts).
+  // If no DB override, builtPrompt.system applies.
+  const dbSystem = await getActivePrompt('pass1_system');
+  const prompt = dbSystem
+    ? { ...builtPrompt, system: dbSystem.text }
+    : builtPrompt;
 
   // 4. Concurrent classification sweep.
   const results = await classifyAll(compositions, prompt, concurrency);
@@ -379,6 +387,7 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
         cost_usd: roundedCost,
         model_version: SONNET_MODEL,
         anchors_version: anchors.version,
+        prompt_override_version: dbSystem?.version ?? null,
         average_combined_score: avgCombined != null ? Math.round(avgCombined * 100) / 100 : null,
         concurrency,
       },

@@ -49,6 +49,7 @@ import {
   type BracketGroup,
 } from '../_shared/bracketDetector.ts';
 import { getDropboxTempLink } from '../_shared/shortlistingFolders.ts';
+import { getActivePrompt } from '../_shared/promptLoader.ts';
 
 const GENERATOR = 'shortlisting-pass0';
 
@@ -566,6 +567,20 @@ async function classifyAllGroups(
   return results;
 }
 
+// Cached resolution: load DB override once per Pass 0 run, reuse across all
+// concurrent classifyOne calls. promptText falls back to HARD_REJECT_PROMPT
+// when DB returns null.
+let _cachedRejectPrompt: { text: string; version: number } | null = null;
+async function getRejectPromptText(): Promise<string> {
+  if (_cachedRejectPrompt) return _cachedRejectPrompt.text;
+  const dbPrompt = await getActivePrompt('pass0_reject');
+  if (dbPrompt) {
+    _cachedRejectPrompt = dbPrompt;
+    return dbPrompt.text;
+  }
+  return HARD_REJECT_PROMPT;
+}
+
 async function classifyOne(row: InsertedGroupRow): Promise<ClassificationResult> {
   const result: ClassificationResult = {
     groupId: row.id,
@@ -589,12 +604,13 @@ async function classifyOne(row: InsertedGroupRow): Promise<ClassificationResult>
     return result;
   }
 
+  const promptText = await getRejectPromptText();
   const messages: VisionMessage[] = [
     {
       role: 'user',
       content: [
         { type: 'image', source: { type: 'url', url: imageUrl } },
-        { type: 'text', text: HARD_REJECT_PROMPT },
+        { type: 'text', text: promptText },
       ],
     },
   ];

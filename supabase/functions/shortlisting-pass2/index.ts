@@ -76,6 +76,7 @@ import {
   validatePass2Output,
   type Pass2Output,
 } from '../_shared/pass2Validator.ts';
+import { getActivePrompt } from '../_shared/promptLoader.ts';
 
 const GENERATOR = 'shortlisting-pass2';
 
@@ -236,8 +237,9 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
   // 5. Stream B anchors (consistent with Pass 1).
   const anchors = await getActiveStreamBAnchors();
 
-  // 6. Build prompt.
-  const prompt = buildPass2Prompt({
+  // 6. Build prompt. P8 follow-up: master_admin can override the system
+  // message via SettingsShortlistingPrompts (mig 296 / promptLoader.ts).
+  const builtPrompt = buildPass2Prompt({
     propertyAddress: ctx.property_address,
     packageType: ctx.package_type,
     packageCeiling: ctx.package_ceiling,
@@ -246,6 +248,10 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
     streamBAnchors: anchors,
     classifications,
   });
+  const dbSystem = await getActivePrompt('pass2_system');
+  const prompt = dbSystem
+    ? { ...builtPrompt, system: dbSystem.text }
+    : builtPrompt;
 
   // 7. Single Sonnet call — text-only, no image part.
   const messages: VisionMessage[] = [

@@ -41,6 +41,7 @@ export const ROUTE_ACCESS = {
   ShortlistingCalibration: OWNER_ONLY,
   SettingsShortlistingTraining: OWNER_ONLY,
   SettingsShortlistingOverrides: OWNER_ONLY,
+  SettingsShortlistingPrompts: OWNER_ONLY,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,

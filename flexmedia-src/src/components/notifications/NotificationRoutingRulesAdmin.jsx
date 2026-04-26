@@ -502,6 +502,18 @@ export default function NotificationRoutingRulesAdmin({ currentUserRole }) {
     mutationFn: async ({ form, notificationType, currentRule }) => {
       const nextVersion = (currentRule?.version || 0) + 1;
 
+      // P1.5 follow-up: attribute the edit to the master_admin who saved it.
+      // The auth-side helper returns the public.users row; we want the
+      // auth.users.id which the table's FK references. Fall back gracefully
+      // if either is unavailable.
+      let createdById = null;
+      try {
+        const me = await api.auth.me();
+        createdById = me?.id || null;
+      } catch {
+        /* best-effort attribution — never block the save on this */
+      }
+
       const newRow = await api.entities.NotificationRoutingRule.create({
         notification_type: notificationType,
         recipient_roles: form.recipient_roles || [],
@@ -509,6 +521,7 @@ export default function NotificationRoutingRulesAdmin({ currentUserRole }) {
         notes: form.notes?.trim() || null,
         is_active: form.is_active !== false,
         version: nextVersion,
+        created_by: createdById,
       });
 
       if (currentRule?.id) {
@@ -693,6 +706,16 @@ export default function NotificationRoutingRulesAdmin({ currentUserRole }) {
                       ? rule.recipient_roles || []
                       : meta.default_roles || [];
                     const recipientUserIds = rule ? rule.recipient_user_ids || [] : [];
+                    // P1.5 follow-up: detect stale user IDs (deleted from
+                    // public.users but still listed in the rule). The
+                    // resolveRecipients edge fn silently drops these — surface
+                    // them in the admin UI as a warning chip.
+                    const knownUserIds = new Set(
+                      (usersQuery.data || []).map((u) => String(u.id)),
+                    );
+                    const staleUserIds = recipientUserIds.filter(
+                      (id) => !knownUserIds.has(String(id)),
+                    );
                     return (
                       <tr key={typeKey} className="border-b last:border-0 hover:bg-muted/30">
                         <td className="px-3 py-2 font-mono text-[11px] align-top">
@@ -738,6 +761,15 @@ export default function NotificationRoutingRulesAdmin({ currentUserRole }) {
                               <Badge variant="outline" className="text-[10px]">
                                 +{recipientUserIds.length} user
                                 {recipientUserIds.length === 1 ? "" : "s"}
+                              </Badge>
+                            )}
+                            {staleUserIds.length > 0 && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px] bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800"
+                                title={`${staleUserIds.length} user(s) no longer exist — silently dropped at fan-out: ${staleUserIds.join(", ")}`}
+                              >
+                                ⚠ {staleUserIds.length} stale
                               </Badge>
                             )}
                             {recipientRoles.length === 0 && recipientUserIds.length === 0 && (
