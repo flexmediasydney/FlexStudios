@@ -31,6 +31,7 @@ import {
   invokeFunction,
 } from '../_shared/supabase.ts';
 import { processDropboxDelta } from '../_shared/dropboxSync.ts';
+import { getFolderPath } from '../_shared/projectFolders.ts';
 
 const GENERATOR = 'dropbox-webhook';
 const WATCH_PATH = '/Flex Media Team Folder/Projects';
@@ -391,6 +392,30 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
   type TouchedShot = { shoot_id: string; shot_id: string };
   const touchedByProject = new Map<string, TouchedShot[]>();
 
+  // Wave 13 H: cache resolved project → expected drones_editors_edited_post_production
+  // path-prefix so we don't re-query project_folders for every file in a bulk
+  // delivery. A NULL value (cached as empty string) means "no row exists for
+  // this project" — we'll skip the link in that case (defensive: should never
+  // happen for a properly provisioned project).
+  const expectedPrefixByProject = new Map<string, string | null>();
+  async function resolveExpectedPrefix(projectId: string): Promise<string | null> {
+    if (expectedPrefixByProject.has(projectId)) {
+      return expectedPrefixByProject.get(projectId) ?? null;
+    }
+    let prefix: string | null = null;
+    try {
+      prefix = await getFolderPath(projectId, 'drones_editors_edited_post_production');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[${GENERATOR}] no project_folders row for drones_editors_edited_post_production project=${projectId} — skipping path-prefix gate (${msg})`,
+      );
+      prefix = null;
+    }
+    expectedPrefixByProject.set(projectId, prefix);
+    return prefix;
+  }
+
   for (const ev of events) {
     const projectId = ev.project_id as string | null;
     const fileName = ev.file_name as string | null;
@@ -404,6 +429,29 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
     const dedupKey = `${projectId}|${fileName.toLowerCase()}`;
     if (seen.has(dedupKey)) continue;
     seen.add(dedupKey);
+
+    // ── Wave 13 H: path-prefix validation ──────────────────────────────────
+    // The folder_kind on the inbound event is already
+    // 'drones_editors_edited_post_production', but folder_kind is assigned by
+    // dropboxSync via path matching against project_folders.dropbox_path; if
+    // an admin override repointed a folder kind to a path used by another
+    // project (or a non-canonical path was injected), the event could be
+    // attributed to the wrong project. Verify the event's actual fullPath
+    // lives under the project's expected prefix before trusting it. On
+    // mismatch we log + skip the link (don't propagate the wrong path into
+    // drone_shots.edited_dropbox_path → which would later trigger a
+    // mis-attributed render_edited via mig 322's trigger).
+    const expectedPrefix = await resolveExpectedPrefix(projectId);
+    if (!expectedPrefix) {
+      // No project_folders row → skip (already warned in resolver).
+      continue;
+    }
+    if (!fullPath.toLowerCase().startsWith(expectedPrefix.toLowerCase())) {
+      console.warn(
+        `[${GENERATOR}] path-prefix mismatch — refusing editor link: project=${projectId} got=${fullPath} expected_prefix=${expectedPrefix}`,
+      );
+      continue;
+    }
 
     // ── E29 / FIX 7: cross-tick dedup ──────────────────────────────────────
     // The webhook can fire multiple times in close succession for the same
@@ -453,15 +501,45 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
     }
     const shot = candidates[0] as { id: string; shoot_id: string };
 
-    // Update the raw shot's edited_dropbox_path. Idempotent — if the value
-    // is already set to fullPath this is a no-op write.
-    const { error: updErr } = await admin
+    // Update the raw shot's edited_dropbox_path AND atomically promote the
+    // lifecycle_state to 'editor_returned' (Wave 13 D, mig 324). Doing both in
+    // a single UPDATE eliminates the race where mig 322's belt-and-braces
+    // trigger fires on a row whose state hasn't yet been promoted, and the
+    // operator sees a confusingly half-promoted shot in the swimlane.
+    //
+    // The .eq('lifecycle_state', 'raw_accepted') predicate is intentional:
+    // we ONLY promote from raw_accepted. Don't overwrite raw_proposed (would
+    // skip operator triage), sfm_only (alignment frames), final, or rejected.
+    // A shot already at editor_returned will be a 0-row update — handled
+    // gracefully below (we still want to refresh the path if it changed,
+    // which is a separate idempotent fallback UPDATE).
+    const { data: promoted, error: updErr } = await admin
       .from('drone_shots')
-      .update({ edited_dropbox_path: fullPath })
-      .eq('id', shot.id);
+      .update({
+        edited_dropbox_path: fullPath,
+        lifecycle_state: 'editor_returned',
+      })
+      .eq('id', shot.id)
+      .eq('lifecycle_state', 'raw_accepted')
+      .select('id');
     if (updErr) {
-      console.warn(`[${GENERATOR}] edited_dropbox_path update failed for shot ${shot.id}: ${updErr.message}`);
+      console.warn(`[${GENERATOR}] edited_dropbox_path + lifecycle promote failed for shot ${shot.id}: ${updErr.message}`);
       continue;
+    }
+    // 0 rows ⇒ shot was already past raw_accepted (likely already at
+    // editor_returned). Fall back to a path-only update (no lifecycle change)
+    // so a re-delivery with a different filename / location still updates the
+    // canonical path, and the cross-tick dedup above already prevented us from
+    // re-emitting the audit event.
+    if (!promoted || promoted.length === 0) {
+      const { error: fallbackErr } = await admin
+        .from('drone_shots')
+        .update({ edited_dropbox_path: fullPath })
+        .eq('id', shot.id);
+      if (fallbackErr) {
+        console.warn(`[${GENERATOR}] edited_dropbox_path fallback update failed for shot ${shot.id}: ${fallbackErr.message}`);
+        continue;
+      }
     }
 
     await admin.from('drone_events').insert({
