@@ -225,6 +225,40 @@ export default function useBoundaryEditorState(initial) {
     [apply],
   );
 
+  // ── W6 FIX 7 (QC3-5 BE1+BE2): live vertex drag preview ──────────────────
+  // The boundary editor's onPointerMove updated `dragRef.current.previewPx`
+  // but the VertexHandles + PolygonLines components only read from
+  // state.polygon — so the vertex visually never moved during a drag,
+  // only snapping to the final position on pointerup. Pushing one history
+  // entry per pointermove would explode the undo stack.
+  //
+  // setPolygonNoHistory: write through to state.polygon (so VertexHandles
+  // re-renders) but bypass undo/redo + dirty re-anchor. Used during the
+  // drag for the live preview.
+  // commitDragHistory: snapshot the pre-drag state onto undoStack so the
+  // operator gets ONE undo per drag, not zero (no-history) or N (per move).
+  // Caller must hand in the pre-drag polygon snapshot (taken at pointerdown
+  // on the dragRef).
+  const setPolygonNoHistory = useCallback((next) => {
+    const cloned = clonePolygon(next);
+    _setState((prev) => {
+      const draft = { ...prev, polygon: cloned, source: "operator" };
+      return {
+        ...draft,
+        dirty: serialiseForDirty(draft) !== savedSnapshotRef.current,
+      };
+    });
+  }, []);
+
+  const commitDragHistory = useCallback(
+    (preDragSnapshot) => {
+      if (!preDragSnapshot || typeof preDragSnapshot !== "object") return;
+      pushHistory(undoStack, preDragSnapshot);
+      clearHistory(redoStack);
+    },
+    [pushHistory, clearHistory],
+  );
+
   const addVertex = useCallback(
     (afterIdx, latlng) => {
       if (!isFiniteLatLng(latlng)) return;
@@ -422,6 +456,10 @@ export default function useBoundaryEditorState(initial) {
     () => ({
       setPolygon,
       setVertex,
+      // W6 FIX 7: live-drag helpers — write polygon without pushing history,
+      // commit a single undo step at the end of a drag.
+      setPolygonNoHistory,
+      commitDragHistory,
       addVertex,
       deleteVertex,
       translatePolygon,
@@ -436,6 +474,8 @@ export default function useBoundaryEditorState(initial) {
     [
       setPolygon,
       setVertex,
+      setPolygonNoHistory,
+      commitDragHistory,
       addVertex,
       deleteVertex,
       translatePolygon,

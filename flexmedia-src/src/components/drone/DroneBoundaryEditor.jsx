@@ -253,6 +253,14 @@ export default function DroneBoundaryEditor({
           // the same pose that was active at drag start. Mirrors PinEditor #79.
           pose,
           moved: false,
+          // W6 FIX 7 (QC3-5 BE1+BE2): snapshot the full pre-drag state so
+          // commitDragHistory can push exactly one undo step at pointerup
+          // covering the entire drag. Cloning the polygon defensively so
+          // a later mutation can't poison the snapshot.
+          preDragSnapshot: {
+            ...state,
+            polygon: state.polygon.map((v) => [Number(v[0]), Number(v[1])]),
+          },
         };
         return;
       }
@@ -318,20 +326,43 @@ export default function DroneBoundaryEditor({
         const dx = e.clientX - ds.startMouse.x;
         const dy = e.clientY - ds.startMouse.y;
         if (Math.hypot(dx, dy) > 2) ds.moved = true;
-        // Live preview — don't write to state on every mousemove (it would
-        // explode the undo stack). Instead, store the live pixel target on
-        // the dragRef and let render read it via state.polygon[idx] +
-        // dragRef.current.previewPx.
-        ds.previewPx = {
-          x: ds.startVertex /* don't compute here */,
-          screenX: e.clientX,
-          screenY: e.clientY,
-        };
-        // Force a re-render of just the vertex layer.
+        // W6 FIX 7 (QC3-5 BE1+BE2): write the in-flight vertex coord through
+        // to state via setPolygonNoHistory so VertexHandles + PolygonLines
+        // re-render at the live cursor position. Without this, the vertex
+        // visually "stuck" at the start position until pointerup snapped it
+        // to the final coord. Bypasses undo/redo so a 100-move drag doesn't
+        // produce 100 undo steps; commitDragHistory at pointerup pushes
+        // exactly one entry covering the entire drag.
+        const usePose = ds.pose || pose;
+        if (usePose) {
+          const img = screenToImage(e.clientX, e.clientY);
+          const ground = pixelToGroundGps({
+            px: img.x,
+            py: img.y,
+            ...usePose,
+          });
+          if (ground) {
+            // Mutate a single vertex in a freshly-cloned polygon. Read from
+            // the latest state via the ref-free state closure isn't ideal —
+            // this useCallback's deps include `state.polygon` so it's fresh
+            // enough for typical 60fps drag.
+            const polyRef = ds.preDragSnapshot?.polygon ?? state.polygon;
+            const next = polyRef.map((v, i) =>
+              i === ds.idx ? [ground.lat, ground.lon] : v,
+            );
+            actions.setPolygonNoHistory(next);
+          }
+        }
+        // Keep the previewPx for backwards-compat with the pointerup path
+        // below (used as a fallback if the re-projection at pointerup fails).
+        ds.previewPx = { screenX: e.clientX, screenY: e.clientY };
+        // Force a re-render of the hover-vertex bubble too.
         setHoverVertexIdx((p) => (p === ds.idx ? p : ds.idx));
       }
     },
-    [],
+    // state.polygon is only used as a fallback ref source — the live coords
+    // come from preDragSnapshot which is captured at pointerdown.
+    [actions, pose, screenToImage, state.polygon],
   );
 
   const onPointerUp = useCallback(
@@ -353,6 +384,12 @@ export default function DroneBoundaryEditor({
         );
         const usePose = ds.pose || pose;
         if (!usePose) {
+          // W6 FIX 7: revert the live preview by replaying the pre-drag
+          // snapshot's polygon — operator should see the vertex bounce
+          // back, not stick at the cursor position they couldn't commit.
+          if (ds.preDragSnapshot?.polygon) {
+            actions.setPolygonNoHistory(ds.preDragSnapshot.polygon);
+          }
           toast.warning("Pose data unavailable — vertex not moved");
           return;
         }
@@ -362,15 +399,31 @@ export default function DroneBoundaryEditor({
           ...usePose,
         });
         if (!ground) {
+          // Same revert path — pixel above horizon → bounce back.
+          if (ds.preDragSnapshot?.polygon) {
+            actions.setPolygonNoHistory(ds.preDragSnapshot.polygon);
+          }
           toast.warning(
             "Pixel above horizon — vertex not moved (move the cursor onto the ground)",
           );
           return;
         }
-        actions.setVertex(ds.idx, [ground.lat, ground.lon]);
+        // W6 FIX 7: the live preview already wrote the vertex via
+        // setPolygonNoHistory; commit ONE undo step covering the entire
+        // drag using the snapshot we took at pointerdown, then write the
+        // final coord (also via setPolygonNoHistory so we don't push a
+        // second history entry through apply()).
+        if (ds.preDragSnapshot) {
+          actions.commitDragHistory(ds.preDragSnapshot);
+        }
+        const polyRef = ds.preDragSnapshot?.polygon ?? state.polygon;
+        const finalPoly = polyRef.map((v, i) =>
+          i === ds.idx ? [ground.lat, ground.lon] : v,
+        );
+        actions.setPolygonNoHistory(finalPoly);
       }
     },
-    [actions, pose, screenToImage],
+    [actions, pose, screenToImage, state.polygon],
   );
 
   const onWheel = useCallback(
