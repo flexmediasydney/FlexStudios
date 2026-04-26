@@ -66,6 +66,26 @@ if (!Deno.env.get("SHORTLISTING_DISPATCHER_JWT")) {
   );
 }
 
+// Audit defect #12: single-flight enforcement. Cron schedule `* * * * *`
+// plus a long wall-clock means two ticks can overlap. SKIP LOCKED on
+// claim_shortlisting_jobs prevents row double-claim, but the chain logic
+// (e.g. ingest → extract spawn) reads + writes that aren't claim-protected.
+// Wrap the entire tick body in pg_try_advisory_lock(LOCK_KEY); a second tick
+// arriving during overlap returns 200 with `skipped:concurrent_dispatch`.
+// Lock id derived from a fixed string (FNV-1a-style hash) so all ticks agree.
+const DISPATCHER_LOCK_KEY = stableHashBigInt("shortlisting-job-dispatcher");
+
+function stableHashBigInt(s: string): number {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 ^= c; h1 = (h1 * 0x01000193) >>> 0;
+    h2 ^= c; h2 = (h2 * 0x811c9dc5) >>> 0;
+  }
+  return (h1 * 0x200000 + (h2 & 0x1fffff)) % Number.MAX_SAFE_INTEGER;
+}
+
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
 
@@ -113,6 +133,60 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
   const startedAt = Date.now();
 
+  // ── Audit defect #12: Single-flight advisory lock ────────────────────────
+  // Try to acquire the dispatcher lock. If another invocation already holds
+  // it, exit cleanly (200) without touching the queue.
+  let lockAcquired = false;
+  try {
+    const { data: lockResp, error: lockErr } = await admin.rpc(
+      "pg_try_advisory_lock",
+      { lock_id: DISPATCHER_LOCK_KEY },
+    );
+    if (lockErr) {
+      return errorResponse(
+        `pg_try_advisory_lock RPC failed: ${lockErr.message}`,
+        500,
+        req,
+      );
+    }
+    lockAcquired = lockResp === true;
+    if (!lockAcquired) {
+      console.info(
+        `[${GENERATOR}] concurrent dispatch detected — returning early`,
+      );
+      return jsonResponse(
+        {
+          success: true,
+          claimed: 0,
+          dispatched: 0,
+          failed: 0,
+          skipped: "concurrent_dispatch",
+          elapsed_ms: Date.now() - startedAt,
+        },
+        200,
+        req,
+      );
+    }
+    return await runDispatcherTick(admin, req, startedAt);
+  } finally {
+    if (lockAcquired) {
+      const { error: relErr } = await admin.rpc("pg_advisory_unlock", {
+        lock_id: DISPATCHER_LOCK_KEY,
+      });
+      if (relErr) {
+        console.warn(
+          `[${GENERATOR}] pg_advisory_unlock failed (will release on session recycle): ${relErr.message}`,
+        );
+      }
+    }
+  }
+});
+
+async function runDispatcherTick(
+  admin: ReturnType<typeof getAdminClient>,
+  req: Request,
+  startedAt: number,
+): Promise<Response> {
   // ── Reset stale 'running' jobs back to 'pending'. Edge Function crashes
   // (panic, OOM, gateway timeout) leave claimed jobs stuck in 'running'
   // forever. Anything still 'running' after STALE_CLAIM_MIN minutes gets
@@ -184,6 +258,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     try {
       const ok = await dispatchOne(job);
       if (ok.ok) {
+        // Audit defect #1 (contract): the dispatched edge function's full
+        // HTTP response body is persisted into shortlisting_jobs.result. Any
+        // pass function MUST include its complete result payload (cost,
+        // counts, warnings, etc.) in the JSON it returns — Pass 3 reads
+        // job.result during retries to compute pass3_run_count, and ops
+        // queries `result` for cost rollups. Fan-out kinds (e.g. extract)
+        // also expect result to be readable by the chain logic below.
+        // Changing this to a synthesised summary would silently break those
+        // consumers; we keep the verbatim-body contract.
         await admin
           .from("shortlisting_jobs")
           .update({
@@ -238,7 +321,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     200,
     req,
   );
-});
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Dispatch + result types

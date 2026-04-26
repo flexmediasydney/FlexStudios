@@ -122,6 +122,50 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const admin = getAdminClient();
 
+  // ── Audit defect #47: concurrent-run guard ─────────────────────────────
+  // The benchmark sweeps up to 200 rounds × 1 Sonnet call each (~$0.03/call) —
+  // ~$6 per run at the cap. A second concurrent invocation would double-charge
+  // for no benefit. Refuse if a `benchmark_started` event was emitted in the
+  // last 5 minutes without a paired `benchmark_complete`.
+  {
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    const { data: recentStarts } = await admin
+      .from('shortlisting_events')
+      .select('id, created_at')
+      .eq('event_type', 'benchmark_started')
+      .gte('created_at', fiveMinAgo)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (recentStarts && recentStarts.length > 0) {
+      // Check whether any of those starts has a matching complete event since.
+      const oldestStart = recentStarts[recentStarts.length - 1].created_at as string;
+      const { count: recentCompletes } = await admin
+        .from('shortlisting_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('event_type', 'benchmark_complete')
+        .gte('created_at', oldestStart);
+      if ((recentCompletes ?? 0) < recentStarts.length) {
+        return jsonResponse(
+          {
+            ok: false,
+            error_code: 'BENCHMARK_ALREADY_RUNNING',
+            error: 'A benchmark run started in the last 5 minutes is still in progress. Wait for it to complete before triggering another.',
+          },
+          409,
+          req,
+        );
+      }
+    }
+
+    // Emit the guard event before doing any expensive work.
+    await admin.from('shortlisting_events').insert({
+      event_type: 'benchmark_started',
+      actor_type: isService ? 'system' : 'user',
+      actor_id: isService ? null : (user?.id ?? null),
+      payload: { trigger, limit },
+    });
+  }
+
   // ── Select holdout rounds ──────────────────────────────────────────────
   const { data: rounds, error: rerr } = await admin
     .from('shortlisting_rounds')
@@ -141,6 +185,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   );
 
   if (eligible.length === 0) {
+    // Audit defect #47: even on the no-rounds short-circuit, emit
+    // benchmark_complete so the in-flight guard above clears.
+    await admin.from('shortlisting_events').insert({
+      event_type: 'benchmark_complete',
+      actor_type: isService ? 'system' : 'user',
+      actor_id: isService ? null : (user?.id ?? null),
+      payload: { trigger, limit, sample_size: 0, reason: 'no_eligible_rounds' },
+    });
     return jsonResponse(
       {
         ok: true,
