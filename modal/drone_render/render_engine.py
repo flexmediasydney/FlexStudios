@@ -342,6 +342,37 @@ def _gps_to_px(tlat, tlon, dlat, dlon, alt, heading, pitch, w, h, intrinsics=Non
     return (fx * X_c / Z_c + cx, fy * Y_c / Z_c + cy)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Address-overlay template substitution (single-pass, key-whitelisted).
+# QC2-2 #9: chained out.replace() runs on the already-substituted string, so
+# an address field containing "{street_number}" re-expands. Operator-typed
+# templates (or values forwarded from a property record where the address
+# itself contains a curly-brace token) could probe scene internals, e.g.
+#   scene = {"address": "{street_number} cool", "street_number": "999"}
+#   _render_template("{address}", scene)  # used to → "999 cool"
+# Even if that's mostly cosmetic, it's an unintended trust boundary that
+# becomes a real injection vector if scene ever carries non-trivial keys
+# (auth tokens / api keys etc.). Single-pass regex with a fixed key
+# whitelist closes the door cheaply.
+#
+# The whitelist below is the EXACT set of keys the production templates
+# (modal/drone_render/themes/*.json + the pill_with_address pin) reference.
+# Other tokens like {name}/{distance}/{sqm} are handled by code paths that
+# don't go through _render_template (POI label loop / sqm overlay) so they
+# need not appear here.
+# ─────────────────────────────────────────────────────────────────────────────
+_RENDER_TEMPLATE_KEY_WHITELIST = (
+    "address",
+    "street_number",
+    "street_name",
+    "suburb",
+)
+import re as _re  # noqa: E402  — kept local to make the regex compile lazy
+_RENDER_TEMPLATE_PATTERN = _re.compile(
+    r"\{(" + "|".join(_RENDER_TEMPLATE_KEY_WHITELIST) + r")\}"
+)
+
+
 def _render_template(template: str, scene: dict) -> str:
     """Substitute scene fields into a `{field}`-style template.
 
@@ -351,15 +382,25 @@ def _render_template(template: str, scene: dict) -> str:
 
     Supports: {address}, {street_number}, {street_name}, {suburb} (best-effort
     — if the scene doesn't carry the key the placeholder is replaced with "").
+
+    Implementation: single-pass regex substitution against a fixed key
+    whitelist. Tokens NOT in the whitelist (e.g. an injected "{__class__}")
+    pass through verbatim. The substituted value is NOT re-scanned, so a
+    value containing a literal "{street_number}" string renders as the
+    literal text, not as another expansion. (QC2-2 #9.)
     """
     if not template or not isinstance(template, str):
         return template or ""
-    out = template
-    out = out.replace("{address}", str(scene.get("address") or ""))
-    out = out.replace("{street_number}", str(scene.get("street_number") or ""))
-    out = out.replace("{street_name}", str(scene.get("street_name") or ""))
-    out = out.replace("{suburb}", str(scene.get("suburb") or ""))
-    return out
+    if scene is None:
+        scene = {}
+
+    def _replace(match):
+        key = match.group(1)
+        # str(...) tolerates non-str values (e.g. integers from JSON), and
+        # `or ""` swaps None / empty for empty string.
+        return str(scene.get(key) or "")
+
+    return _RENDER_TEMPLATE_PATTERN.sub(_replace, template)
 
 
 def _fmt_distance(d) -> Optional[str]:
