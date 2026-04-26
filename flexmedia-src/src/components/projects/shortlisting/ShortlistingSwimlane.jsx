@@ -306,7 +306,26 @@ export default function ShortlistingSwimlane({
     const rejected = new Set(initialColumns.rejected);
     const approved = new Set();
 
-    const allOverrides = [...overrides, ...pendingOverrides];
+    // Burst 12 J5: apply overrides in the SAME order the server (shortlist-
+    // lock) uses, otherwise the UI and server can diverge on rapid contradict-
+    // ory drags. Server orders by client_sequence ASC NULLS LAST, then
+    // created_at ASC. We replicate that here. Pending (unsubmitted) overrides
+    // sit AFTER server overrides — they're the latest user intent and have no
+    // server timestamp yet.
+    const ordered = [...overrides].slice().sort((a, b) => {
+      const sa = a.client_sequence;
+      const sb = b.client_sequence;
+      // Both have client_sequence → numeric compare.
+      if (sa != null && sb != null) return sa - sb;
+      // One is null → null sorts LAST (matches Postgres NULLS LAST behaviour).
+      if (sa == null && sb != null) return 1;
+      if (sa != null && sb == null) return -1;
+      // Both null → fall back to created_at.
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return ta - tb;
+    });
+    const allOverrides = [...ordered, ...pendingOverrides];
     for (const ov of allOverrides) {
       const aiId = ov.ai_proposed_group_id;
       const humanId = ov.human_selected_group_id;
@@ -388,8 +407,12 @@ export default function ShortlistingSwimlane({
         if (result?.ok === false) {
           throw new Error(result?.error || "Override capture failed");
         }
-        // Refresh server-side overrides + reset pendingOverrides for that event.
-        queryClient.invalidateQueries({
+        // Burst 12 U2: AWAIT the refetch so the caller can clear its pending
+        // entry only AFTER the server-side row is in cache. Without await, we
+        // had a gap between "pending removed" and "server data lands" where
+        // the override briefly disappeared from the UI — visible as a card
+        // flickering back to its previous column for 100-300ms.
+        await queryClient.invalidateQueries({
           queryKey: ["shortlisting_overrides", roundId],
         });
         return true;
