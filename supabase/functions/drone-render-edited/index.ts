@@ -603,10 +603,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Final polygon for the scene: operator polygon when available,
   // else cadastral. Boundary overrides (sqm/side measurements/address
   // overlay) are forwarded so the renderer can apply per-feature toggles.
-  const boundaryPolygon: Array<{ lat: number; lng: number }> | null = boundaryRow?.polygon_latlng
-    ? boundaryRow.polygon_latlng
+  //
+  // SHAPE NOTE (Wave 6 fix QC3-2 B1+B2):
+  // drone-boundary-save writes drone_property_boundary.polygon_latlng as
+  //   [[lat,lng], [lat,lng], ...]   (validatePolygon at line 145 enforces tuples)
+  // BUT historical / fallback paths (cadastral.polygon, in-flight legacy
+  // rows) carried the {lat,lng} object shape. The downstream Modal scene
+  // expects polygon_latlon as [[num,num], ...] so we read defensively
+  // accepting BOTH shapes and normalise downstream.
+  // Type widened to `unknown[]` to admit either tuple or object element shape.
+  const boundaryPolygon: Array<unknown> | null = boundaryRow?.polygon_latlng
+    ? (boundaryRow.polygon_latlng as Array<unknown>)
     : cadastral && Array.isArray(cadastral.polygon)
-      ? cadastral.polygon
+      ? (cadastral.polygon as Array<unknown>)
       : null;
   const boundaryOverrides = boundaryRow
     ? {
@@ -703,7 +712,28 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         scene.pois = normalisePoisForModal(pois);
       }
       if (boundaryPolygon) {
-        scene.polygon_latlon = boundaryPolygon.map((v) => [v.lat, v.lng]);
+        // Defensive read — accept BOTH shapes:
+        //   [[lat,lng], ...]    (drone-boundary-save canonical write shape)
+        //   [{lat,lng}, ...]    (cadastral fallback / legacy rows)
+        // Without this defensive read, an operator-saved boundary lands as
+        // [[NaN, NaN], ...] in scene.polygon_latlon and Modal renders an
+        // empty polygon (silent zero-vertex output).
+        scene.polygon_latlon = boundaryPolygon
+          .map((v: unknown): [number, number] | null => {
+            if (Array.isArray(v) && v.length >= 2) {
+              const lat = Number((v as unknown[])[0]);
+              const lng = Number((v as unknown[])[1]);
+              return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+            }
+            if (v && typeof v === 'object') {
+              const obj = v as { lat?: unknown; lng?: unknown };
+              const lat = Number(obj.lat);
+              const lng = Number(obj.lng);
+              return Number.isFinite(lat) && Number.isFinite(lng) ? [lat, lng] : null;
+            }
+            return null;
+          })
+          .filter((p): p is [number, number] => p !== null);
         if (boundaryOverrides) {
           scene.boundary_overrides = boundaryOverrides;
         }
