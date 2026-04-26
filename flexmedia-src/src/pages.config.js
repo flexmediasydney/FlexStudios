@@ -117,6 +117,10 @@ const SettingsTonomoIntegration = React.lazy(() => import('./pages/SettingsTonom
 const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMappings'));
 // SettingsStaffDefaults removed — now a subtab in SettingsTeamsUsers
 const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
+const ShortlistingCommandCenter = React.lazy(() => import('./pages/ShortlistingCommandCenter'));
+const SettingsShortlistingSlots = React.lazy(() => import('./pages/SettingsShortlistingSlots'));
+const SettingsShortlistingStandards = React.lazy(() => import('./pages/SettingsShortlistingStandards'));
+const SettingsShortlistingSignals = React.lazy(() => import('./pages/SettingsShortlistingSignals'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
 const SettingsLegacyImport = React.lazy(() => import('./pages/SettingsLegacyImport'));
@@ -181,6 +185,10 @@ export const PAGES = {
     "Settings": Settings,
     "SettingsAI": SettingsAI,
     "SettingsAutomationRules": SettingsAutomationRules,
+    "ShortlistingCommandCenter": ShortlistingCommandCenter,
+    "SettingsShortlistingSlots": SettingsShortlistingSlots,
+    "SettingsShortlistingStandards": SettingsShortlistingStandards,
+    "SettingsShortlistingSignals": SettingsShortlistingSignals,
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,
     "SettingsClients": SettingsClients,

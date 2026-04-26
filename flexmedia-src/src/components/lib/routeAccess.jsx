@@ -33,6 +33,12 @@ export const ROUTE_ACCESS = {
   DroneCommandCenter: ADMIN_AND_ABOVE,
   AdminDroneThemes: OWNER_ONLY, // global system theme — master_admin only
 
+  // ── SHORTLISTING MODULE ───────────────────────────────────
+  ShortlistingCommandCenter: ADMIN_AND_ABOVE,
+  SettingsShortlistingSlots: OWNER_ONLY,
+  SettingsShortlistingStandards: OWNER_ONLY,
+  SettingsShortlistingSignals: OWNER_ONLY,
+
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,
   Organisations: MANAGER_AND_ABOVE,

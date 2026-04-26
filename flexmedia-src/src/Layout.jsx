@@ -290,6 +290,9 @@ function LayoutContent({ currentPageName, children }) {
               can("AdminDroneThemes") && { name: "System Themes", href: "AdminDroneThemes", icon: Palette },
             ].filter(Boolean),
           },
+          can("ShortlistingCommandCenter") && {
+            name: "Shortlisting", href: "ShortlistingCommandCenter", icon: Sparkles,
+          },
         ].filter(Boolean)
       },
       (can("ClientAgents") || can("Organisations") || can("People") || can("Teams")) && {
@@ -352,6 +355,9 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers" },
           can("SettingsAI") && { name: "AI Settings", href: "SettingsAI", icon: Sparkles },
           can("AIAuditLog") && { name: "AI Audit", href: "AIAuditLog", icon: Activity },
+          can("SettingsShortlistingSlots") && { name: "Shortlist · Slots", href: "SettingsShortlistingSlots", icon: Sparkles },
+          can("SettingsShortlistingStandards") && { name: "Shortlist · Standards", href: "SettingsShortlistingStandards", icon: Sparkles },
+          can("SettingsShortlistingSignals") && { name: "Shortlist · Signals", href: "SettingsShortlistingSignals", icon: Sparkles },
         ].filter(Boolean)
       },
     ].filter(Boolean);

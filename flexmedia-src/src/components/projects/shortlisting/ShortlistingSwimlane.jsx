@@ -113,7 +113,14 @@ export default function ShortlistingSwimlane({
   const queryClient = useQueryClient();
 
   // Track when the reviewer landed on this page so we can compute review_duration_seconds.
+  // Phase 7 follow-up: reset on round switch — if the parent reuses a single
+  // component instance (no key change) across rounds, the timer would otherwise
+  // measure cumulative dwell time across rounds, which corrupts the override
+  // telemetry that Phase 8's learning loop will consume.
   const reviewStartRef = useRef(Date.now());
+  useEffect(() => {
+    reviewStartRef.current = Date.now();
+  }, [roundId]);
 
   // ── Data fetches ────────────────────────────────────────────────────────
   const groupsQuery = useQuery({
