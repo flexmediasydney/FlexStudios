@@ -818,7 +818,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           const outName = filenameForRender(shot.filename, kind, v.name, v.format);
           const outDropboxPath = `${outFolder}/${outName}`;
           const uploadRes = await uploadFile(outDropboxPath, v.bytes, "overwrite");
-          if (!uploadRes || !uploadRes.path_lower) {
+          if (!uploadRes || !(uploadRes.path_display || uploadRes.path_lower)) {
             anyVariantFailed = true;
             firstError = firstError || `Dropbox upload (${v.name}) returned no path`;
             continue;
@@ -846,7 +846,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             pipeline: PIPELINE,
             column_state: initialColumnState,
             kind,
-            dropbox_path: uploadRes.path_lower,
+            dropbox_path: (uploadRes.path_display || uploadRes.path_lower),
             theme_id: themeIdForRow,
             theme_snapshot: themeSnapshotBundle,
             theme_id_at_render: themeIdAtRender,
@@ -882,7 +882,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             payload: {
               kind,
               pipeline: PIPELINE,
-              dropbox_path: uploadRes.path_lower,
+              dropbox_path: (uploadRes.path_display || uploadRes.path_lower),
               theme_chain_levels: themeChain.length,
               output_variant: v.name,
               column_state: initialColumnState,
@@ -891,7 +891,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             },
           });
 
-          variantResults.push({ variant: v.name, out_path: uploadRes.path_lower });
+          variantResults.push({ variant: v.name, out_path: (uploadRes.path_display || uploadRes.path_lower) });
         } catch (vErr) {
           anyVariantFailed = true;
           firstError =
