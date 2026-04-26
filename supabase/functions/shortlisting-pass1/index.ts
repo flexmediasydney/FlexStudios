@@ -551,8 +551,17 @@ function parsePass1Json(text: string): ParseResult {
   if (!text) return { ok: false, error: 'empty response' };
   let body = text.trim();
 
-  const fenceMatch = body.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenceMatch) body = fenceMatch[1].trim();
+  // Burst 6 L2: Sonnet sometimes emits TWO fenced blocks — the analysis prose
+  // wrapped in one fence, and the JSON output in another. The previous
+  // (?:json)?\s*([\s\S]*?) regex was non-greedy and captured the FIRST fence,
+  // which would be the analysis text. We now scan ALL fenced blocks and pick
+  // the one whose contents look like a JSON object (contains `{`). Falls back
+  // to the first fence (legacy behaviour) only if no JSON-looking fence found.
+  const fenceMatches = Array.from(body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi));
+  if (fenceMatches.length > 0) {
+    const jsonFence = fenceMatches.find((m) => m[1].includes('{'));
+    body = (jsonFence ?? fenceMatches[0])[1].trim();
+  }
 
   const braceStart = body.indexOf('{');
   const braceEnd = body.lastIndexOf('}');
@@ -588,7 +597,21 @@ function parsePass1Json(text: string): ParseResult {
     return Math.max(0, Math.min(1, n));
   };
   const arr = (v: unknown): string[] => Array.isArray(v) ? v.map(String) : [];
-  const bool = (v: unknown): boolean => v === true;
+  // Burst 6 L1: lenient boolean coercion. Sonnet usually emits true/false but
+  // occasionally produces "true" (string), 1, "yes", "y". A strict v===true
+  // check silently flips real-true values to false, corrupting downstream
+  // logic — e.g. Pass 2 reads is_exterior to seed slot eligibility, so a
+  // false-when-should-be-true breaks the entire interior/exterior separation.
+  const bool = (v: unknown): boolean => {
+    if (v === true) return true;
+    if (v === false || v == null) return false;
+    if (typeof v === 'string') {
+      const s = v.trim().toLowerCase();
+      return s === 'true' || s === 'yes' || s === 'y' || s === '1';
+    }
+    if (typeof v === 'number') return v === 1;
+    return false;
+  };
   const str = (v: unknown): string => typeof v === 'string' ? v : String(v ?? '');
   const strOrNull = (v: unknown): string | null => {
     if (v == null) return null;
@@ -622,6 +645,25 @@ function parsePass1Json(text: string): ParseResult {
   // Sanity guard — analysis must be at least 3 chars (spec asks 3+ sentences).
   if (value.analysis.length < 30) {
     return { ok: false, error: `analysis too short (${value.analysis.length} chars)` };
+  }
+
+  // Burst 6 L3: reject when critical taxonomy fields coerced to empty string.
+  // The REQUIRED_JSON_FIELDS check above only verifies key presence; a key
+  // with `null` or `""` value still passes (`'room_type' in parsed === true`).
+  // Pass 2's slot mapping then sees room_type='' and silently skips the
+  // composition from every slot — the group ends up "undecided" with no
+  // evidence in events. Better to fail here so the dispatcher retries.
+  if (!value.room_type) {
+    return { ok: false, error: 'room_type empty/null after coercion' };
+  }
+  if (!value.composition_type) {
+    return { ok: false, error: 'composition_type empty/null after coercion' };
+  }
+  if (!value.vantage_point) {
+    return { ok: false, error: 'vantage_point empty/null after coercion' };
+  }
+  if (!value.clutter_severity) {
+    return { ok: false, error: 'clutter_severity empty/null after coercion' };
   }
 
   return { ok: true, value };
