@@ -129,11 +129,49 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Load round + project ────────────────────────────────────────────────
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
-    .select('id, project_id, status, locked_at')
+    .select('id, project_id, status, locked_at, locked_by')
     .eq('id', roundId)
     .maybeSingle();
   if (roundErr) return errorResponse(`round lookup failed: ${roundErr.message}`, 500, req);
   if (!round) return errorResponse(`round ${roundId} not found`, 404, req);
+
+  // ── Burst 5 K1: idempotent re-lock short-circuit ────────────────────────
+  // If the round is already locked, return the prior result from the audit
+  // event without re-running file moves OR re-invoking the training extractor.
+  // Without this guard, a retry (browser double-click, pg_net retry, edge
+  // gateway reissue) would:
+  //   - re-run all moves (most skipped via Dropbox `to/conflict`, but burns
+  //     API quota and adds 30s latency)
+  //   - overwrite locked_at with a new timestamp (audit trail corrupted)
+  //   - re-invoke training-extractor (duplicate audit event, wasted work)
+  // Returning the latest shortlist_locked event payload preserves the
+  // original lock metadata while giving the caller a successful response.
+  if (round.status === 'locked') {
+    const { data: priorEvent } = await admin
+      .from('shortlisting_events')
+      .select('payload, created_at')
+      .eq('round_id', roundId)
+      .eq('event_type', 'shortlist_locked')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const priorPayload = (priorEvent?.payload || {}) as Record<string, unknown>;
+    return jsonResponse(
+      {
+        ok: true,
+        round_id: roundId,
+        already_locked: true,
+        locked_at: round.locked_at,
+        moved: {
+          approved: (priorPayload.moved_approved as number) ?? 0,
+          rejected: (priorPayload.moved_rejected as number) ?? 0,
+        },
+        skipped: (priorPayload.skipped as number) ?? 0,
+      },
+      200,
+      req,
+    );
+  }
 
   // ── Resolve destination folder paths ────────────────────────────────────
   let folders;
@@ -164,7 +202,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .from('shortlisting_events')
       .select('group_id, event_type, payload')
       .eq('round_id', roundId)
-      .in('event_type', ['pass2_slot_assigned', 'pass2_phase3_recommendation']),
+      .in('event_type', ['pass2_slot_assigned', 'pass2_phase3_recommendation'])
+      // Burst 5 K2: deterministic event order. Without ORDER BY, two re-runs
+      // of this query can return rows in different orders, which causes the
+      // approvedSet's Set-insertion order to differ. The downstream
+      // confirmedShortlistGroupIds = Array.from(approvedSet) snapshot then
+      // changes between runs, breaking stable comparisons in the training
+      // extractor + benchmark runner. created_at ASC matches the order events
+      // were emitted by Pass 2.
+      .order('created_at', { ascending: true }),
     admin
       .from('shortlisting_overrides')
       .select('ai_proposed_group_id, human_selected_group_id, human_action, created_at, client_sequence')
@@ -393,7 +439,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Phase 8: capture the confirmed shortlist as a stable snapshot on the round
   // row. The training extractor + the benchmark runner read this — both need
   // a comparison target that doesn't drift if events are later edited.
-  const confirmedShortlistGroupIds = Array.from(approvedSet);
+  //
+  // Burst 5 K2: sort the snapshot deterministically. Set iteration order
+  // depends on insertion order, which depends on slotEvents row order from
+  // Postgres. Even with the ORDER BY created_at on the events query above,
+  // ties on created_at (events inserted in the same statement batch) can be
+  // resolved differently across re-runs. Sorting the final array by group_id
+  // gives a fully deterministic snapshot regardless of event-row arrival.
+  const confirmedShortlistGroupIds = Array.from(approvedSet).sort();
 
   // Note: shortlisting_rounds.locked_by FKs auth.users(id), but app-level
   // user.id may be the public.users.id. When the auth identity equals the
@@ -408,8 +461,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       confirmed_shortlist_group_ids: confirmedShortlistGroupIds,
     })
     .eq('id', roundId);
+  // Burst 5 K3: if the round update fails, the training extractor (invoked
+  // below) reads stale `confirmed_shortlist_group_ids` and produces wrong
+  // training rows. Demote to a hard failure so the operator sees the error
+  // and re-runs Lock — the file moves are already idempotent (K1 short-
+  // circuits on round.status='locked', and Dropbox `to/conflict` is
+  // tolerated), so re-running is safe.
   if (roundUpdErr) {
-    console.warn(`[${GENERATOR}] round update failed: ${roundUpdErr.message}`);
+    console.error(`[${GENERATOR}] round update failed — aborting before training extractor: ${roundUpdErr.message}`);
+    return errorResponse(
+      `Round status update failed: ${roundUpdErr.message}. Files were moved but the round was not marked locked. Re-run Lock to retry.`,
+      500,
+      req,
+    );
   }
 
   const { error: projectUpdErr } = await admin
@@ -417,6 +481,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     .update({ shortlist_status: 'locked' })
     .eq('id', round.project_id);
   if (projectUpdErr) {
+    // Project status is best-effort — shortlist_status is a denormalised cache
+    // for the project list. The round itself is marked locked above, so the
+    // training extractor can safely run regardless.
     console.warn(`[${GENERATOR}] project update failed: ${projectUpdErr.message}`);
   }
 
