@@ -3,11 +3,13 @@
  * ────────────────────
  * Pulls pending `drone_jobs` and dispatches them to the appropriate handler:
  *
- *   kind='ingest'             → POST to drone-ingest      payload: { project_id }
- *   kind='render'             → POST to drone-render      payload: { shoot_id, kind?, fallback? }
- *   kind='sfm'                → POST to Modal sfm_http    payload: { _token, shoot_id }
- *   kind='poi_fetch'          → POST to drone-pois        payload: { project_id }
- *   kind='raw_preview_render' → POST to drone-raw-preview payload: { shoot_id }
+ *   kind='ingest'                       → POST to drone-ingest      payload: { project_id }
+ *   kind='render'                       → POST to drone-render      payload: { shoot_id, kind?, fallback? }
+ *   kind='render_edited'                → POST to drone-render-edited payload: { shoot_id|shot_id, kind?, column_state?, wipe_existing?, reason?, cascade? }
+ *   kind='boundary_save_render_cascade' → POST to drone-render-edited (cascade=true) payload: { project_id }
+ *   kind='sfm'                          → POST to Modal sfm_http    payload: { _token, shoot_id }
+ *   kind='poi_fetch'                    → POST to drone-pois        payload: { project_id }
+ *   kind='raw_preview_render'           → POST to drone-raw-preview payload: { shoot_id }
  *
  *     Chain: ingest → sfm → poi_fetch → raw_preview_render
  *
@@ -421,7 +423,21 @@ async function dispatchOne(
       return await callEdgeFunction("drone-ingest", {
         project_id: job.payload?.project_id,
       });
-    case "render":
+    case "render": {
+      // Wave 5 P2 (S3): drone-render is the RAW pipeline only. If a legacy
+      // edited-pipeline payload slips into a kind='render' row (pre-S3
+      // dispatcher / direct DB write), reject loudly rather than letting
+      // drone-render's own pipeline guard 400 it from inside (which would
+      // burn dispatcher attempts unnecessarily). The job goes straight to
+      // failed and the operator can re-enqueue as kind='render_edited'.
+      const rawPipeline = job.payload?.pipeline;
+      if (rawPipeline === 'edited') {
+        return {
+          ok: false,
+          error:
+            "legacy edited-pipeline render in kind=render row; should have been kind=render_edited",
+        };
+      }
       return await callEdgeFunction("drone-render", {
         shoot_id: job.payload?.shoot_id || job.shoot_id,
         kind: job.payload?.kind || "poi_plus_boundary",
@@ -432,6 +448,37 @@ async function dispatchOne(
         // adjustments lane regenerates with the new pins instead of stacking
         // alongside stale rows. Pass-through for any caller that sets it.
         wipe_existing: job.payload?.wipe_existing === true,
+      });
+    }
+    case "render_edited":
+      // Wave 5 P2 (S3): edited pipeline canonical renderer. Mirrors the
+      // 'render' case but routes to drone-render-edited and propagates
+      // edited-pipeline-specific fields (column_state, cascade, project_id).
+      return await callEdgeFunction("drone-render-edited", {
+        shoot_id: job.payload?.shoot_id || job.shoot_id,
+        shot_id: job.payload?.shot_id,
+        project_id: job.payload?.project_id || job.project_id,
+        kind: job.payload?.kind || "poi_plus_boundary",
+        column_state: job.payload?.column_state,
+        reason: job.payload?.reason,
+        cascade: job.payload?.cascade === true,
+        wipe_existing: job.payload?.wipe_existing === true,
+        pipeline: 'edited',
+      });
+    case "boundary_save_render_cascade":
+      // Wave 5 P2 (S3): boundary save trigger. The dispatcher fans this out
+      // to drone-render-edited with cascade=true and a fixed
+      // 'boundary_edit_cascade' reason so the per-shot fan-out lands rows
+      // in column_state='adjustments'. shoot_id is intentionally NULL —
+      // the cascade scopes to the entire project. The render fan-out is
+      // server-side in drone-render-edited (B.2 spec).
+      return await callEdgeFunction("drone-render-edited", {
+        project_id: job.payload?.project_id || job.project_id,
+        shoot_id: null,
+        cascade: true,
+        kind: 'poi_plus_boundary',
+        reason: 'boundary_edit_cascade',
+        pipeline: 'edited',
       });
     // 'sfm' is the canonical kind per migration 225 CHECK constraint.
     // 'sfm_run' is a deprecated alias kept for forward-compat with any rows
