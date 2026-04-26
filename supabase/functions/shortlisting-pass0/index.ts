@@ -231,6 +231,42 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
   }
   const projectId: string = round.project_id;
 
+  // 1b. Audit defects #6 + #7: idempotent re-run cleanup.
+  //
+  //   Pass 0 may be re-invoked after a mid-loop crash (composition_groups inserted
+  //   but classification not finished, or quarantine partially written). Without
+  //   pre-cleanup we'd accumulate duplicate composition_groups (no UNIQUE),
+  //   duplicate quarantine rows (mig 327 catches the second one with a 409 but
+  //   the run still aborts), and stale composition_classifications referencing
+  //   deleted groups.
+  //
+  //   Order matters: child tables first (FK to composition_groups), then groups.
+  //   composition_classifications cascade via FK; quarantine doesn't, hence the
+  //   explicit DELETE.
+  {
+    const { error: delClsErr } = await admin
+      .from('composition_classifications')
+      .delete()
+      .eq('round_id', roundId);
+    if (delClsErr) {
+      console.warn(`[${GENERATOR}] composition_classifications cleanup failed (non-fatal): ${delClsErr.message}`);
+    }
+    const { error: delQErr } = await admin
+      .from('shortlisting_quarantine')
+      .delete()
+      .eq('round_id', roundId);
+    if (delQErr) {
+      console.warn(`[${GENERATOR}] shortlisting_quarantine cleanup failed (non-fatal): ${delQErr.message}`);
+    }
+    const { error: delGrpErr } = await admin
+      .from('composition_groups')
+      .delete()
+      .eq('round_id', roundId);
+    if (delGrpErr) {
+      throw new Error(`composition_groups cleanup failed (cannot proceed safely): ${delGrpErr.message}`);
+    }
+  }
+
   // 2. Pull every succeeded extract job for this round.
   const { data: jobs, error: jobsErr } = await admin
     .from('shortlisting_jobs')

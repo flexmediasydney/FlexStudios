@@ -260,6 +260,42 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
     return r.clutter_severity && r.clutter_severity !== 'major_reject';
   });
 
+  // Audit defect #45: clear prior pass3_complete events from earlier retries
+  // before we emit the new one. Without this, repeated invocations leave a
+  // trail of pass3_complete rows and downstream consumers (Tonomo, dashboards)
+  // double-count.
+  // We do NOT delete pass2_* events here — those are owned by Pass 2 and Pass 3
+  // is read-only against them.
+  {
+    const { error: evtDelErr } = await admin
+      .from('shortlisting_events')
+      .delete()
+      .eq('round_id', roundId)
+      .eq('event_type', 'pass3_complete');
+    if (evtDelErr) {
+      warnings.push(`prior pass3_complete cleanup failed: ${evtDelErr.message}`);
+    }
+  }
+
+  // Audit defect #28: count prior pass3 runs (post-cleanup, so this is at
+  // most 0 for the immediately-running attempt — we look at attempt count from
+  // the round itself for retry traceability).
+  // We compute the run count by counting any prior pass3 jobs for the round
+  // — the dispatcher's idempotency guard means the active job either is the
+  // first attempt (count=1) or a manual rerun. Either way, this number is
+  // appended to the notification idempotency key so retries don't collide.
+  let pass3RunCount = 1;
+  try {
+    const { count } = await admin
+      .from('shortlisting_jobs')
+      .select('id', { count: 'exact', head: true })
+      .eq('round_id', roundId)
+      .eq('kind', 'pass3');
+    if (typeof count === 'number' && count > 0) pass3RunCount = count;
+  } catch (_) {
+    // best-effort — fall through with pass3RunCount=1
+  }
+
   let retouchFlagsOnShortlist = 0;
   if (retouchRows.length > 0) {
     // Build INSERT batch — guard against duplicate inserts on retry by first
@@ -396,7 +432,10 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
       projectName,
       ctaLabel: 'Review shortlist',
       source: GENERATOR,
-      idempotencyKey: `shortlist-ready-${roundId}`,
+      // Audit defect #28: append pass3RunCount so retries produce distinct keys.
+      // Without this, a re-fire after a transient notif failure was suppressed
+      // by the recipient-side dedup, hiding actual delivery problems.
+      idempotencyKey: `shortlist-ready-${roundId}-r${pass3RunCount}`,
     });
   } catch (notifErr) {
     const msg = notifErr instanceof Error ? notifErr.message : String(notifErr);

@@ -463,7 +463,16 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
   }
 
   // 13. Update round counters + cost + coverage_notes (status stays 'processing').
-  const roundedCost = Math.round(visionCostUsd * 1_000_000) / 1_000_000;
+  // Audit defect #5: pass2_cost_usd was OVERWRITTEN on retry, losing the prior
+  // run's cost. Sum across retries so totals reflect the true Sonnet spend.
+  const { data: priorRound } = await admin
+    .from('shortlisting_rounds')
+    .select('pass2_cost_usd')
+    .eq('id', ctx.round_id)
+    .maybeSingle();
+  const priorPass2Cost = typeof priorRound?.pass2_cost_usd === 'number' ? priorRound.pass2_cost_usd : 0;
+  const accumulatedCost = priorPass2Cost + visionCostUsd;
+  const roundedCost = Math.round(accumulatedCost * 1_000_000) / 1_000_000;
   const { error: roundUpdErr } = await admin
     .from('shortlisting_rounds')
     .update({
