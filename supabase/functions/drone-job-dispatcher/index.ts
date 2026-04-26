@@ -642,6 +642,22 @@ async function dispatchOne(
       }
       return await callEdgeFunction("drone-render", {
         shoot_id: job.payload?.shoot_id || job.shoot_id,
+        // W12 P0 fix from E2E walker: per-shot render children from the
+        // drone-raw-preview fan-out (W10-S2) carry payload.shot_id, but the
+        // pre-fix dispatcher dropped it on the floor — drone-render then
+        // rendered the WHOLE shoot, found everything already done, returned
+        // shots_rendered=0/shots_already_rendered=N, and the dispatcher
+        // dead-lettered the whole batch. Forward shot_id (also from the
+        // top-level column W11-S2 added in commit 4917cb1 → fall back to
+        // payload.shot_id for backwards compat).
+        shot_id: job.shot_id || job.payload?.shot_id,
+        // pipeline / column_state / allow_raw_source pass-through for the
+        // raw-preview-per-shot path which runs raw pipeline + column_state="pool"
+        // + allow_raw_source=true. Without these, drone-render falls back to
+        // legacy edited-pipeline defaults and misroutes outputs.
+        pipeline: job.payload?.pipeline,
+        column_state: job.payload?.column_state,
+        allow_raw_source: job.payload?.allow_raw_source === true,
         kind: job.payload?.kind || "poi_plus_boundary",
         // Pass-through `reason` so drone-render can route Pin Editor saves
         // to the drone_renders_adjusted/ folder + adjustments column state.
@@ -1001,11 +1017,28 @@ async function callEdgeFunction(
           typeof bodyJson.shots_failed_this_run === "number"
             ? bodyJson.shots_failed_this_run
             : -1;
+        // W12 P0 fix from E2E walker: shots_already_rendered === shots_total
+        // is genuine success, not failure. Happens when a per-shot render
+        // child runs after a sibling already filled the row (raw-preview
+        // fan-out + Pin Editor re-fire). Treat as success to drain the queue
+        // cleanly.
+        const alreadyRendered =
+          typeof bodyJson.shots_already_rendered === "number"
+            ? bodyJson.shots_already_rendered
+            : 0;
+        const allAlreadyRendered =
+          alreadyRendered > 0 && alreadyRendered === bodyJson.shots_total;
         const allFailedAreSkipped =
           skipped > 0 && failedThisRun > 0 && skipped === failedThisRun;
         const totalsMatch =
           skipped > 0 &&
           skipped + (bodyJson.shots_rendered as number) === bodyJson.shots_total;
+        if (allAlreadyRendered) {
+          return {
+            ok: true,
+            result: bodyJson,
+          };
+        }
         if (allFailedAreSkipped || totalsMatch) {
           return {
             ok: true,
