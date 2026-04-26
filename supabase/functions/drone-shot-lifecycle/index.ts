@@ -140,23 +140,63 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     projectId = shootRow?.project_id ?? null;
   }
 
-  // ── Update lifecycle_state ────────────────────────────────────────────────
-  const { data: updated, error: updErr } = await admin
+  // ── Update lifecycle_state (optimistic lock on fromState) ────────────────
+  // QC2-1 #12: previously the UPDATE had no fromState predicate, so two
+  // parallel POSTs racing the same shot from raw_proposed → raw_accepted /
+  // raw_proposed → rejected both succeeded — last-write-wins on the column,
+  // BOTH inserted a drone_events row (one with the wrong from_state), and
+  // the audit log emitted contradictory transitions for a single human
+  // intent. Chain the predicate `lifecycle_state = $fromState` and detect
+  // a 0-row update as a 409 conflict — the second writer reports
+  // current_state so the caller can refetch + reconcile.
+  //
+  // Use .select() WITHOUT .single() so 0-row updates don't throw PGRST116;
+  // we inspect updated.length explicitly. .maybeSingle() would also work
+  // but .select() is more readable for "expecting 0 or 1 rows by predicate".
+  const { data: updatedRows, error: updErr } = await admin
     .from('drone_shots')
     .update({ lifecycle_state: target })
     .eq('id', body.shot_id)
-    .select('*')
-    .single();
+    .eq('lifecycle_state', fromState)
+    .select('*');
 
   if (updErr) {
     console.error(`[${GENERATOR}] update failed:`, updErr);
     return errorResponse(`Failed to update shot: ${updErr.message}`, 500, req);
   }
 
+  // 0 rows → another writer flipped the lifecycle between our read above
+  // and the conditional UPDATE. Re-read the current state and 409 with it
+  // so the client can refetch + reconcile (or treat as no-op if the new
+  // current_state already matches their target).
+  if (!updatedRows || updatedRows.length === 0) {
+    const { data: current } = await admin
+      .from('drone_shots')
+      .select('id, lifecycle_state')
+      .eq('id', body.shot_id)
+      .maybeSingle();
+    const currentState = (current?.lifecycle_state as string | null) || null;
+    return jsonResponse(
+      {
+        success: false,
+        error: 'lifecycle_state_conflict',
+        expected_from_state: fromState,
+        current_state: currentState,
+      },
+      409,
+      req,
+    );
+  }
+
+  const updated = updatedRows[0];
+
   // ── Emit audit event (best-effort — don't block on failure) ───────────────
   // drone_events.project_id became nullable in migration 235, so we can still
   // record the event even when project resolution misses (rare). Surface a
   // warn-level log instead of failing the user-visible action.
+  // QC2-1 #12: this insert is now downstream of a confirmed-success UPDATE
+  // (predicated on fromState), so we never emit conflicting audit events
+  // for a racing pair — only the winner reaches this block.
   if (projectId) {
     const { error: evErr } = await admin
       .from('drone_events')
