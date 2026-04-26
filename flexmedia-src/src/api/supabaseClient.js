@@ -507,7 +507,18 @@ async function invokeFunction(client, functionName, params = {}, opts = {}) {
   // Timeout: Edge Functions should not hang indefinitely on slow networks.
   // pulseDataSync runs Apify actors which can take 2-3 min per batch.
   // Other functions use 45s (Supabase default 30s + network overhead).
-  const LONG_RUNNING_FUNCTIONS = ['pulseDataSync'];
+  // Burst 20 UU1: shortlisting-benchmark-runner runs N parallel Sonnet calls
+  // (capped at CONCURRENCY=8). After burst 14's parallelization, default
+  // limit=50 rounds completes in ~60-95s — exceeds the 45s default. Without
+  // the override the frontend sees a timeout error, but the benchmark
+  // continues on the backend → user thinks it failed and may retry,
+  // doubling cost. shortlist-lock can also approach 45s for big rounds with
+  // 30+ groups × 5 brackets, even with the 6-worker Dropbox parallelization.
+  const LONG_RUNNING_FUNCTIONS = [
+    'pulseDataSync',
+    'shortlisting-benchmark-runner',
+    'shortlist-lock',
+  ];
   const FUNCTION_TIMEOUT = LONG_RUNNING_FUNCTIONS.includes(functionName) ? 180000 : 45000;
   let timeoutId;
   const timeoutPromise = new Promise((_, reject) => {
