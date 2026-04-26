@@ -219,10 +219,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     recommendedIds = pickAiShortlist(shortlistInput);
 
     // ── Bulk-update is_ai_recommended for the eligible set ────────
-    // Two updates so re-runs converge cleanly on the algorithm's current
-    // verdict: clear the flag for the entire eligible set, then set it for
-    // the recommended subset. Cheaper than diffing in-app, and atomic enough
-    // for a single shoot (eligible counts are typically <50).
+    // Two updates with DISJOINT row sets so re-runs converge cleanly on the
+    // algorithm's current verdict without exposing a transient state where
+    // recommended rows are momentarily false. Cheaper than diffing in-app.
+    //
+    // Wave 14-mini Pick C: changed from "clear all eligible, then set
+    // recommended" to "clear non-recommended eligible, set recommended".
+    // The disjoint-set approach removes the race window where a concurrent
+    // reader between the two statements would see the recommended subset
+    // briefly flipped to false.
     //
     // INVARIANT — DO NOT REGRESS: this function ONLY mutates is_ai_recommended.
     // The shot's lifecycle_state MUST remain 'raw_proposed' so the operator
@@ -232,14 +237,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     // change which files end up in the deliverable Shortlist Final folder.
     // If a future revision needs to set lifecycle_state from this codepath,
     // it MUST be gated behind an explicit operator-confirmed flag.
-    const { error: clearErr } = await admin
-      .from("drone_shots")
-      .update({ is_ai_recommended: false })
-      .in("id", eligibleIds);
-    if (clearErr) {
-      console.warn(
-        `[${GENERATOR}] clear is_ai_recommended failed: ${clearErr.message} — continuing`,
-      );
+    const recommendedSet = new Set(recommendedIds);
+    const nonRecommendedIds = eligibleIds.filter((id) => !recommendedSet.has(id));
+    if (nonRecommendedIds.length > 0) {
+      const { error: clearErr } = await admin
+        .from("drone_shots")
+        .update({ is_ai_recommended: false })
+        .in("id", nonRecommendedIds);
+      if (clearErr) {
+        console.warn(
+          `[${GENERATOR}] clear is_ai_recommended failed: ${clearErr.message} — continuing`,
+        );
+      }
     }
     if (recommendedIds.length > 0) {
       const { error: setErr } = await admin
