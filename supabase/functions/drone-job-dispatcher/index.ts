@@ -618,10 +618,16 @@ async function dispatchOne(
         wipe_existing: job.payload?.wipe_existing === true,
       }, deadlineSignal);
     }
-    case "render_edited":
+    case "render_edited": {
       // Wave 5 P2 (S3): edited pipeline canonical renderer. Mirrors the
       // 'render' case but routes to drone-render-edited and propagates
       // edited-pipeline-specific fields (column_state, cascade, project_id).
+      //
+      // W10-S1: when payload.cascade=true (drone-pins-save's pin-edit
+      // cascade enqueues this shape), pass parent_job_id so the fan-out
+      // children get stamped with this orchestration row's id and the
+      // mig 302 trigger can roll up children_summary on the parent.
+      const isCascade = job.payload?.cascade === true;
       return await callEdgeFunction("drone-render-edited", {
         shoot_id: job.payload?.shoot_id || job.shoot_id,
         shot_id: job.payload?.shot_id,
@@ -629,10 +635,12 @@ async function dispatchOne(
         kind: job.payload?.kind || "poi_plus_boundary",
         column_state: job.payload?.column_state,
         reason: job.payload?.reason,
-        cascade: job.payload?.cascade === true,
+        cascade: isCascade,
         wipe_existing: job.payload?.wipe_existing === true,
         pipeline: 'edited',
+        ...(isCascade ? { parent_job_id: job.id } : {}),
       }, deadlineSignal);
+    }
     case "boundary_save_render_cascade":
       // Wave 5 P2 (S3): boundary save trigger. The dispatcher fans this out
       // to drone-render-edited with cascade=true and a fixed
@@ -640,6 +648,10 @@ async function dispatchOne(
       // in column_state='adjustments'. shoot_id is intentionally NULL —
       // the cascade scopes to the entire project. The render fan-out is
       // server-side in drone-render-edited (B.2 spec).
+      //
+      // W10-S1: stamp parent_job_id=job.id so fan-out children link back to
+      // this orchestration row. The mig 302 trigger then rolls children
+      // status into parent.children_summary + parent.terminal_status.
       return await callEdgeFunction("drone-render-edited", {
         project_id: job.payload?.project_id || job.project_id,
         shoot_id: null,
@@ -647,6 +659,7 @@ async function dispatchOne(
         kind: 'poi_plus_boundary',
         reason: 'boundary_edit_cascade',
         pipeline: 'edited',
+        parent_job_id: job.id,
       }, deadlineSignal);
     // 'sfm' is the canonical kind per migration 225 CHECK constraint.
     // 'sfm_run' is a deprecated alias kept for forward-compat with any rows
