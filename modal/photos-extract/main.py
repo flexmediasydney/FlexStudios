@@ -80,11 +80,27 @@ def _dropbox_client():
         raise RuntimeError(
             "DROPBOX_ACCESS_TOKEN missing — Modal secret 'dropbox_access_token' not attached"
         )
-    # If a team namespace id is configured, scope the client to it. The
-    # Edge-side helpers do this via a request header; the SDK uses
-    # with_path_root for the same effect.
-    ns = os.environ.get("DROPBOX_TEAM_NAMESPACE_ID", "").strip()
     client = dropbox.Dropbox(oauth2_access_token=token, timeout=120)
+    # Team-folder namespace handling: paths like "/Flex Media Team Folder/..."
+    # only resolve when the SDK is scoped to the team's root namespace via
+    # with_path_root. Without it, the SDK looks in the user's PERSONAL root and
+    # returns LookupError('not_found') for every team-folder path.
+    #
+    # Resolution order:
+    #   1. DROPBOX_TEAM_NAMESPACE_ID env var (matches Supabase Edge-side var name)
+    #   2. Auto-detect via users/get_current_account → root_info.root_namespace_id
+    #      (works whenever the access token has a team root)
+    ns = os.environ.get("DROPBOX_TEAM_NAMESPACE_ID", "").strip()
+    if not ns:
+        try:
+            account = client.users_get_current_account()
+            root_info = getattr(account, "root_info", None)
+            if root_info is not None:
+                ns = getattr(root_info, "root_namespace_id", "") or ""
+                if ns:
+                    print(f"[photos-extract] auto-detected team root namespace: {ns}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[photos-extract] team namespace auto-detect failed: {e}")
     if ns:
         client = client.with_path_root(dropbox.common.PathRoot.root(ns))
     return client

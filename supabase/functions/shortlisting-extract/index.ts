@@ -310,6 +310,10 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
     files_processed: fileEntries.length,
     files_succeeded: filesSucceeded,
     files_failed: filesFailed,
+    // P-fix-1: include the full modal_response so the dispatcher's overwrite of
+    // shortlisting_jobs.result preserves per-file detail. Without this, pass0
+    // reads job.result.modal_response.files and finds nothing — round dies.
+    modal_response: modalResponse || undefined,
     job_id: input.jobId,
     round_id: input.roundId,
   };
