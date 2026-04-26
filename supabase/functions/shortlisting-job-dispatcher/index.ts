@@ -559,6 +559,13 @@ async function callEdgeFunction(
     return { ok: false, error: errMsg };
   }
   try {
+    // Burst 17 GG1: bound the per-call wait so a hanging downstream function
+    // doesn't burn the dispatcher's entire 150s gateway budget. The
+    // dispatcher claims up to MAX_JOBS_PER_RUN (10) jobs per tick — one slow
+    // call shouldn't strand the other 9 in 'running' until stale-claim
+    // recovery (20 min). 120s gives Pass 2 (the slowest, with 8192-token
+    // output + Stream B universe) headroom while leaving the dispatcher
+    // ~30s to cleanly mark the timed-out job and exit.
     const resp = await fetch(url, {
       method: "POST",
       headers: {
@@ -567,6 +574,7 @@ async function callEdgeFunction(
         "x-caller-context": GENERATOR,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120 * 1000),
     });
 
     // Single-read body (mirrors drone dispatcher audit #35).
