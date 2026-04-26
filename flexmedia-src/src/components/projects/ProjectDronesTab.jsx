@@ -53,6 +53,7 @@ import {
 import { ChevronDown, RotateCw } from "lucide-react";
 import { useDronePipelineState } from "@/hooks/useDronePipelineState";
 import DronePipelineBanner from "@/components/drone/DronePipelineBanner";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 // ── Status pipeline ──────────────────────────────────────────────────────────
 // Ordered chain — first 4 are linear ingestion/processing, last 4 are pipeline columns.
@@ -682,24 +683,35 @@ function ShootDetail({
           </TabsTrigger>
         </TabsList>
 
+        {/* Wave 14-mini Pick B: each Drone subtab is wrapped in its own
+            ErrorBoundary so a single subtab crash (e.g. Renders) doesn't take
+            down the whole project page or sibling subtabs. The compact variant
+            renders an inline error card with a Try-Again button instead of
+            the full-page fallback. */}
         <TabsContent value="shots" className="mt-3">
-          <DroneShotsSubtab
-            shoot={shoot}
-            pipelineState={pipelineState}
-            onForceFire={forceFireNow}
-          />
+          <ErrorBoundary fallbackLabel="Drone Shots" compact>
+            <DroneShotsSubtab
+              shoot={shoot}
+              pipelineState={pipelineState}
+              onForceFire={forceFireNow}
+            />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="renders" className="mt-3">
-          <DroneRendersSubtab
-            shoot={shoot}
-            projectId={projectId}
-            pipelineState={pipelineState}
-          />
+          <ErrorBoundary fallbackLabel="Drone Renders" compact>
+            <DroneRendersSubtab
+              shoot={shoot}
+              projectId={projectId}
+              pipelineState={pipelineState}
+            />
+          </ErrorBoundary>
         </TabsContent>
 
         <TabsContent value="edits" className="mt-3">
-          <DroneEditsSubtab shoot={shoot} projectId={projectId} />
+          <ErrorBoundary fallbackLabel="Drone Edits" compact>
+            <DroneEditsSubtab shoot={shoot} projectId={projectId} />
+          </ErrorBoundary>
         </TabsContent>
       </Tabs>
     </div>
