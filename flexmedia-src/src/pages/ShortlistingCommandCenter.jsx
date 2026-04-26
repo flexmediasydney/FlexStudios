@@ -898,26 +898,124 @@ function AlertsPanel({
   );
 }
 
-// ── Phase 8 placeholder ─────────────────────────────────────────────────────
+// ── Recalibration insights ───────────────────────────────────────────────────
+// Wave 6 P8: was a placeholder. Now wired to:
+//   - shortlisting_benchmark_results (latest row → match rate vs 78% baseline)
+//   - get_override_analytics (top 3 most-overridden signals from last 90 days)
+// Empty state shown if either source has no data yet.
 function RecalibrationPlaceholder() {
+  const benchmarkQuery = useQuery({
+    queryKey: ["shortlisting_benchmark_latest"],
+    queryFn: async () => {
+      const rows = await api.entities.ShortlistingBenchmarkResult.list("-ran_at", 1);
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const since90 = useMemo(
+    () => new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString(),
+    [],
+  );
+
+  const signalsQuery = useQuery({
+    queryKey: ["shortlisting_top_signals_overridden", since90],
+    queryFn: async () => {
+      const rows = await api.rpc("get_override_analytics", {
+        p_since: since90,
+        p_package_type: null,
+        p_project_tier: null,
+      });
+      return (rows || [])
+        .filter((r) => String(r.dimension).toLowerCase() === "signal")
+        .sort((a, b) => Number(b.count) - Number(a.count))
+        .slice(0, 3);
+    },
+    staleTime: 60 * 1000,
+  });
+
+  const bench = benchmarkQuery.data;
+  const signals = signalsQuery.data || [];
+  const hasData = bench != null || signals.length > 0;
+  const matchRate = bench ? Number(bench.match_rate) : null;
+  const baseline = bench ? Number(bench.baseline_match_rate || 0.78) : 0.78;
+  const delta = matchRate != null ? matchRate - baseline : null;
+
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center gap-2">
           <TrendingUp className="h-4 w-4" />
-          Recalibration proposals
-          <Badge variant="outline" className="text-[9px]">
-            Phase 8
-          </Badge>
+          Recalibration insights
+          <a
+            href="/ShortlistingCalibration"
+            className="ml-auto text-[10px] text-muted-foreground hover:text-foreground underline"
+          >
+            full view →
+          </a>
         </CardTitle>
       </CardHeader>
-      <CardContent>
-        <div className="text-xs text-muted-foreground italic py-3 px-2">
-          Recalibration insights will appear here after Phase 8 (the learning
-          loop) ships. Once override telemetry has accumulated, signal weight
-          and Stream B anchor tweaks will be proposed automatically and surface
-          here for operator approval.
-        </div>
+      <CardContent className="space-y-3">
+        {!hasData ? (
+          <div className="text-xs text-muted-foreground italic py-3 px-1">
+            No data yet. Run a benchmark or accumulate override telemetry to populate.
+          </div>
+        ) : (
+          <>
+            {bench ? (
+              <div className="rounded border p-2 text-xs space-y-1">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-muted-foreground">Latest match rate</span>
+                  <span className="font-bold tabular-nums text-base">
+                    {(matchRate * 100).toFixed(1)}%
+                  </span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-muted-foreground">vs baseline ({(baseline * 100).toFixed(0)}%)</span>
+                  <span
+                    className={cn(
+                      "tabular-nums font-medium",
+                      delta > 0 ? "text-emerald-600" : delta < 0 ? "text-red-600" : "",
+                    )}
+                  >
+                    {delta >= 0 ? "+" : ""}
+                    {(delta * 100).toFixed(1)} pp
+                  </span>
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {bench.sample_size} rounds · {fmtTime(bench.ran_at)}
+                </div>
+              </div>
+            ) : (
+              <div className="text-xs text-muted-foreground italic">
+                No benchmarks run yet.
+              </div>
+            )}
+
+            {signals.length > 0 && (
+              <div>
+                <div className="text-[11px] text-muted-foreground mb-1.5 uppercase tracking-wide">
+                  Top overridden signals (90d)
+                </div>
+                <ul className="space-y-1">
+                  {signals.map((s) => (
+                    <li
+                      key={s.bucket}
+                      className="flex items-center justify-between text-xs"
+                    >
+                      <span className="font-mono truncate" title={s.bucket}>
+                        {s.bucket}
+                      </span>
+                      <span className="text-muted-foreground tabular-nums shrink-0 ml-2">
+                        {s.count} · {(Number(s.rate) * 100).toFixed(1)}%
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
       </CardContent>
     </Card>
   );

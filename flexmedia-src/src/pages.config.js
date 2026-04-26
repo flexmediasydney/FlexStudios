@@ -121,6 +121,9 @@ const ShortlistingCommandCenter = React.lazy(() => import('./pages/ShortlistingC
 const SettingsShortlistingSlots = React.lazy(() => import('./pages/SettingsShortlistingSlots'));
 const SettingsShortlistingStandards = React.lazy(() => import('./pages/SettingsShortlistingStandards'));
 const SettingsShortlistingSignals = React.lazy(() => import('./pages/SettingsShortlistingSignals'));
+const ShortlistingCalibration = React.lazy(() => import('./pages/ShortlistingCalibration'));
+const SettingsShortlistingTraining = React.lazy(() => import('./pages/SettingsShortlistingTraining'));
+const SettingsShortlistingOverrides = React.lazy(() => import('./pages/SettingsShortlistingOverrides'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
 const SettingsLegacyImport = React.lazy(() => import('./pages/SettingsLegacyImport'));
@@ -189,6 +192,9 @@ export const PAGES = {
     "SettingsShortlistingSlots": SettingsShortlistingSlots,
     "SettingsShortlistingStandards": SettingsShortlistingStandards,
     "SettingsShortlistingSignals": SettingsShortlistingSignals,
+    "ShortlistingCalibration": ShortlistingCalibration,
+    "SettingsShortlistingTraining": SettingsShortlistingTraining,
+    "SettingsShortlistingOverrides": SettingsShortlistingOverrides,
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,
     "SettingsClients": SettingsClients,

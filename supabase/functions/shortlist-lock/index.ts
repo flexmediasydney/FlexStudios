@@ -49,6 +49,7 @@ import {
   getUserFromReq,
   serveWithAudit,
   getAdminClient,
+  invokeFunction,
 } from '../_shared/supabase.ts';
 import { getShortlistingFolders } from '../_shared/shortlistingFolders.ts';
 import { moveFile } from '../_shared/dropbox.ts';
@@ -331,6 +332,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const lockedAt = new Date().toISOString();
   const lockedBy = isService ? null : (user?.id ?? null);
 
+  // Phase 8: capture the confirmed shortlist as a stable snapshot on the round
+  // row. The training extractor + the benchmark runner read this — both need
+  // a comparison target that doesn't drift if events are later edited.
+  const confirmedShortlistGroupIds = Array.from(approvedSet);
+
   // Note: shortlisting_rounds.locked_by FKs auth.users(id), but app-level
   // user.id may be the public.users.id. When the auth identity equals the
   // public.users row id (common case), this works; otherwise we set NULL.
@@ -341,6 +347,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       locked_at: lockedAt,
       locked_by: lockedBy,
       updated_at: lockedAt,
+      confirmed_shortlist_group_ids: confirmedShortlistGroupIds,
     })
     .eq('id', roundId);
   if (roundUpdErr) {
@@ -371,6 +378,24 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       rejected_count: rejectedSet.size,
     },
   });
+
+  // ── Phase 8: kick the training extractor (fire-and-forget) ─────────────
+  // The extractor reads confirmed_shortlist_group_ids set above and writes one
+  // shortlisting_training_examples row per confirmed group. It runs async so
+  // the lock response stays fast; failures are logged inside the extractor and
+  // visible via shortlisting_events.event_type='training_examples_extracted'.
+  if (confirmedShortlistGroupIds.length > 0) {
+    const extractorWork = invokeFunction(
+      'shortlisting-training-extractor',
+      { round_id: roundId },
+      GENERATOR,
+    ).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[${GENERATOR}] training extractor invoke failed: ${msg}`);
+    });
+    // deno-lint-ignore no-explicit-any
+    (globalThis as any).EdgeRuntime?.waitUntil?.(extractorWork);
+  }
 
   return jsonResponse(
     {

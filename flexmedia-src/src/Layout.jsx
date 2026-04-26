@@ -358,6 +358,9 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsShortlistingSlots") && { name: "Shortlist · Slots", href: "SettingsShortlistingSlots", icon: Sparkles },
           can("SettingsShortlistingStandards") && { name: "Shortlist · Standards", href: "SettingsShortlistingStandards", icon: Sparkles },
           can("SettingsShortlistingSignals") && { name: "Shortlist · Signals", href: "SettingsShortlistingSignals", icon: Sparkles },
+          can("ShortlistingCalibration") && { name: "Shortlist · Calibration", href: "ShortlistingCalibration", icon: Sparkles },
+          can("SettingsShortlistingTraining") && { name: "Shortlist · Training", href: "SettingsShortlistingTraining", icon: Sparkles },
+          can("SettingsShortlistingOverrides") && { name: "Shortlist · Overrides", href: "SettingsShortlistingOverrides", icon: Sparkles },
         ].filter(Boolean)
       },
     ].filter(Boolean);

@@ -28,6 +28,7 @@ import {
   errorResponse,
   serveWithAudit,
   getAdminClient,
+  invokeFunction,
 } from '../_shared/supabase.ts';
 import { processDropboxDelta } from '../_shared/dropboxSync.ts';
 
@@ -142,6 +143,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[${GENERATOR}] editor-link failed: ${msg}`);
       }
+      // Photos finals watcher: scan project_folder_events for `file_added`
+      // rows in photos_finals / photos_editors_final_enriched emitted since
+      // this webhook started, group by project_id, and invoke the
+      // shortlisting-finals-watcher edge function with the batch. The watcher
+      // parses filename suffixes to update training_examples.variant_count
+      // (spec §14). Wave 6 P8 SHORTLIST.
+      try {
+        const fanned = await fanoutFinalsWatcher(webhookStartIso);
+        if (fanned > 0) {
+          console.log(`[${GENERATOR}] fanned-out finals-watcher to ${fanned} project(s)`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] finals-watcher fanout failed: ${msg}`);
+      }
     })
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -232,6 +248,62 @@ async function enqueueShortlistingForRecentPhotos(sinceIso: string): Promise<num
     }
   }
   return projectIds.length;
+}
+
+/**
+ * Photos finals watcher fanout — Wave 6 P8 SHORTLIST.
+ *
+ * After every webhook delta, scan project_folder_events for file_added rows
+ * where folder_kind ∈ ('photos_finals','photos_editors_final_enriched')
+ * emitted since the webhook started. Group the file paths by project_id and
+ * invoke the shortlisting-finals-watcher edge function once per project with
+ * the batch.
+ *
+ * The watcher parses filename suffixes to compute variant_count per stem and
+ * updates shortlisting_training_examples.variant_count + weight per spec §14.
+ *
+ * Returns the number of project_ids fanned-out.
+ */
+async function fanoutFinalsWatcher(sinceIso: string): Promise<number> {
+  const admin = getAdminClient();
+  const { data, error } = await admin
+    .from('project_folder_events')
+    .select('project_id, file_name, metadata')
+    .in('folder_kind', ['photos_finals', 'photos_editors_final_enriched'])
+    .eq('event_type', 'file_added')
+    .gte('created_at', sinceIso);
+  if (error) throw error;
+  if (!data || data.length === 0) return 0;
+
+  // Group by project_id → list of full paths (preferring metadata.path; fall
+  // back to bare file_name when path is missing).
+  const byProject = new Map<string, string[]>();
+  for (const ev of data) {
+    const pid = ev.project_id as string | null;
+    if (!pid) continue;
+    const meta = (ev.metadata || {}) as Record<string, unknown>;
+    const fullPath =
+      (meta.path as string | undefined) || (ev.file_name as string | undefined) || null;
+    if (!fullPath) continue;
+    if (!byProject.has(pid)) byProject.set(pid, []);
+    byProject.get(pid)!.push(fullPath);
+  }
+
+  let fanned = 0;
+  for (const [pid, paths] of byProject) {
+    try {
+      await invokeFunction(
+        'shortlisting-finals-watcher',
+        { project_id: pid, file_paths: paths },
+        GENERATOR,
+      );
+      fanned++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[${GENERATOR}] finals-watcher invoke failed for ${pid}: ${msg}`);
+    }
+  }
+  return fanned;
 }
 
 /**
