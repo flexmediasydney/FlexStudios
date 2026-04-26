@@ -710,6 +710,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // shot shoot's later batches would default to whatever the dispatcher
   // synthesised, breaking the operator's intent (e.g. column_state='pool'
   // they explicitly requested would silently flip back).
+  //
+  // W13 F (audit): render_continuation is per-SHOOT by design — it batches N
+  // shots per dispatcher tick and re-enqueues itself for the unrendered
+  // remainder of the same shoot. Per-shot fan-out (W10-S2) covers the
+  // initial drone-raw-preview burst (one job per shot); the continuation
+  // is intentionally a self-paced shoot-level loop. Do not refactor to
+  // per-shot fan-out — that would multiply jobs unnecessarily.
   if (moreRemaining > 0) {
     const continuationPayload: Record<string, unknown> = {
       shoot_id: shoot.id,
