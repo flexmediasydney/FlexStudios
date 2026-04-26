@@ -29,6 +29,19 @@ class EnuRef:
     lon: float
     alt: float
 
+    def __post_init__(self):
+        # QC2-2 #13: defend against caller-supplied garbage (e.g. swapped
+        # lat/lon, accidentally degrees vs radians). EnuRef is the alignment
+        # anchor — corruption here silently wrecks every projection.
+        if not (-90.0 <= self.lat <= 90.0):
+            raise ValueError(
+                f"EnuRef.lat must be in [-90, 90], got {self.lat}"
+            )
+        if not (-180.0 <= self.lon <= 180.0):
+            raise ValueError(
+                f"EnuRef.lon must be in [-180, 180], got {self.lon}"
+            )
+
     def to_enu(self, lat: float, lon: float, alt: float) -> np.ndarray:
         # Antimeridian-safe longitude difference. Without normalisation a
         # ref.lon=179.9 vs lon=-179.9 reads as ~-360° instead of ~+0.2°,
@@ -47,16 +60,71 @@ class EnuRef:
         # Wrap longitude back into (-180, 180]
         lon = ((lon + 540.0) % 360.0) - 180.0
         lat = self.lat + dN / EARTH_M_PER_DEG
+        # QC2-2 #4: clamp lat after the rebase. A long ENU dN can push the
+        # arithmetic out of [-90, 90], producing nonsense WGS84 that confuses
+        # every downstream consumer (Mapbox markers jump to the antipode).
+        lat = max(-90.0, min(90.0, lat))
         alt = self.alt + dU
         return (lat, lon, alt)
 
 
+def lonlat_mean_via_unit_vectors(
+    lats: List[float], lngs: List[float]
+) -> Tuple[float, float]:
+    """Spherical mean of lat/lng via unit-vector sum + renormalise.
+
+    Naive arithmetic mean of longitudes wraps incorrectly anywhere near the
+    antimeridian (e.g. +179.9° and -179.9° average to 0°, when the real
+    midpoint is ±180°). Convert each (lat, lng) to a unit vector on the unit
+    sphere, sum + renormalise, convert back. Correct anywhere on the globe;
+    cost is ~10 µs per point. (QC2 #9 + QC2-2 #3.)
+
+    Returns (mean_lat, mean_lng) in degrees.
+
+    Raises ValueError on empty / mismatched-length input.
+    """
+    if not lats or not lngs or len(lats) != len(lngs):
+        raise ValueError("lats and lngs must be same non-empty length")
+    sx = sy = sz = 0.0
+    for lat, lng in zip(lats, lngs):
+        lat_r = math.radians(lat)
+        lng_r = math.radians(lng)
+        cos_lat = math.cos(lat_r)
+        sx += cos_lat * math.cos(lng_r)
+        sy += cos_lat * math.sin(lng_r)
+        sz += math.sin(lat_r)
+    n = float(len(lats))
+    mx, my, mz = sx / n, sy / n, sz / n
+    norm = math.sqrt(mx * mx + my * my + mz * mz)
+    if norm < 1e-12:
+        # Antipodal cancellation — fall back to arithmetic mean. Realistic
+        # nadir grids span <100 m so this branch is unreachable in practice.
+        return (sum(lats) / n, sum(lngs) / n)
+    mx /= norm
+    my /= norm
+    mz /= norm
+    mean_lat = math.degrees(math.asin(max(-1.0, min(1.0, mz))))
+    mean_lng = math.degrees(math.atan2(my, mx))
+    return (mean_lat, mean_lng)
+
+
 def build_enu_ref(gps: Dict[str, Tuple[float, float, float]]) -> EnuRef:
-    """Use mean of supplied (lat, lon, alt) triples as the ENU origin."""
-    lats = np.array([g[0] for g in gps.values()])
-    lons = np.array([g[1] for g in gps.values()])
-    alts = np.array([g[2] for g in gps.values()])
-    return EnuRef(float(lats.mean()), float(lons.mean()), float(alts.mean()))
+    """Use mean of supplied (lat, lon, alt) triples as the ENU origin.
+
+    QC2-2 #14: requires ≥3 GPS-tagged points (matches WorldToPixelProjector).
+    QC2-2 #3: longitude mean uses spherical unit-vector method, otherwise a
+    Fiji-area shoot at lng ±179.9 lands the ENU origin at lng 0 (Indian
+    Ocean) and silently corrupts every projection by ~40 000 km.
+    """
+    if len(gps) < 3:
+        raise ValueError(
+            f"build_enu_ref requires ≥3 GPS-tagged points, got {len(gps)}"
+        )
+    lats = [g[0] for g in gps.values()]
+    lons = [g[1] for g in gps.values()]
+    alts_arr = np.array([g[2] for g in gps.values()])
+    mean_lat, mean_lon = lonlat_mean_via_unit_vectors(lats, lons)
+    return EnuRef(float(mean_lat), float(mean_lon), float(alts_arr.mean()))
 
 
 # ── Umeyama similarity transform (Umeyama 1991) ────────────────────
