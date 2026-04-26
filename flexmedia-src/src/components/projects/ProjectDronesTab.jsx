@@ -21,8 +21,10 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { createPageUrl } from "@/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +38,7 @@ import {
   CheckCircle2,
   Clock,
   RefreshCw,
+  Map as MapIcon,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
@@ -373,6 +376,25 @@ export default function ProjectDronesTab({ project }) {
               Boundary Editor is also per-card on Edits cards (operator
               launches from a specific edited card so they have visual
               context). */}
+          {/* W14 S1: project-level Boundary Editor entry. High-discoverability
+              entry point for first-time operators — without a saved
+              drone_property_boundary the renderer has no geographic filter and
+              the pin overlay comes back empty. mig 329 also gates
+              operator_actions_unlocked behind the boundary's existence.
+              Disabled when no shoot is selected (the editor needs both
+              project + shoot scope). */}
+          {projectId && selectedShootId && (
+            <Button asChild variant="outline" size="sm">
+              <Link
+                to={createPageUrl(
+                  `DroneBoundaryEditor?project=${projectId}&shoot=${selectedShootId}&pipeline=raw`,
+                )}
+              >
+                <MapIcon className="h-4 w-4 mr-2" />
+                Boundary Editor
+              </Link>
+            </Button>
+          )}
           {/* "Reload UI" — invalidates React-Query caches but does NOT
               re-trigger any backend pipeline stage. (W9 S3 rename: was
               "Refresh", which was easy to confuse with a pipeline re-run.) */}

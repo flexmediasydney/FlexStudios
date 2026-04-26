@@ -43,8 +43,10 @@
  */
 
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { createPageUrl } from "@/utils";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -90,6 +92,7 @@ import {
   RefreshCw,
   ThumbsDown,
   Pencil,
+  Map as MapIcon,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
@@ -756,6 +759,8 @@ export default function DroneRendersSubtab({ shoot, projectId, pipelineState = n
                   if (idx >= 0) setLightbox({ columnKey, index: idx, itemId });
                 }}
                 isCompact={isCompact}
+                projectId={projectId}
+                shootId={shootId}
               />
             );
 
@@ -874,6 +879,8 @@ function PipelineColumn({
   onRequestConfirmEditorAction,
   onPreview,
   isCompact,
+  projectId,
+  shootId,
 }) {
   const emptyLabel =
     column.key === "raw_proposed"
@@ -924,6 +931,8 @@ function PipelineColumn({
               onPreview={({ itemId }) =>
                 onPreview && onPreview({ columnKey: column.key, itemId })
               }
+              projectId={projectId}
+              shootId={shootId}
             />
           ))
         )}
@@ -947,6 +956,8 @@ function ShotLifecycleCard({
   onMutateShot,
   onRequestConfirmEditorAction,
   onPreview,
+  projectId,
+  shootId,
 }) {
   const thumbPath = previewPath || shot?.dropbox_path || null;
   const clickPath = thumbPath;
@@ -1171,6 +1182,31 @@ function ShotLifecycleCard({
                   <RotateCcw className="h-2.5 w-2.5 mr-1" />
                 )}
                 Restore
+              </Button>
+            )}
+            {/* W14 S1: Boundary Editor entry on raw pool/accepted cards.
+                Without drone_property_boundary the renderer has no
+                geographic filter — pin overlays come back empty. The
+                operator MUST click Save in DroneBoundaryEditor at least
+                once before lock-shortlist will unlock (mig 329 enforces
+                this server-side). Hidden on rejected + editor_returned
+                because boundary work is part of pre-triage prep. */}
+            {!isRejected && !isEditorReturned && projectId && shootId && shot?.id && (
+              <Button
+                asChild
+                variant="outline"
+                size="sm"
+                className="h-6 text-[10px] px-1.5"
+                title="Edit cadastral boundary for this property"
+              >
+                <Link
+                  to={createPageUrl(
+                    `DroneBoundaryEditor?project=${projectId}&shoot=${shootId}&shot=${shot.id}&pipeline=raw`,
+                  )}
+                >
+                  <MapIcon className="h-2.5 w-2.5 mr-1" />
+                  Boundary
+                </Link>
               </Button>
             )}
           </div>
