@@ -4,8 +4,9 @@
  * Top-of-shoot status banner. Mounted at top of ShootDetail in
  * ProjectDronesTab.jsx (S3 owns mounting).
  *
- * Four states (architect Section C):
- *   1. Active     — current stage running/queued/debouncing/pending: blue (or
+ * Five states (architect Section C + W14 S1 boundary_review_pending):
+ *   1. Active     — current stage running/queued/debouncing/pending AND a job
+ *                   actually has status='running' in active_jobs: blue (or
  *                   amber if slow) border, ~48px tall card, countdown
  *                   elapsed/ETA, [Force fire now] + [Re-run this stage ▾]
  *   2. Failed     — any stage failed/dead_letter / shoot.status='sfm_failed' /
@@ -14,7 +15,21 @@
  *   3. System down— system.dispatcher_health !== 'ok' (i.e. 'stale' or 'down'):
  *                   amber border, "Dispatcher hasn't ticked in 4 min". admin+
  *                   sees [Trigger dispatcher manually]
- *   4. Idle       — operator_actions_unlocked=true, no active jobs: returns null
+ *   4. Boundary   — stages[boundary_review].status === 'ready' (W14 S1):
+ *                   slate border, "Cadastral detected — open Boundary Editor
+ *                   to confirm and save the property polygon" + Boundary
+ *                   Editor link.
+ *   5. Idle       — operator_actions_unlocked=true, no active jobs: returns null
+ *
+ * W14 S1 fix: previously `isActive` triggered on currentStage.status alone
+ * (running/queued/debouncing/pending), and the "Currently running drone-render
+ * · 274:38 elapsed" line in ActiveBanner read currentStage.started_at without
+ * confirming the underlying job was actually still in flight. After all
+ * auto-stages completed but the operator hadn't acted yet, current_stage
+ * walked back to a completed stage and the banner happily painted a fictional
+ * 274-minute counter. isActive now ALSO requires a running entry in
+ * active_jobs, and ActiveBanner only computes elapsed when finished_at is
+ * null. Together: completed → no banner; truly running → real numbers.
  *
  * Implementation details:
  *   - Uses shadcn Card / Button / Tooltip / DropdownMenu / AlertDialog.
@@ -71,6 +86,7 @@ import {
   ChevronDown,
   ExternalLink,
   Clock,
+  Map as MapIcon,
 } from 'lucide-react';
 import { useDronePipelineState } from '@/hooks/useDronePipelineState';
 import { useAuth } from '@/lib/AuthContext';
@@ -80,7 +96,7 @@ import { createPageUrl } from '@/utils';
 import { cn } from '@/lib/utils';
 
 // ── Stage metadata: human label + Modal cost note (architect Section D) ────
-// stage_key values come from migration 301_drone_pipeline_state_rpc.sql:282-375
+// stage_key values come from migration 329 (W14 S1 12-stage extension).
 // We display the function_name (from the stage row) when present, else label.
 const STAGE_META = {
   ingest:          { label: 'Ingest',          function_name: 'drone-ingest',        note: 'Dropbox → storage transfer (~30s typical)' },
@@ -88,7 +104,8 @@ const STAGE_META = {
   poi:             { label: 'POIs',            function_name: 'drone-pois',          note: 'OSM POIs lookup (~30s)' },
   cadastral:       { label: 'Cadastral',       function_name: 'drone-cadastral',     note: 'NSW cadastral boundary fetch (~15s)' },
   raw_render:      { label: 'Raw render',      function_name: 'drone-raw-preview',   note: 'Modal raw preview render, ~2 min typical' },
-  operator_triage: { label: 'Operator triage', function_name: null,                  note: 'Waiting on operator boundary + shortlist approval' },
+  boundary_review: { label: 'Boundary',        function_name: null,                  note: 'Operator reviews + saves the cadastral polygon' },
+  operator_triage: { label: 'Operator triage', function_name: null,                  note: 'Waiting on operator shortlist approval' },
   editor_handoff:  { label: 'Editor handoff',  function_name: null,                  note: 'Awaiting photographer-side edit' },
   edited_render:   { label: 'Edited render',   function_name: 'drone-render-edited', note: 'Photographer-edited renders (~90s)' },
   edited_curate:   { label: 'Edited curate',   function_name: null,                  note: 'Operator curates final shortlist' },
@@ -148,6 +165,12 @@ function formatCountdown(stageRow, now = Date.now()) {
     return { text: 'queued — waiting on dispatcher', tone: 'gray' };
   }
   if (status === 'running') {
+    // W14 S1 guard: if the stage row has a completed_at it isn't actually
+    // running anymore — the RPC may briefly hold a 'running' status while
+    // the dispatcher catches up, but elapsed should never accumulate
+    // against a finished job. Belt-and-braces against the false-positive
+    // counter (the parent isActive check is the primary defence).
+    if (stageRow.completed_at) return { text: '', tone: 'gray' };
     const started = stageRow.started_at ? new Date(stageRow.started_at).getTime() : null;
     const elapsedMs = started ? Math.max(0, now - started) : 0;
     // RPC returns ETA in seconds — convert to ms for fmtClock.
@@ -303,9 +326,17 @@ export default function DronePipelineBanner({
     const sfmFailed = pipelineState.shoot_status === 'sfm_failed';
 
     const activeJobs = pipelineState.active_jobs || [];
+    // W14 S1: a job counts as truly running only if status='running' AND
+    // finished_at is null. The RPC sometimes leaves a succeeded job in the
+    // 24h window of active_jobs — using just status='running' is enough,
+    // but the finished_at guard makes the intent explicit and survives any
+    // RPC-side window changes.
+    const runningJob = activeJobs.find(
+      (j) => j?.status === 'running' && !j?.finished_at,
+    );
     // Pick the running job first, else the first pending — for force-fire CTA.
     const activeJob =
-      activeJobs.find((j) => j?.status === 'running') ||
+      runningJob ||
       activeJobs.find((j) => j?.status === 'pending') ||
       null;
     const activeJobInDeadLetter = activeJobs.some((j) => j?.status === 'dead_letter');
@@ -314,13 +345,29 @@ export default function DronePipelineBanner({
     // RPC values: 'ok' | 'stale' | 'down' — only 'ok' is healthy.
     const isFailed = Boolean(failedStage || sfmFailed || activeJobInDeadLetter);
     const isSystemDown = dispatcherHealth !== 'ok';
-    const isActive =
+    // W14 S1: tighten isActive — currentStage.status alone wasn't enough
+    // because current_stage walks back to the most recent completed stage
+    // when nothing's queued, and the old check matched 'pending' (which
+    // some manual stages report). Require BOTH a current-stage status that
+    // could plausibly be running AND an actual running job.
+    const stageStatusActive =
       currentStage?.status === 'running' ||
       currentStage?.status === 'queued' ||
-      currentStage?.status === 'debouncing' ||
-      currentStage?.status === 'pending';
+      currentStage?.status === 'debouncing';
+    const isActive = stageStatusActive && Boolean(runningJob);
+
+    // W14 S1: surface boundary_review when the operator can act on it. The
+    // server flips it to 'ready' as soon as cadastral completes and there's
+    // no drone_property_boundary row yet (mig 329).
+    const boundaryReviewStage = stages.find((s) => s?.stage_key === 'boundary_review');
+    const isBoundaryReviewPending = boundaryReviewStage?.status === 'ready';
+
     const isIdle =
-      Boolean(pipelineState.operator_actions_unlocked) && !isActive && !isFailed && !isSystemDown;
+      Boolean(pipelineState.operator_actions_unlocked) &&
+      !isActive &&
+      !isFailed &&
+      !isSystemDown &&
+      !isBoundaryReviewPending;
 
     return {
       currentStage,
@@ -336,8 +383,11 @@ export default function DronePipelineBanner({
       isFailed,
       isSystemDown,
       isActive,
+      isBoundaryReviewPending,
+      boundaryReviewStage,
       isIdle,
       activeJob,
+      runningJob,
       stages,
     };
   }, [pipelineState]);
@@ -359,8 +409,11 @@ export default function DronePipelineBanner({
   if (derived.isIdle) return null;
 
   // ── Render ───────────────────────────────────────────────────────────────
-  // Precedence: failed > system_down > active.
-  // (Architect doesn't strictly say but failure is the most actionable.)
+  // Precedence: failed > system_down > active > boundary_review_pending.
+  // Failure is most actionable; system_down blocks every automated step;
+  // active is real motion. boundary_review_pending lives below those because
+  // it's a steady-state operator-action prompt — the others are transient
+  // events the operator can't directly act on.
   if (derived.isFailed) {
     return (
       <FailedBanner
@@ -397,6 +450,11 @@ export default function DronePipelineBanner({
         cancelDialogOpen={cancelDialogOpen}
         setCancelDialogOpen={setCancelDialogOpen}
       />
+    );
+  }
+  if (derived.isBoundaryReviewPending) {
+    return (
+      <BoundaryReviewBanner projectId={projectId} shootId={shootId} />
     );
   }
   // Fallback — shouldn't hit since isIdle short-circuited above, but be safe.
@@ -646,6 +704,50 @@ function FailedBanner({
         onConfirm={(s) => rerunStage(s)}
       />
     </>
+  );
+}
+
+// W14 S1: boundary review banner. Shown when stages[boundary_review].status
+// === 'ready' (cadastral done, no drone_property_boundary saved yet). The
+// renderer needs the boundary as its geographic filter — without it, pin
+// overlays come back empty. mig 329 also gates operator_actions_unlocked
+// behind boundary existence, so this banner persists until the operator
+// opens DroneBoundaryEditor and clicks Save.
+function BoundaryReviewBanner({ projectId, shootId }) {
+  const canLink = Boolean(projectId && shootId);
+  return (
+    <Card
+      role="status"
+      aria-live="polite"
+      className={cn(
+        'border-l-4 p-3 flex flex-col sm:flex-row sm:items-center gap-3',
+        TONE_BORDER.gray,
+      )}
+    >
+      <div className="flex items-start gap-2 flex-1 min-w-0">
+        <MapIcon className="h-5 w-5 text-slate-600 shrink-0 mt-0.5" aria-hidden="true" />
+        <div className="flex-1 min-w-0">
+          <div className="font-medium text-sm text-slate-900">
+            Cadastral detected — open Boundary Editor to confirm and save the property polygon
+          </div>
+          <div className="text-xs text-slate-700">
+            Until a boundary is saved, the renderer has no geographic filter and pin overlays will be empty. This unlocks the rest of the swimlane.
+          </div>
+        </div>
+      </div>
+      {canLink && (
+        <Button asChild size="sm" variant="default">
+          <Link
+            to={createPageUrl(
+              `DroneBoundaryEditor?project=${projectId}&shoot=${shootId}&pipeline=raw`,
+            )}
+          >
+            <MapIcon className="h-3.5 w-3.5 mr-1.5" />
+            Open Boundary Editor
+          </Link>
+        </Button>
+      )}
+    </Card>
   );
 }
 
