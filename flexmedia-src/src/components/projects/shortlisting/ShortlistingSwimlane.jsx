@@ -655,6 +655,15 @@ export default function ShortlistingSwimlane({
   const proposedCount = columnItems.proposed.length;
   const rejectedCount = columnItems.rejected.length;
   const isLocked = round?.status === "locked" || round?.status === "delivered";
+  // Burst 16 AA1/AA2: lock the UI while the engine is still mid-pipeline.
+  // status='processing' means Pass 0/1/2 are still running. During that
+  // window, slotEvents may be empty (Pass 2 hasn't fired yet), so EVERY
+  // group renders in REJECTED — and the user could drag freely + click
+  // Lock prematurely on garbage state. status='proposed' is the correct
+  // gate for human review; 'pending' is even earlier (round just created).
+  const isProcessing =
+    round?.status === "processing" || round?.status === "pending";
+  const isReadOnly = isLocked || isProcessing;
 
   return (
     <div className="space-y-3">
@@ -712,13 +721,15 @@ export default function ShortlistingSwimlane({
             variant={isLocked ? "outline" : "default"}
             size="sm"
             onClick={() => setConfirmLockOpen(true)}
-            disabled={isLocking || isLocked || approvedCount === 0}
+            disabled={isLocking || isLocked || isProcessing || approvedCount === 0}
             title={
               isLocked
                 ? "Round already locked"
-                : approvedCount === 0
-                  ? "Add at least one composition to Approved before locking"
-                  : "Lock the shortlist and move RAWs in Dropbox"
+                : isProcessing
+                  ? "Engine is still running — wait for status='proposed' before locking"
+                  : approvedCount === 0
+                    ? "Add at least one composition to Approved before locking"
+                    : "Lock the shortlist and move RAWs in Dropbox"
             }
           >
             {isLocking ? (
@@ -751,6 +762,21 @@ export default function ShortlistingSwimlane({
           </Card>
         )}
 
+      {/* Burst 16 AA2: in-progress banner so the swimlane doesn't look empty/
+          stuck while the engine is mid-pipeline. Hidden once the round
+          transitions to 'proposed'. */}
+      {isProcessing && (
+        <div className="rounded-md border border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30 px-3 py-2 text-xs text-blue-700 dark:text-blue-200 flex items-center gap-2">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span>
+            Engine is still running for this round (status=
+            <code className="text-[10px] font-mono">{round?.status}</code>).
+            Drag &amp; drop and Lock are disabled until the AI finishes proposing
+            the shortlist.
+          </span>
+        </div>
+      )}
+
       {/* 3-column swimlane */}
       <DragDropContext onDragEnd={onDragEnd}>
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] gap-3">
@@ -761,7 +787,7 @@ export default function ShortlistingSwimlane({
                 key={col.key}
                 column={col}
                 items={items}
-                isLocked={isLocked}
+                isLocked={isReadOnly}
                 onSwapAlternative={handleSwapAlternative}
                 altsBySlotId={altsBySlotId}
                 classByGroupId={classByGroupId}
