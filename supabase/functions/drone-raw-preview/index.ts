@@ -326,6 +326,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const childRows = shotsNeedingRender.map((shotId) => ({
     project_id: project.id,
     shoot_id: shoot.id,
+    shot_id: shotId, // W11-S2 Cluster D parity: top-level column for hot index + queryability
     kind: "render",
     status: "pending",
     pipeline: "raw" as const,
