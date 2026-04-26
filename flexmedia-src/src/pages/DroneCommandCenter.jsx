@@ -612,6 +612,155 @@ function AlertsPanel({
   );
 }
 
+// ── In-Flight Pipelines (Wave 9 S4 — architect §C.7) ────────────────────────
+// Project-scoped pipeline roll-up. Calls Stream 1's RPC with NULL p_shoot_id
+// → returns one row per project that has active drone work. Each row renders
+// the per-stage progress (Stream 2's <DroneStageProgress compact />) plus a
+// deep-link to the project's drones tab.
+//
+// Defensive fallbacks while Streams 1 & 2 land:
+//   • If the RPC name doesn't exist yet, the queryFn swallows the error and
+//     returns []; the section then renders nothing (early return on empty).
+//   • If Stream 2's component isn't merged, we render a minimal inline
+//     stage-bar fallback. Once Stream 2 ships, swap the import to the real
+//     component (search "DroneStageProgress" below).
+const INFLIGHT_STAGE_ORDER = [
+  "ingested",
+  "analysing",
+  "sfm_running",
+  "sfm_complete",
+  "rendering",
+  "proposed_ready",
+  "adjustments_ready",
+  "final_ready",
+];
+
+function InlineStageProgress({ pipelineState }) {
+  const current = pipelineState?.current_stage;
+  const idx = INFLIGHT_STAGE_ORDER.indexOf(current);
+  const pct = idx < 0 ? 0 : Math.round(((idx + 1) / INFLIGHT_STAGE_ORDER.length) * 100);
+  return (
+    <div className="space-y-1">
+      <div className="h-1.5 w-full bg-muted rounded overflow-hidden">
+        <div
+          className="h-full bg-blue-500 transition-all"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="text-[10px] text-muted-foreground tabular-nums">
+        {pct}% · stage {Math.max(idx + 1, 1)}/{INFLIGHT_STAGE_ORDER.length}
+      </div>
+    </div>
+  );
+}
+
+function InFlightPipelinesSection() {
+  const queryClient = useQueryClient();
+
+  const { data: pipelines, isLoading } = useQuery({
+    queryKey: ["drone_pipeline_state_aggregate"],
+    queryFn: async () => {
+      // Stream 1 RPC. Architect spec'd two possible names — try the canonical
+      // one first, then fall back. Both calls swallow errors (the function may
+      // not exist yet on this branch's Supabase project) and return [] so the
+      // section silently hides.
+      try {
+        const rows = await api.rpc("get_drone_pipeline_state", {
+          p_shoot_id: null,
+        });
+        if (Array.isArray(rows)) return rows;
+      } catch {
+        // fall through to aggregate variant
+      }
+      try {
+        const rows = await api.rpc("get_drone_pipeline_state_aggregate", {});
+        if (Array.isArray(rows)) return rows;
+      } catch {
+        // RPC not deployed — render nothing
+      }
+      return [];
+    },
+    refetchInterval: 15_000,
+    staleTime: 5_000,
+  });
+
+  // Realtime: any drone_jobs write across all projects bumps the aggregate.
+  // Mirrors the pattern at DroneCommandCenter:946.
+  useEffect(() => {
+    let unsub;
+    try {
+      unsub = api.entities.DroneJob.subscribe(() => {
+        queryClient.invalidateQueries({
+          queryKey: ["drone_pipeline_state_aggregate"],
+        });
+      });
+    } catch (e) {
+      console.warn("[InFlightPipelinesSection] DroneJob subscribe failed:", e);
+    }
+    return () => {
+      try {
+        if (typeof unsub === "function") unsub();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [queryClient]);
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-4 text-xs text-muted-foreground">
+          Loading in-flight pipelines…
+        </CardContent>
+      </Card>
+    );
+  }
+  if (!pipelines?.length) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          In-Flight Pipelines ({pipelines.length})
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {pipelines.slice(0, 20).map((p) => (
+          <div
+            key={`${p.project_id}-${p.shoot_id}`}
+            className="flex items-center gap-4 p-3 border rounded-md"
+          >
+            <div className="flex-1 min-w-0">
+              <div className="font-medium truncate">
+                {p.project_title || p.project_id}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Shoot {p.shoot_id?.slice(0, 8)} · {p.current_stage}
+              </div>
+            </div>
+            <div className="flex-1">
+              {/* TODO Wave 9 S2: replace with <DroneStageProgress pipelineState={p} compact /> */}
+              <InlineStageProgress pipelineState={p} />
+            </div>
+            <Link
+              to={`/ProjectDetails?id=${p.project_id}&tab=drones`}
+              className="text-sm text-blue-600 hover:underline whitespace-nowrap"
+            >
+              Open →
+            </Link>
+          </div>
+        ))}
+        {pipelines.length > 20 && (
+          <div className="text-xs text-muted-foreground text-center">
+            Showing 20 of {pipelines.length} active pipelines
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main page ───────────────────────────────────────────────────────────────
 export default function DroneCommandCenter() {
   const queryClient = useQueryClient();
@@ -1113,6 +1262,9 @@ export default function DroneCommandCenter() {
       ) : (
         <PipelineKanban shoots={shootsQuery.data || []} projectsById={projectsById} progressByShoot={progressByShoot} />
       )}
+
+      {/* In-Flight Pipelines (Wave 9 S4 — project-scoped roll-up) */}
+      <InFlightPipelinesSection />
 
       {/* Activity + Alerts side by side on wide */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
