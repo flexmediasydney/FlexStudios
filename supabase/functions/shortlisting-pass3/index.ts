@@ -35,6 +35,7 @@ import {
   serveWithAudit,
   getAdminClient,
   fireNotif,
+  callerHasProjectAccess,
 } from '../_shared/supabase.ts';
 
 const GENERATOR = 'shortlisting-pass3';
@@ -102,6 +103,23 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (job?.round_id) roundId = job.round_id;
   }
   if (!roundId) return errorResponse('round_id (or job_id) required', 400, req);
+
+  // Audit defect #42: project-access guard. master_admin/admin/service_role
+  // pass through; manager/employee/contractor must own the project.
+  if (!isService) {
+    const adminLookup = getAdminClient();
+    const { data: rowForAcl } = await adminLookup
+      .from('shortlisting_rounds')
+      .select('project_id')
+      .eq('id', roundId)
+      .maybeSingle();
+    const pid = rowForAcl?.project_id ? String(rowForAcl.project_id) : '';
+    if (!pid) return errorResponse('round not found', 404, req);
+    const allowed = await callerHasProjectAccess(user, pid);
+    if (!allowed) {
+      return errorResponse('Forbidden — caller has no access to this project', 403, req);
+    }
+  }
 
   try {
     const result = await runPass3(roundId);

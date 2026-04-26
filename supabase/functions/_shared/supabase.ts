@@ -159,6 +159,52 @@ export async function getUserFromReq(req: Request): Promise<AppUser | null> {
   return appUser || null;
 }
 
+/**
+ * Wave 6 P-audit-fix-2 Class B (#42): per-call project access guard for
+ * shortlisting edge functions.
+ *
+ * Returns true iff the user has access to the given project. Resolution:
+ *   - service_role / master_admin / admin → always TRUE (full access).
+ *   - manager / employee / contractor / photographer → TRUE iff the project_id
+ *     appears in users.assigned_project_ids (the canonical FlexStudios
+ *     project assignment column — same source the my_project_ids() SQL
+ *     function reads from).
+ *
+ * Returns FALSE when:
+ *   - User is null (caller forgot to authenticate).
+ *   - User has a non-system role and the project_id isn't in their
+ *     assigned_project_ids array.
+ *
+ * Does NOT throw — caller should treat false as a 403.
+ *
+ * Cost: 1 SELECT per call (only for non-admin roles). For admin-tier users
+ * we short-circuit before the DB roundtrip.
+ */
+export async function callerHasProjectAccess(
+  user: AppUser | null,
+  projectId: string,
+): Promise<boolean> {
+  if (!user) return false;
+  if (!projectId) return false;
+
+  // service_role + admin tiers bypass.
+  if (user.id === '__service_role__') return true;
+  const adminRoles = new Set(['master_admin', 'admin']);
+  if (adminRoles.has(user.role || '')) return true;
+
+  // For all other roles, require project membership.
+  const admin = getAdminClient();
+  const { data, error } = await admin
+    .from('users')
+    .select('assigned_project_ids')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (error || !data) return false;
+  const ids: unknown = data.assigned_project_ids;
+  if (!Array.isArray(ids)) return false;
+  return ids.some((p) => typeof p === 'string' && p === projectId);
+}
+
 // ─── Entity helpers (mirrors the Base44 SDK pattern) ──────────────────────────
 //
 // PostgREST's default `.select()` returns max 1000 rows — this has been the

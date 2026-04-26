@@ -58,6 +58,14 @@ const SUPABASE_URL =
 const MAX_JOBS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
 
+// Audit defect #13: warn loudly at cold-start if the dispatcher JWT secret
+// is missing. Catches misconfiguration before the first dispatch tick.
+if (!Deno.env.get("SHORTLISTING_DISPATCHER_JWT")) {
+  console.error(
+    `[${GENERATOR}] STARTUP WARNING: SHORTLISTING_DISPATCHER_JWT is not set. All dispatches will fail until this secret is configured.`,
+  );
+}
+
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
 
@@ -453,21 +461,19 @@ async function callEdgeFunction(
   body: Record<string, unknown>,
 ): Promise<DispatchResult> {
   const url = `${SUPABASE_URL}/functions/v1/${fnName}`;
-  // SHORTLISTING_DISPATCHER_JWT (preferred) or DRONE_DISPATCHER_JWT (legacy
-  // shared secret) must be a real Supabase service-role JWT (HS256/ES256).
-  // The new sb_secret_* env values fail getUserFromReq's JWT structure check
-  // on verify_jwt=true gateways. Fail loud if neither is set. (Mirrors drone
-  // dispatcher audit #29.)
-  const serviceKey =
-    Deno.env.get("SHORTLISTING_DISPATCHER_JWT") ||
-    Deno.env.get("DRONE_DISPATCHER_JWT") ||
-    "";
+  // Audit defect #13: SHORTLISTING_DISPATCHER_JWT is the ONLY accepted secret
+  // here; the prior DRONE_DISPATCHER_JWT fallback was fragile (a rotation in
+  // the drone module would silently break shortlisting). The secret must be a
+  // real Supabase service-role JWT (HS256/ES256); sb_secret_* values fail
+  // getUserFromReq's JWT structure check on verify_jwt=true gateways.
+  const serviceKey = Deno.env.get("SHORTLISTING_DISPATCHER_JWT") || "";
   if (!serviceKey) {
-    return {
-      ok: false,
-      error:
-        "SHORTLISTING_DISPATCHER_JWT (or fallback DRONE_DISPATCHER_JWT) not set — cannot dispatch. Set it to a real Supabase service-role JWT (not the sb_secret_* env value).",
-    };
+    const errMsg =
+      "SHORTLISTING_DISPATCHER_JWT not set — cannot dispatch. Set it via " +
+      "`supabase secrets set SHORTLISTING_DISPATCHER_JWT=<service-role-jwt>` to a real " +
+      "Supabase service-role JWT (not the sb_secret_* env value).";
+    console.error(`[${GENERATOR}] ${errMsg}`);
+    return { ok: false, error: errMsg };
   }
   try {
     const resp = await fetch(url, {

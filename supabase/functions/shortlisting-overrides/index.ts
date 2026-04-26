@@ -112,10 +112,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const events = Array.isArray(body.events) ? body.events : [];
   if (events.length === 0) {
-    return errorResponse('events array required (non-empty)', 400, req);
+    return jsonResponse(
+      { ok: false, error: 'events array required (non-empty)', error_code: 'EVENTS_EMPTY' },
+      400,
+      req,
+    );
   }
   if (events.length > 200) {
-    return errorResponse('Too many events in one batch (max 200)', 400, req);
+    return jsonResponse(
+      { ok: false, error: 'Too many events in one batch (max 200)', error_code: 'EVENTS_OVER_LIMIT' },
+      400,
+      req,
+    );
   }
 
   // ── Validate + normalise rows ───────────────────────────────────────────
@@ -123,37 +131,36 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let firstProjectId: string | null = null;
   let firstRoundId: string | null = null;
 
+  // Audit defect #56: include structured `error_code` so the swimlane UI can
+  // map specific validation failures to user-friendly toasts (today it just
+  // shows the raw `error` string — which is fine for debugging but unhelpful
+  // for editors). Codes are stable; messages may evolve.
+  const validationFail = (code: string, message: string) =>
+    jsonResponse({ ok: false, error: message, error_code: code, error_index: undefined }, 400, req);
+  const validationFailAt = (idx: number, code: string, message: string) =>
+    jsonResponse({ ok: false, error: message, error_code: code, error_index: idx }, 400, req);
+
   for (let i = 0; i < events.length; i++) {
     const e = events[i];
     if (!e || typeof e !== 'object') {
-      return errorResponse(`events[${i}] must be an object`, 400, req);
+      return validationFailAt(i, 'EVENT_NOT_OBJECT', `events[${i}] must be an object`);
     }
     if (!e.project_id || typeof e.project_id !== 'string') {
-      return errorResponse(`events[${i}].project_id required`, 400, req);
+      return validationFailAt(i, 'PROJECT_ID_REQUIRED', `events[${i}].project_id required`);
     }
     if (!e.round_id || typeof e.round_id !== 'string') {
-      return errorResponse(`events[${i}].round_id required`, 400, req);
+      return validationFailAt(i, 'ROUND_ID_REQUIRED', `events[${i}].round_id required`);
     }
     if (!e.human_action || !VALID_ACTIONS.has(e.human_action)) {
-      return errorResponse(
-        `events[${i}].human_action must be one of: ${[...VALID_ACTIONS].join(', ')}`,
-        400,
-        req,
-      );
+      return validationFailAt(i, 'HUMAN_ACTION_INVALID',
+        `events[${i}].human_action must be one of: ${[...VALID_ACTIONS].join(', ')}`);
     }
     if (e.override_reason != null && !VALID_REASONS.has(e.override_reason)) {
-      return errorResponse(
-        `events[${i}].override_reason invalid`,
-        400,
-        req,
-      );
+      return validationFailAt(i, 'OVERRIDE_REASON_INVALID', `events[${i}].override_reason invalid`);
     }
     if (e.project_tier != null && !VALID_TIERS.has(e.project_tier)) {
-      return errorResponse(
-        `events[${i}].project_tier must be 'standard' or 'premium'`,
-        400,
-        req,
-      );
+      return validationFailAt(i, 'PROJECT_TIER_INVALID',
+        `events[${i}].project_tier must be 'standard' or 'premium'`);
     }
 
     if (firstProjectId === null) firstProjectId = e.project_id;
