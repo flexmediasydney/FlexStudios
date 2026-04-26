@@ -907,7 +907,11 @@ function RenderCard({
             </Button>
           )}
 
-          {/* Edit boundary → DroneBoundaryEditor (S5 contract) */}
+          {/* Edit boundary → DroneBoundaryEditor (S5 contract)
+              W6 FIX 8 (QC3-8 E2E6): include pipeline=edited so the editor
+              page's render filter knows to scope to the Edited pipeline
+              (matches the Pins button above + the page wrapper's resolver
+              expectation that the edited pipeline is in play). */}
           {(isPool || isAdjustments) && canEdit && projectId && shootId && r.shot_id && (
             <Button
               asChild
@@ -918,7 +922,7 @@ function RenderCard({
             >
               <Link
                 to={createPageUrl(
-                  `DroneBoundaryEditor?project=${projectId}&shoot=${shootId}&shot=${r.shot_id}`,
+                  `DroneBoundaryEditor?project=${projectId}&shoot=${shootId}&shot=${r.shot_id}&pipeline=edited`,
                 )}
               >
                 <MapIcon className="h-2.5 w-2.5 mr-1" />
