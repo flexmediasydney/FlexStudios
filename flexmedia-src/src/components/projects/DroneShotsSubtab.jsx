@@ -48,8 +48,11 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import DroneLightbox from "@/components/drone/DroneLightbox";
+import DroneStageProgress from "@/components/drone/DroneStageProgress";
+import { Zap } from "lucide-react";
 
 const ROLE_LABEL = {
   nadir_grid: "Nadir grid",
@@ -73,9 +76,19 @@ const ROLE_TONE = {
 
 const FLIGHT_ROLL_LIMIT_DEG = 10;
 
-export default function DroneShotsSubtab({ shoot }) {
+// Wave 9 S3: pipelineState (from ProjectDronesTab) + onForceFire let the
+// empty-state surface a "skip ingest wait" affordance when the shoot has
+// zero shots and an ingest job is pending. Both default to null/no-op so
+// the page still loads if the parent is older than W9.
+export default function DroneShotsSubtab({ shoot, pipelineState = null, onForceFire = null }) {
   const queryClient = useQueryClient();
   const shootId = shoot?.id;
+  // Tick once a second so the ingest countdown ("scheduled in 1:23") is live.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const [roleFilter, setRoleFilter] = useState("all");
   const [openShot, setOpenShot] = useState(null);
@@ -164,17 +177,85 @@ export default function DroneShotsSubtab({ shoot }) {
   }
 
   if (shots.length === 0) {
+    // Wave 9 S3: pipeline-aware empty state. When the ingest stage is
+    // pending, surface the upload path + a "Skip wait — ingest now"
+    // affordance backed by S2's onForceFire(active_job.id).
+    //
+    // S2 RPC stage_key for ingest is 'drone-ingest'. status === 'pending'
+    // means the job is enqueued and the dispatcher will fire it soon.
+    const stages = Array.isArray(pipelineState?.stages) ? pipelineState.stages : [];
+    const ingestStage = stages.find((s) => s?.stage_key === "drone-ingest");
+    const ingestPending = ingestStage?.status === "pending";
+    const activeJob = pipelineState?.active_job || null;
+    const ingestJobId =
+      ingestStage?.job_id ||
+      (activeJob?.function_name === "drone-ingest" ? activeJob.id : null);
+    const scheduledFor =
+      ingestStage?.scheduled_for || activeJob?.scheduled_for || null;
+    const secondsUntil = scheduledFor
+      ? Math.max(0, Math.ceil((new Date(scheduledFor).getTime() - now) / 1000))
+      : null;
+    const countdown =
+      secondsUntil != null
+        ? `${Math.floor(secondsUntil / 60)}:${String(secondsUntil % 60).padStart(2, "0")}`
+        : null;
+
     return (
-      <Card>
-        <CardContent className="p-6 text-center text-sm text-muted-foreground">
-          No shots indexed yet for this shoot.
-        </CardContent>
-      </Card>
+      <div className="space-y-3">
+        {/* In-context compact stage strip — visible even with zero shots
+            so the operator sees the pipeline is alive. */}
+        {pipelineState && (
+          <DroneStageProgress pipelineState={pipelineState} compact />
+        )}
+        <Card>
+          <CardContent className="p-6 text-center text-sm text-muted-foreground space-y-3">
+            {ingestPending ? (
+              <>
+                <p>
+                  No shots ingested yet. Awaiting Dropbox upload to{" "}
+                  <code className="text-[11px] font-mono">/Drones/Raws/Shortlist Proposed/</code>.
+                </p>
+                <p className="text-xs">
+                  Ingest scheduled in {countdown ? <strong>{countdown}</strong> : "a moment"}
+                  {" "}— files uploaded in the last 2 minutes are batched.
+                </p>
+                {ingestJobId && typeof onForceFire === "function" && (
+                  <div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs"
+                      onClick={() => {
+                        try {
+                          onForceFire(ingestJobId);
+                        } catch (err) {
+                          console.warn("[DroneShotsSubtab] forceFire threw:", err);
+                        }
+                      }}
+                    >
+                      <Zap className="h-3.5 w-3.5 mr-1.5" />
+                      Skip wait — ingest now
+                    </Button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <p>No shots indexed yet for this shoot.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
   return (
     <div className="space-y-3">
+      {/* Wave 9 S3: compact pipeline-stage strip in-context. Renders
+          nothing when pipelineState is null (older parents / loading). */}
+      {pipelineState && (
+        <DroneStageProgress pipelineState={pipelineState} compact />
+      )}
+
       {/* Filter bar */}
       <div className="flex items-center gap-2 flex-wrap">
         <Select value={roleFilter} onValueChange={setRoleFilter}>
