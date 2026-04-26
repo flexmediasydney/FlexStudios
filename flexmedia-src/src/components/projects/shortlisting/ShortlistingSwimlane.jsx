@@ -89,6 +89,16 @@ const COLUMNS = [
 ];
 
 // human_action enum mapping based on (fromColumn -> toColumn)
+// Burst 4 J1: monotonic client-side sequence counter to disambiguate the
+// server-side ordering of two override events POSTed within milliseconds of
+// each other. Network jitter can flip arrival order from emit order; the
+// sequence number resolves it. Module-level state is fine — same browser
+// tab, same reviewer session, monotonic for the lifetime of the page load.
+let _clientSeq = 0;
+function nextClientSequence() {
+  return ++_clientSeq;
+}
+
 function deriveHumanAction(fromColumn, toColumn) {
   if (fromColumn === toColumn) return null;
   if (fromColumn === "proposed" && toColumn === "approved")
@@ -97,10 +107,14 @@ function deriveHumanAction(fromColumn, toColumn) {
   if (fromColumn === "rejected" && toColumn === "approved")
     return "added_from_rejects";
   if (fromColumn === "approved" && toColumn === "rejected") return "removed";
-  if (fromColumn === "approved" && toColumn === "proposed")
-    return "approved_as_proposed"; // unusual; treat as toggle back
-  if (fromColumn === "rejected" && toColumn === "proposed")
-    return "added_from_rejects";
+  // Burst 4 J6/J7 fix: returning to PROPOSED column means "I haven't decided
+  // yet" — not an affirmative approve/reject. Recording these as
+  // approved_as_proposed / added_from_rejects (the prior behaviour) inverts
+  // user intent and biases training data toward the wrong direction.
+  // We emit no event — the optimistic UI move stands but no override row is
+  // persisted, so on refetch the card returns to its server-derived column.
+  if (fromColumn === "approved" && toColumn === "proposed") return null;
+  if (fromColumn === "rejected" && toColumn === "proposed") return null;
   return null;
 }
 
@@ -431,6 +445,12 @@ export default function ShortlistingSwimlane({
         review_duration_seconds: reviewSecs,
         alternative_offered: (altsBySlotId.get(slot?.slot_id) || []).length > 0,
         alternative_selected: false, // dragging isn't selecting an alt
+        // Burst 4 J1: client_sequence is a monotonic counter so server-side
+        // ordering is independent of network arrival jitter. shortlist-lock
+        // (and any future override consumers) prefers client_sequence over
+        // created_at when both are present. Falls back gracefully on legacy
+        // events that pre-date this field.
+        client_sequence: nextClientSequence(),
       };
 
       // Optimistic update — append to pendingOverrides immediately. Use a
@@ -492,6 +512,7 @@ export default function ShortlistingSwimlane({
         review_duration_seconds: reviewSecs,
         alternative_offered: true,
         alternative_selected: true,
+        client_sequence: nextClientSequence(), // J1
       };
 
       const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -511,7 +532,10 @@ export default function ShortlistingSwimlane({
       setPendingOverrides((prev) =>
         prev.filter((p) => p._pendingId !== pendingId),
       );
-      if (ok) toast.success("Slot swapped — original moved to Rejected");
+      // Burst 4 J2 fix: previous toast said "original moved to Rejected" but
+      // no file movement happens until Lock. Toast now reflects that the
+      // record is registered, not the move.
+      if (ok) toast.success("Swap recorded — files will move on Lock");
     },
     [classByGroupId, slotByGroupId, projectId, roundId, sendOverride],
   );

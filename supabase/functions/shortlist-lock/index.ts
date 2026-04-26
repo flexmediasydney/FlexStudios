@@ -93,6 +93,7 @@ interface OverrideRow {
   human_selected_group_id: string | null;
   human_action: string;
   created_at: string;
+  client_sequence: number | null; // Burst 4 J1: prefer over created_at for ordering
 }
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -166,8 +167,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .in('event_type', ['pass2_slot_assigned', 'pass2_phase3_recommendation']),
     admin
       .from('shortlisting_overrides')
-      .select('ai_proposed_group_id, human_selected_group_id, human_action, created_at')
+      .select('ai_proposed_group_id, human_selected_group_id, human_action, created_at, client_sequence')
       .eq('round_id', roundId)
+      // Burst 4 J1: order by client_sequence when present (NULLS LAST puts
+      // legacy events at the end where created_at takes over). For events
+      // with the same null-ness, the secondary created_at sort gives stable
+      // ordering. This ensures fast-emitted drag events are processed in the
+      // order the user emitted them, not the order they happened to arrive.
+      .order('client_sequence', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: true }),
   ]);
 
