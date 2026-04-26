@@ -446,7 +446,73 @@ export default function DronePinEditor() {
     );
   }, [shots, currentShotId]);
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // W6 FIX 2 (QC3-8 E2E1): React #310 root cause.
+  //
+  // Previously, the early returns below for `!projectId/!shootId`,
+  // `pipeline === 'raw'`, `isLoading`, `fatal`, `!shootQ.data`, and the
+  // `anyEdited` guard ran BEFORE the `handleShotChange` and `handleAfterSave`
+  // useCallback definitions. On the first render (queries loading) we'd hit
+  // the spinner branch and never call those hooks; on a later render (data
+  // loaded) we WOULD call them. React's hooks-rule check counts the number
+  // of hooks per render — mismatch → minified error #310 ("Rendered fewer
+  // hooks than expected"), which crashed Pin Editor on every fully-loaded
+  // /DronePinEditor?pipeline=edited deep-link.
+  //
+  // Fix: hoist BOTH useCallback definitions above all the early returns. We
+  // also wrap `goBackToProject` in useCallback for parity (it was a plain
+  // arrow before — fine because no return-path-conditional hook depends on
+  // it, but consistency is cheap). Returns below remain pure render branches
+  // — none of them call additional hooks, so the hook count is now stable.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Shot-strip click → update the URL `?shot=` so currentShotId / imageUrl
+  // re-derive against the new shot. Without this, clicking a thumbnail
+  // updated PinEditor's local activeShotId but the source image (driven by
+  // imageDropboxPath via currentShotId via the URL) never swapped — the
+  // canvas stayed locked on the first opened shot.
+  const handleShotChange = useCallback(
+    (newShotId) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("shot", newShotId);
+          // Clear the explicit ?render= pin so picking a new shot doesn't
+          // try to load the previous render's image on the new shot.
+          next.delete("render");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  // After save: refetch custom pins + renders so the editor reflects the
+  // server's authoritative state (incl. dbId for any newly-created rows).
+  // F33 (W5 P2 S4): the actual cache key is "by-shoot-or-project" (set in
+  // customPinsQ above) — not "by-shoot". The legacy invalidation never
+  // matched, so the editor would re-render against the stale prop until
+  // the next mount. Use a predicate so any pin-cache variant matches.
+  const handleAfterSave = useCallback(() => {
+    queryClient.invalidateQueries({
+      predicate: (q) => {
+        const key = q.queryKey;
+        return Array.isArray(key) && key[0] === "drone_custom_pins";
+      },
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["drone_renders", "by-shoot", shootId],
+    });
+  }, [queryClient, shootId]);
+
+  const goBackToProject = useCallback(
+    () => navigate(createPageUrl(`ProjectDetails?id=${projectId}&tab=drones`)),
+    [navigate, projectId],
+  );
+
   // ── Loading / error states ──────────────────────────────────────────────
+  // (No more hook calls below this line — only render branches.)
   if (!projectId || !shootId) {
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background">
@@ -464,9 +530,6 @@ export default function DronePinEditor() {
   // accept pin overrides. S6 removes the "Edit pins" button from raw
   // RenderCards in DroneRendersSubtab; this is the defensive guard for
   // anyone deep-linking ?pipeline=raw or hitting an old bookmark.
-  // Renders the rejection BEFORE mounting <PinEditor /> so the React #310
-  // hooks-rule violation can't happen (the prior conditional-hook gating
-  // on requestedRenderId crashed Pin Editor on raw cards).
   if (pipeline === "raw") {
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background p-8">
@@ -569,9 +632,6 @@ export default function DronePinEditor() {
     );
   }
 
-  const goBackToProject = () =>
-    navigate(createPageUrl(`ProjectDetails?id=${projectId}&tab=drones`));
-
   // Theme is non-fatal: only treat an actual fetch error as an error.
   // The previous version also treated `themeQ.data == null` as fatal, which
   // (a) blocked the editor when getDroneTheme legitimately returned no theme
@@ -580,46 +640,6 @@ export default function DronePinEditor() {
   // isLoading=false + data=undefined. Net result: editor was blocked for
   // most users. Revert to "only block on hard error". (Audit #11 softened.)
   const themeError = themeQ.error || null;
-
-  // Shot-strip click → update the URL `?shot=` so currentShotId / imageUrl
-  // re-derive against the new shot. Without this, clicking a thumbnail
-  // updated PinEditor's local activeShotId but the source image (driven by
-  // imageDropboxPath via currentShotId via the URL) never swapped — the
-  // canvas stayed locked on the first opened shot.
-  const handleShotChange = useCallback(
-    (newShotId) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set("shot", newShotId);
-          // Clear the explicit ?render= pin so picking a new shot doesn't
-          // try to load the previous render's image on the new shot.
-          next.delete("render");
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  // After save: refetch custom pins + renders so the editor reflects the
-  // server's authoritative state (incl. dbId for any newly-created rows).
-  // F33 (W5 P2 S4): the actual cache key is "by-shoot-or-project" (set in
-  // customPinsQ above) — not "by-shoot". The legacy invalidation never
-  // matched, so the editor would re-render against the stale prop until
-  // the next mount. Use a predicate so any pin-cache variant matches.
-  const handleAfterSave = useCallback(() => {
-    queryClient.invalidateQueries({
-      predicate: (q) => {
-        const key = q.queryKey;
-        return Array.isArray(key) && key[0] === "drone_custom_pins";
-      },
-    });
-    queryClient.invalidateQueries({
-      queryKey: ["drone_renders", "by-shoot", shootId],
-    });
-  }, [queryClient, shootId]);
 
   return (
     <PinEditor
