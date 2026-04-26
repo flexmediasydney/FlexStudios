@@ -210,54 +210,70 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const anchors = await getActiveStreamBAnchors();
 
   // ── Iterate rounds + run blind Pass 2 ──────────────────────────────────
-  const results: RoundResult[] = [];
+  // Burst 14 W4: parallel execution. Sequential-per-round was guaranteed to
+  // timeout the 150s edge gateway: one Pass 2 call ≈ 10-15s × 50 rounds
+  // (DEFAULT_LIMIT) = 500-750s. With CONCURRENCY=8 we drop to ~60-95s for
+  // the default limit, well within budget. Cap is 8 to stay under
+  // Anthropic's per-key concurrency limit during benchmark + production
+  // co-existence (we don't want a benchmark to starve live shortlisting).
+  // Cost is unchanged — same number of Sonnet calls, just overlapped.
+  const results: RoundResult[] = new Array(eligible.length);
   let totalMatches = 0;
   let totalSlots = 0;
   let totalCost = 0;
   const perSlotAgg = new Map<string, { matches: number; total: number }>();
   const perPackageAgg = new Map<string, { matches: number; total: number }>();
 
-  for (const round of eligible) {
-    try {
-      const result = await runBlindBenchmark(round, anchors);
-      results.push(result);
-      totalMatches += result.matched;
-      totalSlots += result.total_confirmed;
-      totalCost += result.cost_usd;
-
-      // per-slot accumulator (we don't have slot_id for every confirmed
-      // group — but per_slot covers what we could attribute).
-      for (const [slotId, val] of Object.entries(result.per_slot)) {
-        const cur = perSlotAgg.get(slotId) || { matches: 0, total: 0 };
-        cur.matches += val;
-        cur.total += 1;
-        perSlotAgg.set(slotId, cur);
+  const BENCH_CONCURRENCY = 8;
+  let nextIdx = 0;
+  async function benchWorker() {
+    while (true) {
+      const i = nextIdx++;
+      if (i >= eligible.length) return;
+      const round = eligible[i];
+      try {
+        const result = await runBlindBenchmark(round, anchors);
+        results[i] = result;
+        // Accumulators are JS-single-threaded safe.
+        totalMatches += result.matched;
+        totalSlots += result.total_confirmed;
+        totalCost += result.cost_usd;
+        for (const [slotId, val] of Object.entries(result.per_slot)) {
+          const cur = perSlotAgg.get(slotId) || { matches: 0, total: 0 };
+          cur.matches += val;
+          cur.total += 1;
+          perSlotAgg.set(slotId, cur);
+        }
+        const pkg = (round.package_type || 'unknown') as string;
+        const cur = perPackageAgg.get(pkg) || { matches: 0, total: 0 };
+        cur.matches += result.matched;
+        cur.total += result.total_confirmed;
+        perPackageAgg.set(pkg, cur);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[${GENERATOR}] round ${round.id} failed: ${msg}`);
+        const totalConfirmed = (round.confirmed_shortlist_group_ids as string[])?.length || 0;
+        results[i] = {
+          round_id: round.id,
+          package_type: (round.package_type as string) || 'unknown',
+          matched: 0,
+          total_confirmed: totalConfirmed,
+          match_rate: 0,
+          per_slot: {},
+          cost_usd: 0,
+          warnings: [`benchmark failed: ${msg}`],
+        };
+        // Failed rounds still count in denominator — engine couldn't reproduce.
+        totalSlots += totalConfirmed;
       }
-
-      const pkg = (round.package_type || 'unknown') as string;
-      const cur = perPackageAgg.get(pkg) || { matches: 0, total: 0 };
-      cur.matches += result.matched;
-      cur.total += result.total_confirmed;
-      perPackageAgg.set(pkg, cur);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[${GENERATOR}] round ${round.id} failed: ${msg}`);
-      results.push({
-        round_id: round.id,
-        package_type: (round.package_type as string) || 'unknown',
-        matched: 0,
-        total_confirmed: (round.confirmed_shortlist_group_ids as string[])?.length || 0,
-        match_rate: 0,
-        per_slot: {},
-        cost_usd: 0,
-        warnings: [`benchmark failed: ${msg}`],
-      });
-      // Failed rounds count toward total_slots (denominator) but contribute
-      // zero matches — treats them as "engine couldn't reproduce" rather
-      // than dropping them silently.
-      totalSlots += (round.confirmed_shortlist_group_ids as string[])?.length || 0;
     }
   }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(BENCH_CONCURRENCY, eligible.length) },
+      () => benchWorker(),
+    ),
+  );
 
   const matchRate = totalSlots > 0 ? totalMatches / totalSlots : 0;
   const improvement = matchRate - 0.78;
@@ -561,11 +577,23 @@ async function fetchSlotDefinitions(
   if (!data) return [];
 
   const matchPkg = packageType.toLowerCase();
+  // Burst 14 W1: substring fallback for package matching, mirroring Pass 2 +
+  // Pass 3 (audit defect #53). Without this, seed slot definitions for "Gold"
+  // wouldn't match production rounds with package_type="Gold Package",
+  // causing the benchmark to load ZERO slot definitions and the engine to
+  // emit empty slot_assignments — match rate plummets to ~0 spuriously.
+  const pkgMatches = (defPkg: string, roundPkg: string): boolean => {
+    const a = String(defPkg).toLowerCase().trim();
+    const b = String(roundPkg).toLowerCase().trim();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return a.includes(b) || b.includes(a);
+  };
   // deno-lint-ignore no-explicit-any
   const filtered = (data as any[]).filter((row) => {
     const pkgs: string[] = Array.isArray(row.package_types) ? row.package_types : [];
     if (pkgs.length === 0) return true;
-    return pkgs.some((p) => String(p).toLowerCase() === matchPkg);
+    return pkgs.some((p) => pkgMatches(p, matchPkg));
   });
 
   const byId = new Map<string, Pass2SlotDefinition & { version: number }>();
@@ -593,10 +621,15 @@ async function fetchSlotDefinitions(
 // deno-lint-ignore no-explicit-any
 function parsePass2Json(content: string): { ok: true; value: any } | { ok: false; error: string } {
   if (!content) return { ok: false, error: 'empty content' };
-  // Find a top-level JSON object — strip any surrounding fences.
   let s = content.trim();
-  // Remove markdown code fences if present
-  s = s.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+  // Burst 14 W2: pick the JSON-bearing fenced block when Sonnet emits
+  // multiple fences (e.g. coverage_notes prose + JSON output). Same fix as
+  // Pass 1 L2 / Pass 2 M5 / Pass 0 O1.
+  const fenceMatches = Array.from(s.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi));
+  if (fenceMatches.length > 0) {
+    const jsonFence = fenceMatches.find((m) => m[1].includes('{'));
+    s = (jsonFence ?? fenceMatches[0])[1].trim();
+  }
   // First/last brace
   const first = s.indexOf('{');
   const last = s.lastIndexOf('}');
