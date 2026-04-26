@@ -504,10 +504,18 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
       continue;
     }
 
-    // Look up the matching raw shot via shoot.project_id JOIN. v1 = exact
-    // match on filename. We need shot_id + shoot_id for the audit row +
-    // downstream render-gate check.
-    const { data: candidates, error: shotErr } = await admin
+    // Look up the matching raw shot via shoot.project_id JOIN. We need shot_id
+    // + shoot_id for the audit row + downstream render-gate check.
+    //
+    // Wave 14 S4: two-phase match. Fast-path is exact filename equality (covers
+    // the common case where the editor preserves the raw filename as the stem
+    // of their JPEG export). Fallback is a normalised stem match — strips
+    // trailing whitespace, collapses internal whitespace, strips the extension,
+    // lowercases — so the editor renaming `DJI_0042.JPG` to `dji_0042.jpeg` or
+    // ` DJI_0042 .png ` still routes to the same shot. Without normalisation
+    // these variants surface as "no matching raw shot" warnings + the editor
+    // delivery never enters the edited pipeline.
+    const { data: exactCandidates, error: shotErr } = await admin
       .from('drone_shots')
       .select('id, filename, shoot_id, drone_shoots!inner(project_id)')
       .eq('drone_shoots.project_id', projectId)
@@ -516,9 +524,32 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
       console.warn(`[${GENERATOR}] editor-link shot lookup failed for ${fileName}: ${shotErr.message}`);
       continue;
     }
+    let candidates = exactCandidates;
     if (!candidates || candidates.length === 0) {
-      console.warn(`[${GENERATOR}] editor file '${fileName}' (project ${projectId}) has no matching raw shot — likely a new shot introduced by editor (out of scope for v1).`);
-      continue;
+      // Fallback: pull all shots for the project and normalise-compare. The
+      // shoot count per project is small (single-digit typical) and shot count
+      // per shoot is in the hundreds; this scan is cheap relative to the
+      // delivery's value. Logged as INFO so the normalised-match path is
+      // visible in production traces.
+      const normTarget = normaliseFilename(fileName);
+      const { data: allCandidates, error: allErr } = await admin
+        .from('drone_shots')
+        .select('id, filename, shoot_id, drone_shoots!inner(project_id)')
+        .eq('drone_shoots.project_id', projectId);
+      if (allErr) {
+        console.warn(`[${GENERATOR}] editor-link normalised lookup failed for ${fileName}: ${allErr.message}`);
+        continue;
+      }
+      const matches = (allCandidates || []).filter((row) => {
+        const rowName = row.filename as string | null | undefined;
+        return Boolean(rowName) && normaliseFilename(rowName!) === normTarget;
+      });
+      if (matches.length === 0) {
+        console.warn(`[${GENERATOR}] editor file '${fileName}' (project ${projectId}) has no matching raw shot — likely a new shot introduced by editor (out of scope for v1).`);
+        continue;
+      }
+      console.info(`[${GENERATOR}] editor file '${fileName}' matched via normalised stem (project ${projectId}, ${matches.length} candidate(s))`);
+      candidates = matches;
     }
     if (candidates.length > 1) {
       console.warn(`[${GENERATOR}] editor file '${fileName}' (project ${projectId}) matched ${candidates.length} shots — using first.`);
@@ -790,6 +821,34 @@ async function enqueueEditedPipelineInit(
       console.log(`[${GENERATOR}] render_edited enqueued for shot ${shot_id} (project ${projectId})`);
     }
   }
+}
+
+// ─── Filename normalisation ──────────────────────────────────────────────────
+
+/**
+ * Normalise a filename for stem-equality matching.
+ *
+ * Wave 14 S4: editors deliver JPGs whose filenames may differ from the raw
+ * shot's `filename` by extension (`.JPG` → `.jpeg`), case (`DJI_0042` →
+ * `dji_0042`), or whitespace artefacts (a stray trailing space from a sloppy
+ * file rename). Strip those variants so the editor-link lookup matches the
+ * underlying shot regardless of the editor's export pipeline.
+ *
+ * Order:
+ *   1. trim leading/trailing whitespace
+ *   2. collapse internal whitespace runs to a single space
+ *   3. strip the trailing extension (`.ext`, `.tiff` etc.)
+ *   4. lowercase the result
+ *
+ * Used as a FALLBACK only — the exact-match fast path runs first and short-
+ * circuits the common case.
+ */
+function normaliseFilename(name: string): string {
+  return name
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\.[^.]+$/, '')
+    .toLowerCase();
 }
 
 // ─── HMAC helpers ────────────────────────────────────────────────────────────
