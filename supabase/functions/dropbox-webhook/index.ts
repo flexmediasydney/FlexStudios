@@ -257,16 +257,40 @@ async function enqueueShortlistingForRecentPhotos(sinceIso: string): Promise<num
   if (error) throw error;
 
   const projectIds = Array.from(new Set((data || []).map((r) => r.project_id as string).filter(Boolean)));
+  if (projectIds.length === 0) return 0;
+
+  // Audit defect #35: pre-check that each project actually has a provisioned
+  // photos_raws_shortlist_proposed folder before enqueueing. Prevents wasting
+  // ingest cycles on projects that haven't been provisioned yet (the ingest
+  // job would just no-op + dead-letter, polluting the queue).
+  const { data: provisioned } = await admin
+    .from('project_folders')
+    .select('project_id')
+    .eq('folder_kind', 'photos_raws_shortlist_proposed')
+    .in('project_id', projectIds);
+  const provisionedSet = new Set(
+    (provisioned || []).map((r) => r.project_id as string),
+  );
+
+  let enqueued = 0;
   for (const pid of projectIds) {
+    if (!provisionedSet.has(pid)) {
+      console.info(
+        `[${GENERATOR}] skipping shortlisting enqueue for ${pid} — no photos_raws_shortlist_proposed folder provisioned yet`,
+      );
+      continue;
+    }
     const { error: rpcErr } = await admin.rpc('enqueue_shortlisting_ingest_job', {
       p_project_id: pid,
       p_debounce_seconds: SHORTLISTING_DEBOUNCE_SECONDS,
     });
     if (rpcErr) {
       console.warn(`[${GENERATOR}] enqueue_shortlisting_ingest_job failed for ${pid}: ${rpcErr.message}`);
+    } else {
+      enqueued++;
     }
   }
-  return projectIds.length;
+  return enqueued;
 }
 
 /**

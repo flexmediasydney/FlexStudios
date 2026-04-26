@@ -179,9 +179,14 @@ export default function ShortlistingCard({
                   : "border-amber-400 text-amber-700 dark:text-amber-300",
               )}
             >
-              {slot.slot_id}
+              {/* Audit defect #50: Phase 3 (AI free recommendations) used to
+                  render the raw fallback string "ai_recommended" — confusing
+                  for editors. Map to a human label. Other slot IDs render
+                  as-is (they're meaningful identifiers like
+                  exterior_front_hero). */}
+              {slot.slot_id === "ai_recommended" ? "Phase 3 — AI rec" : slot.slot_id}
             </Badge>
-            {slot.phase != null && (
+            {slot.phase != null && slot.slot_id !== "ai_recommended" && (
               <span className="text-[9px] text-muted-foreground">
                 phase {slot.phase}
               </span>

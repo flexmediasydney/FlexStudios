@@ -527,20 +527,31 @@ export default function ShortlistingSwimlane({
         round_id: roundId,
       });
       const result = resp?.data ?? resp ?? {};
+      // Audit defect #20: ok:false now means EVERYTHING failed; ok:true with
+      // partial:true means some moves landed but errors exist. We surface
+      // partial as a warning toast (yellow) instead of a red error.
       if (result?.ok === false) {
         const errs = Array.isArray(result?.errors) ? result.errors : [];
         if (errs.length > 0) {
-          throw new Error(`Lock partial: ${errs.length} error(s) — see console`);
+          console.warn("[ShortlistingSwimlane] lock errors:", errs);
         }
-        throw new Error(result?.error || "Lock failed");
+        throw new Error(result?.error || `Lock failed: ${errs.length} error(s) — see console`);
       }
       const moved = result?.moved || {};
       const total = (moved.approved || 0) + (moved.rejected || 0);
-      toast.success(
-        total > 0
-          ? `Shortlist locked — moved ${total} file(s) into Final Shortlist / Rejected.`
-          : "Shortlist locked.",
-      );
+      if (result?.partial === true) {
+        const errs = Array.isArray(result?.errors) ? result.errors : [];
+        console.warn("[ShortlistingSwimlane] lock partial errors:", errs);
+        toast.warning(
+          `Shortlist locked with warnings — moved ${total} file(s); ${errs.length} file(s) skipped (see console).`,
+        );
+      } else {
+        toast.success(
+          total > 0
+            ? `Shortlist locked — moved ${total} file(s) into Final Shortlist / Rejected.`
+            : "Shortlist locked.",
+        );
+      }
       queryClient.invalidateQueries({
         queryKey: ["shortlisting_rounds", projectId],
       });
@@ -676,18 +687,22 @@ export default function ShortlistingSwimlane({
       </Card>
 
       {/* Coverage notes (if any) */}
-      {round?.coverage_notes && (
-        <Card className="border-blue-200 dark:border-blue-900">
-          <CardContent className="p-3 text-xs text-muted-foreground">
-            <div className="font-medium text-foreground mb-1">
-              Coverage notes
-            </div>
-            <p className="leading-snug whitespace-pre-line">
-              {round.coverage_notes}
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      {/* Audit defect #39: render only when notes are substantive (>=20 chars).
+          Sonnet sometimes emits a single-word placeholder like "OK" that
+          rendered as a near-empty blue panel; suppressed below the threshold. */}
+      {typeof round?.coverage_notes === "string" &&
+        round.coverage_notes.trim().length >= 20 && (
+          <Card className="border-blue-200 dark:border-blue-900">
+            <CardContent className="p-3 text-xs text-muted-foreground">
+              <div className="font-medium text-foreground mb-1">
+                Coverage notes
+              </div>
+              <p className="leading-snug whitespace-pre-line">
+                {round.coverage_notes}
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
       {/* 3-column swimlane */}
       <DragDropContext onDragEnd={onDragEnd}>

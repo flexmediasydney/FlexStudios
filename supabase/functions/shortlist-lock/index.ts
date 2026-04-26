@@ -423,15 +423,25 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     (globalThis as any).EdgeRuntime?.waitUntil?.(extractorWork);
   }
 
+  // Audit defect #20: surface partial successes as ok:true with partial:true,
+  // not ok:false. The swimlane UI was treating any 207 as a fatal red toast,
+  // hiding the fact that most files moved. Now:
+  //   - all moves succeeded         → ok:true, partial:undefined,  status 200
+  //   - some moves failed (partial) → ok:true, partial:true,       status 207
+  //   - everything failed           → ok:false, partial:undefined, status 207
+  const totalMoved = (movedApproved || 0) + (movedRejected || 0);
+  const isFullSuccess = allErrors.length === 0;
+  const isPartialSuccess = !isFullSuccess && totalMoved > 0;
   return jsonResponse(
     {
-      ok: allErrors.length === 0,
+      ok: isFullSuccess || isPartialSuccess,
+      partial: isPartialSuccess || undefined,
       round_id: roundId,
       moved: { approved: movedApproved, rejected: movedRejected },
       skipped: totalSkipped,
       errors: allErrors.length > 0 ? allErrors : undefined,
     },
-    allErrors.length === 0 ? 200 : 207,
+    isFullSuccess ? 200 : 207,
     req,
   );
 });
