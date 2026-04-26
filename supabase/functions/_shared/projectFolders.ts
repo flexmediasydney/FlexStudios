@@ -81,7 +81,16 @@ export type FolderKind =
   | 'drones_editors_edited_post_production'
   | 'drones_editors_ai_proposed_enriched'
   | 'drones_editors_final_enriched'
-  | 'drones_finals';
+  | 'drones_finals'
+  // New photo shortlisting restructure (Wave 6 P1 — mig 282-289)
+  | 'photos_raws_shortlist_proposed'
+  | 'photos_raws_shortlist_proposed_previews'
+  | 'photos_raws_final_shortlist'
+  | 'photos_raws_rejected'
+  | 'photos_raws_quarantine'
+  | 'photos_editors_edited_post_production'
+  | 'photos_editors_ai_proposed_enriched'
+  | 'photos_finals';
 
 /**
  * All folder kinds the system understands — includes both the legacy drone
@@ -111,6 +120,15 @@ export const ALL_FOLDER_KINDS: FolderKind[] = [
   'drones_editors_ai_proposed_enriched',
   'drones_editors_final_enriched',
   'drones_finals',
+  // New photo shortlisting restructure (Wave 6 P1)
+  'photos_raws_shortlist_proposed',
+  'photos_raws_shortlist_proposed_previews',
+  'photos_raws_final_shortlist',
+  'photos_raws_rejected',
+  'photos_raws_quarantine',
+  'photos_editors_edited_post_production',
+  'photos_editors_ai_proposed_enriched',
+  'photos_finals',
 ];
 
 /**
@@ -135,6 +153,15 @@ export const NEW_PROJECT_FOLDER_KINDS: FolderKind[] = [
   'drones_editors_ai_proposed_enriched',
   'drones_editors_final_enriched',
   'drones_finals',
+  // New photo shortlisting restructure (Wave 6 P1)
+  'photos_raws_shortlist_proposed',
+  'photos_raws_shortlist_proposed_previews',
+  'photos_raws_final_shortlist',
+  'photos_raws_rejected',
+  'photos_raws_quarantine',
+  'photos_editors_edited_post_production',
+  'photos_editors_ai_proposed_enriched',
+  'photos_finals',
 ];
 
 const FOLDER_RELATIVE_PATHS: Record<FolderKind, string> = {
@@ -161,11 +188,20 @@ const FOLDER_RELATIVE_PATHS: Record<FolderKind, string> = {
   drones_editors_ai_proposed_enriched: 'Drones/Editors/AI Proposed Enriched',
   drones_editors_final_enriched: 'Drones/Editors/Final Enriched',
   drones_finals: 'Drones/Finals',
+  // Photo shortlisting (Wave 6 P1) — top-level Photos/ bucket mirrors Drones/.
+  photos_raws_shortlist_proposed: 'Photos/Raws/Shortlist Proposed',
+  photos_raws_shortlist_proposed_previews: 'Photos/Raws/Shortlist Proposed/Previews',
+  photos_raws_final_shortlist: 'Photos/Raws/Final Shortlist',
+  photos_raws_rejected: 'Photos/Raws/Rejected',
+  photos_raws_quarantine: 'Photos/Raws/Quarantine',
+  photos_editors_edited_post_production: 'Photos/Editors/Edited Post Production',
+  photos_editors_ai_proposed_enriched: 'Photos/Editors/AI Proposed Enriched',
+  photos_finals: 'Photos/Finals',
 };
 
 // Intermediate parent folders that must exist before leaves can be created.
 // Includes the legacy 01/06/07 trees (still in use for photos/videos/orthos
-// /sfm) AND the new top-level Drones/ subtree.
+// /sfm), the Drones/ subtree, AND the Photos/ subtree (Wave 6 P1).
 const INTERMEDIATE_FOLDERS = [
   '01_RAW_WORKING',
   '06_ENRICHMENT',
@@ -174,6 +210,10 @@ const INTERMEDIATE_FOLDERS = [
   'Drones/Raws',
   'Drones/Raws/Shortlist Proposed',
   'Drones/Editors',
+  'Photos',
+  'Photos/Raws',
+  'Photos/Raws/Shortlist Proposed',
+  'Photos/Editors',
 ];
 
 // ─── Slug + path helpers ─────────────────────────────────────────────────────
