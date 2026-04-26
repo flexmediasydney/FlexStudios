@@ -98,7 +98,28 @@ def _sfm_core(
     print(f"[sfm] preparing {len(image_urls)} images at width={target_width}")
     fetched_names: List[str] = []
     for entry in image_urls:
-        name = entry["name"]
+        # QC2-2 #2: entry["name"] is API-supplied. A crafted name like
+        # "../../etc/passwd.jpg" would resolve via `img_dir / name` to a
+        # path outside the worker's tempdir — reading it back via PIL/cv2
+        # is harmless but cv2.imwrite + exiftool would happily write
+        # arbitrary bytes there. Defence-in-depth: strip any directory
+        # component and reject suspicious bytes outright.
+        raw_name = entry.get("name")
+        if not isinstance(raw_name, str) or not raw_name:
+            print(f"[sfm]   skip (missing name): {entry!r}")
+            continue
+        if any(c in raw_name for c in ("/", "\\", "\x00")) or ".." in raw_name:
+            # Security: log + skip. Don't echo the full string to logs in case
+            # it's hostile (we still log a fingerprint for forensics).
+            print(
+                f"[sfm]   SECURITY: rejected path-traversal name "
+                f"(len={len(raw_name)}, starts={raw_name[:8]!r})"
+            )
+            continue
+        name = Path(raw_name).name  # belt-and-braces: Path().name strips dirs
+        if not name or name in (".", ".."):
+            print(f"[sfm]   SECURITY: rejected degenerate name {raw_name!r}")
+            continue
         dst = img_dir / name
         raw_bytes = _fetch_bytes(entry)
         arr = np.frombuffer(raw_bytes, dtype=np.uint8)
