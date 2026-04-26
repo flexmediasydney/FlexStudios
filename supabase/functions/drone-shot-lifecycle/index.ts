@@ -1,8 +1,8 @@
 /**
  * drone-shot-lifecycle — operator action handler for Raw Proposed/Accepted
- * lifecycle transitions.
+ * + Editor-Returned lifecycle transitions.
  *
- * POST { shot_id, target: 'raw_accepted' | 'rejected' | 'raw_proposed' }
+ * POST { shot_id, target: 'raw_accepted' | 'rejected' | 'raw_proposed' | 'editor_returned' | 'final' }
  *   → { success, shot, no_op? }
  *
  * Why an Edge Function instead of `DroneShot.update` directly from the client:
@@ -46,7 +46,12 @@ import {
 
 const GENERATOR = 'drone-shot-lifecycle';
 
-type LifecycleTarget = 'raw_proposed' | 'raw_accepted' | 'rejected';
+type LifecycleTarget =
+  | 'raw_proposed'
+  | 'raw_accepted'
+  | 'rejected'
+  | 'editor_returned'
+  | 'final';
 
 interface Body {
   shot_id?: string;
@@ -54,7 +59,13 @@ interface Body {
   _health_check?: boolean;
 }
 
-const VALID_TARGETS: LifecycleTarget[] = ['raw_proposed', 'raw_accepted', 'rejected'];
+const VALID_TARGETS: LifecycleTarget[] = [
+  'raw_proposed',
+  'raw_accepted',
+  'rejected',
+  'editor_returned',
+  'final',
+];
 // Wave 12 D: contractor admitted at the role-membership gate, then narrowed
 // per-project below to the assigned projects.drone_editor_id. Manager+/admin
 // roles bypass the per-project narrow.
@@ -170,6 +181,73 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // distinguish "you already did this" from "this just happened".
   if (fromState === target) {
     return jsonResponse({ success: true, shot, no_op: true }, 200, req);
+  }
+
+  // ── Wave 13 D: state-machine transition gating for editor_returned ──────
+  // The editor_returned bucket is the "post-editor delivery, awaiting operator
+  // review" state. Only specific transitions in/out of it are valid:
+  //   raw_accepted → editor_returned: canonical setter is dropbox-webhook
+  //                                   (service_role); manual override allowed
+  //                                   for master_admin / admin only — the
+  //                                   broader manager/employee gate would let
+  //                                   any operator simulate an editor delivery
+  //                                   without the file actually existing in
+  //                                   /Drones/Editors/Edited Post Production/.
+  //   editor_returned → raw_accepted: revert / re-edit (managers+).
+  //   editor_returned → final:        operator approves the editor delivery.
+  //   editor_returned → rejected:     operator vetoes the editor delivery.
+  // Any other transition involving editor_returned is rejected with 409.
+  // Other (non-editor_returned) transitions remain unchanged from prior
+  // behaviour — i.e. raw_proposed↔raw_accepted, raw_proposed↔rejected,
+  // raw_accepted↔rejected, rejected→raw_proposed (Restore) all permitted for
+  // managers+ as before.
+  if (target === 'editor_returned') {
+    if (fromState !== 'raw_accepted') {
+      return errorResponse(
+        `cannot transition from ${fromState} to editor_returned (only raw_accepted → editor_returned allowed)`,
+        409,
+        req,
+      );
+    }
+    if (!isService && !['master_admin', 'admin'].includes(role)) {
+      return errorResponse(
+        'forbidden: editor_returned can only be set by service_role (dropbox-webhook) or master_admin/admin',
+        403,
+        req,
+      );
+    }
+  } else if (fromState === 'editor_returned') {
+    // From editor_returned, allow only: raw_accepted (revert / re-edit),
+    // final (operator approve), rejected (operator veto). Forbid backward
+    // jumps to raw_proposed / sfm_only — those break the linear flow and
+    // would orphan the editor delivery.
+    if (!['raw_accepted', 'final', 'rejected'].includes(target)) {
+      return errorResponse(
+        `cannot transition from editor_returned to ${target} (allowed: raw_accepted, final, rejected)`,
+        409,
+        req,
+      );
+    }
+    // Managers+ admitted; contractors blocked from approving / rejecting an
+    // editor delivery (operator-only call). master_admin/admin/manager/
+    // employee all admitted via ALLOWED_ROLES; explicitly drop contractor
+    // since an editor reviewing their own delivery is a conflict of interest.
+    if (!isService && role === 'contractor') {
+      return errorResponse(
+        'forbidden: contractor cannot transition editor_returned (operator-only)',
+        403,
+        req,
+      );
+    }
+  } else if (target === 'final') {
+    // 'final' may only be reached from editor_returned via this Edge Fn.
+    // Any other path (e.g. raw_proposed → final) skips the editor delivery
+    // step and would leave the deliverable orphaned of any editor metadata.
+    return errorResponse(
+      `cannot transition from ${fromState} to final (only editor_returned → final allowed)`,
+      409,
+      req,
+    );
   }
 
   // ── Resolve project_id via shoot for audit attribution ────────────────────
