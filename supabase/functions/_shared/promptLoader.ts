@@ -52,8 +52,22 @@ export async function getActivePrompt(passKind: PassKind): Promise<ActivePrompt 
     if (!data || typeof data.prompt_text !== 'string' || data.prompt_text.trim().length === 0) {
       return null;
     }
+    // Audit defect #55: a master_admin editing the prompt via the
+    // SettingsShortlistingPrompts UI could remove the "ONLY JSON" guardrail
+    // (or its equivalent) and break Sonnet's structured output. We fail safe
+    // by validating the loaded prompt mentions JSON in some form; if not,
+    // log a warning and fall back to the hardcoded constant in the caller
+    // — that constant always contains the JSON guardrail.
+    const promptText = data.prompt_text;
+    const hasJsonGuardrail = /\bjson\b/i.test(promptText);
+    if (!hasJsonGuardrail) {
+      console.warn(
+        `[promptLoader] ${passKind} v${data.version} appears to be missing a 'JSON' guardrail keyword — falling back to code default to avoid breaking the engine. Edit the prompt in SettingsShortlistingPrompts to include 'JSON' (case-insensitive).`,
+      );
+      return null;
+    }
     return {
-      text: data.prompt_text,
+      text: promptText,
       version: typeof data.version === 'number' ? data.version : 0,
     };
   } catch (err) {

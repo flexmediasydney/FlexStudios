@@ -206,11 +206,20 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
   if (slotErr) throw new Error(`slot_definitions fetch failed: ${slotErr.message}`);
 
   const matchPkg = packageType.toLowerCase();
+  // Audit defect #53: substring-match fallback so marketing-renamed package
+  // labels don't silently break coverage filtering. Mirrors Pass 2.
+  const pkgMatches = (defPkg: string, roundPkg: string): boolean => {
+    const a = String(defPkg).toLowerCase().trim();
+    const b = String(roundPkg).toLowerCase().trim();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return a.includes(b) || b.includes(a);
+  };
   // deno-lint-ignore no-explicit-any
   const activeSlots = ((slotDefs || []) as any[]).filter((row) => {
     const pkgs: string[] = Array.isArray(row.package_types) ? row.package_types : [];
     if (pkgs.length === 0) return true;
-    return pkgs.some((p) => String(p).toLowerCase() === matchPkg);
+    return pkgs.some((p) => pkgMatches(p, matchPkg));
   });
 
   const mandatorySlotIds = activeSlots.filter((s) => s.phase === 1).map((s) => s.slot_id);

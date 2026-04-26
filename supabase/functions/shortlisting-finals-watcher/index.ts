@@ -50,10 +50,27 @@ interface RequestBody {
   _health_check?: boolean;
 }
 
-// Suffix is one or more `-\d+` segments (e.g. -2, -2-2, -2-2-3). Anything
-// else (e.g. `-staged`, `-final`) is NOT a variant indicator — treat as base.
-const FINAL_FILENAME_RE =
-  /^(?<stem>.+?)(?<suffix>(?:-\d+)+)?\.(?:jpg|jpeg|png|webp)$/i;
+// Audit defect #21: editor variant suffixes are richer than just `-\d+`.
+// Real-world Lightroom/Photoshop/ACR/Finder exports include all of:
+//   KELV4091.jpg           → base
+//   KELV4091-2.jpg         → numeric variant
+//   KELV4091-2-2.jpg       → numeric chain
+//   KELV4091_HDR.jpg       → underscore-tag variant
+//   KELV4091-vs.jpg        → letter-tag variant
+//   IMG_5620 (copy).jpg    → Finder paren-tag
+//   IMG_5620 (1).jpg       → Finder numbered duplicate
+//   IMG_5620-Edit.jpg      → named edit
+//
+// Strategy: the "stem" is the camera-style root — `LETTERS+DIGITS` or
+// `IMG_DIGITS` (Canon/iPhone convention). Anything after that root is a
+// suffix indicator: `-`, `_`, or a paren block. We greedy-match the root
+// then take everything until the extension as the suffix.
+//
+// Variant count = 1 (no suffix) | 2 (any suffix) | n (numeric chain of n−1
+// segments). Numeric chains are detected separately so the
+// 1.0 + 0.2*(n-1) weight formula keeps its meaning.
+const VARIANT_FILENAME_RE =
+  /^(?<stem>(?:IMG_\d+|[A-Za-z]+\d+))(?<suffix>[^.]*)\.(?:jpg|jpeg|png|webp)$/i;
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
@@ -91,14 +108,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
 
   // ── Parse filenames into (stem, variantIndex) pairs ─────────────────────
-  // For each path, extract just the basename, strip the extension, and count
-  // `-\d+` suffix segments. Track max variant index per stem.
+  // Audit defect #21: count distinct variants per stem (handles -N chains
+  // AND non-numeric tags like _HDR / -vs / (copy)). variantIndex semantics:
+  //   no suffix      → 1 (just the base file present)
+  //   any suffix     → at least 2 (base + at least one variant)
+  //   -\d+ chain     → segCount + 1 (one numeric tier per chain link)
+  //   non-numeric    → 2 (single named variant)
   const variantsByStem = new Map<string, number>();
   let unparsed = 0;
   for (const path of filePaths) {
     if (!path) continue;
     const basename = String(path).split('/').pop() || '';
-    const m = basename.match(FINAL_FILENAME_RE);
+    const m = basename.match(VARIANT_FILENAME_RE);
     if (!m) {
       unparsed++;
       continue;
@@ -109,10 +130,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       continue;
     }
     const suffix = m.groups?.suffix || '';
-    const segCount = suffix
-      ? suffix.split('-').filter((s) => /^\d+$/.test(s)).length
-      : 0;
-    const variantIndex = segCount + 1; // no suffix = variant 1
+    const numericChain = suffix.match(/-\d+/g) || [];
+    const variantIndex = numericChain.length > 0
+      ? numericChain.length + 1            // numeric chain
+      : (suffix.length > 0 ? 2 : 1);       // any non-numeric suffix → 2
     const cur = variantsByStem.get(stem) || 0;
     if (variantIndex > cur) variantsByStem.set(stem, variantIndex);
   }

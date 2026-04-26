@@ -334,6 +334,17 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
     const eligibleExtRear =
       c.room_type === 'alfresco' && c.vantage_point === 'exterior_looking_in';
 
+    // Audit defect #48: derive flag_for_retouching server-side from
+    // clutter_severity rather than trusting Sonnet's flag. The contract
+    // (per spec L13/§9): TRUE iff severity is minor_photoshoppable or
+    // moderate_retouch; FALSE for none and major_reject (major_reject is
+    // already excluded by Pass 3's filter, but consistency with the prompt
+    // doc is what matters here). This eliminates the inconsistency between
+    // the Pass 1 prompt's text and Pass 3's runtime filter.
+    const derivedFlagForRetouching =
+      c.clutter_severity === 'minor_photoshoppable' ||
+      c.clutter_severity === 'moderate_retouch';
+
     const { error: insErr } = await admin
       .from('composition_classifications')
       .insert({
@@ -355,7 +366,7 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
         indoor_outdoor_visible: c.indoor_outdoor_visible,
         clutter_severity: c.clutter_severity,
         clutter_detail: c.clutter_detail,
-        flag_for_retouching: c.flag_for_retouching,
+        flag_for_retouching: derivedFlagForRetouching,
         technical_score: c.technical_score,
         lighting_score: c.lighting_score,
         composition_score: c.composition_score,

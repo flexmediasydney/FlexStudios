@@ -624,11 +624,22 @@ async function fetchSlotDefinitions(
   if (!data) return [];
 
   const matchPkg = packageType.toLowerCase();
+  // Audit defect #53: exact-match filter previously failed when marketing
+  // tweaked package names ("Gold Package" vs "Gold"). Add a substring fallback
+  // — case-insensitive contains either way — so seed slot definitions don't
+  // need to be in lockstep with the projects.package_type marketing label.
+  const pkgMatches = (defPkg: string, roundPkg: string): boolean => {
+    const a = String(defPkg).toLowerCase().trim();
+    const b = String(roundPkg).toLowerCase().trim();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return a.includes(b) || b.includes(a);
+  };
   // deno-lint-ignore no-explicit-any
   const filtered = (data as any[]).filter((row) => {
     const pkgs: string[] = Array.isArray(row.package_types) ? row.package_types : [];
     if (pkgs.length === 0) return true; // empty = all packages
-    return pkgs.some((p) => String(p).toLowerCase() === matchPkg);
+    return pkgs.some((p) => pkgMatches(p, matchPkg));
   });
 
   // Take latest version per slot_id (defensive — multiple versions may be active).
