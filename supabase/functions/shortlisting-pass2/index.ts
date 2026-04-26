@@ -730,8 +730,14 @@ function parsePass2Json(text: string): ParseResult {
   if (!text) return { ok: false, error: 'empty response' };
   let body = text.trim();
 
-  const fenceMatch = body.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenceMatch) body = fenceMatch[1].trim();
+  // Burst 7 M5: same multi-fence resolution as Pass 1 (L2). Sonnet sometimes
+  // wraps coverage_notes prose in one fence and the JSON in another; pick the
+  // fence containing `{` rather than the first fence.
+  const fenceMatches = Array.from(body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi));
+  if (fenceMatches.length > 0) {
+    const jsonFence = fenceMatches.find((m) => m[1].includes('{'));
+    body = (jsonFence ?? fenceMatches[0])[1].trim();
+  }
 
   const braceStart = body.indexOf('{');
   const braceEnd = body.lastIndexOf('}');

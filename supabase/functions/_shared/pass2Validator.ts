@@ -150,14 +150,36 @@ export function validatePass2Output(
   });
 
   // ─── 1. Mutual exclusivity (L12) ─────────────────────────────────────────
-  const shortlistSet = new Set(fixed.shortlist);
-  const overlap = fixed.rejected_near_duplicates.filter((stem) => shortlistSet.has(stem));
+  // Burst 7 M3/M4: extend the rule to slot_assignments (winners) and
+  // phase3_recommendations, not just shortlist. The model occasionally lists
+  // a stem in rejected_near_duplicates AND emits it as a slot winner — Pass 3
+  // and the lock fn then see contradictory state (the group is "approved" via
+  // slot event AND has classification.is_near_duplicate_candidate=true). The
+  // lock fn's rejected-set computation excludes approved stems anyway, so the
+  // file move is correct — but the UI shows conflicting badges and the
+  // training extractor tags the row inconsistently. Fix here: build a
+  // "selected set" from shortlist + slot winners + phase3 files; remove any
+  // overlap from rejected_near_duplicates. slot_alternatives are NOT in the
+  // selected set because alternatives ARE often near-duplicates of the winner
+  // by design (that's why they're alternatives).
+  const slotWinnerStems: string[] = [];
+  for (const v of Object.values(fixed.slot_assignments)) {
+    if (Array.isArray(v)) slotWinnerStems.push(...v);
+    else if (typeof v === 'string') slotWinnerStems.push(v);
+  }
+  const phase3Stems = fixed.phase3_recommendations.map((r) => r.file);
+  const selectedSet = new Set<string>([
+    ...fixed.shortlist,
+    ...slotWinnerStems,
+    ...phase3Stems,
+  ]);
+  const overlap = fixed.rejected_near_duplicates.filter((stem) => selectedSet.has(stem));
   if (overlap.length > 0) {
     fixed.rejected_near_duplicates = fixed.rejected_near_duplicates.filter(
-      (stem) => !shortlistSet.has(stem),
+      (stem) => !selectedSet.has(stem),
     );
     warnings.push(
-      `mutual_exclusivity_fix: ${overlap.length} stem(s) appeared in both shortlist and rejected_near_duplicates — shortlist takes precedence (${overlap.slice(0, 5).join(', ')}${overlap.length > 5 ? '…' : ''})`,
+      `mutual_exclusivity_fix: ${overlap.length} stem(s) appeared in both selected (shortlist/slot_assignments/phase3) and rejected_near_duplicates — selection takes precedence (${overlap.slice(0, 5).join(', ')}${overlap.length > 5 ? '…' : ''})`,
     );
   }
 
