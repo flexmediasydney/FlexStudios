@@ -345,13 +345,27 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     scheduled_for: new Date(Date.now() + 5_000).toISOString(),
   }));
 
-  const { error: childInsErr } = await admin.from("drone_jobs").insert(childRows);
-  if (childInsErr) {
-    return errorResponse(
-      `failed to fan out per-shot render children: ${childInsErr.message}`,
-      500,
-      req,
-    );
+  // QC iter 6 Stream B: per-row insert + 23505 catch. mig 294b's
+  // idx_drone_jobs_unique_pending_render dedupes per (shoot_id, pipeline,
+  // payload->>shot_id). The select-then-filter above narrows the candidate
+  // set, but a race against another tick (cron+manual concurrent) can land
+  // a duplicate; bulk insert would 23505-abort the entire batch and lose
+  // the rest. Insert one-at-a-time and treat 23505 as debounced.
+  let debounced = 0;
+  for (const row of childRows) {
+    const { error: childInsErr } = await admin.from("drone_jobs").insert(row);
+    if (childInsErr) {
+      const code = (childInsErr as { code?: string }).code;
+      if (code === "23505") {
+        debounced++;
+        continue;
+      }
+      return errorResponse(
+        `failed to fan out per-shot render child: ${childInsErr.message}`,
+        500,
+        req,
+      );
+    }
   }
 
   return jsonResponse(
@@ -360,13 +374,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       shoot_id: shoot.id,
       eligible_shots: eligibleIds.length,
       already_rendered: existingCount,
-      fanned_out: shotsNeedingRender.length,
+      fanned_out: shotsNeedingRender.length - debounced,
+      debounced,
       parent_job_id: parentJobId,
       ai_recommended_count: recommendedIds.length,
       ai_recommended_ids: recommendedIds,
       message: parentJobId
-        ? `fanned out ${shotsNeedingRender.length} per-shot render children under parent ${parentJobId}`
-        : `fanned out ${shotsNeedingRender.length} per-shot render children (no parent linkage — parent_job_id not provided)`,
+        ? `fanned out ${shotsNeedingRender.length - debounced} per-shot render children under parent ${parentJobId} (${debounced} debounced)`
+        : `fanned out ${shotsNeedingRender.length - debounced} per-shot render children (no parent linkage — parent_job_id not provided; ${debounced} debounced)`,
     },
     200,
     req,
