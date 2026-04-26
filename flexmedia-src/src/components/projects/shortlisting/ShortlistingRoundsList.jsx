@@ -109,8 +109,14 @@ export default function ShortlistingRoundsList({
         </TableHeader>
         <TableBody>
           {rounds.map((r) => {
-            const canReRunPass2 =
-              r.status === "processing" || r.status === "proposed";
+            // Burst 18 LL1: Pass 2 has a hard status guard that throws unless
+            // round.status='processing' (see shortlisting-pass2 line ~214).
+            // Previous UI also showed the button for 'proposed' rounds, but
+            // the click would just error with "Pass 2 requires status=
+            // 'processing'". A proper re-run from 'proposed' requires
+            // reverting status + clearing pass3 events, which the API
+            // doesn't expose yet — so we hide the button for now.
+            const canReRunPass2 = r.status === "processing";
             return (
               <TableRow key={r.id}>
                 <TableCell className="font-medium">{r.round_number}</TableCell>
