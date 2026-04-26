@@ -1,7 +1,8 @@
 /**
- * DroneStageProgress — Wave 9 S2
+ * DroneStageProgress — Wave 9 S2 (W14 S1: 12-stage with boundary_review)
  * ─────────────────────────────────
- * Visual stage stepper with the 11 pipeline stages (architect Section A.1).
+ * Visual stage stepper with the 12 pipeline stages (architect Section A.1
+ * + W14 S1 boundary_review insert).
  *
  * Modes:
  *   compact={false} (default): horizontal chevron pills with stage names + duration/ETA below
@@ -16,13 +17,15 @@
  *   future (no row)        → muted hollow circle
  *
  * Below each pill: 11px gray text "X:XX" duration if complete, "ETA X:XX" if running.
- * Wraps to 2 rows below 768px.
+ * Wraps to 2 rows below 768px (the row uses flex-wrap so 12 vs 11 stages
+ * is purely a layout-flow concern; no fixed grid columns to bump).
  * Tooltip on hover: function_name (or stage label), job_id, scheduled_for, attempt_count,
  *                  error_message.
  *
- * RPC contract source of truth: supabase/migrations/301_drone_pipeline_state_rpc.sql
+ * RPC contract source of truth: supabase/migrations/329_get_drone_pipeline_state_add_boundary_review_stage.sql
  *   stage_key values match exactly: ingest, sfm, poi, cadastral, raw_render,
- *   operator_triage, editor_handoff, edited_render, edited_curate, final, delivered.
+ *   boundary_review, operator_triage, editor_handoff, edited_render,
+ *   edited_curate, final, delivered.
  *   eta is in seconds (eta_seconds_remaining), not ms.
  */
 
@@ -40,10 +43,13 @@ import {
   AlertTriangle,
   Circle,
   ChevronRight,
+  Map as MapIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Canonical 11-stage order — matches migration 301:282-375 exactly.
+// Canonical 12-stage order — matches migration 329 exactly. boundary_review
+// (idx 5) was inserted between cadastral and operator_triage in W14 S1 so
+// the operator can SEE the boundary save as the next blocking step.
 // Each shoot rolls through these; if a stage isn't applicable to a given
 // shoot it appears as 'future' and is grey.
 const DEFAULT_STAGE_ORDER = [
@@ -52,6 +58,7 @@ const DEFAULT_STAGE_ORDER = [
   { key: 'poi',             label: 'POIs',            function_name: 'drone-pois' },
   { key: 'cadastral',       label: 'Cadastral',       function_name: 'drone-cadastral' },
   { key: 'raw_render',      label: 'Raw render',      function_name: 'drone-raw-preview' },
+  { key: 'boundary_review', label: 'Boundary',        function_name: null },
   { key: 'operator_triage', label: 'Operator triage', function_name: null },
   { key: 'editor_handoff',  label: 'Editor handoff',  function_name: null },
   { key: 'edited_render',   label: 'Edited render',   function_name: 'drone-render-edited' },
@@ -59,6 +66,14 @@ const DEFAULT_STAGE_ORDER = [
   { key: 'final',           label: 'Final render',    function_name: 'drone-render' },
   { key: 'delivered',       label: 'Delivered',       function_name: null },
 ];
+
+// Stage-key → optional icon override for the pill body. Most stages use the
+// status-derived icon (check / spinner / lock / alert / circle), but
+// boundary_review benefits from a Map glyph so operators can recognise it
+// at a glance from across the swimlane.
+const STAGE_ICON_OVERRIDE = {
+  boundary_review: MapIcon,
+};
 
 // ── helpers ────────────────────────────────────────────────────────────────
 function fmtClock(ms) {
@@ -162,6 +177,12 @@ export default function DroneStageProgress({ pipelineState, compact = false }) {
           const styles = statusStyles(stage.status || 'future');
           const isLast = idx === stages.length - 1;
           const displayName = stage.function_name || stage.label;
+          // W14 S1: stage-specific icon override (e.g. Map for
+          // boundary_review). Falls back to the status-derived glyph.
+          const OverrideIcon = STAGE_ICON_OVERRIDE[stage.key];
+          const renderedIcon = OverrideIcon
+            ? <OverrideIcon className="h-3 w-3" aria-hidden="true" />
+            : styles.icon;
 
           // Sub-text: duration if complete, ETA if running, blank otherwise.
           // RPC: completed_at + started_at gives duration; eta_seconds_remaining
@@ -212,7 +233,7 @@ export default function DroneStageProgress({ pipelineState, compact = false }) {
                   compact && 'px-2 py-0.5 text-[11px]',
                 )}
               >
-                {styles.icon}
+                {renderedIcon}
                 {!compact && <span>{stage.label}</span>}
                 {compact && <span className="sr-only">{stage.label}</span>}
               </span>
