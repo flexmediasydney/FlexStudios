@@ -108,13 +108,25 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
   }, [events]);
 
   // Filter slots to this round's package (or treat empty as universal).
+  // Burst 19 NN1: substring fallback for package matching (audit defect #53,
+  // mirrors Pass 2 / Pass 3 / benchmark-runner W1). Without this, a round
+  // with package_type='Gold Package' shows zero slots when seed defs use
+  // 'Gold' — coverage map renders the "no slot definitions configured"
+  // empty-state misleadingly.
   const pkg = round?.package_type;
+  const pkgMatches = (defPkg, roundPkg) => {
+    const a = String(defPkg || "").toLowerCase().trim();
+    const b = String(roundPkg || "").toLowerCase().trim();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    return a.includes(b) || b.includes(a);
+  };
   const eligibleSlots = useMemo(() => {
     return slots.filter((s) => {
       const types = s.package_types || [];
       if (types.length === 0) return true;
       if (!pkg) return true;
-      return types.includes(pkg);
+      return types.some((p) => pkgMatches(p, pkg));
     });
   }, [slots, pkg]);
 

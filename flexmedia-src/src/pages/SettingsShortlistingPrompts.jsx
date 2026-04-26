@@ -351,7 +351,7 @@ export default function SettingsShortlistingPrompts() {
   });
 
   return (
-    <PermissionGuard requireRole={["master_admin"]}>
+    <PermissionGuard require={["master_admin"]}>
       <div className="p-6 space-y-6 max-w-4xl mx-auto">
         <div>
           <h1 className="text-2xl font-bold">Prompt Editor</h1>

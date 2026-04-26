@@ -290,7 +290,7 @@ export default function SettingsShortlistingTraining() {
   }, [examplesQuery.data]);
 
   return (
-    <PermissionGuard requireRole={["master_admin"]}>
+    <PermissionGuard require={["master_admin"]}>
       <div className="p-6 space-y-6 max-w-7xl mx-auto">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>

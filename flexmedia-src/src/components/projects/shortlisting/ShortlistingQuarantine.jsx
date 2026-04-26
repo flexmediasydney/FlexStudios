@@ -28,18 +28,38 @@ import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
+// Burst 19 OO1: align with the actual quarantine.reason values written by
+// Pass 0 (out_of_scope is the only one that flows here today; motion_blur /
+// severe_underexposure / corrupt_frame go to composition_hard_rejected
+// events instead). The previous fictional sub-reasons (agent_headshot etc)
+// were never populated, so editors saw the raw "out_of_scope" string.
 const REASON_LABEL = {
+  out_of_scope: "Out of scope",
   agent_headshot: "Agent headshot",
   test_shot: "Test shot",
   bts: "Behind-the-scenes",
+  motion_blur: "Motion blur",
+  accidental_trigger: "Accidental trigger",
+  severe_underexposure: "Severe underexposure",
+  corrupt_frame: "Corrupt frame",
   other: "Other",
 };
 const REASON_TONE = {
+  out_of_scope:
+    "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
   agent_headshot:
     "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300",
   test_shot:
     "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
   bts: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  motion_blur:
+    "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  accidental_trigger:
+    "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  severe_underexposure:
+    "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  corrupt_frame:
+    "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
   other: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
 };
 
@@ -106,9 +126,13 @@ export default function ShortlistingQuarantine({ roundId }) {
       await api.entities.ShortlistingQuarantine.delete(restoreDialog.id);
       // Trigger pass1 for the round — it'll pick up just this group since
       // already-classified compositions are excluded by the RPC.
+      // Burst 19 OO2: api.functions.invoke wraps params with { body: ... }
+      // internally; the previous { body: { round_id } } double-wrapped and
+      // Pass 1 saw req.json() = { body: { round_id: ... } } with no top-
+      // level round_id field. Restore-to-round was completely broken.
       try {
         await api.functions.invoke("shortlisting-pass1", {
-          body: { round_id: roundId },
+          round_id: roundId,
         });
         toast.success("Restored and re-classification triggered.");
       } catch (passErr) {
