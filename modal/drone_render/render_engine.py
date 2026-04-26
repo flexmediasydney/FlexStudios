@@ -362,6 +362,44 @@ def _render_template(template: str, scene: dict) -> str:
     return out
 
 
+def _fmt_distance(d) -> Optional[str]:
+    """Format a distance (metres) for the POI secondary label.
+
+    Returns ``None`` when the value is unrenderable so the caller skips the
+    secondary line entirely. (QC2-2 #8.)
+
+    Old `lambda d: f'{d/1000:.1f}km' if d > 999 else f'{d:.0f}m'`:
+      - fmt(1e9) → '1000000.0km' blew the pill width clamp
+      - fmt(0)   → '0m' rendered a meaningless "0 m" label for "unset"
+      - fmt(NaN) → 'nanm'
+      - fmt(-100) → '-100m' (negative distance is meaningless)
+      - 999 → "999 m", 1000 → "1.0 km" (right of cliff is fine, but use
+        >=1000 to make the boundary explicit)
+
+    New behaviour:
+      - None / non-numeric / NaN / inf → None
+      - <= 0 → None ("unset" / nonsensical)
+      - > 9999 → ">10km" (caps the label width regardless of input)
+      - >= 1000 → "X.Ykm"
+      - else → "Nm"
+    """
+    if d is None:
+        return None
+    try:
+        f = float(d)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    if f <= 0:
+        return None
+    if f > 9999:
+        return ">10km"
+    if f >= 1000:
+        return f"{f / 1000:.1f}km"
+    return f"{f:.0f}m"
+
+
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
     """Geodesic distance in metres between two WGS84 points."""
     R = 6371008.8
@@ -1837,13 +1875,10 @@ def render_canvas(image_bytes: bytes, theme_config: dict, scene: dict) -> np.nda
                 if show_dist and "distance_m" in poi:
                     # Distance arrives as a string surprisingly often (Google
                     # Places returns it stringly-typed in some response shapes).
-                    # Coerce + fall back to skipping the secondary label.
-                    try:
-                        d = float(poi.get("distance_m") or 0)
-                        secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
-                    except (TypeError, ValueError) as e:
-                        print(f"[poi] {poi.get('name', '?')}: bad distance_m {poi.get('distance_m')!r} ({e}); rendering without secondary")
-                        secondary = None
+                    # _fmt_distance returns None for NaN / 0 / negative /
+                    # non-numeric — caller skips the secondary line entirely.
+                    # (QC2-2 #8.)
+                    secondary = _fmt_distance(poi.get("distance_m"))
                 name = poi.get("name")
                 if not name or not isinstance(name, str):
                     print(f"[poi] skip: missing/invalid name (poi={poi!r})")
@@ -1917,13 +1952,10 @@ def render_canvas(image_bytes: bytes, theme_config: dict, scene: dict) -> np.nda
                     # content explicitly carries distance_m.
                     secondary = None
                     if show_dist:
-                        try:
-                            d_raw = content.get("distance_m")
-                            if d_raw is not None:
-                                d = float(d_raw)
-                                secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
-                        except (TypeError, ValueError):
-                            secondary = None
+                        # _fmt_distance returns None for NaN / 0 / negative /
+                        # non-numeric — caller skips the secondary line.
+                        # (QC2-2 #8.)
+                        secondary = _fmt_distance(content.get("distance_m"))
                     canvas = _draw_poi_label(
                         canvas, x, y, label, merged_style, anchor_style, secondary, w, h,
                     )
