@@ -116,7 +116,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Load the render ────────────────────────────────────────────────────────
   const { data: render, error: fetchErr } = await admin
     .from('drone_renders')
-    .select('id, shot_id, column_state, kind, dropbox_path, output_variant')
+    .select('id, shot_id, column_state, kind, dropbox_path, output_variant, pipeline')
     .eq('id', body.render_id)
     .maybeSingle();
 
@@ -125,6 +125,24 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`Failed to load render: ${fetchErr.message}`, 500, req);
   }
   if (!render) return errorResponse('render_id not found', 404, req);
+
+  // ── Pipeline guard (W6 hotfix) ─────────────────────────────────────────────
+  // mig 282 split column_state into pipeline-aware vocabularies:
+  //   raw    → pool, accepted, rejected
+  //   edited → pool, adjustments, final, rejected
+  // ALLOWED_TRANSITIONS below speaks the EDITED vocabulary only. Allowing a
+  // raw-pipeline render through this function ends in a 23514 CHECK violation
+  // when target_state is 'adjustments'/'final' (not legal on the raw side) —
+  // surfaced as an opaque 500 to the operator. Hard-reject up-front with a
+  // clear directive to use drone-shot-lifecycle for raw-side moves. (#W6-T1)
+  if ((render as { pipeline?: string }).pipeline === 'raw') {
+    return errorResponse(
+      "drone-render-approve handles edited-pipeline transitions only. " +
+      "Raw-side moves (pool→accepted/rejected) go through drone-shot-lifecycle.",
+      400,
+      req,
+    );
+  }
 
   const fromState = render.column_state as string;
   let toState = body.target_state as TargetState;
