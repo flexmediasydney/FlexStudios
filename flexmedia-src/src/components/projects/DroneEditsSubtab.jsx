@@ -44,13 +44,15 @@ import {
   TooltipProvider,
 } from "@/components/ui/tooltip";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -610,28 +612,30 @@ export default function DroneEditsSubtab({ shoot, projectId }) {
         />
       )}
 
-      <Dialog
+      {/* Wave 14 S4: AlertDialog parity (matches DroneRendersSubtab + DronePipelineBanner).
+          Shadcn AlertDialog is the right primitive for irreversible
+          confirmations — keyboard focus is trapped, ESC + outside-click route
+          through onOpenChange, and the Cancel/Action buttons are
+          first-class. Replaces the prior plain Dialog wrap. */}
+      <AlertDialog
         open={Boolean(confirmReject)}
-        onOpenChange={(o) => !o && setConfirmReject(null)}
+        onOpenChange={(o) => { if (!o) setConfirmReject(null); }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Reject this edited render?</DialogTitle>
-            <DialogDescription>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reject this edited render?</AlertDialogTitle>
+            <AlertDialogDescription>
               The render moves to the Rejected list. You can restore it back
               to its previous column from there if it was rejected by mistake.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setConfirmReject(null)}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
               disabled={Boolean(pendingAction[confirmReject?.render?.id])}
             >
               Cancel
-            </Button>
-            <Button
-              variant="destructive"
+            </AlertDialogCancel>
+            <AlertDialogAction
               onClick={async () => {
                 const id = confirmReject?.render?.id;
                 if (!id) return;
@@ -646,10 +650,10 @@ export default function DroneEditsSubtab({ shoot, projectId }) {
                 <X className="h-4 w-4 mr-2" />
               )}
               Reject
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </TooltipProvider>
   );
 }
