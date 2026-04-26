@@ -1202,9 +1202,27 @@ def _draw_dashed_polygon(canvas_bgr: np.ndarray, pts: np.ndarray, color, width: 
 
 
 def _draw_side_measurements(
-    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int
+    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int,
+    side_overrides: dict | None = None,
 ) -> np.ndarray:
-    """Label each polygon edge with its geodesic length."""
+    """Label each polygon edge with its geodesic length.
+
+    ``side_overrides`` (Wave 5 P2 S5): operator overrides from the new
+    Boundary Editor — keyed by stringified edge index ("0", "1", ...) into
+    the polygon as the EDITOR sees it. Each entry may carry:
+      - ``hide: bool``           — if true, skip the label for that edge
+      - ``label_offset_px: [dx, dy]`` — additive nudge to the (tx, ty)
+        anchor point (after the outward-from-centroid offset is applied)
+
+    Caveat: when ``_project_polygon`` Sutherland-Hodgman clips a vertex behind
+    the camera, intersection vertices are inserted, so polygon_px (length N)
+    can be longer than the operator's saved polygon (length M). In that case
+    the override indexes don't align with the rendered edges. We document
+    the misalignment by logging once per render — the editor's polygon view
+    must reflect the SH-clipped polygon for overrides to track precisely.
+    For typical operator usage (polygon fully in frame, M == N), the indexes
+    line up directly.
+    """
     if not cfg.get("enabled", False):
         return canvas_bgr
     unit = cfg.get("unit", "metres")
@@ -1222,7 +1240,12 @@ def _draw_side_measurements(
 
     overlay, draw = _bgr_to_rgba_overlay(w, h)
     n = len(polygon_px)
+    overrides_map = side_overrides if isinstance(side_overrides, dict) else {}
     for i in range(n):
+        # Per-edge operator overrides — keyed by stringified edge index.
+        ov = overrides_map.get(str(i)) if overrides_map else None
+        if isinstance(ov, dict) and ov.get("hide") is True:
+            continue
         p1 = polygon_px[i]
         p2 = polygon_px[(i + 1) % n]
         ll1 = polygon_latlon[i]
@@ -1245,6 +1268,15 @@ def _draw_side_measurements(
         offset = 28 if position == "outside" else -28
         tx = int(mx + ox * offset)
         ty = int(my + oy * offset)
+        # Operator nudge — add [dx, dy] to the centred anchor point.
+        if isinstance(ov, dict):
+            nudge = ov.get("label_offset_px")
+            if isinstance(nudge, (list, tuple)) and len(nudge) == 2:
+                try:
+                    tx += int(nudge[0])
+                    ty += int(nudge[1])
+                except (TypeError, ValueError):
+                    pass  # malformed payload — ignore the nudge silently
 
         bbox = font.getbbox(label)
         tw_px = bbox[2] - bbox[0]
@@ -1272,9 +1304,25 @@ def _draw_side_measurements(
 
 
 def _draw_sqm_total(
-    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int
+    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int,
+    centroid_offset_px: list | tuple | None = None,
+    value_override: float | int | None = None,
 ) -> np.ndarray:
-    """Overlay total area (sqm) — uses geodesic shoelace approx via local ENU projection."""
+    """Overlay total area (sqm) — uses geodesic shoelace approx via local ENU projection.
+
+    Wave 5 P2 S5 — operator overrides from the new Boundary Editor:
+      - ``centroid_offset_px`` ([dx, dy]): when ``cfg.position == 'centroid'``
+        this is added to the computed centroid anchor (does not affect any
+        of the named corner positions). Other positions ignore the override
+        because the operator can simply pick a different position in the
+        Inspector if they want a corner anchor.
+      - ``value_override`` (numeric): replaces the geodesic-shoelace computed
+        area. The renderer still substitutes the raw integer into the
+        ``{sqm}`` template, so themes that ship "{sqm} sqm approx" produce
+        e.g. "999 sqm approx". To set the entire string the editor should
+        set this AND set the theme's text_template to "{sqm}" — but the
+        v1 editor only exposes the numeric override.
+    """
     if not cfg.get("enabled", False):
         return canvas_bgr
 
@@ -1293,6 +1341,12 @@ def _draw_sqm_total(
         x2, y2 = enu[(i + 1) % n]
         s += x1 * y2 - x2 * y1
     area_sqm = abs(s) / 2.0
+    # Operator override wins over the computed area.
+    if value_override is not None:
+        try:
+            area_sqm = float(value_override)
+        except (TypeError, ValueError):
+            pass  # malformed → fall back to computed area
     sqm_int = int(round(area_sqm))
 
     template = cfg.get("text_template", "{sqm} sqm approx")
@@ -1321,6 +1375,15 @@ def _draw_sqm_total(
     else:  # bottom_right
         cx = int(polygon_px[:, 0].max()) - 60
         cy = int(polygon_px[:, 1].max()) - 60
+
+    # Operator centroid offset — only meaningful for the centroid anchor;
+    # named-corner positions are explicit operator choices, no nudge needed.
+    if pos == "centroid" and isinstance(centroid_offset_px, (list, tuple)) and len(centroid_offset_px) == 2:
+        try:
+            cx += int(centroid_offset_px[0])
+            cy += int(centroid_offset_px[1])
+        except (TypeError, ValueError):
+            pass  # malformed payload — keep centroid as-is
 
     bbox = font.getbbox(text)
     tw_px = bbox[2] - bbox[0]
@@ -1363,14 +1426,39 @@ def _draw_sqm_total(
 
 
 def _draw_address_overlay(
-    canvas_bgr: np.ndarray, polygon_px: np.ndarray, cfg: dict, scene: dict, w: int, h: int
+    canvas_bgr: np.ndarray, polygon_px: np.ndarray, cfg: dict, scene: dict, w: int, h: int,
+    position_latlng_override: list | tuple | None = None,
+    text_override: str | None = None,
 ) -> np.ndarray:
-    """Overlay an address line near/inside the boundary."""
+    """Overlay an address line near/inside the boundary.
+
+    Wave 5 P2 S5 — operator overrides from the new Boundary Editor:
+      - ``position_latlng_override`` ([lat, lng]): when set, the anchor is
+        projected via ``_gps_to_px`` instead of being derived from the
+        polygon centroid + cfg.position. Lets the operator drag the label
+        to any spot inside the property even if the centroid sits on a
+        roof/driveway.
+      - ``text_override`` (str): replaces the templated text from
+        ``_render_template(cfg.text_template, scene)``. The operator types
+        the literal label (e.g. "Lot 27 — 8/2 Everton Rd") and we render
+        verbatim, no template substitution. Empty/whitespace strings are
+        treated as "no override" so the auto template still wins.
+
+    The override is silently ignored when projection lands off-frame (px
+    is None — happens if the operator drags the label well outside the
+    visible image envelope on a tilted shot). Falls back to the centroid
+    placement in that case so the address is never lost.
+    """
     if not cfg.get("enabled", False):
         return canvas_bgr
 
-    template = cfg.get("text_template", "{address}")
-    text = _render_template(template, scene)
+    # Text resolution: operator override > templated render.
+    override_str = text_override.strip() if isinstance(text_override, str) else ""
+    if override_str:
+        text = override_str
+    else:
+        template = cfg.get("text_template", "{address}")
+        text = _render_template(template, scene)
 
     if not text.strip():
         return canvas_bgr
@@ -1378,13 +1466,35 @@ def _draw_address_overlay(
     fs = int(cfg.get("font_size_px", 36))
     font = _get_font(_resolve_font_family(cfg.get("font_family"), bold=True), fs)
     text_rgb = _hex_to_rgb(cfg.get("text_color", "#FFFFFF")) or (255, 255, 255)
-    pos = cfg.get("position", "centroid")
-    cx = int(polygon_px[:, 0].mean())
-    cy = int(polygon_px[:, 1].mean())
-    if pos == "below_sqm":
-        cy = int(polygon_px[:, 1].mean()) + 80
-    elif pos == "above_sqm":
-        cy = int(polygon_px[:, 1].mean()) - 80
+
+    # Anchor resolution: operator lat/lng override > cfg.position.
+    cx: int | None = None
+    cy: int | None = None
+    if isinstance(position_latlng_override, (list, tuple)) and len(position_latlng_override) == 2:
+        try:
+            ov_lat = float(position_latlng_override[0])
+            ov_lng = float(position_latlng_override[1])
+            px = _gps_to_px(
+                ov_lat, ov_lng,
+                scene["lat"], scene["lon"], scene["alt"],
+                scene["yaw"], scene["pitch"], w, h,
+            )
+            if px is not None:
+                cx = int(px[0])
+                cy = int(px[1])
+        except (TypeError, ValueError, KeyError):
+            cx = None  # fall through to the centroid path below
+
+    if cx is None or cy is None:
+        # No override or override projection failed — use the legacy
+        # centroid-based positioning.
+        pos = cfg.get("position", "centroid")
+        cx = int(polygon_px[:, 0].mean())
+        cy = int(polygon_px[:, 1].mean())
+        if pos == "below_sqm":
+            cy = int(polygon_px[:, 1].mean()) + 80
+        elif pos == "above_sqm":
+            cy = int(polygon_px[:, 1].mean()) - 80
 
     bbox = font.getbbox(text)
     tw_px = bbox[2] - bbox[0]
@@ -1409,7 +1519,16 @@ def _draw_address_overlay(
 def _render_boundary(
     canvas_bgr: np.ndarray, theme: dict, scene: dict, w: int, h: int, intrinsics=None
 ) -> np.ndarray:
-    """Apply the boundary pass per theme.boundary block + scene.polygon_latlon."""
+    """Apply the boundary pass per theme.boundary block + scene.polygon_latlon.
+
+    Wave 5 P2 S5 — when ``scene.boundary_overrides`` is set, the operator's
+    Boundary Editor tweaks (per-edge hide / nudge, sqm centroid offset and
+    value override, address overlay position lat/lng + text override) are
+    threaded through to the per-feature draw functions. Master toggles
+    (side_measurements_enabled, sqm_total_enabled, address_overlay_enabled)
+    are handled here rather than via theme cfg overlay so the operator can
+    suppress an entire feature without editing the theme.
+    """
     boundary_cfg = theme.get("boundary", {})
     if not boundary_cfg.get("enabled", False):
         return canvas_bgr
@@ -1417,6 +1536,12 @@ def _render_boundary(
     polygon_latlon = scene.get("polygon_latlon")
     if not polygon_latlon or len(polygon_latlon) < 3:
         return canvas_bgr  # nothing to draw
+
+    # Pull the operator's overrides bundle. Empty dict → no overrides; same
+    # behaviour as v1 (theme-only) renders.
+    bo = scene.get("boundary_overrides") or {}
+    if not isinstance(bo, dict):
+        bo = {}
 
     # _project_polygon returns BOTH px array and parallel-clipped lat/lon —
     # SH clipping inserts intersection vertices, so the original
@@ -1439,24 +1564,34 @@ def _render_boundary(
     if line_cfg:
         canvas_bgr = _draw_boundary_line(canvas_bgr, polygon_px, line_cfg)
 
-    # 3. Side measurements
+    # 3. Side measurements (master toggle override + per-edge dict)
     sm_cfg = boundary_cfg.get("side_measurements", {})
-    if sm_cfg:
+    side_master = bo.get("side_measurements_enabled", True)
+    if sm_cfg and side_master is not False:
         canvas_bgr = _draw_side_measurements(
-            canvas_bgr, polygon_px, polygon_latlon_clipped, sm_cfg, w, h
+            canvas_bgr, polygon_px, polygon_latlon_clipped, sm_cfg, w, h,
+            side_overrides=bo.get("side_measurements_overrides"),
         )
 
-    # 4. SQM total
+    # 4. SQM total (master toggle + centroid offset + value override)
     sqm_cfg = boundary_cfg.get("sqm_total", {})
-    if sqm_cfg:
+    sqm_master = bo.get("sqm_total_enabled", True)
+    if sqm_cfg and sqm_master is not False:
         canvas_bgr = _draw_sqm_total(
-            canvas_bgr, polygon_px, polygon_latlon_clipped, sqm_cfg, w, h
+            canvas_bgr, polygon_px, polygon_latlon_clipped, sqm_cfg, w, h,
+            centroid_offset_px=bo.get("sqm_total_position_offset_px"),
+            value_override=bo.get("sqm_total_value_override"),
         )
 
-    # 5. Address overlay
+    # 5. Address overlay (master toggle + lat/lng anchor + text override)
     addr_cfg = boundary_cfg.get("address_overlay", {})
-    if addr_cfg:
-        canvas_bgr = _draw_address_overlay(canvas_bgr, polygon_px, addr_cfg, scene, w, h)
+    addr_master = bo.get("address_overlay_enabled", True)
+    if addr_cfg and addr_master is not False:
+        canvas_bgr = _draw_address_overlay(
+            canvas_bgr, polygon_px, addr_cfg, scene, w, h,
+            position_latlng_override=bo.get("address_overlay_position_latlng"),
+            text_override=bo.get("address_overlay_text_override"),
+        )
 
     return canvas_bgr
 
