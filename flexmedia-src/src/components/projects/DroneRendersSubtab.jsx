@@ -81,6 +81,8 @@ import { cn } from "@/lib/utils";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import DroneLightbox from "@/components/drone/DroneLightbox";
+import DroneSwimlaneLockOverlay from "@/components/drone/DroneSwimlaneLockOverlay";
+import DroneStageProgress from "@/components/drone/DroneStageProgress";
 
 // W1-ε iPad collapse: at <1024px the 3-column grid squeezes cards uncomfortably.
 // Below this width we collapse to a single column with a stage selector.
@@ -128,7 +130,12 @@ const SHOT_ROLE_LABEL = {
 // was removed (now edited-only on DroneEditsSubtab) and the Re-render Edge
 // Function takes shoot_id only. Prefix with _ so the lint rule lets it pass
 // while keeping the ProjectDronesTab call signature stable.
-export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
+//
+// Wave 9 S3: pipelineState (from ProjectDronesTab → useDronePipelineState)
+// drives the swimlane lock + the in-context compact stage strip. When the
+// lock is active, all triage cards become non-interactive behind the
+// overlay (architect Section C.4).
+export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipelineState = null }) {
   const queryClient = useQueryClient();
   const shootId = shoot?.id;
   const { isManagerOrAbove } = usePermissions();
@@ -663,67 +670,83 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
           </div>
         )}
 
-        {/* Pipeline columns
-            ≥1024px: 3-column grid.
-            <1024px (W1-ε iPad collapse): single column with stage selector. */}
-        {(() => {
-          const renderColumn = (col) => (
-            <PipelineColumn
-              key={col.key}
-              column={col}
-              shots={grouped[col.key] || []}
-              previewPathByShotId={previewPathByShotId}
-              canEdit={isManagerOrAbove}
-              pendingShotAction={pendingShotAction}
-              onMutateShot={mutateShotLifecycle}
-              onPreview={({ columnKey, itemId }) => {
-                const items = lightboxItemsByColumn[columnKey] || [];
-                const idx = items.findIndex((it) => it.id === itemId);
-                if (idx >= 0) setLightbox({ columnKey, index: idx, itemId });
-              }}
-              isCompact={isCompact}
-            />
-          );
+        {/* Wave 9 S3: in-context compact stage strip. Sits above the
+            columns so the operator sees pipeline progress without leaving
+            the swimlane. Renders nothing when pipelineState is null. */}
+        {pipelineState && (
+          <DroneStageProgress pipelineState={pipelineState} compact />
+        )}
 
-          if (isCompact) {
-            const activeCol =
-              COLUMNS.find((c) => c.key === activeColumnKey) || COLUMNS[0];
-            return (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold flex-shrink-0">
-                    Stage
-                  </span>
-                  <Select
-                    value={activeColumnKey}
-                    onValueChange={setActiveColumnKey}
-                  >
-                    <SelectTrigger className="h-8 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {COLUMNS.map((c) => {
-                        const items = grouped[c.key] || [];
-                        return (
-                          <SelectItem key={c.key} value={c.key}>
-                            {c.label} ({items.length})
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
+        {/* Wave 9 S3: swimlane lock overlay (architect Section C.4).
+            Wraps the entire 3-column triage UI. When the pipeline is mid-
+            flight (operator_actions_unlocked === false) the overlay
+            disables clicks on Accept/Reject/Send back/Restore cards and
+            explains the gate. Header buttons (Lock shortlist / Re-render
+            stale / Show rejected) remain outside the overlay since they
+            are pre-lock or post-lock affordances. */}
+        <DroneSwimlaneLockOverlay pipelineState={pipelineState}>
+          {/* Pipeline columns
+              ≥1024px: 3-column grid.
+              <1024px (W1-ε iPad collapse): single column with stage selector. */}
+          {(() => {
+            const renderColumn = (col) => (
+              <PipelineColumn
+                key={col.key}
+                column={col}
+                shots={grouped[col.key] || []}
+                previewPathByShotId={previewPathByShotId}
+                canEdit={isManagerOrAbove}
+                pendingShotAction={pendingShotAction}
+                onMutateShot={mutateShotLifecycle}
+                onPreview={({ columnKey, itemId }) => {
+                  const items = lightboxItemsByColumn[columnKey] || [];
+                  const idx = items.findIndex((it) => it.id === itemId);
+                  if (idx >= 0) setLightbox({ columnKey, index: idx, itemId });
+                }}
+                isCompact={isCompact}
+              />
+            );
+
+            if (isCompact) {
+              const activeCol =
+                COLUMNS.find((c) => c.key === activeColumnKey) || COLUMNS[0];
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold flex-shrink-0">
+                      Stage
+                    </span>
+                    <Select
+                      value={activeColumnKey}
+                      onValueChange={setActiveColumnKey}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {COLUMNS.map((c) => {
+                          const items = grouped[c.key] || [];
+                          return (
+                            <SelectItem key={c.key} value={c.key}>
+                              {c.label} ({items.length})
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {renderColumn(activeCol)}
                 </div>
-                {renderColumn(activeCol)}
+              );
+            }
+
+            return (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {COLUMNS.map(renderColumn)}
               </div>
             );
-          }
-
-          return (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {COLUMNS.map(renderColumn)}
-            </div>
-          );
-        })()}
+          })()}
+        </DroneSwimlaneLockOverlay>
       </div>
 
       {/* Lightbox */}
