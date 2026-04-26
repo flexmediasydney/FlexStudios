@@ -287,10 +287,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .filter((r) => (r.output_variant ?? null) === targetVariant)
       .map((r) => r.id);
     if (sameVariantIds.length > 0) {
-      await admin
+      const { error: supErr } = await admin
         .from('drone_renders')
         .update({ column_state: 'rejected' })
         .in('id', sameVariantIds);
+      if (supErr) {
+        console.warn(`[${GENERATOR}] auto-supersede of prior occupant(s) failed: ${supErr.message}`);
+      }
     }
   }
 
