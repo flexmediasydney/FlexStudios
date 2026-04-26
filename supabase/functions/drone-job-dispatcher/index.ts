@@ -99,6 +99,23 @@ const DISPATCHER_LOCK_KEY = stableHashBigInt("drone-job-dispatcher");
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
 
+// W10-S2: Modal-resource-limit backoff. When callEdgeFunction detects a
+// WORKER_RESOURCE_LIMIT or 5xx Modal error, the next retry should wait
+// longer (5min / 30min / 2hr) instead of the default 1min / 5min / 30min
+// so the Modal worker pool has time to scale back / shed load. Paired
+// with payload.next_attempt_smaller_batch=true so the smaller working
+// set lands on a less-contended worker.
+const MODAL_RESOURCE_BACKOFF_SECONDS = [300, 1800, 7200];
+
+// W10-S2: regex for Modal-side 5xx detection. The 5xx-from-Modal pattern
+// arrives as a synthesised string in the dispatched function's response
+// body when the inner Modal call to render-worker returns 5xx. We match
+// the literal substring drone-render uses ("Modal returned 5\d\d") so
+// the classifier picks up resource-limit-style failures even when Modal
+// surfaces them as a plain 5xx rather than the explicit
+// WORKER_RESOURCE_LIMIT sentinel.
+const MODAL_5XX_REGEX = /Modal returned 5\d\d/;
+
 type DroneJob = {
   id: string;
   // claim_drone_jobs() returns project_id directly as of migration 248 so the
@@ -470,13 +487,22 @@ async function runDispatcherTick(
           }
         }
       } else {
-        await markFailed(admin, job, ok.error || "unknown");
+        // W10-S2: thread the modal_resource_limit flag through to markFailed
+        // so it can pick the longer backoff curve + flip next_attempt_smaller_batch
+        // on the retry payload.
+        await markFailed(admin, job, ok.error || "unknown", {
+          modalResourceLimit: ok.modal_resource_limit === true,
+        });
         failed++;
         results.push({ id: job.id, kind: job.kind, ok: false, error: ok.error });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await markFailed(admin, job, msg);
+      // Throw-path failures (network blow-up etc) — also classify in case
+      // the error string contains the Modal sentinel.
+      const isResLimit =
+        msg.includes("WORKER_RESOURCE_LIMIT") || MODAL_5XX_REGEX.test(msg);
+      await markFailed(admin, job, msg, { modalResourceLimit: isResLimit });
       failed++;
       results.push({ id: job.id, kind: job.kind, ok: false, error: msg });
     }
@@ -574,6 +600,14 @@ type DispatchResult = {
   deferred?: boolean;
   /** Backoff hint in seconds when deferred=true (default DEFER_BACKOFF_SEC). */
   defer_backoff_sec?: number;
+  /**
+   * W10-S2: set true when callEdgeFunction detected a Modal resource-limit
+   * error (WORKER_RESOURCE_LIMIT substring OR matches MODAL_5XX_REGEX).
+   * markFailed reads this flag and (a) writes payload.next_attempt_smaller_batch=true
+   * so drone-render lowers PER_INVOCATION_CAP on the next tick, and (b) uses
+   * the longer MODAL_RESOURCE_BACKOFF_SECONDS curve.
+   */
+  modal_resource_limit?: boolean;
 };
 
 // Default backoff window when a job is deferred (e.g. waiting on editor
@@ -685,8 +719,12 @@ async function dispatchOne(
       // non-SfM shot through the engine (POI + boundary overlay) so the
       // operator can SEE each candidate before locking the shortlist. Also
       // runs the smart-shortlist algorithm to flag is_ai_recommended.
+      // W10-S2: pass parent_job_id=job.id so the per-shot child render
+      // jobs drone-raw-preview fans out are linked back to THIS row via
+      // drone_jobs.parent_job_id (mig 302 trigger refreshes children_summary).
       return await callEdgeFunction("drone-raw-preview", {
         shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
+        parent_job_id: job.id,
       }, deadlineSignal);
     case "cadastral_fetch":
       // QC8 D-11: cadastral cache was cold for everyone because no kind=
@@ -903,7 +941,16 @@ async function callEdgeFunction(
     const rawText = await resp.text().catch(() => "");
 
     if (!resp.ok) {
-      return { ok: false, error: `${fnName} returned ${resp.status}: ${rawText.slice(0, 300)}` };
+      const errMsg = `${fnName} returned ${resp.status}: ${rawText.slice(0, 300)}`;
+      // W10-S2: Modal-error classifier. Detect resource-limit-style failures
+      // so markFailed can use the longer backoff curve + flip the smaller-batch
+      // flag on the retry payload. WORKER_RESOURCE_LIMIT is Modal's explicit
+      // sentinel; the regex picks up the more general 5xx-from-Modal pattern
+      // (drone-render surfaces this as "Modal returned 5\d\d" in error
+      // strings via callModalRender).
+      const isResourceLimit =
+        errMsg.includes("WORKER_RESOURCE_LIMIT") || MODAL_5XX_REGEX.test(errMsg);
+      return { ok: false, error: errMsg, modal_resource_limit: isResourceLimit };
     }
 
     // drone-render and drone-ingest both expose shots_total / shots_rendered
@@ -971,17 +1018,28 @@ async function callEdgeFunction(
           ? (bodyJson.results as Array<{ ok: boolean; error?: string }>)
               .find((r) => r && r.ok === false)?.error
           : undefined;
+        const errStr = `${fnName}: 0/${bodyJson.shots_total} shots rendered. ${
+          firstErr ? `First error: ${String(firstErr).slice(0, 200)}` : ""
+        }`.trim();
+        // W10-S2: classifier also runs on the body-JSON 0/N error path,
+        // where Modal-side failures arrive inside a per-shot result.error
+        // rather than as a transport-level non-OK response.
+        const isResourceLimit =
+          errStr.includes("WORKER_RESOURCE_LIMIT") || MODAL_5XX_REGEX.test(errStr);
         return {
           ok: false,
-          error: `${fnName}: 0/${bodyJson.shots_total} shots rendered. ${
-            firstErr ? `First error: ${String(firstErr).slice(0, 200)}` : ""
-          }`.trim(),
+          error: errStr,
+          modal_resource_limit: isResourceLimit,
         };
       }
       if (bodyJson.success === false) {
+        const errStr = `${fnName}: success=false, error=${bodyJson.error || "unknown"}`;
+        const isResourceLimit =
+          errStr.includes("WORKER_RESOURCE_LIMIT") || MODAL_5XX_REGEX.test(errStr);
         return {
           ok: false,
-          error: `${fnName}: success=false, error=${bodyJson.error || "unknown"}`,
+          error: errStr,
+          modal_resource_limit: isResourceLimit,
         };
       }
     }
@@ -996,12 +1054,22 @@ async function markFailed(
   admin: ReturnType<typeof getAdminClient>,
   job: DroneJob,
   errMsg: string,
+  opts?: { modalResourceLimit?: boolean },
 ): Promise<void> {
   // claim_drone_jobs already incremented attempt_count when it claimed the
   // job, so job.attempt_count IS the count of attempts made (including this
   // failed one). The previous nextAttempt = (...) + 1 was an off-by-one that
   // killed jobs after MAX_ATTEMPTS-1 failures. (#31 audit fix)
   const attemptsSoFar = job.attempt_count || 1;
+  // W10-S2: Modal resource-limit failures get a longer backoff curve and
+  // a smaller-batch payload flag so the next tick has a better chance of
+  // landing on a less-contended Modal worker.
+  const isModalResLimit = opts?.modalResourceLimit === true;
+  if (isModalResLimit) {
+    console.warn(
+      `[${GENERATOR}] Modal resource limit detected on job ${job.id}, using longer backoff + smaller batch on retry`,
+    );
+  }
   if (attemptsSoFar >= MAX_ATTEMPTS) {
     await admin
       .from("drone_jobs")
@@ -1022,15 +1090,26 @@ async function markFailed(
       })
       .eq("id", job.id);
   } else {
-    const backoffSec = BACKOFF_SECONDS[Math.min(attemptsSoFar - 1, BACKOFF_SECONDS.length - 1)];
+    const backoffCurve = isModalResLimit
+      ? MODAL_RESOURCE_BACKOFF_SECONDS
+      : BACKOFF_SECONDS;
+    const backoffSec = backoffCurve[Math.min(attemptsSoFar - 1, backoffCurve.length - 1)];
     const next = new Date(Date.now() + backoffSec * 1000).toISOString();
+    const updateRow: Record<string, unknown> = {
+      status: "pending",
+      scheduled_for: next,
+      error_message: errMsg.slice(0, 1000),
+    };
+    if (isModalResLimit) {
+      // Merge into existing payload so shoot_id/kind/etc are preserved.
+      updateRow.payload = {
+        ...(job.payload || {}),
+        next_attempt_smaller_batch: true,
+      };
+    }
     await admin
       .from("drone_jobs")
-      .update({
-        status: "pending",
-        scheduled_for: next,
-        error_message: errMsg.slice(0, 1000),
-      })
+      .update(updateRow)
       .eq("id", job.id);
   }
 }
