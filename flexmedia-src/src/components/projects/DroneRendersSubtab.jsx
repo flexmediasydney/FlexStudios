@@ -2,12 +2,15 @@
  * DroneRendersSubtab — Drone Wave 5 P2 (raw-only)
  *
  * Wave 5 P2 S6: this subtab now manages the RAW pipeline only. The 5-column
- * curate-then-edit-then-render swimlane was reduced to a 3-column raw triage:
+ * curate-then-edit-then-render swimlane was reduced to a 3-column raw triage.
+ * Wave 13 D added a 4th post-editor column (Editor Returned) so the operator
+ * can review editor deliveries on the same swimlane:
  *
- *   ┌ RAW POOL ─────────┬ RAW ACCEPTED ─────┬ REJECTED ────────┐
- *   │ shots (untriaged) │ shots (kept)      │ shots (dropped)  │
- *   │ Accept / Reject   │ Send back / Reject│ Restore           │
- *   └───────────────────┴───────────────────┴───────────────────┘
+ *   ┌ RAW POOL ─────────┬ RAW ACCEPTED ─────┬ EDITOR RETURNED ──┬ REJECTED ────────┐
+ *   │ shots (untriaged) │ shots (kept)      │ editor delivered  │ shots (dropped)  │
+ *   │ Accept / Reject   │ Send back / Reject│ Final / Reject /  │ Restore           │
+ *   │                   │                   │ Revert (mgr+)     │                   │
+ *   └───────────────────┴───────────────────┴───────────────────┴───────────────────┘
  *
  * Edited renders (proposed / adjustments / final) live in the new
  * DroneEditsSubtab, fed by the Wave 5 P2 edited-pipeline. Pin Editor entry
@@ -74,6 +77,7 @@ import {
   Lock,
   RefreshCw,
   ThumbsDown,
+  Pencil,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
@@ -103,16 +107,25 @@ function useIsCompactSwimlane() {
   return compact;
 }
 
+// Wave 13 D: 4-column swimlane (was 3). The new editor_returned column sits
+// between Raw Accepted and Rejected because it represents a forward step
+// (post-editor delivery, awaiting operator review). Source: drone_shots
+// WHERE lifecycle_state='editor_returned' (mig 324). The column is one-way
+// forward — Send to Pool is hidden; Mark Final / Reject / Revert are exposed
+// for managers+. Service-role (dropbox-webhook) is the canonical setter for
+// the raw_accepted → editor_returned transition (W13 S2).
 const COLUMNS = [
-  { key: "raw_proposed", label: "Raw Pool",     tone: "border-slate-300 dark:border-slate-700" },
-  { key: "raw_accepted", label: "Raw Accepted", tone: "border-amber-300 dark:border-amber-800" },
-  { key: "rejected",     label: "Rejected",     tone: "border-red-300 dark:border-red-800" },
+  { key: "raw_proposed",    label: "Raw Pool",        tone: "border-slate-300 dark:border-slate-700" },
+  { key: "raw_accepted",    label: "Raw Accepted",    tone: "border-amber-300 dark:border-amber-800" },
+  { key: "editor_returned", label: "Editor Returned", tone: "border-blue-300 dark:border-blue-800" },
+  { key: "rejected",        label: "Rejected",        tone: "border-red-300 dark:border-red-800" },
 ];
 
 const COLUMN_HEADER_TONE = {
-  raw_proposed: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
-  raw_accepted: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  rejected:     "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
+  raw_proposed:    "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+  raw_accepted:    "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  editor_returned: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+  rejected:        "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
 };
 
 // Mirror of DroneShotsSubtab.ROLE_LABEL.
@@ -300,11 +313,15 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
 
     const rawProposed = shots.filter((s) => effectiveLifecycle(s) === "raw_proposed");
     const rawAccepted = shots.filter((s) => effectiveLifecycle(s) === "raw_accepted");
+    // Wave 13 D: editor_returned bucket — populated by dropbox-webhook when
+    // an editor's delivery lands in /Drones/Editors/Edited Post Production/.
+    const editorReturned = shots.filter((s) => effectiveLifecycle(s) === "editor_returned");
     const shotRejected = shots.filter((s) => effectiveLifecycle(s) === "rejected");
 
     return {
       raw_proposed: rawProposed,
       raw_accepted: rawAccepted,
+      editor_returned: editorReturned,
       rejected: shotRejected,
       previewByShot,
     };
@@ -340,6 +357,7 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
 
     out.raw_proposed = buildItems(grouped.raw_proposed);
     out.raw_accepted = buildItems(grouped.raw_accepted);
+    out.editor_returned = buildItems(grouped.editor_returned);
     out.rejected = buildItems(grouped.rejected);
     return out;
   }, [grouped, previewPathByShotId]);
@@ -491,8 +509,9 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
 
   // ── Render ────────────────────────────────────────────────────────────────
   if (shotsQuery.isLoading || rendersQuery.isLoading) {
+    // Wave 13 D: skeleton grid follows the active column count (now 4).
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 animate-pulse">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 animate-pulse">
         {COLUMNS.map((c) => (
           <div key={c.key} className="space-y-2">
             <div className="h-8 bg-muted rounded" />
@@ -741,7 +760,10 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
             }
 
             return (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              // Wave 13 D: 4 columns at lg+ (was 3). Keep 2 at sm so the
+              // editor_returned column doesn't squeeze to unreadable widths
+              // on iPad-portrait / smaller laptops.
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 {COLUMNS.map(renderColumn)}
               </div>
             );
@@ -783,6 +805,8 @@ function PipelineColumn({
       ? "No raws to triage"
       : column.key === "raw_accepted"
       ? "Accept raws to stage them here"
+      : column.key === "editor_returned"
+      ? "Editor deliveries land here automatically"
       : "No rejected raws";
 
   return (
@@ -851,6 +875,13 @@ function ShotLifecycleCard({
   const clickPath = thumbPath;
   const isAccepted = column === "raw_accepted";
   const isRejected = column === "rejected";
+  // Wave 13 D: editor_returned column — post-editor delivery awaiting
+  // operator review. Send-to-Pool is hidden here (one-way forward state
+  // machine: editor_returned → final | rejected | back to raw_accepted via
+  // Revert). Mark Final / Reject calls drone-shot-lifecycle with the matching
+  // target. Revert to Raw Accepted lets managers send the shot back for
+  // re-edit (clears the editor delivery from the column).
+  const isEditorReturned = column === "editor_returned";
   const pendingState = pendingShotAction?.[shot.id];
   const isAiRecommended = Boolean(shot?.is_ai_recommended);
   const captureTime = shot?.captured_at
@@ -911,7 +942,7 @@ function ShotLifecycleCard({
         {/* Triage actions — explicit buttons (no drag-drop) */}
         {canEdit && (
           <div className="flex items-center gap-1 flex-wrap pt-1">
-            {!isAccepted && !isRejected && (
+            {!isAccepted && !isRejected && !isEditorReturned && (
               <>
                 <Button
                   variant="default"
@@ -977,6 +1008,59 @@ function ShotLifecycleCard({
                 </Button>
               </>
             )}
+            {/* Wave 13 D: editor_returned column actions.
+                Order: Final (primary forward step) → Reject → Revert (mgr+ only).
+                Send-to-Pool is intentionally absent — the swimlane only flows
+                forward from editor_returned (mig 324 + drone-shot-lifecycle
+                state-machine gating). */}
+            {isEditorReturned && (
+              <>
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="h-6 text-[10px] px-2"
+                  onClick={() => onMutateShot(shot.id, "final", "Marked Final")}
+                  disabled={Boolean(pendingState)}
+                  title="Approve editor delivery — moves to Final"
+                >
+                  {pendingState === "final" ? (
+                    <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                  ) : (
+                    <Check className="h-2.5 w-2.5 mr-1" />
+                  )}
+                  Final
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-[10px] px-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
+                  onClick={() => onMutateShot(shot.id, "rejected", "Rejected editor delivery")}
+                  disabled={Boolean(pendingState)}
+                  title="Reject the editor delivery"
+                >
+                  {pendingState === "rejected" ? (
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  ) : (
+                    <X className="h-2.5 w-2.5" />
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-6 text-[10px] px-1.5"
+                  onClick={() => onMutateShot(shot.id, "raw_accepted", "Sent back for re-edit")}
+                  disabled={Boolean(pendingState)}
+                  title="Revert to Raw Accepted — sends back for re-edit"
+                >
+                  {pendingState === "raw_accepted" ? (
+                    <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                  ) : (
+                    <Pencil className="h-2.5 w-2.5 mr-1" />
+                  )}
+                  Revert
+                </Button>
+              </>
+            )}
             {isRejected && (
               <Button
                 variant="outline"
@@ -997,9 +1081,9 @@ function ShotLifecycleCard({
           </div>
         )}
 
-        {/* Created-at timestamp on accepted/rejected so operators can tell
-            stale entries apart without opening details. */}
-        {(isAccepted || isRejected) && shot?.captured_at && (
+        {/* Created-at timestamp on accepted/editor_returned/rejected so
+            operators can tell stale entries apart without opening details. */}
+        {(isAccepted || isRejected || isEditorReturned) && shot?.captured_at && (
           <div className="text-[9px] text-muted-foreground">
             <Badge variant="outline" className="text-[9px] h-4 px-1">
               {formatDistanceToNow(new Date(shot.captured_at), { addSuffix: true })}
