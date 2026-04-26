@@ -372,6 +372,46 @@ def _haversine_m(lat1, lon1, lat2, lon2) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
+def _lonlat_mean_via_unit_vectors(lats, lons):
+    """Spherical mean of lat/lng via unit-vector sum + renormalise.
+
+    Mirrors modal/drone_sfm/projection.lonlat_mean_via_unit_vectors. We can't
+    cross-import (the Modal render image only bundles drone_render/, not
+    drone_sfm/), so this is a local copy.
+
+    Naive arithmetic mean of longitudes wraps incorrectly anywhere near the
+    antimeridian (Fiji/NZ at lon ±179.9 averages to lon 0 — Indian Ocean —
+    so the ENU centroid is ~40 000 km away and the shoelace area is wrong by
+    orders of magnitude). The unit-vector form is correct anywhere on the
+    globe. (QC2-2 #5.)
+
+    Returns (mean_lat, mean_lon) in degrees.
+    """
+    n = len(lats)
+    if n == 0 or n != len(lons):
+        return (0.0, 0.0)
+    sx = sy = sz = 0.0
+    for lat, lng in zip(lats, lons):
+        lat_r = math.radians(lat)
+        lng_r = math.radians(lng)
+        cos_lat = math.cos(lat_r)
+        sx += cos_lat * math.cos(lng_r)
+        sy += cos_lat * math.sin(lng_r)
+        sz += math.sin(lat_r)
+    nf = float(n)
+    mx, my, mz = sx / nf, sy / nf, sz / nf
+    norm = math.sqrt(mx * mx + my * my + mz * mz)
+    if norm < 1e-12:
+        # Antipodal cancellation — fall back to arithmetic mean.
+        return (sum(lats) / nf, sum(lons) / nf)
+    mx /= norm
+    my /= norm
+    mz /= norm
+    mean_lat = math.degrees(math.asin(max(-1.0, min(1.0, mz))))
+    mean_lon = math.degrees(math.atan2(my, mx))
+    return (mean_lat, mean_lon)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # PIL text rendering helpers (draw onto a numpy BGR canvas via temp RGBA layer).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1326,14 +1366,24 @@ def _draw_sqm_total(
     if not cfg.get("enabled", False):
         return canvas_bgr
 
-    # Compute area via local equirectangular ENU on the polygon centroid
-    lat0 = sum(ll[0] for ll in polygon_latlon) / len(polygon_latlon)
-    lon0 = sum(ll[1] for ll in polygon_latlon) / len(polygon_latlon)
+    # Compute area via local equirectangular ENU on the polygon centroid.
+    # lat: simple arithmetic mean (lat doesn't wrap; bounded to [-90, 90]).
+    # lon: spherical unit-vector mean — naive (sum/N) maps a Fiji property
+    #      polygon spanning ±180° to lon0 = 0° (Indian Ocean), then the
+    #      shoelace area is wrong by orders of magnitude (the ENU dE values
+    #      become ~20 000 km instead of a few metres). (QC2-2 #5.)
+    lats_only = [ll[0] for ll in polygon_latlon]
+    lons_only = [ll[1] for ll in polygon_latlon]
+    lat0 = sum(lats_only) / len(lats_only)
+    _, lon0 = _lonlat_mean_via_unit_vectors(lats_only, lons_only)
     cos_lat0 = math.cos(math.radians(lat0))
-    enu = [
-        ((lon - lon0) * 111319 * cos_lat0, (lat - lat0) * 111319)
-        for lat, lon in polygon_latlon
-    ]
+    # Antimeridian-safe lon difference per vertex (mirrors _gps_to_px /
+    # _project_polygon). Without this, even with a correct lon0, vertices
+    # on the opposite side of ±180° produce dE ≈ ±40 000 km.
+    enu = []
+    for lat, lon in polygon_latlon:
+        dlon_diff = ((lon - lon0 + 540.0) % 360.0) - 180.0
+        enu.append((dlon_diff * 111319 * cos_lat0, (lat - lat0) * 111319))
     n = len(enu)
     s = 0.0
     for i in range(n):
