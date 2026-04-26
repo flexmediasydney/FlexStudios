@@ -302,30 +302,31 @@ export default function ProjectDronesTab({ project }) {
   // S2 RPC stage_key values are dash-prefixed (e.g. 'drone-sfm') and
   // status uses 'done'|'running'|'pending'|'blocked-on-operator'|'failed'|'future'.
   const rerunStageOptions = useMemo(() => {
+    // QC iter 6 C contract fix: drone-stage-rerun edge fn accepts BARE keys
+    // (per supabase/functions/drone-stage-rerun/index.ts:33 and DronePipelineBanner
+    // RERUN_ELIGIBLE_STAGES). The RPC also emits bare stage_keys (mig 301).
+    // Old code used 'drone-sfm' etc. → never matched anything → re-run buttons
+    // never disabled correctly AND the request payload was bogus.
     const stageDefs = [
-      { key: "drone-ingest",      label: "Re-run Ingest",      requires: () => true },
-      { key: "drone-sfm",         label: "Re-run SfM",         requires: (st) => st.ingestDone },
-      { key: "drone-render",      label: "Re-run Render",      requires: (st) => st.sfmDone },
-      { key: "drone-proposed",    label: "Re-run Proposed",    requires: (st) => st.renderDone },
-      { key: "drone-adjustments", label: "Re-run Adjustments", requires: (st) => st.proposedDone },
-      { key: "drone-final",       label: "Re-run Final",       requires: (st) => st.adjustmentsDone },
+      { key: "ingest",        label: "Re-run Ingest",        requires: () => true },
+      { key: "sfm",           label: "Re-run SfM",           requires: (st) => st.ingestDone },
+      { key: "raw_render",    label: "Re-run Raw render",    requires: (st) => st.sfmDone },
+      { key: "edited_render", label: "Re-run Edited render", requires: (st) => st.rawRenderDone },
     ];
 
     // Build a derived "what's done" snapshot from pipelineState.stages so
-    // disabled-state has real meaning. Treat both 'done' (S2 RPC) and
-    // 'complete' (older drafts) as completed.
+    // disabled-state has real meaning. RPC emits 'completed' (per mig 301
+    // and statusStyles in DroneStageProgress).
     const stages = Array.isArray(pipelineState?.stages) ? pipelineState.stages : [];
     const isDone = (k) => {
       const s = stages.find((x) => x?.stage_key === k)?.status;
-      return s === "done" || s === "complete";
+      return s === "completed";
     };
     const snapshot = pipelineState
       ? {
-          ingestDone:       isDone("drone-ingest"),
-          sfmDone:          isDone("drone-sfm"),
-          renderDone:       isDone("drone-render"),
-          proposedDone:     isDone("drone-proposed"),
-          adjustmentsDone:  isDone("drone-adjustments"),
+          ingestDone:    isDone("ingest"),
+          sfmDone:       isDone("sfm"),
+          rawRenderDone: isDone("raw_render"),
         }
       : null;
 
