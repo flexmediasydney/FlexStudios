@@ -1,25 +1,33 @@
 /**
  * drone-render
  * ────────────
- * Renders annotated drone images for a shoot.
+ * Renders annotated RAW drone images for a shoot. Wave 5 P2 reduced this
+ * function to the RAW pipeline ONLY — the edited pipeline is owned by
+ * drone-render-edited (S3). Any caller that passes `body.pipeline='edited'`
+ * is hard-rejected with a 400; pin-editor saves now route to the edited
+ * function and are rejected here too.
  *
  * For each shot in the shoot:
- *   1. Resolves theme via internal `themeResolver` lib (person → org → system)
- *   2. Fetches POIs (drone-pois) + cadastral polygon (drone-cadastral)
- *   3. Downloads source image from Dropbox
- *   4. Calls Modal render worker via HTTP endpoint with theme + scene
- *   5. Uploads rendered output to `Drones/Editors/AI Proposed Enriched/`
- *      (or `Drones/Raws/Shortlist Proposed/Previews/` for the preview lane).
- *      Migrated 2026-04-25 off the legacy `06_ENRICHMENT/drone_renders_*`
- *      folders as part of the W2-β cleanup; both proposed and adjustments
- *      now share the AI Proposed Enriched bucket — column_state distinguishes.
- *   6. Inserts `drone_renders` row with column_state='proposed'
+ *   1. Resolves theme via shared `loadThemeChain` (person → org → system).
+ *   2. Loads drone_custom_pins (manual + AI POIs, mig 268 unified model).
+ *   3. Fetches POIs (drone-pois) + cadastral polygon (drone-cadastral).
+ *   4. Downloads source image from Dropbox — ALWAYS shot.dropbox_path
+ *      (raw JPG). Edited paths are never read by this function.
+ *   5. Calls Modal render worker via shared callModalRender helper.
+ *   6. Uploads rendered output to drones_raws_shortlist_proposed_previews/
+ *      (the Raw Pool column in the new swimlane reads from this folder).
+ *   7. Inserts drone_renders row with pipeline='raw' (explicit, even though
+ *      mig 282 set DEFAULT 'raw') and column_state defaulting to 'pool'.
  *
  * Inputs:
  *   POST { shoot_id }                 → render every shot in the shoot
  *   POST { shoot_id, shot_id }        → render one specific shot (re-render)
  *   POST { shoot_id, kind }           → 'poi' | 'boundary' | 'poi_plus_boundary'
  *                                       (default: 'poi_plus_boundary')
+ *   POST { shoot_id, wipe_existing }  → wipe pipeline='raw' rows for the shoot
+ *                                       BEFORE rendering (Re-analyse swimlane action)
+ *   POST { shoot_id, column_state }   → caller-requested initial column_state
+ *                                       (must be one of pool|accepted|rejected)
  *
  * Auth:
  *   - master_admin / admin / manager / employee with project access
@@ -36,15 +44,44 @@ import {
 } from "../_shared/supabase.ts";
 import { getFolderPath } from "../_shared/projectFolders.ts";
 import { downloadFile, uploadFile } from "../_shared/dropbox.ts";
-import { resolveFromChain, mergeConfigChain } from "../_shared/themeResolver.ts";
+import { mergeConfigChain } from "../_shared/themeResolver.ts";
+import {
+  type RenderKind,
+  type RenderResult,
+  type PoisSubcallTelemetry,
+  RENDER_TOKEN,
+  resolveRenderKind,
+  applyKindToTheme,
+  loadThemeChain,
+  loadCustomPins,
+  fetchPois,
+  fetchCadastral,
+  needsPois,
+  needsBoundary,
+  callModalRender,
+  decodeModalVariants,
+  buildAddressOverlay,
+  normalisePoisForModal,
+  buildSceneCustomPins,
+  capPinsByMax,
+  filenameForRender,
+} from "../_shared/droneRenderCommon.ts";
 
 const GENERATOR = "drone-render";
-const MODAL_RENDER_URL =
-  Deno.env.get("MODAL_RENDER_URL") ||
-  "https://joseph-89037--flexstudios-drone-render-render-http.modal.run";
-const RENDER_TOKEN = Deno.env.get("FLEXSTUDIOS_RENDER_TOKEN") || "";
 
-type RenderKind = "poi" | "boundary" | "poi_plus_boundary";
+/**
+ * Wave 5 P2 (S2): the only pipeline this function handles. Stamped on every
+ * drone_renders insert and on every continuation drone_jobs payload.
+ */
+const PIPELINE: 'raw' = 'raw';
+
+/**
+ * Raw-pipeline column_state lanes (mig 282 CHECK). 'pool' is the swimlane's
+ * Raw Pool column (was 'preview'/'proposed' pre-mig); accepted/rejected are
+ * operator-locked transitions.
+ */
+const RAW_COLUMN_STATES = ['pool', 'accepted', 'rejected'] as const;
+type RawColumnState = typeof RAW_COLUMN_STATES[number];
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
@@ -65,36 +102,36 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     shot_id?: string;
     kind?: RenderKind;
     /**
-     * When true, allow the renderer to source from `drone_shots.dropbox_path`
-     * (raw drone JPG) even when the shot has no `edited_dropbox_path` set.
-     * Used by drone-raw-preview (which by design renders from raws to give the
-     * operator a preview before the editor pass) and as an explicit safety
-     * hatch for ad-hoc previews. Without this flag, non-`nadir_hero` shots
-     * with NULL edited_dropbox_path are hard-failed because the post-prod
-     * edited version is what gets enriched, not the raw.
-     */
-    allow_raw_source?: boolean;
-    /**
      * Caller-requested column_state for the resulting drone_renders row.
-     * Currently honoured values:
-     *   - 'adjustments' → Pin-Editor save path (legacy `reason: pin_edit_saved`
-     *                     also routes here). Output goes to drone_renders_adjusted/.
-     *   - 'preview'     → drone-raw-preview path. Output goes to
-     *                     Drones/Raws/Shortlist Proposed/Previews/, the row is
-     *                     informational and excluded from the active-per-variant
-     *                     uniqueness scope (migration 243).
-     *   - undefined / 'proposed' → default; standard AI render lane.
+     * RAW pipeline only — must be one of ('pool','accepted','rejected').
+     * Defaults to 'pool' (the swimlane's Raw Pool column).
      */
-    column_state?: 'proposed' | 'adjustments' | 'preview';
+    column_state?: RawColumnState;
     /**
-     * When true, DELETE existing renders for this shoot in column_state
-     * 'proposed' BEFORE rendering. Used by the swimlane Re-analyse action so
-     * a fresh render run replaces the AI's prior proposals rather than piling
-     * up alongside them. Adjustments / final / rejected rows are preserved —
-     * we only wipe the proposed slot.
+     * When true, DELETE existing pipeline='raw' renders for this shoot
+     * BEFORE rendering. Used by the swimlane Re-analyse action so a fresh
+     * render run replaces the prior raw renders rather than piling up
+     * alongside them. Edited-pipeline rows (handled by drone-render-edited)
+     * are NEVER touched by this wipe — strict pipeline isolation.
+     *
+     * Wave 5 P2 change: previously this could wipe 'adjustments' or other
+     * non-raw lanes when the pin-edit alias was set. That routing now belongs
+     * to drone-render-edited; here wipe_existing=true wipes RAW only.
      */
     wipe_existing?: boolean;
-    /** Pin-Editor flag — also routes to adjustments lane (legacy alias). */
+    /**
+     * Pipeline routing field — when present MUST equal 'raw'. Wave 5 P2:
+     * this function rejects pipeline='edited' with a 400 directing the
+     * caller to drone-render-edited. Callers that don't set the field are
+     * implicitly raw (back-compat for pre-S2 dispatcher payloads).
+     */
+    pipeline?: 'raw' | 'edited';
+    /**
+     * Pre-S2 alias for the Pin Editor save path. Wave 5 P2: this routing
+     * moved to drone-render-edited (S3 owns the edited pipeline). drone-render
+     * rejects 'pin_edit_saved' with a 400 so any stale caller is forced to
+     * update its endpoint rather than silently producing wrong-pipeline rows.
+     */
     reason?: string;
     _health_check?: boolean;
   } = {};
@@ -105,7 +142,33 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   if (body._health_check) {
-    return jsonResponse({ _version: "v1.0", _fn: GENERATOR }, 200, req);
+    return jsonResponse({ _version: "v2.0-raw-only", _fn: GENERATOR }, 200, req);
+  }
+
+  // ── PIPELINE GUARD (Wave 5 P2 S2) ────────────────────────────────
+  // drone-render is now the RAW-ONLY pipeline. Any explicit edited request
+  // is rejected at the door so no row can be misrouted. Callers that don't
+  // set body.pipeline are implicitly raw (back-compat).
+  if (body.pipeline === 'edited') {
+    return errorResponse(
+      "drone-render handles raw pipeline only. Use drone-render-edited for the edited pipeline.",
+      400,
+      req,
+    );
+  }
+  if (body.reason === 'pin_edit_saved') {
+    return errorResponse(
+      "Pin Editor saves route to drone-render-edited (edited pipeline). drone-render rejects reason='pin_edit_saved'.",
+      400,
+      req,
+    );
+  }
+  if (body.column_state && !RAW_COLUMN_STATES.includes(body.column_state)) {
+    return errorResponse(
+      `column_state '${body.column_state}' not allowed on raw pipeline (allowed: ${RAW_COLUMN_STATES.join(', ')}). For 'adjustments' or 'final' use drone-render-edited.`,
+      400,
+      req,
+    );
   }
 
   if (!body.shoot_id) return errorResponse("shoot_id required", 400, req);
@@ -118,28 +181,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Resolve render kind ───────────────────────────────────────────
-  // `drone_renders.kind` only allows poi|boundary|poi_plus_boundary (CHECK
-  // constraint from migration 225). The body type used to allow `kind:
-  // 'preview'` to flow through, but writing 'preview' to drone_renders.kind
-  // would violate the CHECK and abort the whole render with no partial
-  // results. Map the preview signal into kind=poi_plus_boundary +
-  // isPreviewRun=true, then validate against the allowed enum so any other
-  // junk (typos, future kinds before migration) fails fast with 400 instead
-  // of after the Modal call. (QC2 #19.)
-  const ALLOWED_KINDS: RenderKind[] = ["poi", "boundary", "poi_plus_boundary"];
-  const rawKindRequest = (body as { kind?: string }).kind;
-  let kind: RenderKind;
-  if (rawKindRequest === "preview" || !rawKindRequest) {
-    kind = "poi_plus_boundary";
-  } else if (ALLOWED_KINDS.includes(rawKindRequest as RenderKind)) {
-    kind = rawKindRequest as RenderKind;
-  } else {
-    return errorResponse(
-      `kind '${rawKindRequest}' is not allowed (allowed: ${ALLOWED_KINDS.join(", ")} or 'preview')`,
-      400,
-      req,
-    );
+  // resolveRenderKind maps 'preview' → 'poi_plus_boundary' (kind enum CHECK
+  // forbids 'preview' as a stored value — mig 225) and validates the rest.
+  const kindResolved = resolveRenderKind(body.kind as string | undefined);
+  if (kindResolved.error) {
+    return errorResponse(kindResolved.error, 400, req);
   }
+  const kind = kindResolved.kind!;
 
   const admin = getAdminClient();
 
@@ -163,84 +211,23 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`project lookup failed: ${projErr?.message || "missing"}`, 500, req);
 
   // ── Load drone_custom_pins (UNIFIED model, mig 268) ────────────────
-  // After W3-PINS the table holds BOTH operator-created pins (source='manual',
-  // shoot- or project-scoped) AND AI-fetched POIs (source='ai',
-  // project-scoped, materialised by drone-pois). One query covers both.
-  //
-  // Filters:
-  //   - lifecycle='active' (skip suppressed/superseded/deleted)
-  //   - scope = THIS shoot OR THIS project (project-scoped pins fan out
-  //     across every shoot in the project)
-  //
-  // Ordering: priority DESC so when max_pins truncates, manual edits beat
-  // AI proposals (manual default priority=20, ai default=10).
-  type CustomPinRow = {
-    id: string;
-    pin_type: 'poi_manual' | 'text' | 'line' | 'measurement';
-    source: 'manual' | 'ai';
-    subsource: string | null;
-    external_ref: string | null;
-    world_lat: number | null;
-    world_lng: number | null;
-    pixel_anchored_shot_id: string | null;
-    pixel_x: number | null;
-    pixel_y: number | null;
-    content: Record<string, unknown> | null;
-    style_overrides: Record<string, unknown> | null;
-    priority: number;
-  };
-  const { data: customPinsRaw, error: pinsErr } = await admin
-    .from("drone_custom_pins")
-    .select(
-      "id, pin_type, source, subsource, external_ref, world_lat, world_lng, pixel_anchored_shot_id, pixel_x, pixel_y, content, style_overrides, priority",
-    )
-    .eq("lifecycle", "active")
-    .or(`shoot_id.eq.${shoot.id},project_id.eq.${project.id}`)
-    .order("priority", { ascending: false });
-  if (pinsErr) {
-    console.warn(`[${GENERATOR}] drone_custom_pins lookup failed (non-fatal): ${pinsErr.message}`);
+  const pinsLoaded = await loadCustomPins(admin, { shoot_id: shoot.id, project_id: project.id });
+  if (pinsLoaded.warning) {
+    console.warn(`[${GENERATOR}] ${pinsLoaded.warning}`);
   }
-  const allCustomPins: CustomPinRow[] = (customPinsRaw as CustomPinRow[] | null) || [];
-  const worldCustomPins = allCustomPins.filter(
-    (p) =>
-      (p.pin_type === 'poi_manual' ||
-        p.pin_type === 'text' ||
-        p.pin_type === 'line' ||
-        p.pin_type === 'measurement') &&
-      p.world_lat !== null &&
-      p.world_lng !== null,
-  );
-  // Pixel-anchored pins are keyed by pixel_anchored_shot_id; build an
-  // index so the per-shot loop below is O(1) per shot.
-  const pixelPinsByShot = new Map<string, CustomPinRow[]>();
-  for (const p of allCustomPins) {
-    if (p.pixel_anchored_shot_id && p.pixel_x !== null && p.pixel_y !== null) {
-      const arr = pixelPinsByShot.get(p.pixel_anchored_shot_id) || [];
-      arr.push(p);
-      pixelPinsByShot.set(p.pixel_anchored_shot_id, arr);
-    }
-  }
+  const { worldCustomPins, pixelPinsByShot } = pinsLoaded;
 
   // ── Load shots to render ─────────────────────────────────────────
   let shotQ = admin
     .from("drone_shots")
     .select(
-      "id, shoot_id, dropbox_path, edited_dropbox_path, filename, gps_lat, gps_lon, relative_altitude, flight_yaw, gimbal_pitch, gimbal_roll, flight_roll, shot_role, sfm_pose, registered_in_sfm",
+      // edited_dropbox_path is intentionally NOT selected — raw pipeline
+      // never reads it (Wave 5 P2). drone-render-edited owns that column.
+      "id, shoot_id, dropbox_path, filename, gps_lat, gps_lon, relative_altitude, flight_yaw, gimbal_pitch, gimbal_roll, flight_roll, shot_role, sfm_pose, registered_in_sfm",
     )
     .eq("shoot_id", shoot.id);
   if (body.shot_id) shotQ = shotQ.eq("id", body.shot_id);
-  // Render eligibility:
-  //   - nadir_hero, orbital, oblique_hero, building_hero, unclassified → delivered
-  //   - nadir_grid                                                     → SfM-only, NOT delivered
-  //   - ground_level                                                   → projection math
-  //                                                                      doesn't fit horizontal
-  //                                                                      cameras well
-  // The nadir grid was historically rendered as deliverable too, but operators
-  // never wanted 26 near-identical top-down shots in the swimlane — for unit
-  // blocks they want zero top-downs, for houses they want at most one MLS hero
-  // shot. nadir_hero (an isolated single nadir, distinguished from sequential
-  // grid bursts by the refineNadirClassifications post-pass) IS delivered:
-  // it's the MLS hero shot operators expect. (2026-04-25)
+  // Render eligibility (same set as pre-S2; nadir_grid stays SfM-only):
   shotQ = shotQ.in(
     "shot_role",
     ["nadir_hero", "orbital", "oblique_hero", "building_hero", "unclassified"],
@@ -252,116 +239,60 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse("no eligible shots found for shoot", 400, req);
   }
 
-  // ── Per-shot source resolution ──────────────────────────────────
-  // The post-edit workflow: editors drop polished JPGs in
-  // Drones/Editors/Edited Post Production/, the dropbox-webhook links them
-  // to drone_shots.edited_dropbox_path, and the renderer pulls THAT for the
-  // delivered roles. Source-resolution rules (applied per-shot, not per-batch):
-  //
-  //   - shot_role='nadir_grid' OR 'nadir_hero'              → always use shot.dropbox_path
-  //     (nadir_grid is SfM-only and never edited; nadir_hero may not have an
-  //     editor pass either — operators sometimes deliver the raw MLS top-down)
-  //   - everything else (orbital/oblique_hero/building_hero/unclassified) →
-  //     prefer shot.edited_dropbox_path. If NULL → SKIP the shot (add to
-  //     errors[]) and KEEP rendering the others. Don't fail the whole batch.
-  //
-  // Override flags (bypass the edited-path requirement entirely):
-  //   - body.allow_raw_source: true        → drone-raw-preview / ad-hoc
-  //   - body.column_state === 'preview'     → Stream E preview pipeline
-  //   - body.kind === 'preview'             → alt preview signal
-  //
-  // Previews always render from raws (they show operators what raws look like
-  // PRE-editing). Both the new edited-path requirement and Stream E's preview
-  // path coexist additively.
-  const isPreviewRun =
-    body?.column_state === "preview" ||
-    (body as { kind?: string }).kind === "preview";
-  const allowRawSource = body.allow_raw_source === true || isPreviewRun;
-
-  function resolveSourcePath(
-    shot: { id: string; filename: string; dropbox_path: string; edited_dropbox_path: string | null; shot_role: string },
-  ): { path: string | null; error?: string } {
-    if (allowRawSource) {
-      return { path: shot.dropbox_path };
-    }
-    if (shot.shot_role === "nadir_grid" || shot.shot_role === "nadir_hero") {
-      return { path: shot.dropbox_path };
-    }
-    if (shot.edited_dropbox_path) {
-      return { path: shot.edited_dropbox_path };
-    }
-    return {
-      path: null,
-      error: `shot ${shot.id} (${shot.shot_role}) has no edited_dropbox_path — needs editor upload before render`,
-    };
+  // ── Source resolution: ALWAYS shot.dropbox_path (RAW pipeline) ───
+  // Wave 5 P2: removed the per-shot edited_dropbox_path branch. Raw pipeline
+  // never reads the editor-delivered file — that's drone-render-edited's job.
+  // Even nadir_hero (which historically could go either way) renders from
+  // the raw here, since this function defines the raw lane outputs.
+  function resolveSourcePath(shot: { dropbox_path: string }): { path: string } {
+    return { path: shot.dropbox_path };
   }
 
-  // ── Optional wipe of prior renders for THIS lane (Re-analyse + Pin Save) ──
-  // Two callers set wipe_existing=true:
-  //   - Stream D's swimlane Re-analyse → wipes the 'proposed' lane so a fresh
-  //     AI render replaces the prior proposals rather than colliding with them.
-  //   - Pin Editor save (drone-pins-save) → wipes the 'adjustments' lane so
-  //     the new adjustment render reflects the latest pin set instead of
-  //     colliding with the prior adjustment row.
-  // Lane is inferred from the same logic the writer uses below: pin-edit
-  // signals route to 'adjustments'; everything else stays on 'proposed'.
-  // Final/rejected slots are NEVER wiped — those are operator-locked.
+  // ── Optional wipe of prior renders for THIS pipeline ──────────────
+  // Wave 5 P2: wipe_existing=true now wipes pipeline='raw' renders only.
+  // Edited-pipeline rows are owned by drone-render-edited and untouched here.
+  // Final/rejected slots are NEVER wiped (operator-locked) but for raw the
+  // analogous "operator-locked" lane is column_state='accepted' — strictly
+  // we wipe column_state IN ('pool') only. 'accepted'/'rejected' are
+  // operator decisions and must survive a Re-analyse.
   if (body.wipe_existing === true) {
     const shotIds = shotsAll.map((s) => s.id);
-    const wipeColumnState =
-      body?.reason === "pin_edit_saved" || body?.column_state === "adjustments"
-        ? "adjustments"
-        : "proposed";
     const { error: wipeErr } = await admin
       .from("drone_renders")
       .delete()
       .eq("kind", kind)
-      .eq("column_state", wipeColumnState)
+      .eq("pipeline", PIPELINE)
+      .eq("column_state", "pool")
       .in("shot_id", shotIds);
     if (wipeErr) {
       return errorResponse(`wipe_existing failed: ${wipeErr.message}`, 500, req);
     }
   }
 
-  // Skip shots that ALREADY have an active render row for this kind. The
-  // unique partial index from migration 233 covers (shot_id,kind,variant,state)
-  // so duplicates would 500 the insert anyway — pre-filter saves the work +
-  // lets us split a 34-shot ingest across multiple Edge Function invocations
-  // (each capped at 145s wall-clock).
+  // ── Skip shots that already have an active raw render row ────────
+  // The unique partial index from migration 233 + 282's pipeline-aware
+  // column_state CHECK mean writing a duplicate (shot,kind,variant,state,
+  // pipeline) row would 23505 the insert. Pre-filtering also lets us split a
+  // 34-shot ingest across multiple Edge Function invocations (each capped at
+  // 145s wall-clock).
   //
-  // For preview lane: previews are excluded from the unique partial index so
-  // they CAN stack — but we still skip shots that have a preview render to
-  // make drone-raw-preview idempotent (the dispatcher chains it once after
-  // SfM+poi_fetch; re-runs shouldn't re-render every shot). We pre-filter
-  // against preview rows ONLY, ignoring proposed/adjustments/final since the
-  // Edited Post Production source is different from the raw source used here.
-  //
-  // For adjustments lane (Pin Editor save): skip only against existing
-  // adjustments + final rows. A shot that has a 'proposed' render but no
-  // adjustment row should still re-render into the adjustments slot. The
-  // wipe block above just cleared adjustments, so this filter degenerates
-  // to skipping only 'final' (operator-locked).
-  // Note: use isPreviewRun here directly. isPreviewRender (an alias for the
-  // same value) is declared further down in the output-folder block.
-  const isAdjustmentsRunForSkip =
-    !isPreviewRun &&
-    (body?.reason === "pin_edit_saved" || body?.column_state === "adjustments");
-  const skipStates = isPreviewRun
-    ? ["preview"]
-    : isAdjustmentsRunForSkip
-      ? ["adjustments", "final"]
-      : ["proposed", "adjustments", "final"];
+  // We skip against pool/accepted/rejected — every raw column_state. A shot
+  // that operators have already accepted shouldn't be re-rendered into the
+  // pool by a routine Re-analyse (the wipe above only clears 'pool', so
+  // accepted survives, and this skip prevents a duplicate insert).
   const { data: existingRenders } = await admin
     .from("drone_renders")
     .select("shot_id")
     .eq("kind", kind)
-    .in("column_state", skipStates)
+    .eq("pipeline", PIPELINE)
+    .in("column_state", RAW_COLUMN_STATES as readonly string[])
     .in("shot_id", shotsAll.map((s) => s.id));
   const alreadyRenderedSet = new Set((existingRenders || []).map((r) => r.shot_id));
   const shots = shotsAll.filter((s) => !alreadyRenderedSet.has(s.id));
   if (shots.length === 0) {
     return jsonResponse({
       success: true,
+      pipeline: PIPELINE,
       shoot_id: shoot.id,
       kind,
       shots_total: shotsAll.length,
@@ -370,27 +301,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       results: [],
     }, 200, req);
   }
-  // Cap per-invocation work to avoid OOM. Each shot's source download (~10MB),
-  // base64-encode (~13MB string), Modal request (~13MB body), Modal response
-  // (~4MB for 2 variants), and upload buffers each occupy memory simultaneously
-  // in flight. With concurrency=1 (sequential below) only ONE shot's footprint
-  // is live at any time, so the cap here is wall-clock-bound, not memory-bound.
-  // QC1 #18: bumped 2 → 4 so a 16-shot shoot finishes in 4 dispatcher ticks
-  // rather than 8. Each shot averages ~25-40s with the new 120s Modal timeout
-  // ceiling, so 4 × 40s = 160s in the worst case (slightly over the 145s
-  // wall-clock cap). When the Edge Function gets killed mid-loop the
-  // continuation job re-enqueued below picks up where we left off (the
-  // existing-renders pre-filter is what makes this safe). If we observe OOM
-  // or a noticeable rise in mid-batch timeouts in prod, revert to 2.
+  // Cap per-invocation work to avoid OOM. With concurrency=1 (sequential)
+  // only ONE shot's footprint is live at any time, so the cap is wall-clock-
+  // bound (4 × ~40s = 160s, slightly over the 145s wall-clock cap; the
+  // continuation enqueue below picks up where we left off).
   const PER_INVOCATION_CAP = 4;
   const shotsCapped = shots.slice(0, PER_INVOCATION_CAP);
   const moreRemaining = shots.length - shotsCapped.length;
 
   // ── Resolve theme via inheritance chain ──────────────────────────
-  // loadThemeChain returns highest-priority first ([person, org, system]).
-  // mergeConfigChain is a left-fold deep-merge where right wins, so we MUST
-  // reverse to lowest-first ([system, org, person]) before merging — otherwise
-  // the system default overrides every branded customisation. (#87 audit fix)
   const themeChain = await loadThemeChain(admin, {
     person_id: project.primary_contact_person_id,
     organisation_id: project.agency_id,
@@ -408,149 +327,85 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse("project has no usable coordinates (confirmed or geocoded)", 400, req);
   }
 
-  // ── POIs (W3-PINS): no longer fetched from drone-pois cache JSONB ──────
+  // ── POIs (W3-PINS): unified drone_custom_pins is canonical now ────────
   // After mig 268 + drone-pois rewrite, AI POIs live as drone_custom_pins
-  // rows with source='ai'. They're already in `allCustomPins` above (loaded
-  // via the unified pins query) and reach Modal via scene.custom_pins, NOT
-  // scene.pois. The legacy fetchPois sub-call is retained ONLY for renders
-  // against projects whose drone-pois has not yet been re-run post-mig 268
-  // (so the unified table is empty). When `worldCustomPins` already contains
-  // ai-source rows for this project, skip fetchPois entirely.
+  // rows with source='ai' (already in `worldCustomPins`). The legacy fetchPois
+  // sub-call is retained ONLY for projects whose drone-pois has not yet been
+  // re-run post-mig 268 (so the unified table is empty for that project).
   const haveAiPinsAlready = worldCustomPins.some((p) => p.source === 'ai');
-  const themeRadius = Number(themeForKind?.poi_selection?.radius_m);
+  const themeRadius = Number((themeForKind as { poi_selection?: { radius_m?: number } })?.poi_selection?.radius_m);
   const radiusToUse = Number.isFinite(themeRadius) && themeRadius > 0 ? themeRadius : undefined;
-  // Forward the resolved theme's poi_selection.type_quotas to drone-pois so
-  // operator-controlled POI categories actually apply at fetch time. When
-  // null/empty/missing, drone-pois falls back to its hardcoded defaults
-  // (back-compat). The hash of this object also keys the cache row, so
-  // different theme selections don't collide. (Stream J — type-quotas wiring.)
-  const themeQuotas = themeForKind?.poi_selection?.type_quotas;
+  const themeQuotas = (themeForKind as { poi_selection?: { type_quotas?: Record<string, { priority?: number; max?: number }> | null } })?.poi_selection?.type_quotas ?? null;
+  const poiSubcallTelemetry: PoisSubcallTelemetry = {};
   const [pois, cadastral] = await Promise.all([
     needsPois(kind) && !haveAiPinsAlready
-      ? fetchPois(req, project.id, radiusToUse, themeQuotas)
+      ? fetchPois(req, project.id, poiSubcallTelemetry, { radiusM: radiusToUse, typeQuotas: themeQuotas, pipeline: PIPELINE })
       : Promise.resolve([]),
     needsBoundary(kind) ? fetchCadastral(req, project.id) : Promise.resolve(null),
   ]);
 
-  // ── Output folder path + initial column_state ─────────────────────
-  // Three render lanes share this code path:
-  //   - 'preview'     → drone-raw-preview pipeline. Sources from raw drone
-  //                     JPGs (allow_raw_source=true), writes to
-  //                     Drones/Raws/Shortlist Proposed/Previews/, row is
-  //                     informational (excluded from the active-per-variant
-  //                     uniqueness scope by migration 243).
-  //   - 'adjustments' → Pin-Editor save (legacy alias: `reason='pin_edit_saved'`).
-  //                     Writes to Drones/Editors/AI Proposed Enriched/ —
-  //                     same lane as 'proposed' since both AI and adjustment
-  //                     outputs land alongside each other in the editor's
-  //                     enriched bucket; the column_state distinguishes the row.
-  //   - 'proposed'    → default AI render after ingest. Writes to
-  //                     Drones/Editors/AI Proposed Enriched/.
-  // Reuse `isPreviewRun` (defined above near source resolution) so we have a
-  // single source of truth for "are we in the preview lane". `isPreviewRender`
-  // is the local alias for the column-state slice of that decision.
+  // ── Render-time snapshots ────────────────────────────────────────
+  // Per architect plan B.1: ensure theme/pois/boundary snapshots are
+  // populated on every drone_renders row so post-hoc audits can reproduce
+  // the inputs that produced any given output. The drone_renders table only
+  // has the legacy `theme_snapshot` jsonb column today; we stash POI +
+  // boundary snapshots inside it as a composite { theme, pois_snapshot,
+  // boundary_snapshot } when there's no canonical theme_id to point at,
+  // and we put pois_snapshot + boundary_snapshot into pin_overrides
+  // unconditionally so the data is reproducible regardless. A future
+  // migration can promote these to dedicated columns; the wrapper shape
+  // here is forward-compatible (consumers read the wrapped keys directly).
   //
-  // 2026-04-25: migrated off the legacy `enrichment_drone_renders_*` folder
-  // kinds (Wave 1 dropped raw_drones / final_delivery_drones; W2-β consolidates
-  // the enrichment outputs onto the `drones_editors_ai_proposed_enriched`
-  // top-level folder). Once all writers are off the legacy kinds, the
-  // corresponding project_folders rows can be dropped.
-  const isPreviewRender = isPreviewRun;
-  const isAdjustedRender =
-    !isPreviewRender &&
-    (body?.reason === "pin_edit_saved" || body?.column_state === "adjustments");
-  const outFolderKind = isPreviewRender
-    ? "drones_raws_shortlist_proposed_previews"
-    : "drones_editors_ai_proposed_enriched";
-  const initialColumnState = isPreviewRender
-    ? "preview"
-    : isAdjustedRender
-      ? "adjustments"
-      : "proposed";
-  const outFolder = await getFolderPath(project.id, outFolderKind);
+  // boundary_snapshot for raw pipeline = the cadastral DCDB polygon at
+  // fetch time. S5 wires the operator-edited boundary into
+  // drone-render-edited; raw side stays cadastral-only.
+  const renderTimeIso = new Date().toISOString();
+  const poisSnapshot = pois && Array.isArray(pois) ? { fetched_at: renderTimeIso, count: pois.length, pois } : null;
+  const boundarySnapshot = cadastral && Array.isArray(cadastral.polygon)
+    ? { fetched_at: renderTimeIso, source: 'cadastral', polygon: cadastral.polygon }
+    : null;
 
-  // ── Update shoot status to 'rendering' ───────────────────────────
-  // Optimistic update — only flip if not already in a terminal state. Without
-  // this, a render kicked off concurrently with an SfM job would clobber
-  // status='sfm_running'. (#4 audit fix)
-  // Preview renders skip the status flip — they're informational and
-  // shouldn't move the production-lane shoot status.
-  if (!isPreviewRender) {
-    await admin
-      .from("drone_shoots")
-      .update({ status: "rendering" })
-      .eq("id", shoot.id)
-      .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
+  // ── Output folder + initial column_state (RAW pipeline) ──────────
+  // Wave 5 P2: the raw pipeline writes to drones_raws_shortlist_proposed_previews/.
+  // The new swimlane's "Raw Pool" column reads from this folder via the
+  // pipeline='raw' + column_state='pool' filter on drone_renders.
+  const outFolder = await getFolderPath(project.id, "drones_raws_shortlist_proposed_previews");
+  const requestedColumnState = body.column_state;
+  const initialColumnState: RawColumnState = requestedColumnState ?? 'pool';
+
+  // Defensive: warn if the request is for a non-default raw column_state
+  // (e.g. caller pre-sets 'accepted' which would skip the operator review
+  // step). Don't fail — operators occasionally re-render an already-accepted
+  // row and want to keep the column_state — but surface the unusual state.
+  if (initialColumnState !== 'pool') {
+    console.warn(
+      `[${GENERATOR}] raw render writing column_state='${initialColumnState}' (non-default 'pool') for shoot=${shoot.id}`,
+    );
   }
 
+  // ── Update shoot status to 'rendering' ───────────────────────────
+  // Optimistic update — only flip if not already in a terminal state.
+  await admin
+    .from("drone_shoots")
+    .update({ status: "rendering" })
+    .eq("id", shoot.id)
+    .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
+
   // ── Render each shot in parallel chunks ──────────────────────────────
-  // Modal has soft caps on concurrent worker invocations; 3 shots in flight
-  // is conservative and keeps memory bounded for large nadir grids. Chunks
-  // run sequentially to preserve result order. (#9 audit fix)
-  type RenderResult = {
-    shot_id: string;
-    filename: string;
-    ok: boolean;
-    out_path?: string;
-    error?: string;
-    /**
-     * True when the shot was skipped because it has no edited_dropbox_path
-     * and the render context requires the edited source. Surfaced separately
-     * from generic failures so the caller (UI / dispatcher) can distinguish
-     * "editor team owes us a file" from "render genuinely failed".
-     */
-    skipped_no_edit?: boolean;
-    /** Diagnostic: number of POIs that drone-render passed to Modal for this shot. */
-    pois_passed?: number;
-    /** Diagnostic: shape of the first POI (key list) — to confirm lon mapping landed. */
-    pois_first_keys?: string[];
-    /** Diagnostic: raw count from fetchPois (before the orbital-only gate). */
-    pois_from_fetch?: number;
-    /** Diagnostic: shot role at time of render. */
-    shot_role_at_render?: string;
-    /** Diagnostic: needsPois(kind) result. */
-    needs_pois?: boolean;
-    /** Diagnostic: the resolved drone-pois sub-call URL drone-render computed. */
-    pois_subcall_url?: string;
-    /** Diagnostic: HTTP status returned by the drone-pois sub-call. */
-    pois_subcall_status?: number;
-    /** Diagnostic: first 200 chars of the drone-pois sub-call response body. */
-    pois_subcall_body_head?: string;
-    variants?: Array<{ variant: string; out_path: string }>;
-  };
   const renderResults: RenderResult[] = [];
-  // Concurrency 1 — each shot's source download (~10-20MB) + base64 encode
-  // (~25MB) + Modal response (~4MB for 2 variants) blows the Edge Function's
-  // 256MB cap with concurrency >1. Sequential keeps peak memory bounded.
-  // (Post-live-test refit of #9.)
+  // Concurrency 1 — see PER_INVOCATION_CAP comment above for OOM rationale.
   const RENDER_CONCURRENCY = 1;
 
-  // Honour fallback='gps_only' from the dispatcher payload — when set, we
-  // skip the per-shot SfM pose lookup and project everything via GPS-only
-  // (the existing render path already does this since we don't pass sfm_pose
-  // to Modal in this function; the flag is a future-proof signal that this
-  // shoot should never block on SfM availability). (#16 audit fix)
+  // fallback='gps_only' is informational; the per-shot loop below does
+  // GPS-only projection in all cases (sfm_pose is loaded but unused pending
+  // Stream-Z drone-render SfM-aware projection). (#16 audit fix)
   const fallbackGpsOnly = (body as { fallback?: string }).fallback === "gps_only";
-  void fallbackGpsOnly; // currently informational; the per-shot loop below
-  // does GPS-only projection in all cases (sfm_pose is loaded but unused
-  // pending Stream-Z drone-render SfM-aware projection).
+  void fallbackGpsOnly;
 
   // Single-shot render fn (closes over scene/theme deps).
   const renderOneShot = async (shot: typeof shots[number]): Promise<RenderResult> => {
     try {
-      // Resolve source path per shot — see resolveSourcePath comment.
-      // For preview / nadir / explicit-raw flows: shot.dropbox_path.
-      // For everything else: shot.edited_dropbox_path; SKIP if NULL.
       const srcResolved = resolveSourcePath(shot);
-      if (!srcResolved.path) {
-        return {
-          shot_id: shot.id,
-          filename: shot.filename,
-          ok: false,
-          error: srcResolved.error || "no source path resolved",
-          skipped_no_edit: true,
-        };
-      }
 
       // Download source image
       const dlRes = await downloadFile(srcResolved.path);
@@ -564,12 +419,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       }
       const srcBytes = new Uint8Array(await dlRes.arrayBuffer());
 
-      // Build scene. Skip shots whose GPS is missing/unparseable — Number(null)
-      // is NaN, which would silently cascade through to Modal and produce a
-      // visually-broken render with POIs landing at frame center. (#B4 audit fix)
-      // Also skip shots with missing relative_altitude — we no longer fall back
-      // to gps_altitude (MSL ≠ AGL) so a missing AGL means the projection math
-      // can't run reliably. (#18 audit fix)
+      // Build scene. Skip shots with missing GPS (Number(null) = NaN would
+      // silently cascade through to Modal). Also skip shots with missing
+      // relative_altitude — we no longer fall back to gps_altitude (MSL ≠
+      // AGL) so missing AGL means the projection math can't run reliably.
       const scene: Record<string, unknown> = {
         lat: Number(shot.gps_lat),
         lon: Number(shot.gps_lon),
@@ -578,7 +431,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         pitch: Number(shot.gimbal_pitch),
         property_lat: projectCoord.lat,
         property_lon: projectCoord.lng,
-        address: [project.property_address, project.property_suburb].filter(Boolean).join(", "),
+        address: buildAddressOverlay(project),
       };
       if (!Number.isFinite(scene.lat as number) || !Number.isFinite(scene.lon as number)) {
         return {
@@ -596,144 +449,51 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           error: "shot has missing relative_altitude (AGL) — cannot render",
         };
       }
-      // POIs only render on ORBITAL shots. Building hero / oblique hero /
-      // nadir hero / unclassified are framing-driven deliverables — POIs at
-      // façade level or top-down nadir framing add visual clutter without
-      // useful context. Operators surface POIs only on the wide aerial
-      // orbital, where the city/POI context is the whole point of the shot.
-      // (Per Joseph's call 2026-04-25 spot-checking Everton previews.)
-      //
-      // Also normalises the POI field shape: drone-pois (Google Places)
-      // returns `lng`; Modal render_engine.py reads `poi["lon"]`. Map both.
+      // POIs only render on ORBITAL shots (Joseph 2026-04-25 Everton review).
       const poisAllowedForRole = shot.shot_role === 'orbital';
       if (poisAllowedForRole && pois && pois.length > 0) {
-        scene.pois = pois.map((p) => ({ ...p, lon: p.lng ?? p.lon }));
+        scene.pois = normalisePoisForModal(pois);
       }
       if (cadastral && Array.isArray(cadastral.polygon)) {
         scene.polygon_latlon = cadastral.polygon.map((v: { lat: number; lng: number }) => [v.lat, v.lng]);
       }
 
       // ── Custom pins (UNIFIED — operator + AI, mig 268) ───────────
-      // World-anchored pins fan out across every shot in the project/shoot;
-      // pixel-anchored pins are scoped to their specific shot. Modal's
-      // render_engine reads scene.custom_pins and projects/draws each.
-      //
-      // POI-only roles: only orbital frames carry POI labels (per the
-      // poisAllowedForRole gate above). Project-scoped AI pins still get
-      // suppressed on building/oblique heroes, etc.
-      const pinsForThisShot: Array<{
-        pin_type: string;
-        source?: string;
-        external_ref?: string | null;
-        world_lat?: number;
-        world_lng?: number;
-        pixel_x?: number;
-        pixel_y?: number;
-        content?: Record<string, unknown> | null;
-        style_overrides?: Record<string, unknown> | null;
-      }> = [];
-      for (const wp of worldCustomPins) {
-        // AI pins are POI labels — gate by role like the legacy POI loop.
-        if (wp.source === 'ai' && !poisAllowedForRole) continue;
-        pinsForThisShot.push({
-          pin_type: wp.pin_type,
-          source: wp.source,
-          external_ref: wp.external_ref,
-          world_lat: wp.world_lat as number,
-          world_lng: wp.world_lng as number,
-          content: wp.content,
-          style_overrides: wp.style_overrides,
-        });
-      }
-      const myPixelPins = pixelPinsByShot.get(shot.id) || [];
-      for (const pp of myPixelPins) {
-        pinsForThisShot.push({
-          pin_type: pp.pin_type,
-          source: pp.source,
-          external_ref: pp.external_ref,
-          pixel_x: pp.pixel_x as number,
-          pixel_y: pp.pixel_y as number,
-          content: pp.content,
-          style_overrides: pp.style_overrides,
-        });
-      }
-      // Apply max_pins_per_shot truncation (theme-driven). Already sorted
-      // by priority DESC at query time so manual edits beat AI proposals.
-      const maxPins = Number(themeForKind?.poi_selection?.max_pins_per_shot);
-      const cap = Number.isFinite(maxPins) && maxPins > 0 ? Math.floor(maxPins) : null;
-      const cappedPins = cap !== null ? pinsForThisShot.slice(0, cap) : pinsForThisShot;
+      const pinsForThisShot = buildSceneCustomPins({
+        worldCustomPins,
+        pixelPinsByShot,
+        shotId: shot.id,
+        poisAllowedForRole,
+      });
+      const cappedPins = capPinsByMax(pinsForThisShot, themeForKind);
       if (cappedPins.length > 0) {
         scene.custom_pins = cappedPins;
       }
 
       // Determine if this theme requested multi-variant output
-      const variantsCfg = Array.isArray(themeForKind?.output_variants)
-        ? (themeForKind.output_variants as Array<Record<string, unknown>>)
+      const variantsCfg = Array.isArray((themeForKind as { output_variants?: unknown })?.output_variants)
+        ? ((themeForKind as { output_variants: Array<Record<string, unknown>> }).output_variants)
         : [];
       const wantVariants = variantsCfg.length > 0;
 
-      // POST to Modal HTTP endpoint. RENDER_TOKEN is sent as a Bearer header to
-      // avoid leaking it through Modal's request-body error logs. The body field
-      // (_token) is retained for backward compat with the deployed Modal worker.
-      // TODO Wave 4: drop the body _token field once the Modal render_http
-      // endpoint accepts header-only auth. (#7 audit fix)
-      //
-      // QC8 D-07 fix: previously this fetch had no timeout. If Modal hangs the
-      // Edge Function would spin until its 145s wall-clock cap, then return a
-      // generic gateway error and waste the entire invocation budget for the
-      // remaining shots in the batch. 120s is comfortably below the wall-clock
-      // cap and slightly above the p99 Modal render latency observed in prod
-      // (~25-40s for orbital + boundary). Sister function callModalSfm already
-      // does this (15min there because SfM is genuinely long-running).
-      const MODAL_RENDER_TIMEOUT_MS = 120_000;
-      const modalResp = await fetch(MODAL_RENDER_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${RENDER_TOKEN}`,
-        },
-        body: JSON.stringify({
-          _token: RENDER_TOKEN,
-          image_b64: base64Encode(srcBytes),
+      // POST to Modal (shared helper handles bearer auth + timeout).
+      let modalJson;
+      try {
+        modalJson = await callModalRender({
+          imageBytes: srcBytes,
           theme: themeForKind,
           scene,
           variants: wantVariants,
-        }),
-        signal: AbortSignal.timeout(MODAL_RENDER_TIMEOUT_MS),
-      });
-
-      if (!modalResp.ok) {
-        const errText = await modalResp.text().catch(() => "");
+        });
+      } catch (e) {
         return {
           shot_id: shot.id,
           filename: shot.filename,
           ok: false,
-          error: `Modal returned ${modalResp.status}: ${errText.slice(0, 200)}`,
+          error: e instanceof Error ? e.message : String(e),
         };
       }
-      const modalJson = await modalResp.json();
-
-      // Build a uniform list of {name, bytes, format} regardless of single/multi.
-      type Variant = { name: string; bytes: Uint8Array; format: string };
-      const variants: Variant[] = [];
-      if (modalJson.variants && typeof modalJson.variants === "object") {
-        for (const [name, v] of Object.entries(modalJson.variants as Record<string, any>)) {
-          if (v?.image_b64) {
-            variants.push({
-              name,
-              bytes: base64Decode(v.image_b64),
-              format: (v.format || "JPEG").toUpperCase(),
-            });
-          }
-        }
-      }
-      if (variants.length === 0 && modalJson.image_b64) {
-        variants.push({
-          name: "default",
-          bytes: base64Decode(modalJson.image_b64),
-          format: (modalJson.format || "JPEG").toUpperCase(),
-        });
-      }
+      const variants = decodeModalVariants(modalJson);
       if (variants.length === 0) {
         return {
           shot_id: shot.id,
@@ -758,40 +518,52 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             continue;
           }
 
-          // Theme persistence (#10 audit fix): when there's a real theme_id in
-          // the chain, store the id + version pointer only — the snapshot can
-          // be reproduced from drone_themes. Inline snapshot is reserved for
+          // Theme persistence: when there's a real theme_id in the chain,
+          // store the id + version pointer only — the snapshot can be
+          // reproduced from drone_themes. Inline snapshot is reserved for
           // ad-hoc previews where there's no canonical theme to refer to.
-          //
-          // NOTE: the legacy `theme_version` column was never created on
-          // drone_renders — only `theme_version_int_at_render` (migration 244).
-          // Writing `theme_version` previously threw 42703 and silently dead-
-          // lettered every render with a real theme_id. Removed.
           const themeIdForRow = themeChain[0]?.theme_id || null;
-          // Migration 244: stamp the most-specific theme's id + version_int so
-          // the swimlane can amber-badge any render that's behind the theme's
-          // current version. themeChain[0] is the highest-priority theme
-          // (person → org → system), which is the one that visually drove this
-          // render. A null id/version (e.g. ad-hoc preview with no canonical
-          // theme) is fine — the stale-detection RPC treats NULL as "unknown
-          // baseline" → never stale.
           const themeIdAtRender = themeChain[0]?.theme_id || null;
           const themeVersionAtRender = themeChain[0]?.version_int ?? null;
+          // Composite snapshot bundle (architect B.1 spec). When we own the
+          // theme_snapshot column (no canonical theme_id), the snapshot is
+          // the wrapped composite { theme, pois_snapshot, boundary_snapshot }
+          // so a single jsonb read reproduces all render-time inputs.
+          const themeSnapshotBundle = themeIdForRow
+            ? null
+            : {
+                theme: themeForKind,
+                pois_snapshot: poisSnapshot,
+                boundary_snapshot: boundarySnapshot,
+                rendered_at: renderTimeIso,
+              };
+          // Stash POI + boundary snapshots in pin_overrides regardless of
+          // whether theme_snapshot owns them — pin_overrides was previously
+          // null and is the safest existing jsonb column for the architect
+          // B.1 snapshot requirement until a future migration adds dedicated
+          // columns. Consumers read the wrapped keys (pois_snapshot,
+          // boundary_snapshot) directly.
+          const pinOverridesSnapshot = {
+            pois_snapshot: poisSnapshot,
+            boundary_snapshot: boundarySnapshot,
+            theme_snapshot_at_render: themeForKind,
+            rendered_at: renderTimeIso,
+          };
           const renderRow: Record<string, unknown> = {
             shot_id: shot.id,
+            pipeline: PIPELINE,
             column_state: initialColumnState,
             kind,
             dropbox_path: uploadRes.path_lower,
             theme_id: themeIdForRow,
-            // Only inline-snapshot when we have no canonical theme to point at.
-            theme_snapshot: themeIdForRow ? null : themeForKind,
+            theme_snapshot: themeSnapshotBundle,
             theme_id_at_render: themeIdAtRender,
             theme_version_int_at_render: themeVersionAtRender,
             property_coord_used: {
               source: project.confirmed_lat ? "confirmed" : "geocoded",
               ...projectCoord,
             },
-            pin_overrides: null,
+            pin_overrides: pinOverridesSnapshot,
             output_variant: v.name,
           };
           const { error: insErr } = await admin.from("drone_renders").insert(renderRow);
@@ -801,23 +573,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             continue;
           }
 
-          // Per-variant audit event. Use a distinct event_type per lane so
-          // operators can filter the audit feed (preview renders are
-          // informational; proposed/adjustments are operator-facing).
-          const eventType = isPreviewRender
-            ? "render_preview"
-            : isAdjustedRender
-              ? "render_adjusted"
-              : "render_proposed";
+          // Per-variant audit event. Wave 5 P2: raw renders use a single
+          // event_type 'render_raw_pool' since the raw pipeline writes to
+          // a single column_state (pool) by default. Operators distinguish
+          // accepted/rejected via the column_state field on the row, not
+          // the event_type.
           await admin.from("drone_events").insert({
             project_id: project.id,
             shoot_id: shot.shoot_id,
             shot_id: shot.id,
-            event_type: eventType,
+            event_type: "render_raw_pool",
             actor_type: isService ? "system" : "user",
             actor_id: isService ? null : user?.id,
             payload: {
               kind,
+              pipeline: PIPELINE,
               dropbox_path: uploadRes.path_lower,
               theme_chain_levels: themeChain.length,
               output_variant: v.name,
@@ -847,16 +617,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         filename: shot.filename,
         ok: !anyVariantFailed,
         out_path: variantResults[0].out_path,
-        pois_passed: Array.isArray(scene.pois) ? scene.pois.length : 0,
-        pois_first_keys: Array.isArray(scene.pois) && scene.pois[0]
-          ? Object.keys(scene.pois[0])
+        pois_passed: Array.isArray(scene.pois) ? (scene.pois as unknown[]).length : 0,
+        pois_first_keys: Array.isArray(scene.pois) && (scene.pois as unknown[])[0]
+          ? Object.keys((scene.pois as Record<string, unknown>[])[0])
           : undefined,
         pois_from_fetch: Array.isArray(pois) ? pois.length : -1,
         shot_role_at_render: shot.shot_role || "(null)",
         needs_pois: needsPois(kind),
-        pois_subcall_url: POI_SUBCALL_TELEMETRY.url,
-        pois_subcall_status: POI_SUBCALL_TELEMETRY.status,
-        pois_subcall_body_head: POI_SUBCALL_TELEMETRY.body_head,
+        pois_subcall_url: poiSubcallTelemetry.url,
+        pois_subcall_status: poiSubcallTelemetry.status,
+        pois_subcall_body_head: poiSubcallTelemetry.body_head,
         ...(variantResults.length > 1
           ? { variants: variantResults }
           : {}),
@@ -864,11 +634,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Structured per-shot error log so it's machine-greppable in the
-      // function logs alongside other Edge Function output. (#11 audit fix)
       console.error(
         JSON.stringify({
           fn: GENERATOR,
+          pipeline: PIPELINE,
           project_id: project.id,
           shoot_id: shoot.id,
           shot_id: shot.id,
@@ -893,6 +662,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         console.error(
           JSON.stringify({
             fn: GENERATOR,
+            pipeline: PIPELINE,
             project_id: project.id,
             shoot_id: shoot.id,
             shot_id: shot.id,
@@ -911,26 +681,31 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const successCount = renderResults.filter((r) => r.ok).length;
 
-  // If there are still unrendered shots, immediately re-enqueue another
-  // render job so the dispatcher picks it up next tick. Without this, a
-  // 34-shot shoot would only get 6 rendered before drone-render returned
-  // 'success' and the operator would think the rest had failed.
-  //
-  // Preview lane: enqueue `kind='raw_preview_render'` so the continuation
-  // re-enters via drone-raw-preview (which is itself idempotent — already-
-  // rendered preview shots are skipped via the skipStates filter above). This
-  // keeps the preview pipeline self-contained: we never promote a preview run
-  // into the production proposed lane.
+  // ── Continuation enqueue ─────────────────────────────────────────
+  // If there are still unrendered shots, re-enqueue another render job so
+  // the dispatcher picks it up next tick. Wave 5 P2 (architect QC2-1 #4):
+  // MUST propagate pipeline='raw' AND column_state AND wipe_existing on the
+  // continuation payload. Pre-S2 the continuation dropped these so a 34-
+  // shot shoot's later batches would default to whatever the dispatcher
+  // synthesised, breaking the operator's intent (e.g. column_state='pool'
+  // they explicitly requested would silently flip back).
   if (moreRemaining > 0) {
-    const continuationKind = isPreviewRender ? "raw_preview_render" : "render";
-    const continuationPayload = isPreviewRender
-      ? { shoot_id: shoot.id, reason: "raw_preview_continuation" }
-      : { shoot_id: shoot.id, kind, reason: "render_continuation" };
+    const continuationPayload: Record<string, unknown> = {
+      shoot_id: shoot.id,
+      kind,
+      pipeline: PIPELINE,
+      reason: "render_continuation",
+    };
+    if (body.column_state) continuationPayload.column_state = body.column_state;
+    // wipe_existing is one-shot — we already wiped above, don't re-wipe on
+    // the continuation tick (would race with rows we just inserted). Leave
+    // out of the continuation payload by design.
     await admin.from("drone_jobs").insert({
       project_id: project.id,
       shoot_id: shoot.id,
-      kind: continuationKind,
+      kind: "render",
       status: "pending",
+      pipeline: PIPELINE,
       payload: continuationPayload,
       scheduled_for: new Date(Date.now() + 5_000).toISOString(),
     });
@@ -938,22 +713,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // Update shoot status. Move to 'proposed_ready' only when ALL shots are done
   // (partial progress keeps it at 'rendering' so the UI shows a spinner).
-  // Preview renders are informational — they don't drive shoot status (which
-  // tracks the production-deliverable lane).
-  if (!isPreviewRender) {
-    let nextStatus = shoot.status;
-    if (moreRemaining === 0 && successCount > 0) nextStatus = "proposed_ready";
-    else if (moreRemaining === 0 && successCount === 0) nextStatus = "render_failed";
-    // else leave at 'rendering' — there's still more to do
-
-    await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
-  }
-
-  const skippedNoEditCount = renderResults.filter((r) => r.skipped_no_edit === true).length;
+  let nextStatus = shoot.status;
+  if (moreRemaining === 0 && successCount > 0) nextStatus = "proposed_ready";
+  else if (moreRemaining === 0 && successCount === 0) nextStatus = "render_failed";
+  // else leave at 'rendering' — there's still more to do
+  await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
 
   return jsonResponse(
     {
       success: true,
+      pipeline: PIPELINE,
       shoot_id: shoot.id,
       kind,
       shots_total: shotsAll.length,
@@ -961,7 +730,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       shots_rendered_this_run: successCount,
       shots_already_rendered: shotsAll.length - shots.length,
       shots_failed_this_run: shotsCapped.length - successCount,
-      shots_skipped_no_edit: skippedNoEditCount,
       shots_remaining: moreRemaining,
       results: renderResults,
     },
@@ -969,211 +737,3 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     req,
   );
 });
-
-// ──────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────
-
-function needsPois(kind: RenderKind): boolean {
-  return kind === "poi" || kind === "poi_plus_boundary";
-}
-function needsBoundary(kind: RenderKind): boolean {
-  return kind === "boundary" || kind === "poi_plus_boundary";
-}
-
-function applyKindToTheme(theme: any, kind: RenderKind): any {
-  // Defensive copy; tweak feature toggles per kind so the renderer doesn't
-  // double-up. The render engine reads boundary.enabled and pois length.
-  const t = JSON.parse(JSON.stringify(theme || {}));
-  if (kind === "poi") {
-    if (t.boundary) t.boundary.enabled = false;
-  }
-  if (kind === "boundary") {
-    // FORCE boundary.enabled = true. Without this, kind='boundary' silently
-    // produces a no-op render whenever the theme ships with boundary.enabled
-    // = false (which most themes do, since most renders are POI-only). The
-    // operator pressed the boundary-only render button and got a render
-    // identical to the source image with no boundary lines. (QC2 #20.)
-    t.boundary = { ...(t.boundary || {}), enabled: true };
-    t.poi_selection = { ...(t.poi_selection || {}), max_pins_per_shot: 0 };
-  }
-  if (kind === "poi_plus_boundary") {
-    if (t.boundary) t.boundary.enabled = true;
-  }
-  return t;
-}
-
-function filenameForRender(
-  srcFilename: string,
-  kind: RenderKind,
-  variantName?: string,
-  format?: string,
-): string {
-  // Strip extension, append _<kind>[__<variant>].<ext>
-  const dot = srcFilename.lastIndexOf(".");
-  const base = dot > 0 ? srcFilename.slice(0, dot) : srcFilename;
-  const ext =
-    (format || "JPEG").toUpperCase() === "PNG"
-      ? "png"
-      : (format || "JPEG").toUpperCase() === "TIFF"
-        ? "tif"
-        : "jpg";
-  // Skip the variant suffix for the legacy "default" name to preserve
-  // pre-variant filenames (no churn for existing renders).
-  if (!variantName || variantName === "default") {
-    return `${base}__${kind}.${ext}`;
-  }
-  return `${base}__${kind}__${variantName}.${ext}`;
-}
-
-async function loadThemeChain(
-  admin: ReturnType<typeof getAdminClient>,
-  ids: { person_id: string | null; organisation_id: string | null },
-): Promise<Array<{ owner_kind: string; theme_id: string; config: any; version_int: number | null }>> {
-  // version_int (migration 244) tracks the theme content version. We carry it
-  // alongside id+config so the render-insert path can stamp
-  // drone_renders.theme_version_int_at_render and the swimlane's
-  // drone_renders_stale_against_theme RPC can later badge cards whose theme
-  // has been edited since they were rendered.
-  const chain: Array<{ owner_kind: string; theme_id: string; config: any; version_int: number | null }> = [];
-
-  if (ids.person_id) {
-    const { data } = await admin
-      .from("drone_themes")
-      .select("id, config, version_int")
-      .eq("owner_kind", "person")
-      .eq("owner_id", ids.person_id)
-      .eq("is_default", true)
-      .eq("status", "active")
-      .maybeSingle();
-    if (data) chain.push({ owner_kind: "person", theme_id: data.id, config: data.config, version_int: data.version_int ?? null });
-  }
-  if (ids.organisation_id) {
-    const { data } = await admin
-      .from("drone_themes")
-      .select("id, config, version_int")
-      .eq("owner_kind", "organisation")
-      .eq("owner_id", ids.organisation_id)
-      .eq("is_default", true)
-      .eq("status", "active")
-      .maybeSingle();
-    if (data) chain.push({ owner_kind: "organisation", theme_id: data.id, config: data.config, version_int: data.version_int ?? null });
-  }
-  // Brand level: forward-compat (skip)
-
-  // System default — always last
-  const { data: sys } = await admin
-    .from("drone_themes")
-    .select("id, config, version_int")
-    .eq("owner_kind", "system")
-    .eq("is_default", true)
-    .eq("status", "active")
-    .maybeSingle();
-  if (sys) chain.push({ owner_kind: "system", theme_id: sys.id, config: sys.config, version_int: sys.version_int ?? null });
-
-  return chain;
-}
-
-// TODO Wave 4 (#8 audit): when this function is called from the
-// drone-job-dispatcher the forwarded Authorization header carries a
-// service-role JWT. drone-pois / drone-cadastral both gate via
-// getUserClient(req) which doesn't recognise the service-role principal →
-// the sub-call returns 0 POIs / null cadastral and the chained render
-// comes out blank. Fix is owned by the drone-pois / drone-cadastral team
-// (Z2): they need to detect the service-role JWT and skip the per-user
-// RLS check (e.g. accept ?internal=1 + service-role JWT). Until that
-// lands, dispatcher-chained renders won't show POIs/boundary even when
-// the data exists. Tracking: see audit finding #8.
-// Stash the most recent sub-call telemetry so we can surface it in the
-// per-shot RenderResult (see RenderResult.pois_subcall_*). Process-global is
-// fine because the per-invocation main handler is single-tenant.
-const POI_SUBCALL_TELEMETRY: { url?: string; status?: number; body_head?: string } = {};
-
-// External-facing Supabase URL — used as the base for sub-calls because
-// `req.url` (visible inside the Edge Function) is the *internal* route
-// without the `/functions/v1/` prefix, so deriving sub-call URLs from
-// req.url produced 404s. Same pattern drone-raw-preview already uses.
-const PUBLIC_SUPABASE_URL =
-  Deno.env.get("SUPABASE_URL") ||
-  "https://rjzdznwkxnzfekgcdkei.supabase.co";
-
-async function fetchPois(
-  req: Request,
-  projectId: string,
-  radiusM?: number,
-  typeQuotas?: Record<string, { priority?: number; max?: number }> | null,
-): Promise<any[]> {
-  const baseUrl = `${PUBLIC_SUPABASE_URL}/functions/v1/drone-pois`;
-  const auth = req.headers.get("Authorization");
-  POI_SUBCALL_TELEMETRY.url = baseUrl;
-  POI_SUBCALL_TELEMETRY.status = undefined;
-  POI_SUBCALL_TELEMETRY.body_head = undefined;
-  // Only include type_quotas when caller actually has one — drone-pois treats
-  // missing/empty as the fallback path that uses hardcoded defaults (and the
-  // cache hash collapses to '' so legacy cache rows still hit).
-  const includeQuotas = !!typeQuotas && typeof typeQuotas === 'object' && Object.keys(typeQuotas).length > 0;
-  let r: Response;
-  try {
-    r = await fetch(baseUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
-      body: JSON.stringify({
-        project_id: projectId,
-        ...(radiusM ? { radius_m: radiusM } : {}),
-        ...(includeQuotas ? { type_quotas: typeQuotas } : {}),
-      }),
-    });
-  } catch (e) {
-    POI_SUBCALL_TELEMETRY.body_head = `THREW: ${e instanceof Error ? e.message : e}`;
-    return [];
-  }
-  POI_SUBCALL_TELEMETRY.status = r.status;
-  const text = await r.text().catch(() => "");
-  POI_SUBCALL_TELEMETRY.body_head = text.slice(0, 200);
-  if (!r.ok) return [];
-  let j: { pois?: unknown[] } = {};
-  try {
-    j = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  return (j.pois as any[]) || [];
-}
-
-// TODO Wave 4 (#8 audit): same caveat as fetchPois — when invoked via the
-// dispatcher's service-role JWT, drone-cadastral's getUserClient doesn't
-// recognise the principal so we get null back. Fix is owned by
-// drone-cadastral (Z2).
-async function fetchCadastral(req: Request, projectId: string): Promise<any | null> {
-  // Same fix as fetchPois — req.url is the internal route, missing the
-  // /functions/v1/ prefix. Use the public Supabase URL.
-  const baseUrl = `${PUBLIC_SUPABASE_URL}/functions/v1/drone-cadastral`;
-  const auth = req.headers.get("Authorization");
-  const r = await fetch(baseUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(auth ? { Authorization: auth } : {}) },
-    body: JSON.stringify({ project_id: projectId }),
-  });
-  if (!r.ok) {
-    console.warn(`drone-cadastral sub-call failed ${r.status}`);
-    return null;
-  }
-  const j = await r.json().catch(() => ({}));
-  return j.success ? j : null;
-}
-
-function base64Encode(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)) as number[]);
-  }
-  return btoa(binary);
-}
-
-function base64Decode(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}

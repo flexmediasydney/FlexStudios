@@ -98,7 +98,28 @@ def _sfm_core(
     print(f"[sfm] preparing {len(image_urls)} images at width={target_width}")
     fetched_names: List[str] = []
     for entry in image_urls:
-        name = entry["name"]
+        # QC2-2 #2: entry["name"] is API-supplied. A crafted name like
+        # "../../etc/passwd.jpg" would resolve via `img_dir / name` to a
+        # path outside the worker's tempdir — reading it back via PIL/cv2
+        # is harmless but cv2.imwrite + exiftool would happily write
+        # arbitrary bytes there. Defence-in-depth: strip any directory
+        # component and reject suspicious bytes outright.
+        raw_name = entry.get("name")
+        if not isinstance(raw_name, str) or not raw_name:
+            print(f"[sfm]   skip (missing name): {entry!r}")
+            continue
+        if any(c in raw_name for c in ("/", "\\", "\x00")) or ".." in raw_name:
+            # Security: log + skip. Don't echo the full string to logs in case
+            # it's hostile (we still log a fingerprint for forensics).
+            print(
+                f"[sfm]   SECURITY: rejected path-traversal name "
+                f"(len={len(raw_name)}, starts={raw_name[:8]!r})"
+            )
+            continue
+        name = Path(raw_name).name  # belt-and-braces: Path().name strips dirs
+        if not name or name in (".", ".."):
+            print(f"[sfm]   SECURITY: rejected degenerate name {raw_name!r}")
+            continue
         dst = img_dir / name
         raw_bytes = _fetch_bytes(entry)
         arr = np.frombuffer(raw_bytes, dtype=np.uint8)
@@ -164,6 +185,11 @@ def _sfm_core(
     n_pts = len(recon.points3D)
     print(f"[sfm] reconstruction: {n_reg}/{len(fetched_names)} images, {n_pts} 3D points")
 
+    # Where pycolmap wrote the largest reconstruction's binary files
+    # (cameras.bin / images.bin / points3D.bin). The caller may tar this dir
+    # for Dropbox upload (see Bug 4 / sparse_bin_dropbox_path).
+    sparse_recon_dir = sparse_dir / str(largest_key)
+
     t_sfm = time.time() - t0 - t_fetch
 
     # ── 5. Pull SfM camera centres + GPS, fit similarity, compute poses ─
@@ -211,6 +237,35 @@ def _sfm_core(
         f"({t_fetch:.1f}s fetch + {t_sfm:.1f}s sfm + {elapsed - t_fetch - t_sfm:.1f}s align)"
     )
 
+    # ── 6. Pack the sparse reconstruction for Dropbox upload ─────────
+    # E10 / Bug 4: persisting sparse_bin_dropbox_path on drone_sfm_runs lets
+    # downstream consumers (Pin Editor, future bundle-adjustment passes)
+    # rehydrate the COLMAP recon offline. The largest reconstruction's
+    # cameras.bin / images.bin / points3D.bin live in sparse_dir/<key>/.
+    # We tar.gz them in-memory so the wrapper can stream the bytes without
+    # racing the temp-dir cleanup.
+    import tarfile
+    sparse_archive_bytes: Optional[bytes] = None
+    try:
+        if sparse_recon_dir.exists():
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                tar.add(str(sparse_recon_dir), arcname="sparse")
+            sparse_archive_bytes = buf.getvalue()
+            print(
+                f"[sfm] sparse archive packed: {len(sparse_archive_bytes):,} bytes "
+                f"(from {sparse_recon_dir})"
+            )
+        else:
+            print(
+                f"[sfm] WARN sparse_recon_dir missing — no archive will be uploaded "
+                f"({sparse_recon_dir})"
+            )
+    except Exception as e:
+        # Pack failure is non-fatal here — the caller will see no archive
+        # bytes and surface a clear marker on the run row.
+        print(f"[sfm] WARN sparse archive pack failed: {e}")
+
     return {
         "schema_version": 1,
         "ok": True,
@@ -230,6 +285,12 @@ def _sfm_core(
             "sfm": t_sfm,
             "total": elapsed,
         },
+        # Sparse recon archive — bytes that the caller (sfm_http) uploads to
+        # Dropbox via dropboxTestHelper Edge Function. Not part of the
+        # canonical schema_version 1 response (omitted from non-HTTP entry
+        # points anyway), but present here so the wrapper can stream it
+        # before tempdir cleanup.
+        "_sparse_archive_bytes": sparse_archive_bytes,
         # Note: ortho path intentionally omitted — Stream B's render worker
         # owns ortho generation; sparse cloud + poses are all downstream needs.
         "ortho_path": None,
@@ -260,7 +321,14 @@ def run_sfm_for_shoot(
     """
     work = Path(tempfile.mkdtemp(prefix="sfm_"))
     try:
-        return _sfm_core(work, image_urls, exif_metadata, target_width, max_features)
+        result = _sfm_core(work, image_urls, exif_metadata, target_width, max_features)
+        # _sparse_archive_bytes is an internal field used only by the HTTP
+        # path (Bug 4 / sparse_bin_dropbox_path upload). The Modal-decorated
+        # remote() entrypoint is called by the test fixture which doesn't
+        # need it — drop to keep the response payload <bandwidth_limit and
+        # schema-clean.
+        result.pop("_sparse_archive_bytes", None)
+        return result
     finally:
         # Modal containers reuse hot disks across invocations; without this
         # the per-shoot temp dirs accumulate and eventually fill the disk.
@@ -428,6 +496,7 @@ def sfm_http(payload: Dict[str, Any]):
         n_points: Optional[int] = None,
         residual_median: Optional[float] = None,
         residual_max: Optional[float] = None,
+        sparse_bin_dropbox_path: Optional[str] = None,
     ) -> None:
         if not run_id:
             return
@@ -445,6 +514,13 @@ def sfm_http(payload: Dict[str, Any]):
             update["residual_median_m"] = round(float(residual_median), 2)
         if residual_max is not None:
             update["residual_max_m"] = round(float(residual_max), 2)
+        if sparse_bin_dropbox_path is not None:
+            # Bug 4 / E10: persist the Dropbox path of the uploaded sparse
+            # archive so downstream rehydration can find it. On upload
+            # failure the caller passes an "upload_failed:<reason>" sentinel
+            # rather than NULL — we keep the field non-NULL so dashboards
+            # can distinguish "never attempted" from "attempted+failed".
+            update["sparse_bin_dropbox_path"] = sparse_bin_dropbox_path[:1000]
         try:
             with httpx.Client(timeout=30.0) as c2:
                 r2 = c2.patch(
@@ -730,12 +806,49 @@ def sfm_http(payload: Dict[str, Any]):
     except Exception as e:
         print(f"[sfm_http] drone_shoots residual update failed: {e}")
 
+    # ── Step 6: upload sparse recon archive to Dropbox ──
+    # Bug 4 / E10: previously sparse_bin_dropbox_path was never written →
+    # always NULL on succeeded runs. Pin Editor's per-shot fallback (#85)
+    # already protects it from breaking, but the field needs a non-NULL
+    # marker for dashboards / future bundle-adjustment passes / audit.
+    #
+    # Strategy: we don't carry Dropbox OAuth credentials inside the Modal
+    # container. Instead, call the existing dropboxTestHelper Edge Function
+    # with content_b64 — it already proxies file writes via the canonical
+    # Dropbox shared client (folder_kind='enrichment_sfm_meshes'). Modal's
+    # service-role bearer token bypasses the master_admin RBAC check there.
+    sparse_bytes = result.get("_sparse_archive_bytes")
+    sparse_path_value: str
+    if not project_id:
+        sparse_path_value = "upload_failed:no_project_id"
+        print("[sfm_http] sparse upload skipped: no project_id from drone-shot-urls")
+    elif not sparse_bytes:
+        sparse_path_value = "upload_failed:no_archive_packed"
+        print("[sfm_http] sparse upload skipped: _sparse_archive_bytes missing from result")
+    else:
+        sparse_path_value = _upload_sparse_to_dropbox(
+            supabase_url=supabase_url,
+            service_key=service_key,
+            project_id=project_id,
+            shoot_id=shoot_id,
+            archive_bytes=sparse_bytes,
+        )
+
     _finalise_run(
         True,
         n_registered=n_registered,
         n_points=int(result.get("n_points3d", 0)),
         residual_median=residual_median,
         residual_max=residual_max,
+        sparse_bin_dropbox_path=sparse_path_value,
+        # Surface upload failures in error_message so dashboards see them
+        # — but NOT in run.status (that stays 'succeeded' because the SfM
+        # itself succeeded; the upload is downstream-of-success per spec).
+        error_msg=(
+            sparse_path_value
+            if sparse_path_value.startswith("upload_failed:")
+            else None
+        ),
     )
 
     elapsed = time.time() - started_at
@@ -765,37 +878,100 @@ def _iso_utc_now() -> str:
 def _lonlat_mean_via_unit_vectors(
     lats: List[float], lngs: List[float]
 ) -> Tuple[float, float]:
-    """Compute mean lat/lng via the unit-vector method on a sphere.
+    """Thin wrapper around projection.lonlat_mean_via_unit_vectors.
 
-    The naive arithmetic mean of longitudes wraps incorrectly anywhere
-    near the antimeridian (e.g. +179.9° and -179.9° average to 0°, when
-    the geographic midpoint is ±180°). This converts each point to a
-    unit vector on the unit sphere, sums + renormalises, then converts
-    back. Correct anywhere on the globe, ~10 µs per camera. (QC2 #9.)
+    Kept here for backwards compatibility — earlier QC iterations had this
+    helper inline in sfm_worker, but build_enu_ref also needs it (QC2-2 #3),
+    so the canonical implementation now lives in projection.py.
     """
-    if not lats or not lngs or len(lats) != len(lngs):
-        raise ValueError("lats and lngs must be same non-empty length")
-    sx = sy = sz = 0.0
-    for lat, lng in zip(lats, lngs):
-        lat_r = math.radians(lat)
-        lng_r = math.radians(lng)
-        cos_lat = math.cos(lat_r)
-        sx += cos_lat * math.cos(lng_r)
-        sy += cos_lat * math.sin(lng_r)
-        sz += math.sin(lat_r)
-    n = float(len(lats))
-    mx, my, mz = sx / n, sy / n, sz / n
-    norm = math.sqrt(mx * mx + my * my + mz * mz)
-    if norm < 1e-12:
-        # Antipodal cancellation — fall back to arithmetic mean. Realistic
-        # nadir grids span <100 m so this branch is unreachable in practice.
-        return (sum(lats) / n, sum(lngs) / n)
-    mx /= norm
-    my /= norm
-    mz /= norm
-    mean_lat = math.degrees(math.asin(max(-1.0, min(1.0, mz))))
-    mean_lng = math.degrees(math.atan2(my, mx))
-    return (mean_lat, mean_lng)
+    from projection import lonlat_mean_via_unit_vectors
+    return lonlat_mean_via_unit_vectors(lats, lngs)
+
+
+def _upload_sparse_to_dropbox(
+    *,
+    supabase_url: str,
+    service_key: str,
+    project_id: str,
+    shoot_id: str,
+    archive_bytes: bytes,
+) -> str:
+    """Upload sparse recon archive via dropboxTestHelper Edge Function.
+
+    Returns either the Dropbox path (e.g. "/FlexMedia/Projects/.../sparse_<id>.tar.gz")
+    on success, or an "upload_failed:<reason>" sentinel on failure. The
+    sentinel is intentionally non-NULL so dashboards can distinguish
+    "never attempted" (NULL) from "attempted but failed" (sentinel).
+
+    Why route through dropboxTestHelper rather than calling Dropbox directly:
+    the Modal worker does not carry Dropbox OAuth credentials. dropboxTestHelper
+    accepts service-role auth, takes a folder_kind ('enrichment_sfm_meshes'
+    resolves to 06_ENRICHMENT/sfm_meshes inside the project's Dropbox root),
+    and proxies the upload through the canonical _shared/dropbox.ts client.
+    """
+    import httpx
+    import base64 as _b64
+
+    archive_size = len(archive_bytes)
+    print(
+        f"[sfm_http] uploading sparse archive: {archive_size:,} bytes "
+        f"shoot={shoot_id} project={project_id}"
+    )
+    if archive_size == 0:
+        return "upload_failed:empty_archive"
+
+    # dropboxTestHelper hard-caps content_b64 implicitly via Edge Function
+    # request body limit (~50 MB). Sparse recons for a 10-30 image grid are
+    # typically <5 MB; anything larger likely indicates a bug in the
+    # reconstruction step but we still attempt + record the failure.
+    if archive_size > 40 * 1024 * 1024:
+        print(f"[sfm_http] WARN sparse archive >40MB; upload may be rejected")
+
+    filename = f"sparse_{shoot_id}.tar.gz"
+    payload = {
+        "project_id": project_id,
+        "folder_kind": "enrichment_sfm_meshes",
+        "filename": filename,
+        # dropboxTestHelper decodes content_b64 → Uint8Array → upload
+        "content_b64": _b64.b64encode(archive_bytes).decode("ascii"),
+    }
+    headers = {
+        "Authorization": f"Bearer {service_key}",
+        "apikey": service_key,
+        "Content-Type": "application/json",
+    }
+    url = f"{supabase_url}/functions/v1/dropboxTestHelper"
+
+    try:
+        # Generous timeout — the Edge Function refreshes Dropbox tokens +
+        # uploads; small archives should finish in <10 s, large ones <60 s.
+        with httpx.Client(timeout=180.0) as client:
+            r = client.post(url, headers=headers, json=payload)
+        if r.status_code >= 300:
+            body_excerpt = (r.text or "")[:200].replace("\n", " ")
+            print(
+                f"[sfm_http] sparse upload HTTP {r.status_code}: "
+                f"{body_excerpt}"
+            )
+            return f"upload_failed:http_{r.status_code}"
+        try:
+            data = r.json()
+        except Exception as e:
+            print(f"[sfm_http] sparse upload response not JSON: {e}")
+            return "upload_failed:invalid_response"
+        if not data.get("success"):
+            print(f"[sfm_http] sparse upload reported !success: {data}")
+            return "upload_failed:helper_reported_failure"
+        path = (data.get("uploaded") or {}).get("path")
+        if not path or not isinstance(path, str):
+            print(f"[sfm_http] sparse upload no path in response: {data}")
+            return "upload_failed:no_path_in_response"
+        print(f"[sfm_http] sparse upload OK: {path}")
+        return path
+    except Exception as e:
+        msg = str(e)[:160]
+        print(f"[sfm_http] sparse upload exception: {msg}")
+        return f"upload_failed:exception:{msg[:80]}"
 
 
 def _run_sfm_pipeline_inline(

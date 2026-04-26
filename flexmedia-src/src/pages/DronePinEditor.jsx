@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
@@ -48,17 +48,25 @@ const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 // Solution: every Pin Editor mount owns its own cache. The page revokes any
 // blobs it created on unmount, and the swimlane's SHARED_THUMB_CACHE is
 // never touched.
+//
+// W6 FIX 9 (QC3-2 B14): Authorization was hard-coded to the anon key, which
+// fails for getDeliveryMediaFeed's session-checked proxy path (operator
+// rows aren't always anon-readable). Use the live session token; fall back
+// to anon if no session is present (preserves the previous failure mode
+// rather than crashing the editor mount).
 async function _pinEditorFetchProxy(path) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 25000);
   try {
+    const { data: sessData } = await supabase.auth.getSession();
+    const token = sessData?.session?.access_token || SUPABASE_ANON;
     const res = await fetch(
       `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${SUPABASE_ANON}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ action: "proxy", file_path: path }),
         signal: controller.signal,
@@ -105,6 +113,12 @@ export default function DronePinEditor() {
   const projectId = searchParams.get("project");
   const shootId = searchParams.get("shoot");
   const initialShotId = searchParams.get("shot");
+  // W5 P2 S4 / Task 5: Pin Editor is now edited-only. URL convention:
+  //   /DronePinEditor?project=...&shoot=...&shot=...&pipeline=edited
+  // Default 'edited' if not supplied. Reject 'raw' with a clear error
+  // (the surface only exists on Edited cards going forward; S6 removes
+  // the legacy "Edit pins" button from raw RenderCards).
+  const pipeline = (searchParams.get("pipeline") || "edited").toLowerCase();
 
   // ── Data fetching ────────────────────────────────────────────────────────
   const shootQ = useQuery({
@@ -440,7 +454,73 @@ export default function DronePinEditor() {
     );
   }, [shots, currentShotId]);
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // W6 FIX 2 (QC3-8 E2E1): React #310 root cause.
+  //
+  // Previously, the early returns below for `!projectId/!shootId`,
+  // `pipeline === 'raw'`, `isLoading`, `fatal`, `!shootQ.data`, and the
+  // `anyEdited` guard ran BEFORE the `handleShotChange` and `handleAfterSave`
+  // useCallback definitions. On the first render (queries loading) we'd hit
+  // the spinner branch and never call those hooks; on a later render (data
+  // loaded) we WOULD call them. React's hooks-rule check counts the number
+  // of hooks per render — mismatch → minified error #310 ("Rendered fewer
+  // hooks than expected"), which crashed Pin Editor on every fully-loaded
+  // /DronePinEditor?pipeline=edited deep-link.
+  //
+  // Fix: hoist BOTH useCallback definitions above all the early returns. We
+  // also wrap `goBackToProject` in useCallback for parity (it was a plain
+  // arrow before — fine because no return-path-conditional hook depends on
+  // it, but consistency is cheap). Returns below remain pure render branches
+  // — none of them call additional hooks, so the hook count is now stable.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Shot-strip click → update the URL `?shot=` so currentShotId / imageUrl
+  // re-derive against the new shot. Without this, clicking a thumbnail
+  // updated PinEditor's local activeShotId but the source image (driven by
+  // imageDropboxPath via currentShotId via the URL) never swapped — the
+  // canvas stayed locked on the first opened shot.
+  const handleShotChange = useCallback(
+    (newShotId) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("shot", newShotId);
+          // Clear the explicit ?render= pin so picking a new shot doesn't
+          // try to load the previous render's image on the new shot.
+          next.delete("render");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  // After save: refetch custom pins + renders so the editor reflects the
+  // server's authoritative state (incl. dbId for any newly-created rows).
+  // F33 (W5 P2 S4): the actual cache key is "by-shoot-or-project" (set in
+  // customPinsQ above) — not "by-shoot". The legacy invalidation never
+  // matched, so the editor would re-render against the stale prop until
+  // the next mount. Use a predicate so any pin-cache variant matches.
+  const handleAfterSave = useCallback(() => {
+    queryClient.invalidateQueries({
+      predicate: (q) => {
+        const key = q.queryKey;
+        return Array.isArray(key) && key[0] === "drone_custom_pins";
+      },
+    });
+    queryClient.invalidateQueries({
+      queryKey: ["drone_renders", "by-shoot", shootId],
+    });
+  }, [queryClient, shootId]);
+
+  const goBackToProject = useCallback(
+    () => navigate(createPageUrl(`ProjectDetails?id=${projectId}&tab=drones`)),
+    [navigate, projectId],
+  );
+
   // ── Loading / error states ──────────────────────────────────────────────
+  // (No more hook calls below this line — only render branches.)
   if (!projectId || !shootId) {
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background">
@@ -448,6 +528,30 @@ export default function DronePinEditor() {
         <p className="text-sm">Missing project or shoot id in URL.</p>
         <Button variant="outline" onClick={() => navigate(-1)}>
           Go back
+        </Button>
+      </div>
+    );
+  }
+
+  // E1 + E40 / Task 5 (W5 P2 S4): Pin Editor only operates on EDITED
+  // renders. Raw renders use a different rendering pipeline and don't
+  // accept pin overrides. S6 removes the "Edit pins" button from raw
+  // RenderCards in DroneRendersSubtab; this is the defensive guard for
+  // anyone deep-linking ?pipeline=raw or hitting an old bookmark.
+  if (pipeline === "raw") {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background p-8">
+        <AlertCircle className="h-10 w-10 text-amber-500" />
+        <p className="text-sm font-medium">
+          Pin Editor only operates on edited renders
+        </p>
+        <p className="text-xs text-muted-foreground max-w-md text-center">
+          Raw renders use a different rendering pipeline and don&apos;t
+          accept pin overrides. Wait for the editor delivery, then open
+          the Pin Editor from the Edited card.
+        </p>
+        <Button variant="outline" onClick={() => navigate(-1)} className="gap-1">
+          <ArrowLeft className="h-3 w-3" /> Go back
         </Button>
       </div>
     );
@@ -506,8 +610,35 @@ export default function DronePinEditor() {
     );
   }
 
-  const goBackToProject = () =>
-    navigate(createPageUrl(`ProjectDetails?id=${projectId}&tab=drones`));
+  // E1 + E40 / Task 5 (W5 P2 S4): defensive — if no shot in this shoot has
+  // an edited_dropbox_path, the operator is opening Pin Editor against a
+  // shoot that hasn't received editor delivery yet. Render a clear hint
+  // instead of mounting PinEditor with a broken image pipeline.
+  // Note: shots may legitimately be empty (drone-ingest pending) — in
+  // that case the editor's "no shots" state inside PinEditor is more
+  // informative, so only gate on "shots exist BUT none are edited".
+  const shotsForGuard = Array.isArray(shotsQ.data) ? shotsQ.data : [];
+  const anyEdited = shotsForGuard.some((s) => Boolean(s?.edited_dropbox_path));
+  if (shotsForGuard.length > 0 && !anyEdited) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background p-8">
+        <AlertCircle className="h-10 w-10 text-amber-500" />
+        <p className="text-sm font-medium">Pin Editor is for edited renders only</p>
+        <p className="text-xs text-muted-foreground max-w-md text-center">
+          This shoot has no edited shots delivered yet. Wait for the
+          editor delivery (raw shots are processed first), then open
+          Pin Editor from the Edited card.
+        </p>
+        <Button
+          variant="outline"
+          onClick={() => navigate(createPageUrl(`ProjectDetails?id=${projectId}&tab=drones`))}
+          className="gap-1"
+        >
+          <ArrowLeft className="h-3 w-3" /> Back to project
+        </Button>
+      </div>
+    );
+  }
 
   // Theme is non-fatal: only treat an actual fetch error as an error.
   // The previous version also treated `themeQ.data == null` as fatal, which
@@ -517,39 +648,6 @@ export default function DronePinEditor() {
   // isLoading=false + data=undefined. Net result: editor was blocked for
   // most users. Revert to "only block on hard error". (Audit #11 softened.)
   const themeError = themeQ.error || null;
-
-  // Shot-strip click → update the URL `?shot=` so currentShotId / imageUrl
-  // re-derive against the new shot. Without this, clicking a thumbnail
-  // updated PinEditor's local activeShotId but the source image (driven by
-  // imageDropboxPath via currentShotId via the URL) never swapped — the
-  // canvas stayed locked on the first opened shot.
-  const handleShotChange = useCallback(
-    (newShotId) => {
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.set("shot", newShotId);
-          // Clear the explicit ?render= pin so picking a new shot doesn't
-          // try to load the previous render's image on the new shot.
-          next.delete("render");
-          return next;
-        },
-        { replace: true },
-      );
-    },
-    [setSearchParams],
-  );
-
-  // After save: refetch custom pins + renders so the editor reflects the
-  // server's authoritative state (incl. dbId for any newly-created rows).
-  const handleAfterSave = useCallback(() => {
-    queryClient.invalidateQueries({
-      queryKey: ["drone_custom_pins", "by-shoot", shootId],
-    });
-    queryClient.invalidateQueries({
-      queryKey: ["drone_renders", "by-shoot", shootId],
-    });
-  }, [queryClient, shootId]);
 
   return (
     <PinEditor
@@ -564,6 +662,7 @@ export default function DronePinEditor() {
       imageUrl={imageUrl}
       imageError={imageError}
       poseAvailable={poseAvailable}
+      pipeline={pipeline}
       onShotChange={handleShotChange}
       onAfterSave={handleAfterSave}
       onSave={goBackToProject}

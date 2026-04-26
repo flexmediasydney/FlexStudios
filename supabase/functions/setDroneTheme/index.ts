@@ -11,7 +11,8 @@
  * Auth per owner_kind:
  *   - system        : master_admin only
  *   - organisation  : master_admin OR admin (org-admin gating arrives later)
- *   - person        : master_admin OR the person themselves (auth user.id matches)
+ *   - person        : master_admin OR the agent themselves (resolved via
+ *                     agents.assigned_to_user_id = auth.uid)
  *   - brand         : master_admin only — but brand entity not yet implemented;
  *                     reject with 501 to make this explicit.
  *
@@ -19,6 +20,13 @@
  * with a computed diff vs the new config (see _shared/themeResolver.ts).
  *
  * Deployed verify_jwt=false; we do our own auth via getUserFromReq.
+ *
+ * W5 P2 S4 / mig 280: person-theme owner_id is now the agents.id (NOT the
+ * auth.users.id). The function resolves the calling user's agents row via
+ * assigned_to_user_id and uses that id for persistence. Legacy clients that
+ * still send auth.uid() are translated transparently. Without this fix the
+ * persisted row would fail RLS reads under the new mig 280 predicate
+ * `owner_id IN (SELECT id FROM agents WHERE assigned_to_user_id = auth.uid())`.
  */
 
 import {
@@ -65,7 +73,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   if (body._health_check) {
-    return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
+    return jsonResponse({ _version: 'v2.0', _fn: GENERATOR }, 200, req);
   }
 
   const user = await getUserFromReq(req).catch(() => null);
@@ -173,6 +181,96 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const isMasterAdmin = role === 'master_admin';
   const isAdmin = role === 'admin';
 
+  // ── owner_id translation for person themes (W5 P2 S4 / mig 280) ──────────
+  // mig 280 changed the person-theme RLS predicate to:
+  //   owner_id IN (SELECT id FROM agents WHERE assigned_to_user_id = auth.uid())
+  // That means owner_id MUST be an agents.id, not an auth.users.id. Prior
+  // callers (pre-mig 252 / pre-mig 280) often passed auth.uid() because the
+  // initial RLS read it that way. After mig 280 those rows fail RLS with_check
+  // on insert AND become invisible on read.
+  //
+  // Fix: when writing a person theme, RESOLVE the agent for the calling user
+  // and use that agents.id as the canonical owner_id. This applies even when
+  // the function uses the admin client (which bypasses RLS) — without the
+  // translation the persisted owner_id would still be wrong and the actual
+  // owner's normal-RLS reads would exclude the row.
+  let resolvedOwnerId: string | null | undefined = body.owner_id;
+  if (body.owner_kind === 'person') {
+    if (isMasterAdmin) {
+      // Master admin: trust the supplied owner_id but verify it resolves to
+      // a real agent row (no silent FK ghost-rows). owner_id MAY equal
+      // auth.uid() in legacy clients; translate to the agents.id when so.
+      const admin = getAdminClient();
+      const { data: agentDirect } = await admin
+        .from('agents')
+        .select('id, email, assigned_to_user_id')
+        .eq('id', body.owner_id!)
+        .maybeSingle();
+      if (agentDirect) {
+        resolvedOwnerId = (agentDirect as { id: string }).id;
+      } else {
+        // owner_id might be an auth.users.id — try resolving via assigned_to_user_id
+        const { data: agentByUser } = await admin
+          .from('agents')
+          .select('id')
+          .eq('assigned_to_user_id', body.owner_id!)
+          .maybeSingle();
+        if (agentByUser) {
+          resolvedOwnerId = (agentByUser as { id: string }).id;
+          console.info(
+            `[${GENERATOR}] master_admin: translated auth.users.id ${body.owner_id} → agents.id ${resolvedOwnerId}`,
+          );
+        } else {
+          return errorResponse(
+            `owner_id ${body.owner_id} does not resolve to an agent record`,
+            400, req,
+          );
+        }
+      }
+    } else {
+      // Non-admin: the calling user must have an agents row, and that row's
+      // id is the canonical owner_id. Resolve it server-side and ignore
+      // whatever owner_id the client supplied (defence against a manager
+      // trying to write a theme owned by another agent).
+      const admin = getAdminClient();
+      const { data: callerAgent, error: agErr } = await admin
+        .from('agents')
+        .select('id')
+        .eq('assigned_to_user_id', user.id)
+        .limit(1)
+        .maybeSingle();
+      if (agErr) {
+        console.error(`[${GENERATOR}] agent resolve failed:`, agErr);
+        return errorResponse('Failed to resolve agent record', 500, req);
+      }
+      if (!callerAgent) {
+        return errorResponse(
+          'no agent record for current user — cannot write a person theme',
+          403, req,
+        );
+      }
+      const callerAgentId = (callerAgent as { id: string }).id;
+      // Defensive: if the caller supplied an explicit owner_id and it
+      // doesn't match the resolved agents.id, reject — they're trying to
+      // write someone else's person theme. (Master admins pass through above.)
+      if (body.owner_id && body.owner_id !== callerAgentId) {
+        // Allow auth.uid() → agents.id translation as a forgiveness for
+        // legacy clients (we don't want every app version bump to break
+        // saves) — but only when the supplied id IS the caller's auth uid.
+        if (body.owner_id !== user.id) {
+          return errorResponse(
+            'person themes can only be written for your own agent record',
+            403, req,
+          );
+        }
+        console.info(
+          `[${GENERATOR}] translated auth.users.id ${user.id} → agents.id ${callerAgentId} (legacy client)`,
+        );
+      }
+      resolvedOwnerId = callerAgentId;
+    }
+  }
+
   if (body.owner_kind === 'system') {
     if (!isMasterAdmin) {
       return errorResponse('system themes are master_admin only', 403, req);
@@ -181,30 +279,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (!isMasterAdmin && !isAdmin) {
       return errorResponse('organisation themes require master_admin or admin', 403, req);
     }
-  } else if (body.owner_kind === 'person') {
-    // master_admin OR the person themselves.
-    // FlexStudios calls the "person" entity `agents`. Self-check: the agent
-    // row at owner_id must match either the calling user's email OR
-    // assigned_to_user_id. Service-role'd for determinism.
-    if (!isMasterAdmin) {
-      const admin = getAdminClient();
-      const { data: agentRow, error: aErr } = await admin
-        .from('agents')
-        .select('id, email, assigned_to_user_id')
-        .eq('id', body.owner_id!)
-        .maybeSingle();
-      if (aErr) {
-        console.error(`[${GENERATOR}] agent lookup failed:`, aErr);
-        return errorResponse('Failed to verify person ownership', 500, req);
-      }
-      const matchesEmail = agentRow?.email && user.email
-        && agentRow.email.toLowerCase() === user.email.toLowerCase();
-      const matchesUserId = agentRow?.assigned_to_user_id === user.id;
-      if (!agentRow || (!matchesEmail && !matchesUserId)) {
-        return errorResponse('person themes require master_admin or self', 403, req);
-      }
-    }
   }
+  // Person-theme auth was the agents-resolution block above; no further check.
 
   const admin = getAdminClient();
 
@@ -227,7 +303,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (body.owner_kind === 'system') {
       q = q.is('owner_id', null);
     } else {
-      q = q.eq('owner_id', body.owner_id!);
+      // mig 280: scope by RESOLVED agents.id for person themes so we don't
+      // also clear defaults belonging to the (different) auth.users.id row.
+      const ownerIdForScope =
+        body.owner_kind === 'person' ? (resolvedOwnerId as string) : (body.owner_id as string);
+      q = q.eq('owner_id', ownerIdForScope);
     }
     if (excludeThemeId) q = q.neq('id', excludeThemeId);
     const { error } = await q;
@@ -251,10 +331,26 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (!priorTheme) return errorResponse('theme_id not found', 404, req);
 
     // Don't let callers re-parent themes (changes the auth surface).
-    if (priorTheme.owner_kind !== body.owner_kind || (priorTheme.owner_id || null) !== (body.owner_id || null)) {
+    // For person themes compare against the RESOLVED agents.id (not the
+    // raw client-supplied owner_id, which may be auth.uid in legacy clients).
+    const compareOwnerId =
+      body.owner_kind === 'person' ? (resolvedOwnerId || null) : (body.owner_id || null);
+    if (priorTheme.owner_kind !== body.owner_kind || (priorTheme.owner_id || null) !== compareOwnerId) {
       return errorResponse(
         'Cannot change owner_kind or owner_id on existing theme — create a new one instead',
         400, req,
+      );
+    }
+    // Defensive (mig 280): person-theme updates verify the prior row's
+    // owner_id matches the resolved agents.id for the calling user. Without
+    // this, master_admin's translation block above could (theoretically)
+    // accept a stale auth-id-as-owner that maps to a different agent than
+    // the row currently holds. The check above already gates that for non-
+    // admin callers; this is the master-admin belt-and-braces.
+    if (body.owner_kind === 'person' && priorTheme.owner_id !== resolvedOwnerId) {
+      return errorResponse(
+        `prior theme owner_id ${priorTheme.owner_id} does not match resolved agents.id ${resolvedOwnerId}`,
+        403, req,
       );
     }
 
@@ -334,12 +430,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     await clearOtherDefaults(null);
   }
 
+  // mig 280: persist owner_id as the RESOLVED agents.id for person themes,
+  // not whatever the client sent (which may be auth.uid). Other owner_kinds
+  // pass through unchanged.
+  const persistedOwnerId =
+    body.owner_kind === 'person' ? (resolvedOwnerId ?? null) : (body.owner_id ?? null);
   const { data: inserted, error: insErr } = await admin
     .from('drone_themes')
     .insert({
       name: body.name,
       owner_kind: body.owner_kind,
-      owner_id: body.owner_id ?? null,
+      owner_id: persistedOwnerId,
       config: serialisedConfig,
       is_default: body.is_default ?? false,
       // Bug #11 — honour caller-supplied status (defaults to 'active').

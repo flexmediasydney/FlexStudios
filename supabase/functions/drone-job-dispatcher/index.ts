@@ -3,11 +3,13 @@
  * ────────────────────
  * Pulls pending `drone_jobs` and dispatches them to the appropriate handler:
  *
- *   kind='ingest'             → POST to drone-ingest      payload: { project_id }
- *   kind='render'             → POST to drone-render      payload: { shoot_id, kind?, fallback? }
- *   kind='sfm'                → POST to Modal sfm_http    payload: { _token, shoot_id }
- *   kind='poi_fetch'          → POST to drone-pois        payload: { project_id }
- *   kind='raw_preview_render' → POST to drone-raw-preview payload: { shoot_id }
+ *   kind='ingest'                       → POST to drone-ingest      payload: { project_id }
+ *   kind='render'                       → POST to drone-render      payload: { shoot_id, kind?, fallback? }
+ *   kind='render_edited'                → POST to drone-render-edited payload: { shoot_id|shot_id, kind?, column_state?, wipe_existing?, reason?, cascade? }
+ *   kind='boundary_save_render_cascade' → POST to drone-render-edited (cascade=true) payload: { project_id }
+ *   kind='sfm'                          → POST to Modal sfm_http    payload: { _token, shoot_id }
+ *   kind='poi_fetch'                    → POST to drone-pois        payload: { project_id }
+ *   kind='raw_preview_render'           → POST to drone-raw-preview payload: { shoot_id }
  *
  *     Chain: ingest → sfm → poi_fetch → raw_preview_render
  *
@@ -53,9 +55,46 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "https://rjzdznwkxnzfekgcdk
 const MODAL_SFM_URL =
   Deno.env.get("MODAL_SFM_URL") ||
   "https://joseph-89037--flexstudios-drone-sfm-sfm-http.modal.run";
-const SFM_HTTP_TIMEOUT_MS = 15 * 60 * 1000; // 15 min — matches Modal function timeout
+// QC2-1 #8: SfM HTTP timeout MUST be < Edge Function wall-clock cap (~145s),
+// otherwise the dispatcher gets killed mid-fetch, the job stays stuck in
+// 'running' for 20min until the stale-claim sweeper requeues it, and the
+// Modal-side result is silently lost. Cap at 120s — most SfMs finish in
+// 30-90s anyway, and a >120s SfM dies cleanly with a network timeout that
+// surfaces through markFailed → backoff retry.
+//
+// For SfMs that consistently exceed 120s, refactor to a Modal-callback
+// pattern: kick off the job + return immediately + Modal POSTs back to a
+// dedicated webhook on completion (deferred, not in-band). Tracked as a
+// follow-up — not blocking for current shoots which complete inside 90s.
+const SFM_HTTP_TIMEOUT_MS = 120 * 1000;
 const MAX_JOBS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
+
+// QC3-8 E2E13: hard upper bound on dispatcher wall-clock so the function
+// returns BEFORE Supabase's own ~145s scheduler kills it. We aborted Modal
+// fetches at 120s but the OUTER dispatcher tick was observed taking up to
+// 148.6s when stale-claim sweep + 9 dispatched jobs + chained inserts all
+// piled up. A platform-side kill leaves 'running' rows orphaned for 20min
+// (until the stale sweep) so we'd rather exit cleanly at 110s and let the
+// next cron tick pick up the rest. 110s leaves a safety margin for the
+// final response serialisation + advisory-unlock RPC.
+const DISPATCHER_DEADLINE_MS = 110 * 1000;
+
+// QC2-6 #12: single-flight enforcement at the function level. Cron schedule
+// `* * * * *` plus 145s wall-clock cap means two cron invocations can
+// overlap. SKIP LOCKED on claim_drone_jobs prevents row double-claim, but
+// MAX_SFM_PER_TICK=1 still lets BOTH overlapping invocations dispatch a
+// separate SfM to Modal back-to-back (doubles spend during the overlap).
+// Wrap the body in pg_try_advisory_lock(LOCK_KEY) → if a second tick
+// arrives while the first is still running, return cleanly with
+// `skipped:concurrent_dispatch`.
+//
+// Lock id derived from a fixed string; same hashing strategy as
+// hashtext('drone-job-dispatcher') — but we precompute on the JS side so
+// every dispatcher tick agrees on the value. Use a stable 53-bit hash
+// (Postgres bigint is signed 64-bit; we stay well inside the JS safe
+// integer range to avoid bignum gymnastics).
+const DISPATCHER_LOCK_KEY = stableHashBigInt("drone-job-dispatcher");
 
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
@@ -98,6 +137,100 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
   const startedAt = Date.now();
 
+  // QC3-8 E2E13: hard wall-clock deadline. AbortController fires at 110s so
+  // any in-flight fetch (Modal SfM, Edge Function dispatch) gets cancelled
+  // and the dispatcher returns 200 cleanly before Supabase's platform-side
+  // kill can leave rows in 'running' for 20min.
+  const dispatcherDeadline = new AbortController();
+  const deadlineTimer = setTimeout(
+    () => dispatcherDeadline.abort("dispatcher_deadline_110s"),
+    DISPATCHER_DEADLINE_MS,
+  );
+
+  // ── QC2-6 #12: Single-flight advisory lock ──────────────────────────────
+  // Try to acquire the dispatcher lock. If another invocation already holds
+  // it, exit cleanly (200 OK) without touching the queue — the holder will
+  // process pending jobs in the same minute. We deliberately return 200 so
+  // pg_cron doesn't log it as a failed invocation; the explicit
+  // `skipped:concurrent_dispatch` field makes overlap visible in logs.
+  let lockAcquired = false;
+  try {
+    const { data: lockResp, error: lockErr } = await admin.rpc(
+      "pg_try_advisory_lock",
+      { lock_id: DISPATCHER_LOCK_KEY },
+    );
+    if (lockErr) {
+      // RPC error (wrapper missing, role lacks EXECUTE, etc.) — fail loud
+      // so we notice during deploy. Don't silently degrade to no-lock mode
+      // because that's how QC2-6 #12 happened in the first place.
+      return errorResponse(
+        `pg_try_advisory_lock RPC failed: ${lockErr.message}`,
+        500,
+        req,
+      );
+    }
+    lockAcquired = lockResp === true;
+    if (!lockAcquired) {
+      console.info(
+        `[${GENERATOR}] concurrent dispatch detected — returning early`,
+      );
+      return jsonResponse(
+        {
+          success: true,
+          claimed: 0,
+          dispatched: 0,
+          failed: 0,
+          deferred: 0,
+          skipped: "concurrent_dispatch",
+          elapsed_ms: Date.now() - startedAt,
+        },
+        200,
+        req,
+      );
+    }
+
+    // Lock held — run the original dispatcher body. The `return` statements
+    // inside flow through to the `finally` block which releases the lock.
+    return await runDispatcherTick(
+      admin,
+      req,
+      startedAt,
+      dispatcherDeadline.signal,
+    );
+  } finally {
+    clearTimeout(deadlineTimer);
+    if (lockAcquired) {
+      const { error: relErr } = await admin.rpc("pg_advisory_unlock", {
+        lock_id: DISPATCHER_LOCK_KEY,
+      });
+      if (relErr) {
+        // Non-fatal — Postgres releases all session locks when the
+        // connection is recycled (PostgREST pool churn handles this in
+        // ~minutes). Worst case the next 1-2 ticks see lock-held and
+        // skip. Worth a warn so it's visible if it persists.
+        console.warn(
+          `[${GENERATOR}] pg_advisory_unlock failed (lock will release on session recycle): ${relErr.message}`,
+        );
+      }
+    }
+  }
+});
+
+/**
+ * Original dispatcher tick — extracted so the advisory-lock wrapper above
+ * can wrap it in a clean try/finally without nesting half a function inside
+ * an `if` block.
+ */
+async function runDispatcherTick(
+  admin: ReturnType<typeof getAdminClient>,
+  req: Request,
+  startedAt: number,
+  deadlineSignal: AbortSignal,
+): Promise<Response> {
+  // Helper: returns true when the dispatcher's 110s wall-clock budget is
+  // exhausted. Used between job iterations so we exit cleanly with a
+  // `deadline_hit:true` body rather than letting the platform kill us.
+  const deadlineHit = () => deadlineSignal.aborted;
   // ── Reset stale 'running' jobs back to 'pending'. Edge Function crashes
   // (panic, OOM, gateway timeout) leave claimed jobs stuck in 'running'
   // forever. Anything still 'running' after STALE_CLAIM_MIN minutes gets
@@ -172,6 +305,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const deferred: DroneJob[] = [];
 
   for (const job of jobs) {
+    // QC3-8 E2E13: budget check between jobs. If the dispatcher's 110s
+    // deadline already fired (e.g. one heavy SfM ate >100s), defer the
+    // remaining claimed jobs back to 'pending' rather than burning attempts.
+    if (deadlineHit()) {
+      deferred.push(job);
+      continue;
+    }
     // Canonical kind is 'sfm' per the drone_jobs CHECK constraint. The legacy
     // 'sfm_run' literal has been removed from this codebase (#20 audit). If
     // any historical row still has 'sfm_run' we treat it as 'sfm' below.
@@ -182,7 +322,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
     if (isSfmKind) sfmDispatched++;
     try {
-      const ok = await dispatchOne(admin, job);
+      const ok = await dispatchOne(admin, job, deadlineSignal);
       if (ok.ok && ok.deferred === true) {
         // Deferred path — the dispatched function ran cleanly but had nothing
         // to do (e.g. drone-render: every eligible shot is waiting on the
@@ -378,13 +518,42 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       dispatched,
       failed,
       deferred: deferred.length,
+      // QC3-8 E2E13: surface when the wall-clock deadline truncated the
+      // tick so cron logs / dashboard can spot the pattern. Cron treats
+      // this as success — the next tick will pick up the deferred rows.
+      deadline_hit: deadlineSignal.aborted,
       elapsed_ms: Date.now() - startedAt,
       results,
     },
     200,
     req,
   );
-});
+}
+
+/**
+ * stableHashBigInt — deterministic 53-bit hash for an arbitrary string.
+ *
+ * Used to derive a stable BIGINT lock id for pg_try_advisory_lock without
+ * round-tripping through the database for `hashtext('drone-job-dispatcher')`.
+ * Matches Postgres's hashtext output well enough for namespacing purposes
+ * (lock collisions across DIFFERENT lock keys would be catastrophic; lock
+ * collisions across THE SAME key are the entire point — both dispatcher
+ * ticks must agree on the same number).
+ *
+ * Algorithm: 32-bit FNV-1a × 2 with two seeds, packed into a 53-bit positive
+ * integer (stays in JS Number safe range; Postgres BIGINT accepts it).
+ */
+function stableHashBigInt(s: string): number {
+  let h1 = 0x811c9dc5; // FNV offset basis
+  let h2 = 0x01000193; // alternate seed
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 ^= c; h1 = (h1 * 0x01000193) >>> 0;
+    h2 ^= c; h2 = (h2 * 0x811c9dc5) >>> 0;
+  }
+  // Combine to a 53-bit positive integer.
+  return (h1 * 0x200000 + (h2 & 0x1fffff)) % Number.MAX_SAFE_INTEGER;
+}
 
 // ──────────────────────────────────────────────────────────────────────
 // Result type carries optional `sfm_ok` (Modal-reported success) and `result`
@@ -415,13 +584,28 @@ const DEFER_BACKOFF_SEC = 300;
 async function dispatchOne(
   _admin: ReturnType<typeof getAdminClient>,
   job: DroneJob,
+  deadlineSignal: AbortSignal,
 ): Promise<DispatchResult> {
   switch (job.kind) {
     case "ingest":
       return await callEdgeFunction("drone-ingest", {
         project_id: job.payload?.project_id,
-      });
-    case "render":
+      }, deadlineSignal);
+    case "render": {
+      // Wave 5 P2 (S3): drone-render is the RAW pipeline only. If a legacy
+      // edited-pipeline payload slips into a kind='render' row (pre-S3
+      // dispatcher / direct DB write), reject loudly rather than letting
+      // drone-render's own pipeline guard 400 it from inside (which would
+      // burn dispatcher attempts unnecessarily). The job goes straight to
+      // failed and the operator can re-enqueue as kind='render_edited'.
+      const rawPipeline = job.payload?.pipeline;
+      if (rawPipeline === 'edited') {
+        return {
+          ok: false,
+          error:
+            "legacy edited-pipeline render in kind=render row; should have been kind=render_edited",
+        };
+      }
       return await callEdgeFunction("drone-render", {
         shoot_id: job.payload?.shoot_id || job.shoot_id,
         kind: job.payload?.kind || "poi_plus_boundary",
@@ -432,7 +616,38 @@ async function dispatchOne(
         // adjustments lane regenerates with the new pins instead of stacking
         // alongside stale rows. Pass-through for any caller that sets it.
         wipe_existing: job.payload?.wipe_existing === true,
-      });
+      }, deadlineSignal);
+    }
+    case "render_edited":
+      // Wave 5 P2 (S3): edited pipeline canonical renderer. Mirrors the
+      // 'render' case but routes to drone-render-edited and propagates
+      // edited-pipeline-specific fields (column_state, cascade, project_id).
+      return await callEdgeFunction("drone-render-edited", {
+        shoot_id: job.payload?.shoot_id || job.shoot_id,
+        shot_id: job.payload?.shot_id,
+        project_id: job.payload?.project_id || job.project_id,
+        kind: job.payload?.kind || "poi_plus_boundary",
+        column_state: job.payload?.column_state,
+        reason: job.payload?.reason,
+        cascade: job.payload?.cascade === true,
+        wipe_existing: job.payload?.wipe_existing === true,
+        pipeline: 'edited',
+      }, deadlineSignal);
+    case "boundary_save_render_cascade":
+      // Wave 5 P2 (S3): boundary save trigger. The dispatcher fans this out
+      // to drone-render-edited with cascade=true and a fixed
+      // 'boundary_edit_cascade' reason so the per-shot fan-out lands rows
+      // in column_state='adjustments'. shoot_id is intentionally NULL —
+      // the cascade scopes to the entire project. The render fan-out is
+      // server-side in drone-render-edited (B.2 spec).
+      return await callEdgeFunction("drone-render-edited", {
+        project_id: job.payload?.project_id || job.project_id,
+        shoot_id: null,
+        cascade: true,
+        kind: 'poi_plus_boundary',
+        reason: 'boundary_edit_cascade',
+        pipeline: 'edited',
+      }, deadlineSignal);
     // 'sfm' is the canonical kind per migration 225 CHECK constraint.
     // 'sfm_run' is a deprecated alias kept for forward-compat with any rows
     // still in the queue from prior deployments — accepted at dispatch time
@@ -441,7 +656,7 @@ async function dispatchOne(
     case "sfm_run":
       return await callModalSfm({
         shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
-      });
+      }, deadlineSignal);
     case "poi_fetch":
       // Hand the project_id to drone-pois. drone-pois reads its cache; if
       // empty/expired it fetches from the upstream provider and writes the
@@ -451,7 +666,7 @@ async function dispatchOne(
       return await callEdgeFunction("drone-pois", {
         project_id:
           (job.payload?.project_id as string | undefined) || job.project_id,
-      });
+      }, deadlineSignal);
     case "raw_preview_render":
       // Hand to drone-raw-preview, which renders every raw_proposed
       // non-SfM shot through the engine (POI + boundary overlay) so the
@@ -459,7 +674,7 @@ async function dispatchOne(
       // runs the smart-shortlist algorithm to flag is_ai_recommended.
       return await callEdgeFunction("drone-raw-preview", {
         shoot_id: (job.payload?.shoot_id as string | undefined) || job.shoot_id,
-      });
+      }, deadlineSignal);
     case "cadastral_fetch":
       // QC8 D-11: cadastral cache was cold for everyone because no kind=
       // cadastral_fetch job was ever enqueued. drone-cadastral itself is the
@@ -471,7 +686,7 @@ async function dispatchOne(
       return await callEdgeFunction("drone-cadastral", {
         project_id:
           (job.payload?.project_id as string | undefined) || job.project_id,
-      });
+      }, deadlineSignal);
     default:
       return { ok: false, error: `unknown kind: ${job.kind}` };
   }
@@ -579,7 +794,7 @@ async function enqueueRawPreviewAfterPois(
 
 async function callModalSfm(args: {
   shoot_id: string | null | undefined;
-}): Promise<DispatchResult> {
+}, deadlineSignal: AbortSignal): Promise<DispatchResult> {
   if (!args.shoot_id) {
     return { ok: false, error: "callModalSfm: shoot_id missing on job" };
   }
@@ -587,6 +802,14 @@ async function callModalSfm(args: {
   if (!renderToken) {
     return { ok: false, error: "FLEXSTUDIOS_RENDER_TOKEN not set" };
   }
+
+  // QC3-8 E2E13: compose Modal's per-call timeout with the dispatcher's
+  // overall 110s deadline so a slow SfM doesn't push us past the platform
+  // wall-clock kill.
+  const composedSignal = AbortSignal.any([
+    AbortSignal.timeout(SFM_HTTP_TIMEOUT_MS),
+    deadlineSignal,
+  ]);
 
   try {
     const resp = await fetch(MODAL_SFM_URL, {
@@ -598,10 +821,7 @@ async function callModalSfm(args: {
         Authorization: `Bearer ${renderToken}`,
       },
       body: JSON.stringify({ _token: renderToken, shoot_id: args.shoot_id }),
-      // Long timeout — Modal pipeline can take several minutes for a real
-      // nadir grid. The Edge Function's wall-clock cap (Deno) is enforced by
-      // the platform; we set ours just in case.
-      signal: AbortSignal.timeout(SFM_HTTP_TIMEOUT_MS),
+      signal: composedSignal,
     });
     // Single-read body — see callEdgeFunction for rationale. (#35 audit)
     const rawText = await resp.text().catch(() => "");
@@ -633,6 +853,7 @@ async function callModalSfm(args: {
 async function callEdgeFunction(
   fnName: string,
   body: Record<string, unknown>,
+  deadlineSignal: AbortSignal,
 ): Promise<DispatchResult> {
   const url = `${SUPABASE_URL}/functions/v1/${fnName}`;
   // DRONE_DISPATCHER_JWT must be a real Supabase JWT (HS256/ES256). The
@@ -656,6 +877,9 @@ async function callEdgeFunction(
         "x-caller-context": "drone-job-dispatcher",
       },
       body: JSON.stringify(body),
+      // QC3-8 E2E13: dispatcher 110s deadline — abort downstream Edge
+      // Function calls if we run out of budget so we exit cleanly.
+      signal: deadlineSignal,
     });
 
     // Body inspection: read the body ONCE as text and try to parse it as JSON.

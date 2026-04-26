@@ -37,7 +37,15 @@ import {
 
 const GENERATOR = 'drone-render-approve';
 
-type TargetState = 'proposed' | 'adjustments' | 'final' | 'rejected' | 'restore';
+// Wave 5 mig 282 introduced the pipeline split. column_state vocabulary is
+// now pipeline-aware:
+//   raw side (mig 282 CHECK):    pool, accepted, rejected
+//   edited side (mig 282 CHECK): pool, adjustments, final, rejected
+// Raw-side transitions go through drone-shot-lifecycle (shot-level), not this
+// Edge Function. drone-render-approve only handles edited-side transitions.
+// 'proposed' is kept in the table as a legacy value for any pre-Wave-5 row
+// that may still exist, but mig 282 backfilled all such rows to 'pool'.
+type TargetState = 'pool' | 'proposed' | 'adjustments' | 'final' | 'rejected' | 'restore';
 
 interface Body {
   render_id?: string;
@@ -49,9 +57,13 @@ interface Body {
 // recent render_rejected event for this render and puts the row back at the
 // from_state recorded there.
 const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+  // Edited-side states (Wave 5)
+  pool:        ['adjustments', 'rejected'],
+  adjustments: ['pool', 'proposed', 'final', 'rejected'],
+  final:       ['adjustments', 'pool', 'rejected'],
+  // Legacy raw-side state, kept for back-compat with any pre-Wave-5 row
   proposed:    ['adjustments', 'rejected'],
-  adjustments: ['proposed', 'final', 'rejected'],
-  final:       ['adjustments', 'rejected'],
+  // Universal
   rejected:    ['restore'],
 };
 
@@ -91,7 +103,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (!body.render_id || typeof body.render_id !== 'string') {
     return errorResponse('render_id required', 400, req);
   }
-  const validTargets: TargetState[] = ['proposed', 'adjustments', 'final', 'rejected', 'restore'];
+  const validTargets: TargetState[] = ['pool', 'proposed', 'adjustments', 'final', 'rejected', 'restore'];
   if (!validTargets.includes(body.target_state as TargetState)) {
     return errorResponse(
       `target_state must be one of: ${validTargets.join(', ')}`,
@@ -104,7 +116,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Load the render ────────────────────────────────────────────────────────
   const { data: render, error: fetchErr } = await admin
     .from('drone_renders')
-    .select('id, shot_id, column_state, kind, dropbox_path, output_variant')
+    .select('id, shot_id, column_state, kind, dropbox_path, output_variant, pipeline')
     .eq('id', body.render_id)
     .maybeSingle();
 
@@ -113,6 +125,24 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`Failed to load render: ${fetchErr.message}`, 500, req);
   }
   if (!render) return errorResponse('render_id not found', 404, req);
+
+  // ── Pipeline guard (W6 hotfix) ─────────────────────────────────────────────
+  // mig 282 split column_state into pipeline-aware vocabularies:
+  //   raw    → pool, accepted, rejected
+  //   edited → pool, adjustments, final, rejected
+  // ALLOWED_TRANSITIONS below speaks the EDITED vocabulary only. Allowing a
+  // raw-pipeline render through this function ends in a 23514 CHECK violation
+  // when target_state is 'adjustments'/'final' (not legal on the raw side) —
+  // surfaced as an opaque 500 to the operator. Hard-reject up-front with a
+  // clear directive to use drone-shot-lifecycle for raw-side moves. (#W6-T1)
+  if ((render as { pipeline?: string }).pipeline === 'raw') {
+    return errorResponse(
+      "drone-render-approve handles edited-pipeline transitions only. " +
+      "Raw-side moves (pool→accepted/rejected) go through drone-shot-lifecycle.",
+      400,
+      req,
+    );
+  }
 
   const fromState = render.column_state as string;
   let toState = body.target_state as TargetState;
@@ -155,10 +185,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (lastRestoreAt) rejectQ = rejectQ.gt('created_at', lastRestoreAt);
     const { data: lastReject } = await rejectQ.maybeSingle();
     const restored = (lastReject?.payload as { from_state?: string } | null)?.from_state;
-    if (!restored || !['proposed', 'adjustments', 'final'].includes(restored)) {
-      // No prior reject event recorded — fall back to 'proposed' so the user
-      // can recover something rather than be stuck.
-      toState = 'proposed' as TargetState;
+    if (!restored || !['pool', 'proposed', 'adjustments', 'final'].includes(restored)) {
+      // No prior reject event recorded — fall back to 'pool' (the new
+      // edited-side starting state per Wave 5 mig 282) so the user can
+      // recover something rather than be stuck. Pre-Wave-5 rejects with
+      // from_state='proposed' or 'adjustments' or 'final' restore correctly.
+      toState = 'pool' as TargetState;
     } else {
       toState = restored as TargetState;
     }

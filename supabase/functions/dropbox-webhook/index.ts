@@ -192,10 +192,15 @@ async function enqueueIngestForRecentRawDrones(sinceIso: string): Promise<number
   // Window: events created at or after the webhook started (was: last 60s).
   // QC8 D-10 — see top of handler for rationale.
   const since = sinceIso;
+  // QC2-1 #11: dropped 'raw_drones' from the filter — that folder_kind was
+  // cleaned up in mig 247 (DELETE FROM project_folders WHERE folder_kind IN
+  // ('raw_drones', 'final_delivery_drones')) so no event will EVER carry
+  // it again. Keeping it in the filter just adds noise and risks a future
+  // typo confusing readers about what's still live.
   const { data, error } = await admin
     .from('project_folder_events')
     .select('project_id')
-    .in('folder_kind', ['drones_raws_shortlist_proposed', 'raw_drones'])
+    .eq('folder_kind', 'drones_raws_shortlist_proposed')
     .eq('event_type', 'file_added')
     .gte('created_at', since);
   if (error) throw error;
@@ -310,18 +315,32 @@ async function fanoutFinalsWatcher(sinceIso: string): Promise<number> {
  * Editor-folder watcher.
  *
  * After every webhook delta, scan project_folder_events for `file_added` /
- * `file_modified` rows in `drones_editors_edited_post_production` emitted in
- * the last 60 seconds and:
+ * `file_modified` rows in `drones_editors_edited_post_production` emitted
+ * since this webhook started and:
  *
  *   1. Look up the matching `drone_shots` row in the same project by exact
  *      filename (basename match). v1 only does exact match — _edited / (1)
  *      suffix stripping is out of scope.
  *   2. UPDATE drone_shots.edited_dropbox_path = '<full path>'.
  *   3. Insert `drone_events` row (event_type='editor_file_added').
- *   4. After the link, check whether ALL `lifecycle_state='raw_accepted'`
- *      shots in the shoot now have edited_dropbox_path. If yes, enqueue a
- *      `kind='render'` drone_jobs row (deduped via the partial unique index
- *      from migration 240).
+ *   4a. (LEGACY, kept for backwards compat) After the link, check whether
+ *       ALL `lifecycle_state='raw_accepted'` shots in the shoot now have
+ *       edited_dropbox_path. If yes, enqueue a `kind='render'` drone_jobs
+ *       row (deduped via the partial unique index from migration 240).
+ *       Historical pre-Wave-5 trigger — most projects don't depend on it
+ *       any more, but kept alive in parallel so any in-flight project that
+ *       still relies on the gate doesn't break.
+ *   4b. (Wave 5 P2 S6, NEW) Edited-pipeline initiation chain — gated by
+ *       env WAVE5_EDITED_PIPELINE_ENABLED. Default: enabled.
+ *       Per project touched, enqueue:
+ *         • a fresh kind='poi_fetch' job (so drone-pois re-fetches POIs
+ *           rather than inheriting the raw snapshot — Joseph's call).
+ *           Payload includes pipeline='edited' so drone-pois logs the
+ *           call context (drone-pois treats both pipelines identically).
+ *         • per-shot kind='render_edited' jobs for each shot whose
+ *           edited_dropbox_path was just populated. Dispatcher v19 routes
+ *           these to drone-render-edited which renders into Edited Pool.
+ *       Both enqueues use ON CONFLICT DO NOTHING for idempotency.
  *
  * Returns count of linked files. Logs warnings (no throw) for files that
  * don't match a known shot — they may be a NEW shot the editor introduced
@@ -346,8 +365,14 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
   // produce one update + one drone_event. Key on (project_id, basename).
   const seen = new Set<string>();
   // Track which shoots got a link this pass so we only re-evaluate the
-  // "all shots ready?" gate once per shoot.
+  // legacy "all shots ready?" gate once per shoot.
   const touchedShoots = new Set<string>();
+  // Wave 5 P2 S6: track the shot_ids whose edited_dropbox_path was just
+  // populated, grouped by project (for poi_fetch fan-out and per-shot
+  // render_edited enqueues). Keyed on projectId, not shootId, because the
+  // poi_fetch is project-scoped while render_edited is per-shot.
+  type TouchedShot = { shoot_id: string; shot_id: string };
+  const touchedByProject = new Map<string, TouchedShot[]>();
 
   for (const ev of events) {
     const projectId = ev.project_id as string | null;
@@ -362,6 +387,33 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
     const dedupKey = `${projectId}|${fileName.toLowerCase()}`;
     if (seen.has(dedupKey)) continue;
     seen.add(dedupKey);
+
+    // ── E29 / FIX 7: cross-tick dedup ──────────────────────────────────────
+    // The webhook can fire multiple times in close succession for the same
+    // file (Dropbox emits file_modified for every metadata touch — content
+    // change, share-link refresh, even some no-op renames). Production
+    // observation: ×6 file_modified events for one file in 9hr. Without
+    // dedup each one re-inserts the same `editor_file_added` drone_events
+    // row and re-fans the same `render_edited` job.
+    //
+    // Skip if we already wrote an editor_file_added drone_events row for
+    // this (project_id, fullPath) in the last 60s. drone_events.payload
+    // stores edited_path, so we can match on that.
+    const { data: priorEvent } = await admin
+      .from('drone_events')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('event_type', 'editor_file_added')
+      .filter('payload->>edited_path', 'eq', fullPath)
+      .gte('created_at', new Date(Date.now() - 60_000).toISOString())
+      .limit(1)
+      .maybeSingle();
+    if (priorEvent) {
+      console.info(
+        `[${GENERATOR}] editor-link deduped: ${fileName} for project ${projectId} — already linked within 60s (event ${priorEvent.id})`,
+      );
+      continue;
+    }
 
     // Look up the matching raw shot via shoot.project_id JOIN. v1 = exact
     // match on filename. We need shot_id + shoot_id for the audit row +
@@ -411,12 +463,23 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
 
     linkedCount++;
     touchedShoots.add(shot.shoot_id);
+
+    // Wave 5 P2 S6: track per-project shot list for the new edited-pipeline
+    // init chain (poi_fetch + per-shot render_edited).
+    const arr = touchedByProject.get(projectId) || [];
+    arr.push({ shoot_id: shot.shoot_id, shot_id: shot.id });
+    touchedByProject.set(projectId, arr);
   }
 
-  // ── Per-shoot render-readiness gate ─────────────────────────────────
+  // ── (LEGACY, kept for backwards compat) Per-shoot render-readiness gate ─
   // For each shoot we touched, count raw_accepted shots that still have NO
   // edited_dropbox_path. If zero → all editor work is in → enqueue render.
   // Use the partial unique index from migration 240 to dedupe.
+  //
+  // Wave 5 P2 S6: most projects don't depend on this trigger any more
+  // (editor delivery is a one-way push under the new pipeline), but we keep
+  // the path alive in parallel for any in-flight project that still relies
+  // on it. The new edited-pipeline init chain runs ALONGSIDE this block.
   for (const shootId of touchedShoots) {
     try {
       const { count: missing, error: cntErr } = await admin
@@ -473,7 +536,140 @@ async function linkRecentEditorDrops(sinceIso: string): Promise<number> {
     }
   }
 
+  // ── (Wave 5 P2 S6, NEW) Edited-pipeline initiation chain ────────────────
+  // For each project that just received an editor delivery, fan out:
+  //   • one fresh kind='poi_fetch' job (deduped — skip if a pending/running
+  //     poi_fetch already exists for the project)
+  //   • one kind='render_edited' job per touched shot (idempotent insert via
+  //     try/catch on 23505; mig 282/287 doesn't add a partial unique on
+  //     render_edited yet so we treat any duplicate as success)
+  //
+  // Gated by the WAVE5_EDITED_PIPELINE_ENABLED env var. Default is enabled
+  // (production rollout). Set the var to a falsy string in the Supabase
+  // dashboard for emergency disable; legacy block above continues to run.
+  //
+  // To disable: set WAVE5_EDITED_PIPELINE_ENABLED to 'false', '0', or '' in
+  // the Edge Function's secrets. Any other value (including unset) is
+  // treated as enabled.
+  if (touchedByProject.size > 0 && isEditedPipelineEnabled()) {
+    for (const [projectId, shotsArr] of touchedByProject) {
+      try {
+        await enqueueEditedPipelineInit(admin, projectId, shotsArr);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] edited-pipeline init failed for project ${projectId}: ${msg}`);
+      }
+    }
+  } else if (touchedByProject.size > 0) {
+    console.info(`[${GENERATOR}] edited-pipeline init skipped (WAVE5_EDITED_PIPELINE_ENABLED disabled) — ${touchedByProject.size} project(s) had editor deliveries`);
+  }
+
   return linkedCount;
+}
+
+/**
+ * Wave 5 P2 S6 feature flag.
+ *
+ * Reads WAVE5_EDITED_PIPELINE_ENABLED from the Edge Function environment.
+ * Default behaviour: ENABLED (returns true when the var is unset). Disable
+ * by setting the var to 'false', '0', '' or 'no'. Any other value is
+ * treated as enabled.
+ *
+ * The flag exists so an operator can flip the new init chain off in an
+ * emergency (e.g. dispatcher routing bug) without redeploying the webhook.
+ */
+function isEditedPipelineEnabled(): boolean {
+  const raw = Deno.env.get('WAVE5_EDITED_PIPELINE_ENABLED');
+  // Unset → enabled (production-default rollout per architect).
+  if (raw === undefined) return true;
+  const norm = raw.trim().toLowerCase();
+  // Explicit disable strings.
+  if (norm === 'false' || norm === '0' || norm === '' || norm === 'no' || norm === 'off') {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Wave 5 P2 S6 — edited-pipeline initiation per project.
+ *
+ * Enqueues one poi_fetch (deduped) + one render_edited per touched shot
+ * (idempotent on 23505). Both inserts are wrapped in try/catch so a single
+ * conflict does not abort the per-project loop.
+ */
+// deno-lint-ignore no-explicit-any
+async function enqueueEditedPipelineInit(
+  admin: any,
+  projectId: string,
+  touchedShots: { shoot_id: string; shot_id: string }[],
+): Promise<void> {
+  // 1) poi_fetch (project-scoped, deduped). Check for an existing
+  // pending/running row first; insert only if none. The partial unique index
+  // for poi_fetch (if any) would also catch this, but the explicit pre-check
+  // gives us a clean "skipped" log line for observability.
+  const { data: existing, error: cntErr } = await admin
+    .from('drone_jobs')
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('kind', 'poi_fetch')
+    .in('status', ['pending', 'running'])
+    .limit(1);
+  if (cntErr) {
+    console.warn(`[${GENERATOR}] poi_fetch dedup-check failed for project ${projectId}: ${cntErr.message}`);
+  } else if (!existing || existing.length === 0) {
+    const { error: poiErr } = await admin.from('drone_jobs').insert({
+      project_id: projectId,
+      kind: 'poi_fetch',
+      status: 'pending',
+      payload: {
+        project_id: projectId,
+        pipeline: 'edited',
+        reason: 'editor_delivery',
+      },
+    });
+    if (poiErr) {
+      const code = (poiErr as { code?: string }).code;
+      if (code === '23505') {
+        console.info(`[${GENERATOR}] poi_fetch debounced for project ${projectId} (existing pending/running)`);
+      } else {
+        console.warn(`[${GENERATOR}] poi_fetch enqueue failed for project ${projectId}: ${poiErr.message}`);
+      }
+    } else {
+      console.log(`[${GENERATOR}] poi_fetch enqueued for project ${projectId} (editor delivery)`);
+    }
+  } else {
+    console.info(`[${GENERATOR}] poi_fetch already pending for project ${projectId} — skip`);
+  }
+
+  // 2) render_edited per touched shot. mig 282/287 doesn't add a partial
+  // unique on render_edited so we rely on try/catch on 23505. Each shot is
+  // independent — a single conflict is treated as a successful debounce.
+  for (const { shoot_id, shot_id } of touchedShots) {
+    const { error: rendErr } = await admin.from('drone_jobs').insert({
+      project_id: projectId,
+      shoot_id,
+      kind: 'render_edited',
+      status: 'pending',
+      pipeline: 'edited',
+      payload: {
+        shoot_id,
+        shot_id,
+        reason: 'editor_delivery',
+        column_state: 'pool',
+        pipeline: 'edited',
+      },
+    });
+    if (rendErr) {
+      const code = (rendErr as { code?: string }).code;
+      if (code === '23505') {
+        console.info(`[${GENERATOR}] render_edited debounced for shot ${shot_id} (conflict)`);
+      } else {
+        console.warn(`[${GENERATOR}] render_edited enqueue failed for shot ${shot_id}: ${rendErr.message}`);
+      }
+    } else {
+      console.log(`[${GENERATOR}] render_edited enqueued for shot ${shot_id} (project ${projectId})`);
+    }
+  }
 }
 
 // ─── HMAC helpers ────────────────────────────────────────────────────────────

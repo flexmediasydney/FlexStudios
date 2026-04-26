@@ -25,6 +25,11 @@ export const ROUTE_ACCESS = {
   ProjectDetails: ALL_LEVELS,
   ProjectLocation: ALL_LEVELS, // view: any project member; edit gated inside the page
   DronePinEditor: EMPLOYEE_AND_ABOVE,
+  // DroneBoundaryEditor mirrors PinEditor's role gate. The server-side
+  // drone-boundary-save edge fn explicitly 403s contractors — the route
+  // gate keeps the UI consistent so contractors never land on a page that
+  // would error on save. (Wave 5 P2 S5)
+  DroneBoundaryEditor: EMPLOYEE_AND_ABOVE,
   Tasks: ALL_LEVELS,
   Goals: ALL_LEVELS,
   GoalDetails: ALL_LEVELS,

@@ -342,6 +342,37 @@ def _gps_to_px(tlat, tlon, dlat, dlon, alt, heading, pitch, w, h, intrinsics=Non
     return (fx * X_c / Z_c + cx, fy * Y_c / Z_c + cy)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Address-overlay template substitution (single-pass, key-whitelisted).
+# QC2-2 #9: chained out.replace() runs on the already-substituted string, so
+# an address field containing "{street_number}" re-expands. Operator-typed
+# templates (or values forwarded from a property record where the address
+# itself contains a curly-brace token) could probe scene internals, e.g.
+#   scene = {"address": "{street_number} cool", "street_number": "999"}
+#   _render_template("{address}", scene)  # used to → "999 cool"
+# Even if that's mostly cosmetic, it's an unintended trust boundary that
+# becomes a real injection vector if scene ever carries non-trivial keys
+# (auth tokens / api keys etc.). Single-pass regex with a fixed key
+# whitelist closes the door cheaply.
+#
+# The whitelist below is the EXACT set of keys the production templates
+# (modal/drone_render/themes/*.json + the pill_with_address pin) reference.
+# Other tokens like {name}/{distance}/{sqm} are handled by code paths that
+# don't go through _render_template (POI label loop / sqm overlay) so they
+# need not appear here.
+# ─────────────────────────────────────────────────────────────────────────────
+_RENDER_TEMPLATE_KEY_WHITELIST = (
+    "address",
+    "street_number",
+    "street_name",
+    "suburb",
+)
+import re as _re  # noqa: E402  — kept local to make the regex compile lazy
+_RENDER_TEMPLATE_PATTERN = _re.compile(
+    r"\{(" + "|".join(_RENDER_TEMPLATE_KEY_WHITELIST) + r")\}"
+)
+
+
 def _render_template(template: str, scene: dict) -> str:
     """Substitute scene fields into a `{field}`-style template.
 
@@ -351,15 +382,63 @@ def _render_template(template: str, scene: dict) -> str:
 
     Supports: {address}, {street_number}, {street_name}, {suburb} (best-effort
     — if the scene doesn't carry the key the placeholder is replaced with "").
+
+    Implementation: single-pass regex substitution against a fixed key
+    whitelist. Tokens NOT in the whitelist (e.g. an injected "{__class__}")
+    pass through verbatim. The substituted value is NOT re-scanned, so a
+    value containing a literal "{street_number}" string renders as the
+    literal text, not as another expansion. (QC2-2 #9.)
     """
     if not template or not isinstance(template, str):
         return template or ""
-    out = template
-    out = out.replace("{address}", str(scene.get("address") or ""))
-    out = out.replace("{street_number}", str(scene.get("street_number") or ""))
-    out = out.replace("{street_name}", str(scene.get("street_name") or ""))
-    out = out.replace("{suburb}", str(scene.get("suburb") or ""))
-    return out
+    if scene is None:
+        scene = {}
+
+    def _replace(match):
+        key = match.group(1)
+        # str(...) tolerates non-str values (e.g. integers from JSON), and
+        # `or ""` swaps None / empty for empty string.
+        return str(scene.get(key) or "")
+
+    return _RENDER_TEMPLATE_PATTERN.sub(_replace, template)
+
+
+def _fmt_distance(d) -> Optional[str]:
+    """Format a distance (metres) for the POI secondary label.
+
+    Returns ``None`` when the value is unrenderable so the caller skips the
+    secondary line entirely. (QC2-2 #8.)
+
+    Old `lambda d: f'{d/1000:.1f}km' if d > 999 else f'{d:.0f}m'`:
+      - fmt(1e9) → '1000000.0km' blew the pill width clamp
+      - fmt(0)   → '0m' rendered a meaningless "0 m" label for "unset"
+      - fmt(NaN) → 'nanm'
+      - fmt(-100) → '-100m' (negative distance is meaningless)
+      - 999 → "999 m", 1000 → "1.0 km" (right of cliff is fine, but use
+        >=1000 to make the boundary explicit)
+
+    New behaviour:
+      - None / non-numeric / NaN / inf → None
+      - <= 0 → None ("unset" / nonsensical)
+      - > 9999 → ">10km" (caps the label width regardless of input)
+      - >= 1000 → "X.Ykm"
+      - else → "Nm"
+    """
+    if d is None:
+        return None
+    try:
+        f = float(d)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    if f <= 0:
+        return None
+    if f > 9999:
+        return ">10km"
+    if f >= 1000:
+        return f"{f / 1000:.1f}km"
+    return f"{f:.0f}m"
 
 
 def _haversine_m(lat1, lon1, lat2, lon2) -> float:
@@ -370,6 +449,46 @@ def _haversine_m(lat1, lon1, lat2, lon2) -> float:
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat / 2) ** 2 + math.cos(lat1r) * math.cos(lat2r) * math.sin(dlon / 2) ** 2
     return R * 2 * math.asin(math.sqrt(a))
+
+
+def _lonlat_mean_via_unit_vectors(lats, lons):
+    """Spherical mean of lat/lng via unit-vector sum + renormalise.
+
+    Mirrors modal/drone_sfm/projection.lonlat_mean_via_unit_vectors. We can't
+    cross-import (the Modal render image only bundles drone_render/, not
+    drone_sfm/), so this is a local copy.
+
+    Naive arithmetic mean of longitudes wraps incorrectly anywhere near the
+    antimeridian (Fiji/NZ at lon ±179.9 averages to lon 0 — Indian Ocean —
+    so the ENU centroid is ~40 000 km away and the shoelace area is wrong by
+    orders of magnitude). The unit-vector form is correct anywhere on the
+    globe. (QC2-2 #5.)
+
+    Returns (mean_lat, mean_lon) in degrees.
+    """
+    n = len(lats)
+    if n == 0 or n != len(lons):
+        return (0.0, 0.0)
+    sx = sy = sz = 0.0
+    for lat, lng in zip(lats, lons):
+        lat_r = math.radians(lat)
+        lng_r = math.radians(lng)
+        cos_lat = math.cos(lat_r)
+        sx += cos_lat * math.cos(lng_r)
+        sy += cos_lat * math.sin(lng_r)
+        sz += math.sin(lat_r)
+    nf = float(n)
+    mx, my, mz = sx / nf, sy / nf, sz / nf
+    norm = math.sqrt(mx * mx + my * my + mz * mz)
+    if norm < 1e-12:
+        # Antipodal cancellation — fall back to arithmetic mean.
+        return (sum(lats) / nf, sum(lons) / nf)
+    mx /= norm
+    my /= norm
+    mz /= norm
+    mean_lat = math.degrees(math.asin(max(-1.0, min(1.0, mz))))
+    mean_lon = math.degrees(math.atan2(my, mx))
+    return (mean_lat, mean_lon)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -750,6 +869,42 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
             tip_circle_r = max(3, int(round(8 * scale)))
         bw = tw + pad * 2
         bh = th + pad * 2
+
+        # Ellipsis truncation when the rendered text won't fit the canvas
+        # (QC2-2 #10). Without this, a wide address bar (5000 px text on a
+        # 1080 px canvas) lands bx1 deep negative after the second X-clamp;
+        # cv2.rectangle clips fine but PIL draw.text starts off-screen and
+        # the label is invisible. We fit the *rendered* text to (w - 40)
+        # accounting for the pill's pad on both sides, dropping characters
+        # from the end and appending "…" until it fits.
+        max_pill_w = max(40, int(w) - 40)
+        if bw > max_pill_w and len(t) > 1:
+            ellipsis = "…"
+            avail = max_pill_w - pad * 2
+            if avail < 0:
+                avail = 0
+            ell_w, _ = _measure_text(ellipsis, font)
+            # Binary search for the largest prefix that fits with the ellipsis.
+            lo, hi = 0, len(t) - 1
+            best = 0
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                cand = t[:mid].rstrip() + ellipsis
+                cw, _ = _measure_text(cand, font)
+                if cw <= avail:
+                    best = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            if best > 0:
+                t = t[:best].rstrip() + ellipsis
+            else:
+                # Even the ellipsis alone doesn't fit — render just the ellipsis.
+                t = ellipsis
+            tw, th = _measure_text(t, font)
+            bw = tw + pad * 2
+            bh = th + pad * 2
+
         bx1 = x - bw // 2
         bx2 = x + bw // 2
         by2 = y - tip_offset
@@ -930,8 +1085,50 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
 # ─────────────────────────────────────────────────────────────────────────────
 # Boundary layer pass
 # ─────────────────────────────────────────────────────────────────────────────
-def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[np.ndarray]:
-    """Project a list of [lat, lon] tuples to pixel coords. Returns Nx2 int32 or None.
+def _lerp_latlon(ll1, ll2, t):
+    """Antimeridian-safe lat/lon linear interpolation at parameter t in [0,1].
+
+    Latitude lerps trivially. Longitude is interpolated via the unit-vector
+    method on the equatorial circle so a (lon1=179.9, lon2=-179.9, t=0.5)
+    pair maps to ±180° rather than 0° (Indian Ocean). At polar latitudes the
+    longitude difference itself is meaningless, but the unit-vector form
+    degrades gracefully — a pole-spanning polygon edge isn't a real-world
+    drone scene anyway.
+
+    Args:
+      ll1: (lat, lon) tuple at t=0
+      ll2: (lat, lon) tuple at t=1
+      t:   parameter in [0, 1]
+    Returns:
+      (lat, lon) tuple at parameter t.
+    """
+    lat1, lon1 = ll1[0], ll1[1]
+    lat2, lon2 = ll2[0], ll2[1]
+    # Lat: simple lerp (no wrap; lat is already constrained to [-90, 90]).
+    lat = lat1 + (lat2 - lat1) * t
+    # Lon: interpolate the cosine/sine on the unit circle, then atan2 back.
+    # This is the antimeridian-safe equivalent of a plain numeric lerp.
+    lon1_r = math.radians(lon1)
+    lon2_r = math.radians(lon2)
+    x = math.cos(lon1_r) + (math.cos(lon2_r) - math.cos(lon1_r)) * t
+    y = math.sin(lon1_r) + (math.sin(lon2_r) - math.sin(lon1_r)) * t
+    if x == 0.0 and y == 0.0:
+        # Antipodal pair — meaningless edge; fall back to lon1.
+        return (lat, lon1)
+    lon = math.degrees(math.atan2(y, x))
+    return (lat, lon)
+
+
+def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None):
+    """Project a list of [lat, lon] tuples to pixel coords.
+
+    Returns ``(polygon_px, polygon_latlon_clipped)`` where:
+      - ``polygon_px`` is an Nx2 int32 array (pixel coords)
+      - ``polygon_latlon_clipped`` is a list of (lat, lon) tuples, length N,
+        IN THE SAME ORDER as polygon_px
+
+    Returns ``(None, None)`` if the polygon is fully outside the near-plane
+    or has fewer than 3 surviving vertices.
 
     Performs Sutherland-Hodgman clipping against the camera near-plane (Z_c > 0)
     in CAMERA SPACE before projecting to pixels. The previous behaviour
@@ -940,11 +1137,17 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
     the polygon fell behind the focal plane — even though the visible portion
     of the boundary covers most of the frame. (QC2 finding #2.)
 
+    QC2-2 #1: when SH inserts an intersection vertex on edge AB at parameter t,
+    the corresponding lat/lon is also interpolated (antimeridian-safe) and
+    returned in parallel — otherwise downstream side_measurements / sqm_total
+    iterating ``range(len(polygon_px))`` would IndexError into the original
+    (shorter) polygon_latlon array.
+
     Worst case: a triangle whose 1 visible vertex is in front of the camera
     is clipped to a triangle (one vertex + two edge intersections).
     """
     if not polygon_latlon:
-        return None
+        return None, None
 
     # Resolve intrinsics + drone pose once (per-vertex re-derivation matched
     # the legacy _gps_to_px signature, but for the clip we need the underlying
@@ -986,16 +1189,19 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
     cam_pts = [latlon_to_cam(lat, lon) for lat, lon in polygon_latlon]
 
     # Sutherland-Hodgman: keep vertices with Z > Z_NEAR; for an edge crossing
-    # the plane, append the interpolated intersection.
+    # the plane, append the interpolated intersection (cam-space + lat/lon).
     Z_NEAR = 0.1  # 10 cm in front of the camera; > 0 to avoid div-by-zero
     n = len(cam_pts)
     if n == 0:
-        return None
-    output = []
+        return None, None
+    output_cam: list = []
+    output_ll: list = []
     behind_count = 0
     for i in range(n):
         cur = cam_pts[i]
         prev = cam_pts[(i - 1) % n]
+        cur_ll = (polygon_latlon[i][0], polygon_latlon[i][1])
+        prev_ll = (polygon_latlon[(i - 1) % n][0], polygon_latlon[(i - 1) % n][1])
         cur_in = cur[2] > Z_NEAR
         prev_in = prev[2] > Z_NEAR
         if cur_in:
@@ -1004,8 +1210,10 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
                 t = (Z_NEAR - prev[2]) / (cur[2] - prev[2])
                 ix = prev[0] + t * (cur[0] - prev[0])
                 iy = prev[1] + t * (cur[1] - prev[1])
-                output.append((ix, iy, Z_NEAR))
-            output.append(cur)
+                output_cam.append((ix, iy, Z_NEAR))
+                output_ll.append(_lerp_latlon(prev_ll, cur_ll, t))
+            output_cam.append(cur)
+            output_ll.append(cur_ll)
         else:
             behind_count += 1
             if prev_in:
@@ -1013,45 +1221,79 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
                 t = (Z_NEAR - prev[2]) / (cur[2] - prev[2])
                 ix = prev[0] + t * (cur[0] - prev[0])
                 iy = prev[1] + t * (cur[1] - prev[1])
-                output.append((ix, iy, Z_NEAR))
+                output_cam.append((ix, iy, Z_NEAR))
+                output_ll.append(_lerp_latlon(prev_ll, cur_ll, t))
 
     if behind_count > 0:
         print(
             f"[_project_polygon] near-plane clip: {behind_count}/{n} vertices "
-            f"behind camera; clipped polygon has {len(output)} verts"
+            f"behind camera; clipped polygon has {len(output_cam)} verts"
         )
 
-    if len(output) < 3:
+    if len(output_cam) < 3:
         # Less than a triangle remaining — nothing to draw.
-        return None
+        return None, None
 
     pts = []
-    for Xc, Yc, Zc in output:
+    pts_ll = []
+    for (Xc, Yc, Zc), ll in zip(output_cam, output_ll):
         if Zc <= 0:
             continue
         pts.append((fx * Xc / Zc + cx, fy * Yc / Zc + cy))
+        pts_ll.append(ll)
 
     if len(pts) < 3:
-        return None
-    return np.array(pts, dtype=np.int32)
+        return None, None
+    return np.array(pts, dtype=np.int32), pts_ll
 
 
 def _apply_exterior_treatment(canvas_bgr: np.ndarray, polygon_px: np.ndarray, treatment: dict) -> np.ndarray:
     """Blur/darken/desaturate/hue-shift everything OUTSIDE the polygon.
 
     Early-returns the original canvas when EVERY treatment is a no-op
-    (blur disabled OR strength 0; all factors == 1.0; hue_shift == 0).
-    Without this guard, themes that ship with the block present-but-
+    (blur disabled OR strength 0; all factors == 1.0; hue_shift normalised
+    to 0). Without this guard, themes that ship with the block present-but-
     inactive still trigger 80–150 ms per render of canvas copies + mask
     fills + per-pixel writes for zero visual change. (QC2 finding #7.)
+
+    Three input-validation bugs the previous version silently let through
+    (QC2-2 #6 + #7):
+      - int(0.5) truncates to 0 → fractional hue_shift was eaten
+      - hue_shift=360 (full circle, visual no-op) ran the full ~80-150 ms
+        HSV pipeline because int(360) != 0
+      - darken_factor=-1 (negative) corrupted output via clamped negative
+        multiplication
+
+    Coerce + normalise via _safe_float, then test the no-op fast-path on
+    the NORMALISED values (hue_shift folded to (-180, 180], darken/blur
+    floored to legal positive ranges).
     """
-    blur_strength = int(treatment.get("blur_strength_px", 0))
-    blur_active = bool(treatment.get("blur_enabled", False)) and blur_strength > 0
-    darken = float(treatment.get("darken_factor", 1.0))
-    sat = float(treatment.get("saturation_factor", 1.0))
-    light = float(treatment.get("lightness_factor", 1.0))
-    hue_shift = int(treatment.get("hue_shift_degrees", 0))
-    color_active = (darken != 1.0) or (sat != 1.0) or (light != 1.0) or (hue_shift != 0)
+    # Coerce inputs with _safe_float so NaN / non-numeric / negative don't
+    # slip past. allow_zero=True for blur_strength and hue_shift (zero is
+    # the legitimate "off" value); allow_neg=True ONLY for hue_shift
+    # (a negative shift is a valid clockwise rotation).
+    raw_blur = treatment.get("blur_strength_px", 0)
+    blur_strength = int(round(_safe_float(raw_blur, 0.0, allow_zero=True, allow_neg=False)))
+    blur_strength = max(0, blur_strength)
+    blur_active = bool(treatment.get("blur_enabled", False)) and blur_strength >= 1
+
+    darken = _safe_float(treatment.get("darken_factor", 1.0), 1.0, allow_zero=False, allow_neg=False)
+    sat = _safe_float(treatment.get("saturation_factor", 1.0), 1.0, allow_zero=True, allow_neg=False)
+    light = _safe_float(treatment.get("lightness_factor", 1.0), 1.0, allow_zero=True, allow_neg=False)
+
+    # Hue shift: keep the float input (a fractional 0.5° shift is meaningful)
+    # and normalise to (-180, 180]. 360° folds to 0 (visual no-op); 540 → 180.
+    hue_shift_raw = _safe_float(
+        treatment.get("hue_shift_degrees", 0), 0.0, allow_zero=True, allow_neg=True
+    )
+    hue_shift = ((hue_shift_raw + 180.0) % 360.0) - 180.0
+
+    color_active = (
+        abs(darken - 1.0) >= 0.01
+        or abs(sat - 1.0) >= 0.01
+        or abs(light - 1.0) >= 0.01
+        or abs(hue_shift) >= 1.0
+    )
 
     if not blur_active and not color_active:
         return canvas_bgr  # no-op short-circuit
@@ -1069,12 +1311,13 @@ def _apply_exterior_treatment(canvas_bgr: np.ndarray, polygon_px: np.ndarray, tr
 
     if color_active:
         hsv = cv2.cvtColor(treated, cv2.COLOR_BGR2HSV).astype(np.float32)
-        if hue_shift != 0:
-            # OpenCV hue is 0..179 (180 = full circle)
+        if abs(hue_shift) >= 1.0:
+            # OpenCV hue is 0..179 (180 = full circle). Use the normalised
+            # hue_shift so 360→0 short-circuited; 540→180.
             hsv[..., 0] = (hsv[..., 0] + (hue_shift / 360.0) * 180) % 180
-        if sat != 1.0:
+        if abs(sat - 1.0) >= 0.01:
             hsv[..., 1] = np.clip(hsv[..., 1] * sat, 0, 255)
-        if light != 1.0 or darken != 1.0:
+        if abs(light - 1.0) >= 0.01 or abs(darken - 1.0) >= 0.01:
             hsv[..., 2] = np.clip(hsv[..., 2] * light * darken, 0, 255)
         treated = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
@@ -1146,9 +1389,27 @@ def _draw_dashed_polygon(canvas_bgr: np.ndarray, pts: np.ndarray, color, width: 
 
 
 def _draw_side_measurements(
-    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int
+    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int,
+    side_overrides: dict | None = None,
 ) -> np.ndarray:
-    """Label each polygon edge with its geodesic length."""
+    """Label each polygon edge with its geodesic length.
+
+    ``side_overrides`` (Wave 5 P2 S5): operator overrides from the new
+    Boundary Editor — keyed by stringified edge index ("0", "1", ...) into
+    the polygon as the EDITOR sees it. Each entry may carry:
+      - ``hide: bool``           — if true, skip the label for that edge
+      - ``label_offset_px: [dx, dy]`` — additive nudge to the (tx, ty)
+        anchor point (after the outward-from-centroid offset is applied)
+
+    Caveat: when ``_project_polygon`` Sutherland-Hodgman clips a vertex behind
+    the camera, intersection vertices are inserted, so polygon_px (length N)
+    can be longer than the operator's saved polygon (length M). In that case
+    the override indexes don't align with the rendered edges. We document
+    the misalignment by logging once per render — the editor's polygon view
+    must reflect the SH-clipped polygon for overrides to track precisely.
+    For typical operator usage (polygon fully in frame, M == N), the indexes
+    line up directly.
+    """
     if not cfg.get("enabled", False):
         return canvas_bgr
     unit = cfg.get("unit", "metres")
@@ -1160,13 +1421,23 @@ def _draw_side_measurements(
     font = _get_font(_resolve_font_family(cfg.get("font_family"), bold=True), fs)
     position = cfg.get("position", "outside")
 
-    # Centroid for "outside" direction calc
-    cx = polygon_px[:, 0].mean()
-    cy = polygon_px[:, 1].mean()
+    # Per-edge outward direction is computed below from the edge unit vector
+    # rotated 90° CCW, then sign-flipped to point AWAY from the polygon
+    # interior. The previous "midpoint - centroid" heuristic broke on
+    # concave shapes (L-shaped corner blocks: ~30-40% of suburban properties)
+    # because the centroid sits in the inner notch, so the heuristic
+    # pointed INWARD for inner-notch edges and labels overlapped the
+    # boundary line. (QC2-2 #11.)
+    polygon_px_int = polygon_px.astype(np.int32)
 
     overlay, draw = _bgr_to_rgba_overlay(w, h)
     n = len(polygon_px)
+    overrides_map = side_overrides if isinstance(side_overrides, dict) else {}
     for i in range(n):
+        # Per-edge operator overrides — keyed by stringified edge index.
+        ov = overrides_map.get(str(i)) if overrides_map else None
+        if isinstance(ov, dict) and ov.get("hide") is True:
+            continue
         p1 = polygon_px[i]
         p2 = polygon_px[(i + 1) % n]
         ll1 = polygon_latlon[i]
@@ -1180,15 +1451,46 @@ def _draw_side_measurements(
 
         mx = (p1[0] + p2[0]) / 2
         my = (p1[1] + p2[1]) / 2
-        # Outward unit vector (away from centroid)
-        out_x = mx - cx
-        out_y = my - cy
-        out_len = (out_x ** 2 + out_y ** 2) ** 0.5 + 1e-6
-        ox = out_x / out_len
-        oy = out_y / out_len
+        # Per-edge outward normal:
+        #   1. edge vector (dx, dy) = p2 - p1
+        #   2. perpendicular (rotated 90° CCW): (-dy, dx)
+        #   3. test which side lies OUTSIDE the polygon by probing a small
+        #      step along the perpendicular and using cv2.pointPolygonTest
+        #      (returns >0 inside, <0 outside, 0 on boundary). Flip the
+        #      normal if the probe lands inside.
+        #
+        # This works for both convex AND concave polygons (L-shape inner-
+        # notch edges get the correct outward direction even though the
+        # centroid sits on the wrong side).
+        edge_dx = float(p2[0] - p1[0])
+        edge_dy = float(p2[1] - p1[1])
+        edge_len = math.sqrt(edge_dx * edge_dx + edge_dy * edge_dy) + 1e-6
+        # Rotated 90° CCW: (-dy/L, dx/L) is one valid normal.
+        nx = -edge_dy / edge_len
+        ny = edge_dx / edge_len
+        # Probe a small step along this normal from the midpoint.
+        EPS = 4.0  # pixels — large enough to escape the boundary line itself
+        probe = (float(mx + nx * EPS), float(my + ny * EPS))
+        # cv2.pointPolygonTest returns +1/-1/0 for inside/outside/on-edge.
+        # Use the int-cast polygon array (cv2 requires it) and ask for the
+        # measureDist=False fast path.
+        side = cv2.pointPolygonTest(polygon_px_int, probe, False)
+        if side > 0:
+            # Probe landed INSIDE → flip normal so the offset goes outward.
+            nx = -nx
+            ny = -ny
         offset = 28 if position == "outside" else -28
-        tx = int(mx + ox * offset)
-        ty = int(my + oy * offset)
+        tx = int(mx + nx * offset)
+        ty = int(my + ny * offset)
+        # Operator nudge — add [dx, dy] to the centred anchor point.
+        if isinstance(ov, dict):
+            nudge = ov.get("label_offset_px")
+            if isinstance(nudge, (list, tuple)) and len(nudge) == 2:
+                try:
+                    tx += int(nudge[0])
+                    ty += int(nudge[1])
+                except (TypeError, ValueError):
+                    pass  # malformed payload — ignore the nudge silently
 
         bbox = font.getbbox(label)
         tw_px = bbox[2] - bbox[0]
@@ -1216,20 +1518,46 @@ def _draw_side_measurements(
 
 
 def _draw_sqm_total(
-    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int
+    canvas_bgr: np.ndarray, polygon_px: np.ndarray, polygon_latlon, cfg: dict, w: int, h: int,
+    centroid_offset_px: list | tuple | None = None,
+    value_override: float | int | None = None,
 ) -> np.ndarray:
-    """Overlay total area (sqm) — uses geodesic shoelace approx via local ENU projection."""
+    """Overlay total area (sqm) — uses geodesic shoelace approx via local ENU projection.
+
+    Wave 5 P2 S5 — operator overrides from the new Boundary Editor:
+      - ``centroid_offset_px`` ([dx, dy]): when ``cfg.position == 'centroid'``
+        this is added to the computed centroid anchor (does not affect any
+        of the named corner positions). Other positions ignore the override
+        because the operator can simply pick a different position in the
+        Inspector if they want a corner anchor.
+      - ``value_override`` (numeric): replaces the geodesic-shoelace computed
+        area. The renderer still substitutes the raw integer into the
+        ``{sqm}`` template, so themes that ship "{sqm} sqm approx" produce
+        e.g. "999 sqm approx". To set the entire string the editor should
+        set this AND set the theme's text_template to "{sqm}" — but the
+        v1 editor only exposes the numeric override.
+    """
     if not cfg.get("enabled", False):
         return canvas_bgr
 
-    # Compute area via local equirectangular ENU on the polygon centroid
-    lat0 = sum(ll[0] for ll in polygon_latlon) / len(polygon_latlon)
-    lon0 = sum(ll[1] for ll in polygon_latlon) / len(polygon_latlon)
+    # Compute area via local equirectangular ENU on the polygon centroid.
+    # lat: simple arithmetic mean (lat doesn't wrap; bounded to [-90, 90]).
+    # lon: spherical unit-vector mean — naive (sum/N) maps a Fiji property
+    #      polygon spanning ±180° to lon0 = 0° (Indian Ocean), then the
+    #      shoelace area is wrong by orders of magnitude (the ENU dE values
+    #      become ~20 000 km instead of a few metres). (QC2-2 #5.)
+    lats_only = [ll[0] for ll in polygon_latlon]
+    lons_only = [ll[1] for ll in polygon_latlon]
+    lat0 = sum(lats_only) / len(lats_only)
+    _, lon0 = _lonlat_mean_via_unit_vectors(lats_only, lons_only)
     cos_lat0 = math.cos(math.radians(lat0))
-    enu = [
-        ((lon - lon0) * 111319 * cos_lat0, (lat - lat0) * 111319)
-        for lat, lon in polygon_latlon
-    ]
+    # Antimeridian-safe lon difference per vertex (mirrors _gps_to_px /
+    # _project_polygon). Without this, even with a correct lon0, vertices
+    # on the opposite side of ±180° produce dE ≈ ±40 000 km.
+    enu = []
+    for lat, lon in polygon_latlon:
+        dlon_diff = ((lon - lon0 + 540.0) % 360.0) - 180.0
+        enu.append((dlon_diff * 111319 * cos_lat0, (lat - lat0) * 111319))
     n = len(enu)
     s = 0.0
     for i in range(n):
@@ -1237,6 +1565,12 @@ def _draw_sqm_total(
         x2, y2 = enu[(i + 1) % n]
         s += x1 * y2 - x2 * y1
     area_sqm = abs(s) / 2.0
+    # Operator override wins over the computed area.
+    if value_override is not None:
+        try:
+            area_sqm = float(value_override)
+        except (TypeError, ValueError):
+            pass  # malformed → fall back to computed area
     sqm_int = int(round(area_sqm))
 
     template = cfg.get("text_template", "{sqm} sqm approx")
@@ -1265,6 +1599,15 @@ def _draw_sqm_total(
     else:  # bottom_right
         cx = int(polygon_px[:, 0].max()) - 60
         cy = int(polygon_px[:, 1].max()) - 60
+
+    # Operator centroid offset — only meaningful for the centroid anchor;
+    # named-corner positions are explicit operator choices, no nudge needed.
+    if pos == "centroid" and isinstance(centroid_offset_px, (list, tuple)) and len(centroid_offset_px) == 2:
+        try:
+            cx += int(centroid_offset_px[0])
+            cy += int(centroid_offset_px[1])
+        except (TypeError, ValueError):
+            pass  # malformed payload — keep centroid as-is
 
     bbox = font.getbbox(text)
     tw_px = bbox[2] - bbox[0]
@@ -1307,14 +1650,39 @@ def _draw_sqm_total(
 
 
 def _draw_address_overlay(
-    canvas_bgr: np.ndarray, polygon_px: np.ndarray, cfg: dict, scene: dict, w: int, h: int
+    canvas_bgr: np.ndarray, polygon_px: np.ndarray, cfg: dict, scene: dict, w: int, h: int,
+    position_latlng_override: list | tuple | None = None,
+    text_override: str | None = None,
 ) -> np.ndarray:
-    """Overlay an address line near/inside the boundary."""
+    """Overlay an address line near/inside the boundary.
+
+    Wave 5 P2 S5 — operator overrides from the new Boundary Editor:
+      - ``position_latlng_override`` ([lat, lng]): when set, the anchor is
+        projected via ``_gps_to_px`` instead of being derived from the
+        polygon centroid + cfg.position. Lets the operator drag the label
+        to any spot inside the property even if the centroid sits on a
+        roof/driveway.
+      - ``text_override`` (str): replaces the templated text from
+        ``_render_template(cfg.text_template, scene)``. The operator types
+        the literal label (e.g. "Lot 27 — 8/2 Everton Rd") and we render
+        verbatim, no template substitution. Empty/whitespace strings are
+        treated as "no override" so the auto template still wins.
+
+    The override is silently ignored when projection lands off-frame (px
+    is None — happens if the operator drags the label well outside the
+    visible image envelope on a tilted shot). Falls back to the centroid
+    placement in that case so the address is never lost.
+    """
     if not cfg.get("enabled", False):
         return canvas_bgr
 
-    template = cfg.get("text_template", "{address}")
-    text = _render_template(template, scene)
+    # Text resolution: operator override > templated render.
+    override_str = text_override.strip() if isinstance(text_override, str) else ""
+    if override_str:
+        text = override_str
+    else:
+        template = cfg.get("text_template", "{address}")
+        text = _render_template(template, scene)
 
     if not text.strip():
         return canvas_bgr
@@ -1322,13 +1690,35 @@ def _draw_address_overlay(
     fs = int(cfg.get("font_size_px", 36))
     font = _get_font(_resolve_font_family(cfg.get("font_family"), bold=True), fs)
     text_rgb = _hex_to_rgb(cfg.get("text_color", "#FFFFFF")) or (255, 255, 255)
-    pos = cfg.get("position", "centroid")
-    cx = int(polygon_px[:, 0].mean())
-    cy = int(polygon_px[:, 1].mean())
-    if pos == "below_sqm":
-        cy = int(polygon_px[:, 1].mean()) + 80
-    elif pos == "above_sqm":
-        cy = int(polygon_px[:, 1].mean()) - 80
+
+    # Anchor resolution: operator lat/lng override > cfg.position.
+    cx: int | None = None
+    cy: int | None = None
+    if isinstance(position_latlng_override, (list, tuple)) and len(position_latlng_override) == 2:
+        try:
+            ov_lat = float(position_latlng_override[0])
+            ov_lng = float(position_latlng_override[1])
+            px = _gps_to_px(
+                ov_lat, ov_lng,
+                scene["lat"], scene["lon"], scene["alt"],
+                scene["yaw"], scene["pitch"], w, h,
+            )
+            if px is not None:
+                cx = int(px[0])
+                cy = int(px[1])
+        except (TypeError, ValueError, KeyError):
+            cx = None  # fall through to the centroid path below
+
+    if cx is None or cy is None:
+        # No override or override projection failed — use the legacy
+        # centroid-based positioning.
+        pos = cfg.get("position", "centroid")
+        cx = int(polygon_px[:, 0].mean())
+        cy = int(polygon_px[:, 1].mean())
+        if pos == "below_sqm":
+            cy = int(polygon_px[:, 1].mean()) + 80
+        elif pos == "above_sqm":
+            cy = int(polygon_px[:, 1].mean()) - 80
 
     bbox = font.getbbox(text)
     tw_px = bbox[2] - bbox[0]
@@ -1353,7 +1743,16 @@ def _draw_address_overlay(
 def _render_boundary(
     canvas_bgr: np.ndarray, theme: dict, scene: dict, w: int, h: int, intrinsics=None
 ) -> np.ndarray:
-    """Apply the boundary pass per theme.boundary block + scene.polygon_latlon."""
+    """Apply the boundary pass per theme.boundary block + scene.polygon_latlon.
+
+    Wave 5 P2 S5 — when ``scene.boundary_overrides`` is set, the operator's
+    Boundary Editor tweaks (per-edge hide / nudge, sqm centroid offset and
+    value override, address overlay position lat/lng + text override) are
+    threaded through to the per-feature draw functions. Master toggles
+    (side_measurements_enabled, sqm_total_enabled, address_overlay_enabled)
+    are handled here rather than via theme cfg overlay so the operator can
+    suppress an entire feature without editing the theme.
+    """
     boundary_cfg = theme.get("boundary", {})
     if not boundary_cfg.get("enabled", False):
         return canvas_bgr
@@ -1362,7 +1761,20 @@ def _render_boundary(
     if not polygon_latlon or len(polygon_latlon) < 3:
         return canvas_bgr  # nothing to draw
 
-    polygon_px = _project_polygon(polygon_latlon, scene, w, h, intrinsics=intrinsics)
+    # Pull the operator's overrides bundle. Empty dict → no overrides; same
+    # behaviour as v1 (theme-only) renders.
+    bo = scene.get("boundary_overrides") or {}
+    if not isinstance(bo, dict):
+        bo = {}
+
+    # _project_polygon returns BOTH px array and parallel-clipped lat/lon —
+    # SH clipping inserts intersection vertices, so the original
+    # polygon_latlon (length M) cannot be paired with polygon_px (length N>=M)
+    # any more. The clipped lat/lon is what side_measurements + sqm_total
+    # must iterate (QC2-2 #1).
+    polygon_px, polygon_latlon_clipped = _project_polygon(
+        polygon_latlon, scene, w, h, intrinsics=intrinsics
+    )
     if polygon_px is None:
         return canvas_bgr
 
@@ -1376,20 +1788,34 @@ def _render_boundary(
     if line_cfg:
         canvas_bgr = _draw_boundary_line(canvas_bgr, polygon_px, line_cfg)
 
-    # 3. Side measurements
+    # 3. Side measurements (master toggle override + per-edge dict)
     sm_cfg = boundary_cfg.get("side_measurements", {})
-    if sm_cfg:
-        canvas_bgr = _draw_side_measurements(canvas_bgr, polygon_px, polygon_latlon, sm_cfg, w, h)
+    side_master = bo.get("side_measurements_enabled", True)
+    if sm_cfg and side_master is not False:
+        canvas_bgr = _draw_side_measurements(
+            canvas_bgr, polygon_px, polygon_latlon_clipped, sm_cfg, w, h,
+            side_overrides=bo.get("side_measurements_overrides"),
+        )
 
-    # 4. SQM total
+    # 4. SQM total (master toggle + centroid offset + value override)
     sqm_cfg = boundary_cfg.get("sqm_total", {})
-    if sqm_cfg:
-        canvas_bgr = _draw_sqm_total(canvas_bgr, polygon_px, polygon_latlon, sqm_cfg, w, h)
+    sqm_master = bo.get("sqm_total_enabled", True)
+    if sqm_cfg and sqm_master is not False:
+        canvas_bgr = _draw_sqm_total(
+            canvas_bgr, polygon_px, polygon_latlon_clipped, sqm_cfg, w, h,
+            centroid_offset_px=bo.get("sqm_total_position_offset_px"),
+            value_override=bo.get("sqm_total_value_override"),
+        )
 
-    # 5. Address overlay
+    # 5. Address overlay (master toggle + lat/lng anchor + text override)
     addr_cfg = boundary_cfg.get("address_overlay", {})
-    if addr_cfg:
-        canvas_bgr = _draw_address_overlay(canvas_bgr, polygon_px, addr_cfg, scene, w, h)
+    addr_master = bo.get("address_overlay_enabled", True)
+    if addr_cfg and addr_master is not False:
+        canvas_bgr = _draw_address_overlay(
+            canvas_bgr, polygon_px, addr_cfg, scene, w, h,
+            position_latlng_override=bo.get("address_overlay_position_latlng"),
+            text_override=bo.get("address_overlay_text_override"),
+        )
 
     return canvas_bgr
 
@@ -1549,13 +1975,10 @@ def render_canvas(image_bytes: bytes, theme_config: dict, scene: dict) -> np.nda
                 if show_dist and "distance_m" in poi:
                     # Distance arrives as a string surprisingly often (Google
                     # Places returns it stringly-typed in some response shapes).
-                    # Coerce + fall back to skipping the secondary label.
-                    try:
-                        d = float(poi.get("distance_m") or 0)
-                        secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
-                    except (TypeError, ValueError) as e:
-                        print(f"[poi] {poi.get('name', '?')}: bad distance_m {poi.get('distance_m')!r} ({e}); rendering without secondary")
-                        secondary = None
+                    # _fmt_distance returns None for NaN / 0 / negative /
+                    # non-numeric — caller skips the secondary line entirely.
+                    # (QC2-2 #8.)
+                    secondary = _fmt_distance(poi.get("distance_m"))
                 name = poi.get("name")
                 if not name or not isinstance(name, str):
                     print(f"[poi] skip: missing/invalid name (poi={poi!r})")
@@ -1629,13 +2052,10 @@ def render_canvas(image_bytes: bytes, theme_config: dict, scene: dict) -> np.nda
                     # content explicitly carries distance_m.
                     secondary = None
                     if show_dist:
-                        try:
-                            d_raw = content.get("distance_m")
-                            if d_raw is not None:
-                                d = float(d_raw)
-                                secondary = f"{d/1000:.1f}km" if d > 999 else f"{d:.0f}m"
-                        except (TypeError, ValueError):
-                            secondary = None
+                        # _fmt_distance returns None for NaN / 0 / negative /
+                        # non-numeric — caller skips the secondary line.
+                        # (QC2-2 #8.)
+                        secondary = _fmt_distance(content.get("distance_m"))
                     canvas = _draw_poi_label(
                         canvas, x, y, label, merged_style, anchor_style, secondary, w, h,
                     )

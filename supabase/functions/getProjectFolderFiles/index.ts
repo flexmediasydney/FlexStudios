@@ -77,6 +77,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return jsonResponse({ success: true, files }, 200, req);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // (W6-T2) Distinguish "folder kind not provisioned for this project" from
+    // generic Dropbox/upstream errors. mig 247/291 dropped the legacy drone
+    // folder kinds; FE clients that still list them (e.g. ProjectFilesTab.jsx
+    // ALL_FOLDER_KINDS — see W6-T2 ticket) hit getFolderPath's "No folder of
+    // kind 'X' for project Y" throw. Surfacing 404 + the kind lets the FE
+    // gracefully render "folder not provisioned" instead of a generic error
+    // banner, and stops the call counting as a server error in metrics.
+    if (/^No folder of kind /.test(msg)) {
+      console.warn(`[${GENERATOR}] folder kind not provisioned: ${msg}`);
+      return errorResponse(
+        `Folder kind '${body.folder_kind}' is not provisioned for this project`,
+        404,
+        req,
+      );
+    }
     console.error(`[${GENERATOR}] listFiles failed:`, msg);
     return errorResponse(`Failed to list files: ${msg}`, 500, req);
   }

@@ -178,8 +178,10 @@ const AuthenticatedApp = () => {
       <Route path="/EmployeeUtilization" element={<Navigate to="/Dashboard?tab=team" replace />} />
       <Route path="/TeamPulsePage" element={<Navigate to="/Dashboard?tab=team" replace />} />
       {Object.entries(Pages).map(([path, Page]) => {
-        // Field Mode + Drone Pin Editor render full-screen without the desktop Layout wrapper
-        if (path === 'FieldMode' || path === 'DronePinEditor') {
+        // Field Mode + Drone Pin Editor + Drone Boundary Editor render
+        // full-screen without the desktop Layout wrapper. (Wave 5 P2 S5
+        // adds DroneBoundaryEditor to the same set.)
+        if (path === 'FieldMode' || path === 'DronePinEditor' || path === 'DroneBoundaryEditor') {
           return (
             <Route
               key={path}

@@ -94,6 +94,10 @@ function toTableName(entityName) {
     'drone_pois_caches': 'drone_pois_cache',
     'drone_cadastral_caches': 'drone_cadastral_cache',
     'drone_external_caches': 'drone_external_cache',
+    // drone_property_boundary is singular (one row per project). Wave 5 P2
+    // S5 — without this override api.entities.DronePropertyBoundary would
+    // resolve to a non-existent drone_property_boundaries table and 404.
+    'drone_property_boundaries': 'drone_property_boundary',
     // Wave 6 P6 SHORTLIST: shortlisting_quarantine is singular by design
     // (one row per quarantined item; the table name uses the bucket noun
     // rather than a count noun). Override so api.entities.ShortlistingQuarantine
@@ -481,7 +485,7 @@ async function _logFrontendFailure(functionName, errorMessage, durationMs) {
 
 /**
  * Invoke a Supabase Edge Function.
- * Signature: api.functions.invoke(functionName, params) → response data
+ * Signature: api.functions.invoke(functionName, params, opts?) → response data
  *
  * Maps to: supabase.functions.invoke(functionName, { body: params })
  *
@@ -489,8 +493,17 @@ async function _logFrontendFailure(functionName, errorMessage, durationMs) {
  * can attribute the call. On errors where the server wrapper could not run
  * (network failure, CORS, auth-gate rejection), we also write a fallback
  * audit row directly from the client.
+ *
+ * W8 FIX 3 (P0, F1): added `opts.throwOnError` (default true). W6 FIX 1 made
+ * us throw a richError on every non-2xx so callers could read .status/.body
+ * — but BoundaryEditor's invokeBoundary helper expects the Supabase
+ * `{ data, error }` shape and branches on status===409 to open the conflict
+ * dialog. Throwing collapsed that into a generic exception and broke the
+ * UX. With `throwOnError: false`, the rich error is returned in the
+ * `error` slot so legacy callers keep working without a refactor.
  */
-async function invokeFunction(client, functionName, params = {}) {
+async function invokeFunction(client, functionName, params = {}, opts = {}) {
+  const throwOnError = opts.throwOnError !== false; // default true
   // Timeout: Edge Functions should not hang indefinitely on slow networks.
   // pulseDataSync runs Apify actors which can take 2-3 min per batch.
   // Other functions use 45s (Supabase default 30s + network overhead).
@@ -516,13 +529,58 @@ async function invokeFunction(client, functionName, params = {}) {
     ]);
     clearTimeout(timeoutId);
     if (error) {
-      // The server wrapper may or may not have recorded this — depends on how
-      // far the request got. Record a frontend-side audit row regardless;
-      // duplicates are fine for outage diagnostics and the volume is low.
-      const msg = error.message || `Function ${functionName} failed`;
+      // W6 FIX 1 (QC3-5 BE3 + QC3-6 S2): supabase-js's FunctionsHttpError
+      // carries the raw Response body on `error.context`. Without surfacing
+      // it, structured 4xx replies (drone-shot-lifecycle's
+      // `{success:false, error:'lifecycle_state_conflict', current_state}`,
+      // drone-boundary-save's 409 with `current_row` / `current_version`,
+      // drone-render-approve's lock-state messages, etc.) collapsed into a
+      // generic "Edge Function returned a non-2xx status code" — callers
+      // couldn't branch on the actual server-side reason.
+      //
+      // Strategy: best-effort extract the body (json or string), throw a
+      // richer Error that exposes `.status` + `.body` for callers, while
+      // preserving the existing audit-row write so outage diagnostics still
+      // see one row per frontend-side failure.
+      let parsedBody = null;
+      const ctx = error?.context;
+      // Prefer a pre-parsed body if supabase-js gave us one; otherwise pull
+      // bytes off the Response (it's only readable once — we await text() and
+      // then JSON.parse, falling back to the raw string).
+      if (ctx?.body && typeof ctx.body === 'object' && !(ctx.body instanceof ReadableStream)) {
+        parsedBody = ctx.body;
+      } else if (typeof ctx?.body === 'string') {
+        try { parsedBody = JSON.parse(ctx.body); } catch { parsedBody = ctx.body; }
+      } else if (ctx && typeof ctx.text === 'function') {
+        try {
+          const txt = await ctx.text();
+          try { parsedBody = JSON.parse(txt); } catch { parsedBody = txt; }
+        } catch { /* response already consumed or unreadable */ }
+      } else if (ctx && typeof ctx.json === 'function') {
+        try { parsedBody = await ctx.json(); } catch { /* not JSON */ }
+      }
+      const status = ctx?.status ?? error?.status ?? null;
+      const serverMsg =
+        (parsedBody && typeof parsedBody === 'object' && parsedBody.error) ||
+        error.message ||
+        `Function ${functionName} failed`;
       loggedFailure = true;
-      _logFrontendFailure(functionName, msg, Date.now() - startMs);
-      throw new Error(msg);
+      _logFrontendFailure(functionName, serverMsg, Date.now() - startMs);
+      const richError = new Error(serverMsg);
+      richError.status = status;
+      richError.body = parsedBody;
+      richError.functionName = functionName;
+      // Preserve the original supabase-js error in case a caller needs it.
+      richError.cause = error;
+      if (!throwOnError) {
+        // W8 FIX 3: legacy callers (e.g. BoundaryEditor's invokeBoundary)
+        // want the supabase { data, error } shape so they can branch on
+        // status===409 to open the conflict dialog. Surface the richError
+        // in the error slot — the body is also exposed as `data` so
+        // callers that read either path see the server response.
+        return { data: parsedBody ?? null, error: richError };
+      }
+      throw richError;
     }
     // Wrap in { data } to match Base44's response format:
     // Frontend code does: result.data.someField
@@ -539,7 +597,7 @@ async function invokeFunction(client, functionName, params = {}) {
 }
 
 const functionsApi = {
-  invoke: (name, params) => invokeFunction(supabase, name, params),
+  invoke: (name, params, opts) => invokeFunction(supabase, name, params, opts),
 };
 
 const functionsApiAdmin = {

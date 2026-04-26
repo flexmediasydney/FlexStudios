@@ -415,6 +415,58 @@ const computeSparseDelta = (defaults, current, path = "") => {
   return out;
 };
 
+// (W5 P1 #1) Preserve any leaf path that existed in the previously persisted
+// config, even when the current value happens to equal DEFAULT_CONFIG. Without
+// this, a person-level theme that explicitly overrode an INHERITED org/system
+// value (e.g. person.color = "#000" to override org's "#FFF", where
+// DEFAULT_CONFIG.color is also "#000") would have that override silently
+// dropped by `computeSparseDelta(DEFAULT_CONFIG, current)` on every save —
+// resolver would then fall back to the org/system value, undoing the
+// operator's intent. Empirical Chrome E2E observed this as a 1193→645 char
+// shrink of persisted config across an unrelated edit.
+//
+// Algorithm:
+//   for each key in `persisted`:
+//     if it's an object (and not whole-replace), recurse;
+//     otherwise, if `delta` already has the key, keep delta's value;
+//     otherwise, copy `current`'s value at that path (which equals defaults,
+//     because if it differed from defaults `delta` would have included it).
+//
+// The result is a sparse blob that contains: every operator-changed leaf
+// (vs DEFAULT_CONFIG) AND every leaf the persisted config previously
+// asserted (preserving inheritance overrides).
+const preservePersistedKeys = (delta, persisted, current, path = "") => {
+  // Persisted has nothing at this branch → nothing to preserve.
+  if (persisted === undefined || persisted === null) return delta;
+  // Whole-replace path or array: if delta has a value, use it; otherwise
+  // copy current (which equals persisted, since otherwise delta would have it).
+  const isReplaceWholly =
+    REPLACE_WHOLLY_PATHS.has(path) || Array.isArray(persisted) || Array.isArray(current);
+  if (isReplaceWholly) {
+    if (delta !== undefined) return delta;
+    // current may be missing if hydration shape changed; fall back to persisted.
+    const src = current !== undefined ? current : persisted;
+    return JSON.parse(JSON.stringify(src));
+  }
+  // Persisted is a leaf (scalar): if delta exists use it, else use current.
+  if (!isPlainObject(persisted)) {
+    if (delta !== undefined) return delta;
+    return current !== undefined ? current : persisted;
+  }
+  // Persisted is an object — walk its keys to preserve every nested leaf.
+  const out = isPlainObject(delta) ? { ...delta } : {};
+  for (const k of Object.keys(persisted)) {
+    const subPath = path ? `${path}.${k}` : k;
+    out[k] = preservePersistedKeys(
+      isPlainObject(delta) ? delta[k] : undefined,
+      persisted[k],
+      isPlainObject(current) ? current[k] : undefined,
+      subPath,
+    );
+  }
+  return out;
+};
+
 // Tighten 6/8-char only — server's HEX_RE rejects 3-char (#FFF). We
 // previously accepted #FFF client-side which led to silent save failures
 // with a generic toast. Standardise on 6 (#RRGGBB) or 8 (#RRGGBBAA) char
@@ -1037,6 +1089,13 @@ export default function ThemeEditor({
   // Snapshot of the hydrated state (name + config + is_default) used to
   // detect unsaved changes when Cancel is clicked. (Bug #12)
   const baselineRef = useRef({ name: "", config: DEFAULT_CONFIG, isDefault: false });
+  // (W5 P1 #1) Snapshot of the LAST PERSISTED sparse config (raw row.config)
+  // — kept distinct from baselineRef.config (which is the hydrated/merged
+  // editor state). performSave uses this to preserve any leaf the persisted
+  // blob previously asserted, even when its current value happens to equal
+  // DEFAULT_CONFIG (otherwise sparse-delta silently drops inheritance
+  // overrides → 1193→645 char shrink observed in E2E).
+  const persistedConfigRef = useRef({});
 
   // Save-confirmation dialog state (only fires when versionInt > 1).
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
@@ -1068,8 +1127,9 @@ export default function ThemeEditor({
     let cancelled = false;
     async function hydrate() {
       if (initialTheme) {
+        const rawPersisted = initialTheme.config || {};
         const hydratedName = initialTheme.name || "";
-        const hydratedConfig = mergeWithDefaults(DEFAULT_CONFIG, initialTheme.config || {});
+        const hydratedConfig = mergeWithDefaults(DEFAULT_CONFIG, rawPersisted);
         const hydratedIsDefault = !!initialTheme.is_default;
         setName(hydratedName);
         setConfig(hydratedConfig);
@@ -1082,6 +1142,10 @@ export default function ThemeEditor({
           config: hydratedConfig,
           isDefault: hydratedIsDefault,
         };
+        // (W5 P1 #1) Snapshot the raw persisted sparse blob so save can
+        // preserve any leaf it previously asserted (e.g. inheritance overrides
+        // whose value equals DEFAULT_CONFIG and would otherwise be stripped).
+        persistedConfigRef.current = JSON.parse(JSON.stringify(rawPersisted));
         return;
       }
       if (!themeId) {
@@ -1091,6 +1155,8 @@ export default function ThemeEditor({
           config: DEFAULT_CONFIG,
           isDefault: false,
         };
+        // No prior persisted blob — sparse-delta vs DEFAULT_CONFIG suffices.
+        persistedConfigRef.current = {};
         return;
       }
       setLoading(true);
@@ -1098,8 +1164,9 @@ export default function ThemeEditor({
       try {
         const row = await api.entities.DroneTheme.get(themeId);
         if (cancelled) return;
+        const rawPersisted = row.config || {};
         const hydratedName = row.name || "";
-        const hydratedConfig = mergeWithDefaults(DEFAULT_CONFIG, row.config || {});
+        const hydratedConfig = mergeWithDefaults(DEFAULT_CONFIG, rawPersisted);
         const hydratedIsDefault = !!row.is_default;
         setName(hydratedName);
         setConfig(hydratedConfig);
@@ -1112,6 +1179,9 @@ export default function ThemeEditor({
           config: hydratedConfig,
           isDefault: hydratedIsDefault,
         };
+        // (W5 P1 #1) Snapshot the raw persisted sparse blob so save can
+        // preserve any leaf it previously asserted.
+        persistedConfigRef.current = JSON.parse(JSON.stringify(rawPersisted));
       } catch (e) {
         if (!cancelled) setLoadError(e?.message || "Failed to load theme");
       } finally {
@@ -1210,10 +1280,34 @@ export default function ThemeEditor({
         // from org/system. Without this, person themes would override
         // every default value at every level, defeating the point of
         // inheritance. (Bug #1 — sparse-merge inversion)
-        const sparseConfig = computeSparseDelta(DEFAULT_CONFIG, config) || {};
-        // Always echo theme_name into the saved config so DB readers
-        // (RPCs, audit) can identify the theme without joining.
-        sparseConfig.theme_name = name.trim();
+        //
+        // (W5 P1 #1) THEN preserve any leaf the previously persisted config
+        // already asserted — even if its current value happens to equal
+        // DEFAULT_CONFIG. Otherwise an explicit override of an inherited
+        // org/system value (e.g. person.color = "#000" overriding org "#FFF",
+        // where DEFAULT_CONFIG.color is also "#000") gets silently dropped on
+        // every save → resolver falls back to org/system value, undoing the
+        // operator's intent. Empirical Chrome E2E observed a 1193→645 char
+        // shrink across an unrelated edit.
+        const baseDelta = computeSparseDelta(DEFAULT_CONFIG, config) || {};
+        const sparseConfig = saveAsNew
+          ? baseDelta
+          : preservePersistedKeys(baseDelta, persistedConfigRef.current || {}, config);
+        // (W5 P1 #2) DO NOT echo theme_name into sparseConfig. Doing so
+        // pollutes inheritance_diff (every save asserts theme_name at the
+        // person/org level even when the operator only changed the row name),
+        // making the "Resolved from person level" badge misleading. The
+        // theme name is already passed via the dedicated top-level `name`
+        // payload field, which setDroneTheme stores in drone_themes.name —
+        // config.theme_name should default to "" and be resolver-merged,
+        // never asserted unless the operator explicitly sets it via the
+        // schema-driven editor (which they can't today).
+        //
+        // Explicitly strip even if previously persisted blobs had it (saves
+        // pre-W5 stamped it on every write), so we self-heal the pollution.
+        if (sparseConfig && typeof sparseConfig === "object") {
+          delete sparseConfig.theme_name;
+        }
         const payload = {
           owner_kind: ownerKind,
           owner_id: ownerId,
@@ -1239,6 +1333,11 @@ export default function ThemeEditor({
         } else {
           setVersionInt((v) => (v == null ? 1 : v + 1));
         }
+        // (W5 P1 #1) Update the persisted snapshot to what we just sent.
+        // Subsequent saves in the same session must use this value as the
+        // baseline — otherwise the second save would re-shrink against the
+        // pre-save persisted blob.
+        persistedConfigRef.current = JSON.parse(JSON.stringify(sparseConfig));
         toast.success(saveAsNew ? "Theme created" : "Theme saved");
         return {
           theme_id: data.theme_id,

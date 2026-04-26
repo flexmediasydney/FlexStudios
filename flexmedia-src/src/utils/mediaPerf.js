@@ -101,31 +101,42 @@ const GLOBAL_MAX_CONCURRENT = 20; // Max simultaneous fetches across ALL views
 let _globalActive = 0;
 const _globalQueue = [];
 
-// Safety: reset stuck counter periodically (handles unmounted component leaks)
-setInterval(() => {
-  if (_globalActive > 0 && _globalQueue.length > 0) {
-    // If queue has items waiting but active count is at max for >30s, something leaked
-    _globalActive = Math.max(0, _globalActive - 1);
-    _processGlobalQueue();
-  }
-}, 30000);
+// (W5 P1 #4) Removed the global setInterval safety reaper. The previous
+// implementation decremented _globalActive even when the original fetch was
+// still in flight; the original's `finally` then decremented again with no
+// `Math.max(0, …)` guard → counter went negative → the gate
+// `_globalActive < GLOBAL_MAX_CONCURRENT` always passed → unbounded
+// concurrency → Dropbox 429 cascade under load. Replaced with per-request
+// timeout-based reaping (a single boolean per job ensures decrement runs
+// at most once), and the finally clamps with Math.max(0, …) defensively.
 
 function _processGlobalQueue() {
   while (_globalActive < GLOBAL_MAX_CONCURRENT && _globalQueue.length > 0) {
     const { job, resolve, reject } = _globalQueue.shift();
     _globalActive++;
-    // Add a 30s timeout to prevent permanent leak
-    const timeout = setTimeout(() => {
+    // Single-shot release: whichever path fires first (success/failure or
+    // timeout) decrements once and disarms the other path.
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
       _globalActive = Math.max(0, _globalActive - 1);
       _processGlobalQueue();
-    }, 30000);
+    };
+    // 30s safety timeout — if the job never settles (network stuck), reap it.
+    // Only wire up in browser environments to avoid SSR/test leaks.
+    const timeout =
+      typeof window !== 'undefined'
+        ? setTimeout(() => {
+            release();
+          }, 30000)
+        : null;
     job()
       .then(resolve)
       .catch(reject)
       .finally(() => {
-        clearTimeout(timeout);
-        _globalActive--;
-        _processGlobalQueue();
+        if (timeout) clearTimeout(timeout);
+        release();
       });
   }
 }

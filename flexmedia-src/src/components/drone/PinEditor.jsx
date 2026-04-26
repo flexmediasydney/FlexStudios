@@ -36,6 +36,7 @@ import {
 } from "react";
 import { api } from "@/api/supabaseClient";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
+import PinLayersPanel from "@/components/drone/PinLayersPanel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -78,9 +79,6 @@ import {
   AlertTriangle,
   Globe,
   Image as ImageIconLucide,
-  Plus,
-  ChevronDown,
-  ChevronRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -135,6 +133,11 @@ export default function PinEditor({
   imageUrl,
   imageError = null, // truthy when source image failed to load
   poseAvailable = true, // false → SfM not available, use GPS prior
+  // W5 P2 S4 / Task 5: pipeline tells the server which lane the cascade
+  // should target. Pin Editor is edited-only so this defaults to 'edited'
+  // — the server ignores anything else and always cascades through
+  // render_edited.
+  pipeline = "edited",
   onShotChange, // (newShotId) => void — drives URL + image swap from parent
   onAfterSave, // optional — called after a successful save with the response
   onSave,
@@ -291,61 +294,33 @@ export default function PinEditor({
   const poisEnabled = resolvedTheme?.poi_label?.enabled !== false;
   const pinEnabled = resolvedTheme?.property_pin?.enabled !== false;
 
-  // Read-only "Detected POIs" layer items derived from drone_pois_cache.
-  // These are NOT persisted in drone_custom_pins — they're informational so
-  // the operator can see what the AI ingested. Clicking one (TODO Wave 4)
-  // would promote it into an editable custom pin.
-  //
-  // CRITICAL: declared above `projectedItems` (line below) which reads it.
-  // Was previously down at line ~1100 → TDZ violation → minified runtime
-  // error "Cannot access 'Ce' before initialization" on every Pin Editor
-  // mount. Don't move it back down. (Companion to the W3-CASCADE TDZ fix
-  // for `optimisticRenderColumns` in DroneRendersSubtab.)
-  const cachedPoiItems = useMemo(() => {
-    if (!Array.isArray(cachedPois) || cachedPois.length === 0) return [];
-    const out = [];
-    for (const p of cachedPois) {
-      if (!p) continue;
-      const lat = Number(p.lat);
-      const lng = Number(p.lng ?? p.lon);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      out.push({
-        id: `cached_poi_${p.place_id || `${lat}_${lng}`}`,
-        kind: "world",
-        kindLabel: "Detected POI",
-        label: p.name || p.label || "POI",
-        color: "#10B981", // emerald — distinct from theme POIs (indigo)
-        world: { lat, lng },
-        virtual: "cached_poi",
-        readOnly: true,
-        meta: {
-          type: p.type || null,
-          distance_m: p.distance_m ?? null,
-          rating: p.rating ?? null,
-        },
-      });
-    }
-    return out;
-  }, [cachedPois]);
+  // F31 (W5 P2 S4): cachedPois infra is dead post-W3-ARCH. AI pins now live
+  // in drone_custom_pins (mig 268+) and load via the unified customPinsQ.
+  // The cachedPois prop is preserved on the public API for backwards
+  // compatibility but ignored. drone_pois_cache is an audit log only.
+  void cachedPois;
 
   // Items that should be visible on the active shot (after world→pixel projection).
+  // F35: suppressed pins are filtered OUT of the canvas (still appear in
+  // Layers via the suppress-strikethrough rendering — they're hidden from
+  // the rendered output until restored).
   const projectedItems = useMemo(() => {
     if (!activeShot) return [];
     const out = [];
-    // Iterate persisted/local items first, then virtual cachedPoiItems so
-    // operator-saved pins paint on top of AI-detected ones.
-    const allRenderable = [...items, ...(cachedPoiItems || [])];
-    for (const item of allRenderable) {
+    for (const item of items) {
       if (hiddenIds.has(item.id)) continue;
+      // F35: suppress filter — both the persisted lifecycle and the
+      // optimistic _suppress flag count.
+      if (item.lifecycle === "suppressed" || item._suppress === true) continue;
       // Master-toggle suppression of overlay markers. Property pin is the
       // virtual "property" item; POIs are theme POIs + any manual poi_manual
-      // pin (world or pixel anchored). Cached POIs follow the POI toggle.
+      // pin (world or pixel anchored).
       if (!pinEnabled && item.virtual === "property") continue;
       if (
         !poisEnabled &&
         (item.virtual === "theme_poi" ||
-          item.virtual === "cached_poi" ||
-          item.subtype === "poi_manual")
+          item.subtype === "poi_manual" ||
+          item.isAi === true)
       ) {
         continue;
       }
@@ -371,7 +346,7 @@ export default function PinEditor({
       out.push({ ...item, _pixel: pixel });
     }
     return out;
-  }, [items, cachedPoiItems, hiddenIds, activeShot, pose, pinEnabled, poisEnabled]);
+  }, [items, hiddenIds, activeShot, pose, pinEnabled, poisEnabled]);
 
   // ── Canvas / image refs ─────────────────────────────────────────────────
   const containerRef = useRef(null);
@@ -452,6 +427,64 @@ export default function PinEditor({
       return { x: ox / view.zoom, y: oy / view.zoom };
     },
     [view],
+  );
+
+  // E9 (W5 P2 S4): direct pointerdown handler for pin markers. The marker
+  // calls this on pointerdown WITH stopPropagation, so the canvas pan
+  // handler never sees the event for pin starts. Without this the
+  // geometric hit-test on the stage's pointerdown sometimes missed
+  // (small markers, label-side click) and pan engaged instead of drag.
+  const onPinPointerDown = useCallback(
+    (item, e) => {
+      // Honor pose lock for the property pin (same as the stage handler).
+      setSelectedItemId(item.id);
+      try {
+        // Capture pointer on the stage so subsequent pointermove/up
+        // events bubble up via the same path the existing handlers use.
+        const stage = stageRef.current;
+        if (stage && typeof stage.setPointerCapture === "function") {
+          stage.setPointerCapture(e.pointerId);
+        }
+      } catch {
+        /* ignore */
+      }
+      if (item.virtual === "property") {
+        // Property pin: select but don't drag (lock-out).
+        dragState.current = {
+          kind: "pan",
+          startMouse: { x: e.clientX, y: e.clientY },
+          startView: { ...view },
+        };
+        return;
+      }
+      // Compute the projected pixel for this item (mirrors the stage hit-
+      // test), so subsequent pointermove deltas use the right baseline.
+      let pixel;
+      if (item.kind === "world" && item.world && pose) {
+        pixel = gpsToPixel({ tlat: item.world.lat, tlon: item.world.lng, ...pose });
+      } else if (item.kind === "pixel") {
+        pixel = { x: item.pixel.x, y: item.pixel.y };
+      }
+      if (!pixel) {
+        // Off-frame or unprojectable; fall back to pan to keep the
+        // cursor responsive.
+        dragState.current = {
+          kind: "pan",
+          startMouse: { x: e.clientX, y: e.clientY },
+          startView: { ...view },
+        };
+        return;
+      }
+      dragState.current = {
+        kind: "drag-pin",
+        id: item.id,
+        startMouse: { x: e.clientX, y: e.clientY },
+        startPixel: pixel,
+        moved: false,
+        startPose: pose,
+      };
+    },
+    [pose, view],
   );
 
   const onPointerDown = useCallback(
@@ -620,7 +653,10 @@ export default function PinEditor({
       _setItems((prev) =>
         prev.map((it) => {
           if (it.id !== ds.id) return it;
-          if (it.kind !== "world") return { ...it, _dirty: true };
+          // F47: flip aiOperatorEdited on AI pins so Reset-to-AI surfaces
+          // immediately after the drag, not only after a save round-trip.
+          const aiFlag = it.isAi ? { aiOperatorEdited: true } : {};
+          if (it.kind !== "world") return { ...it, ...aiFlag, _dirty: true };
           // Convert _previewPixel → world via inverse projection.
           // #79: use the pose snapshot captured at mousedown rather than the
           // current closure's `pose` (which may have changed if activeShotId
@@ -632,7 +668,7 @@ export default function PinEditor({
               "Pose data unavailable — pin world position not updated",
             );
             const { _previewPixel: _, ...rest } = it;
-            return rest;
+            return { ...rest, ...aiFlag };
           }
           const newWorld = pixelToGroundGps({
             px: target.x,
@@ -644,11 +680,12 @@ export default function PinEditor({
               "Pixel above horizon — cannot ray-cast to ground; world coord unchanged",
             );
             const { _previewPixel: _, ...rest } = it;
-            return rest;
+            return { ...rest, ...aiFlag };
           }
           const { _previewPixel: _, ...rest } = it;
           return {
             ...rest,
+            ...aiFlag,
             world: { lat: newWorld.lat, lng: newWorld.lon },
             _dirty: true,
           };
@@ -778,12 +815,20 @@ export default function PinEditor({
   }, [selectedItemId, fitToFrame]);
 
   // ── Item mutators ────────────────────────────────────────────────────────
+  // F47 (W5 P2 S4): when an AI pin is updated locally (label change, color,
+  // etc.), flip aiOperatorEdited=true so the Reset-to-AI button surfaces
+  // for current-session edits. Was previously only set from the server's
+  // updated_by field, meaning the button only appeared after a save round-
+  // trip — operators couldn't undo their in-progress edits.
   const updateItem = useCallback(
     (id, patch) => {
       setItems((prev) =>
-        prev.map((it) =>
-          it.id === id ? { ...it, ...patch, _dirty: true } : it,
-        ),
+        prev.map((it) => {
+          if (it.id !== id) return it;
+          const merged = { ...it, ...patch, _dirty: true };
+          if (it.isAi) merged.aiOperatorEdited = true;
+          return merged;
+        }),
       );
     },
     [setItems],
@@ -806,19 +851,68 @@ export default function PinEditor({
     [setItems],
   );
 
-  // W3-PINS: Suppress — soft-hide a persisted pin via lifecycle='suppressed'.
+  // W3-PINS / E12 (W5 P2 S4): Suppress — optimistic state update so the
+  // canvas, Layers panel, and Inspector all reflect the suppression
+  // immediately. The server hook (suppress action) flips lifecycle in
+  // drone_custom_pins on save.
   const handleSuppress = useCallback(
     (id) => {
       setItems((prev) =>
         prev.map((it) =>
           it.id === id && it.dbId
-            ? { ...it, _suppress: true, _dirty: true }
+            ? {
+                ...it,
+                _suppress: true,
+                _unsuppress: false,
+                lifecycle: "suppressed",
+                _dirty: true,
+              }
             : it,
         ),
       );
     },
     [setItems],
   );
+
+  // F35 (W5 P2 S4): Un-suppress — flip a previously-suppressed pin back
+  // to active. Optimistic state mirrors the eventual server-side
+  // un_suppress action. Suppression is no longer a one-way trapdoor.
+  const handleUnsuppress = useCallback(
+    (id) => {
+      setItems((prev) =>
+        prev.map((it) => {
+          if (it.id !== id || !it.dbId) return it;
+          return {
+            ...it,
+            _suppress: false,
+            _unsuppress: true,
+            lifecycle: "active",
+            _dirty: true,
+          };
+        }),
+      );
+    },
+    [setItems],
+  );
+
+  // Layers panel callbacks (extracted to PinLayersPanel.jsx).
+  const handleToggleFold = useCallback((groupKey) => {
+    setFoldedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
+
+  const handleToggleVisibility = useCallback((itemId) => {
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }, []);
 
   // W3-PINS: Reset to AI — restore world coords + label from latest_ai_snapshot.
   // We just stamp _reset_to_ai; the server reloads the snapshot from the row.
@@ -948,6 +1042,9 @@ export default function PinEditor({
             const resp = await api.functions.invoke("drone-pins-save", {
               shoot_id: shoot.id,
               edits,
+              // W5 P2 S4 / Task 5: forwarded for forward-compat. Server
+              // currently always treats Pin Editor saves as 'edited'.
+              pipeline,
             });
             result = resp?.data || resp;
             // Surface partial-failure (HTTP 207-style) errors
@@ -975,28 +1072,40 @@ export default function PinEditor({
           (result?.applied?.updates ?? result?.updates ?? 0) +
           (result?.applied?.deletes ?? result?.deletes ?? 0);
 
-        // W3 cascade telemetry: when a world-anchored pin is touched the
-        // server fans out one render per shoot in the project (POIs and the
-        // property pin project to every shot). The toast surfaces the count
-        // so the operator sees that sibling shoots are also re-rendering.
-        const cascadeCount = Number(result?.cascade?.cascaded_shoot_count ?? 0);
-        const cascadeReason = result?.cascade?.reason;
-        const isCascade = cascadeReason === "pin_edit_cascade" && cascadeCount > 1;
-
-        toast.success(
-          `Saved ${totalApplied || edits.length} pin${
-            (totalApplied || edits.length) === 1 ? "" : "s"
-          }`,
-          {
-            description: usedFallback
-              ? "Edge function unavailable — saved direct (no re-render queued)."
-              : isCascade
-              ? `Re-rendering ${cascadeCount} shoots — project-wide pin update.`
-              : result?.job_id || cascadeCount > 0
-              ? "Re-render queued — your renders will refresh shortly."
-              : undefined,
-          },
+        // W6 FIX 3 (QC3-4 P1): the server's response shape changed from
+        // the legacy nested `cascade.{reason,cascaded_shoot_count}` to a
+        // top-level `{cascade_enqueued, cascade_kind, cascade_job_id}`.
+        // The legacy reads silently returned 0 / undefined, so the toast
+        // never told the operator a project-wide re-render was queued —
+        // they'd save and then sit waiting wondering if the cascade fired.
+        const cascadeEnqueued = result?.cascade_enqueued === true;
+        const cascadeKind = result?.cascade_kind;
+        // Legacy fallback (older deployments still on nested shape) so a
+        // half-deployed environment still shows _some_ cascade signal.
+        const legacyCascadeCount = Number(
+          result?.cascade?.cascaded_shoot_count ?? 0,
         );
+        const baseSavedMessage = `Saved ${totalApplied || edits.length} pin${
+          (totalApplied || edits.length) === 1 ? "" : "s"
+        }`;
+
+        let toastDescription;
+        if (usedFallback) {
+          toastDescription =
+            "Edge function unavailable — saved direct (no re-render queued).";
+        } else if (cascadeEnqueued && cascadeKind === "render_edited") {
+          toastDescription =
+            "Re-rendering edited shoots — cards will refresh shortly.";
+        } else if (cascadeEnqueued) {
+          // Unknown cascade_kind but server queued one — surface generic.
+          toastDescription = "Re-render queued — your renders will refresh shortly.";
+        } else if (legacyCascadeCount > 1) {
+          toastDescription = `Re-rendering ${legacyCascadeCount} shoots — project-wide pin update.`;
+        } else if (result?.job_id) {
+          toastDescription = "Re-render queued — your renders will refresh shortly.";
+        }
+
+        toast.success(baseSavedMessage, { description: toastDescription });
         // #7: clear local dirty markers and history stacks after a successful
         // save so dirtyCount drops to 0, the Save button disables, and the
         // beforeunload / useBlocker / "Discard unsaved changes?" modal stops
@@ -1040,6 +1149,13 @@ export default function PinEditor({
                 ...i,
                 _dirty: false,
                 _new: false,
+                // W6 FIX 5 (QC3-4 P3): also clear the lifecycle flags so a
+                // subsequent save in the same session doesn't replay the
+                // suppress / unsuppress / reset_to_ai actions for already-
+                // committed items (which would 409 or no-op needlessly).
+                _suppress: false,
+                _unsuppress: false,
+                _reset_to_ai: false,
                 ...(newDbId ? { dbId: newDbId, id: newDbId } : {}),
               };
             }),
@@ -1134,24 +1250,40 @@ export default function PinEditor({
 
   const dirtyCount = items.filter(isItemDirty).length;
 
-  // (cachedPoiItems was declared above — see hoisted block near line 295.)
-
-  // Layer groups for the tree.
+  // F31 (W5 P2 S4): Layer groups built directly from `items`. AI pins
+  // (source='ai' / isAi=true) flow into 'detected'; manual world-anchored
+  // pins into 'world'; pixel-anchored into 'pixel'. The legacy
+  // cachedPoiItems path is dead — drone_pois_cache is an audit log only
+  // post-W3-ARCH; AI pins live in drone_custom_pins now (mig 268+).
+  //
+  // F35: include suppressed pins in the layer tree (rendered grey/strike-
+  // through by PinLayersPanel) so the operator can find and restore
+  // them. Without this, suppression was a one-way trapdoor in the UI.
   const layerGroups = useMemo(() => {
     const groups = {
+      detected: { label: "Detected POIs (AI)", items: [] },
       world: { label: "World-anchored", items: [] },
       pixel: { label: "Pixel-anchored", items: [] },
-      detected: { label: "Detected POIs (AI)", items: [] },
     };
     for (const it of items) {
+      // Drop hard-deletes (the local _delete tombstone). Suppressed and
+      // un-suppress-pending pins both stay visible — the panel renders
+      // them with affordances.
       if (it._delete) continue;
-      groups[it.kind === "world" ? "world" : "pixel"].items.push(it);
-    }
-    for (const it of cachedPoiItems) {
-      groups.detected.items.push(it);
+      // Property pin is virtual + non-anchored to a group bucket — it
+      // surfaces under 'world' as a non-AI item (matches the legacy
+      // grouping operators are used to).
+      const isAi = Boolean(it.isAi || it.source === "ai");
+      if (isAi) {
+        groups.detected.items.push(it);
+      } else if (it.kind === "world") {
+        groups.world.items.push(it);
+      } else {
+        groups.pixel.items.push(it);
+      }
     }
     return groups;
-  }, [items, cachedPoiItems]);
+  }, [items]);
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -1273,147 +1405,22 @@ export default function PinEditor({
 
         {/* ── MAIN ROW ──────────────────────────────────────── */}
         <div className={cn("flex flex-1 min-h-0", themeError && "opacity-50 pointer-events-none")}>
-          {/* Layers panel */}
-          <aside className="w-60 border-r border-border bg-background overflow-y-auto shrink-0 p-3 text-sm">
-            <div className="font-semibold text-xs uppercase text-muted-foreground mb-2">
-              Layers
-            </div>
-            {Object.entries(layerGroups).map(([key, group]) => {
-              const folded = foldedGroups.has(key);
-              return (
-                <div key={key} className="mb-3">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setFoldedGroups((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(key)) next.delete(key);
-                        else next.add(key);
-                        return next;
-                      })
-                    }
-                    className="flex items-center gap-1 w-full text-left text-xs font-medium text-foreground/80 hover:text-foreground"
-                  >
-                    {folded ? (
-                      <ChevronRight className="h-3 w-3" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3" />
-                    )}
-                    {key === "world" ? (
-                      <Globe className="h-3 w-3" />
-                    ) : key === "detected" ? (
-                      <PinIcon className="h-3 w-3" />
-                    ) : (
-                      <ImageIconLucide className="h-3 w-3" />
-                    )}
-                    {group.label}
-                    <span className="text-muted-foreground ml-auto">
-                      {group.items.length}
-                    </span>
-                  </button>
-                  {!folded && group.items.length === 0 && (
-                    <p className="pl-5 text-[11px] text-muted-foreground italic mt-1">
-                      {key === "world"
-                        ? "Property + theme POIs (GPS-anchored)"
-                        : key === "detected"
-                          ? "AI-detected nearby places (read-only)"
-                          : "Text, ribbons, address overlays (per-shot)"}
-                    </p>
-                  )}
-                  {!folded && (
-                    <ul className="mt-1 space-y-0.5 pl-2">
-                      {group.items.map((it) => {
-                        const isHidden = hiddenIds.has(it.id);
-                        const isSelected = it.id === selectedItemId;
-                        return (
-                          <li
-                            key={it.id}
-                            className={cn(
-                              "flex items-center gap-1 rounded px-1.5 py-1 text-xs cursor-pointer",
-                              isSelected
-                                ? "bg-blue-100 dark:bg-blue-950 text-blue-900 dark:text-blue-200"
-                                : "hover:bg-muted",
-                            )}
-                            onClick={() => setSelectedItemId(it.id)}
-                          >
-                            <span
-                              className="inline-block w-2 h-2 rounded-full shrink-0"
-                              style={{ backgroundColor: it.color || "#888" }}
-                            />
-                            <span className="truncate flex-1">
-                              {it.label || it.kindLabel || "Item"}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setHiddenIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(it.id)) next.delete(it.id);
-                                  else next.add(it.id);
-                                  return next;
-                                });
-                              }}
-                              className="opacity-50 hover:opacity-100 shrink-0"
-                              title={isHidden ? "Show" : "Hide"}
-                              aria-label={`${isHidden ? "Show" : "Hide"} ${
-                                it.label || it.kindLabel || "layer"
-                              }`}
-                            >
-                              {isHidden ? (
-                                <EyeOff className="h-3 w-3" />
-                              ) : (
-                                <Eye className="h-3 w-3" />
-                              )}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </div>
-              );
-            })}
-            <div className="border-t border-border pt-3 mt-2 space-y-1">
-              <Button
-                size="sm"
-                variant={tool === TOOLS.ADD_PIN ? "secondary" : "ghost"}
-                className="w-full justify-start gap-1 text-xs"
-                onClick={() => setTool(TOOLS.ADD_PIN)}
-                disabled={shots.length === 0}
-                title={
-                  shots.length === 0
-                    ? "No shots in this shoot — add shots first."
-                    : poseAvailable
-                      ? "Click on canvas to drop a world-anchored pin (GPS)"
-                      : "SfM unavailable — pin will be pixel-anchored to this shot"
-                }
-              >
-                <Plus className="h-3 w-3" /> Add POI pin
-              </Button>
-              <Button
-                size="sm"
-                variant={tool === TOOLS.ADD_TEXT ? "secondary" : "ghost"}
-                className="w-full justify-start gap-1 text-xs"
-                onClick={() => setTool(TOOLS.ADD_TEXT)}
-                disabled={shots.length === 0}
-                title={
-                  shots.length === 0
-                    ? "No shots in this shoot — add shots first."
-                    : "Click on canvas to drop a pixel-anchored text label on this shot"
-                }
-              >
-                <TextIcon className="h-3 w-3" /> Add text
-              </Button>
-              <p className="text-[10px] text-muted-foreground pl-1 leading-tight pt-1">
-                <span className="font-medium">World</span> pins move with GPS
-                across all shots.
-                <br />
-                <span className="font-medium">Pixel</span> labels stay on a
-                single shot.
-              </p>
-            </div>
-          </aside>
+          {/* Layers panel — extracted to PinLayersPanel.jsx (Wave 5 P2 S4) */}
+          <PinLayersPanel
+            layerGroups={layerGroups}
+            foldedGroups={foldedGroups}
+            onToggleFold={handleToggleFold}
+            selectedItemId={selectedItemId}
+            onSelectItem={setSelectedItemId}
+            hiddenIds={hiddenIds}
+            onToggleVisibility={handleToggleVisibility}
+            onUnsuppress={handleUnsuppress}
+            tool={tool}
+            onSetTool={setTool}
+            shotsCount={shots.length}
+            poseAvailable={poseAvailable}
+            TOOLS={TOOLS}
+          />
 
           {/* Canvas */}
           <main
@@ -1599,6 +1606,7 @@ export default function PinEditor({
                       x={sx}
                       y={sy}
                       isSelected={isSelected}
+                      onPinPointerDown={onPinPointerDown}
                     />
                   );
                 })}
@@ -1626,6 +1634,7 @@ export default function PinEditor({
                 onResetTheme={() => resetToTheme(selectedItem.id)}
                 onApplyAll={() => setConfirm("apply_all")}
                 onSuppress={() => handleSuppress(selectedItem.id)}
+                onUnsuppress={() => handleUnsuppress(selectedItem.id)}
                 onResetToAi={() => handleResetToAi(selectedItem.id)}
                 resolvedTheme={resolvedTheme}
                 disabled={isSaving}
@@ -1840,8 +1849,22 @@ function ToolButton({ tool, value, setTool, Icon, label, disabled = false }) {
   );
 }
 
-function PinMarker({ item, x, y, isSelected }) {
+function PinMarker({ item, x, y, isSelected, onPinPointerDown }) {
   const color = item.color || "#3B82F6";
+  // E9 (W5 P2 S4): explicit pointerdown handler on the marker so a click
+  // STARTS A PIN DRAG instead of falling through to the canvas pan
+  // handler. Without this the geometric hit-test in the stage's
+  // onPointerDown sometimes misses (small markers, label offset) and
+  // pan engages instead of drag. stopPropagation prevents the stage
+  // handler from also running and clobbering dragState.
+  const handlePointerDown = (e) => {
+    if (typeof onPinPointerDown === "function") {
+      // Stop propagation so the stage's onPointerDown doesn't ALSO start a
+      // pan / re-hit-test against this same coordinate.
+      e.stopPropagation();
+      onPinPointerDown(item, e);
+    }
+  };
   if (item.kind === "pixel" && item.subtype === "text") {
     return (
       <div
@@ -1856,7 +1879,11 @@ function PinMarker({ item, x, y, isSelected }) {
           top: y,
           background: "rgba(0,0,0,0.7)",
           color: "#fff",
+          // E9: ensure pointer events fire on the marker even when its
+          // descendants render with their own pointer rules.
+          pointerEvents: "auto",
         }}
+        onPointerDown={handlePointerDown}
       >
         {item.label || "Text"}
       </div>
@@ -1867,7 +1894,8 @@ function PinMarker({ item, x, y, isSelected }) {
       className={cn(
         "absolute -translate-x-1/2 -translate-y-1/2 pointer-events-auto",
       )}
-      style={{ left: x, top: y }}
+      style={{ left: x, top: y, pointerEvents: "auto" }}
+      onPointerDown={handlePointerDown}
     >
       <div
         className={cn(
@@ -1895,6 +1923,7 @@ function Inspector({
   onResetTheme,
   onApplyAll,
   onSuppress,
+  onUnsuppress,
   onResetToAi,
   resolvedTheme,
   disabled,
@@ -1909,6 +1938,14 @@ function Inspector({
   // and surface a hint pointing operators to the project page.
   const isPropertyPin = item.virtual === "property";
   const inputsDisabled = disabled || isPropertyPin;
+  // F35 (W5 P2 S4): suppressed pins get a Restore affordance instead of
+  // Suppress; both lifecycle and the optimistic _suppress flag count.
+  const isItemSuppressed =
+    item.lifecycle === "suppressed" || item._suppress === true;
+  // E6 (W5 P2 S4): AI POIs use suppress instead of delete — Google can
+  // re-detect them on the next drone-pois pass, so a hard delete fights
+  // the AI ingestion pipeline. Manual pins keep their hard-delete.
+  const isAiPin = Boolean(item.isAi || item.source === "ai");
 
   const [labelDraft, setLabelDraft] = useState(item.label || "");
   useEffect(() => setLabelDraft(item.label || ""), [item.id, item.label]);
@@ -2173,10 +2210,11 @@ function Inspector({
             Reset to AI
           </Button>
         )}
-        {/* W3-PINS: Suppress — soft-hide the pin without deleting. Re-shows
-            when the operator clears the suppression (not yet wired in this
-            slice; for v1 the only way back is the next drone-pois refresh). */}
-        {item.dbId && !isPropertyPin && (
+        {/* W3-PINS: Suppress — soft-hide the pin without deleting. F35
+            (W5 P2 S4): when the pin IS already suppressed, swap to a
+            Restore affordance instead. Both flip the optimistic local
+            state immediately; the save round-trip persists the change. */}
+        {item.dbId && !isPropertyPin && !isItemSuppressed && (
           <Button
             size="sm"
             variant="ghost"
@@ -2187,6 +2225,19 @@ function Inspector({
           >
             <EyeOff className="h-3.5 w-3.5 mr-1" />
             Suppress
+          </Button>
+        )}
+        {item.dbId && !isPropertyPin && isItemSuppressed && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            onClick={onUnsuppress}
+            disabled={inputsDisabled}
+            title="Restore this pin so it appears in renders again"
+          >
+            <Eye className="h-3.5 w-3.5 mr-1" />
+            Restore from suppression
           </Button>
         )}
         {/*
@@ -2217,15 +2268,22 @@ function Inspector({
             Apply to all {shotsCount} shot{shotsCount === 1 ? "" : "s"}
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="w-full text-red-600 hover:text-red-700"
-          onClick={onDelete}
-          disabled={inputsDisabled}
-        >
-          <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
-        </Button>
+        {/* E6 (W5 P2 S4): Delete is hidden on AI pins. AI pins should
+            never be hard-deleted via UI — Google can re-detect them on
+            the next drone-pois pass, fighting the hard-delete. Use
+            Suppress instead (rendered above for AI). Manual pins keep
+            their hard-delete. */}
+        {!isAiPin && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="w-full text-red-600 hover:text-red-700"
+            onClick={onDelete}
+            disabled={inputsDisabled}
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -2422,9 +2480,30 @@ function computeSaveEdits({ items, shootId, imageNatural }) {
       continue;
     }
     // W3-PINS: suppress + reset_to_ai are first-class action types.
-    if (it._suppress && it.dbId) {
+    // F35 (W5 P2 S4): un_suppress flips lifecycle back to 'active'.
+    // F39 (W5 P2 S4): if a suppress is paired with a coord/content
+    // change in the same edit, emit a single 'update' carrying
+    // _suppress_after_update=true so the server applies BOTH the
+    // mutation and the lifecycle flip (was: suppress alone won, coord
+    // change silently dropped).
+    const hasCoordOrContentChange =
+      it._dirty &&
+      (it.kind !== "world" || (it.world && Number.isFinite(it.world.lat)));
+    if (it._suppress && it.dbId && !hasCoordOrContentChange) {
       edits.push({ action: "suppress", pin_id: it.dbId });
       continue;
+    }
+    if (it._unsuppress && it.dbId) {
+      // W6 FIX 6 (QC3-4 P4): mirror F39's pattern — when an unsuppress is
+      // paired with a coord/content change in the same edit, emit BOTH
+      // the un_suppress action AND a regular update edit (in that order
+      // so the update lands on an already-restored row). Without this
+      // the dirty content change was silently dropped.
+      edits.push({ action: "un_suppress", pin_id: it.dbId });
+      if (!hasCoordOrContentChange) continue;
+      // Fall through into the normal update path so a paired edit emits
+      // both rows. The base.{action,pin_id,...} construction below picks
+      // up the dbId as an update edit for the just-unsuppressed pin.
     }
     if (it._reset_to_ai && it.dbId) {
       edits.push({ action: "reset_to_ai", pin_id: it.dbId });
@@ -2464,6 +2543,12 @@ function computeSaveEdits({ items, shootId, imageNatural }) {
       content: { label: it.label || "", text: it.label || "" },
       style_overrides: styleOverridesPayload,
     };
+    // F39: when this update edit also carries a suppression, signal the
+    // server to flip lifecycle='suppressed' as a follow-up UPDATE so the
+    // coord change AND the suppression both land.
+    if (it._suppress && it.dbId) {
+      base._suppress_after_update = true;
+    }
     if (it.kind === "world") {
       base.world_lat = it.world?.lat ?? null;
       base.world_lng = it.world?.lng ?? null;
@@ -2488,6 +2573,9 @@ async function directEntityFallback({ edits }) {
   let creates = 0;
   let updates = 0;
   let deletes = 0;
+  let suppresses = 0;
+  let unsuppresses = 0;
+  let skipped = 0;
   for (const e of edits) {
     if (e.action === "delete" && e.pin_id) {
       await api.entities.DroneCustomPin.delete(e.pin_id);
@@ -2498,9 +2586,48 @@ async function directEntityFallback({ edits }) {
     } else if (e.action === "create") {
       await api.entities.DroneCustomPin.create(payloadFromEdit(e));
       creates++;
+    } else if (e.action === "suppress" && e.pin_id) {
+      // W6 FIX 4 (QC3-4 P2): mirror the server's suppress action — flip
+      // lifecycle to 'suppressed'. RLS allows the pin owner to write this.
+      await api.entities.DroneCustomPin.update(e.pin_id, {
+        lifecycle: "suppressed",
+      });
+      suppresses++;
+    } else if (e.action === "un_suppress" && e.pin_id) {
+      await api.entities.DroneCustomPin.update(e.pin_id, {
+        lifecycle: "active",
+      });
+      unsuppresses++;
+    } else if (e.action === "reset_to_ai" && e.pin_id) {
+      // Reset to AI requires the snapshot column from the row + a re-write
+      // of world coords + label — the server reads latest_ai_snapshot which
+      // we don't ship to the client by default. There's no safe way to
+      // restore offline; warn the operator + skip.
+      console.warn(
+        `[PinEditor] reset_to_ai fallback skipped for pin ${e.pin_id} — server unavailable; latest_ai_snapshot only readable server-side.`,
+      );
+      try {
+        // Lazy import to avoid a top-level circular and keep the fallback
+        // self-contained.
+        const { toast: _toast } = await import("sonner");
+        _toast.warning(
+          "Couldn't reset pin to AI offline — try again when online",
+        );
+      } catch {
+        /* sonner unavailable in this context — log only */
+      }
+      skipped++;
     }
   }
-  return { creates, updates, deletes, fallback: true };
+  return {
+    creates,
+    updates,
+    deletes,
+    suppresses,
+    unsuppresses,
+    skipped,
+    fallback: true,
+  };
 }
 
 function payloadFromEdit(e) {
