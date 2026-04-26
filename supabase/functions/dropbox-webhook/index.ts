@@ -38,6 +38,14 @@ const WATCH_PATH = '/Flex Media Team Folder/Projects';
 // (uniq_drone_jobs_pending_ingest_per_project) for the constraint that
 // enforces at-most-one pending ingest per project.
 const INGEST_DEBOUNCE_SECONDS = 120;
+// 7200s (2hr) settling window for photo shoots — Q1 user decision (Wave 6
+// Phase 1, mig 288). Photographers do multi-pass uploads of bracketed
+// CR3 sets across 1-2 hours; the longer window lets the engine wait until
+// the upload session is actually finished before kicking off a round. The
+// "Run Shortlist Now" button on the project page passes a short override
+// (60s) to fire instantly. Mirrors the drone INGEST_DEBOUNCE_SECONDS pattern
+// but with a longer default per the photos workflow.
+const SHORTLISTING_DEBOUNCE_SECONDS = 7200;
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
@@ -107,6 +115,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[${GENERATOR}] ingest enqueue failed: ${msg}`);
       }
+      // Parallel branch: scan project_folder_events for
+      // `photos_raws_shortlist_proposed` file_added events emitted since this
+      // webhook started, and enqueue debounced shortlisting ingest jobs per
+      // distinct project_id. Photos pipeline mirrors the drones one but uses
+      // shortlisting_jobs (mig 284) and the 7200s settling window (mig 288).
+      // Wave 6 P5 SHORTLIST.
+      try {
+        const queuedPhotos = await enqueueShortlistingForRecentPhotos(webhookStartIso);
+        if (queuedPhotos > 0) {
+          console.log(`[${GENERATOR}] enqueued shortlisting ingest for ${queuedPhotos} project(s)`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] shortlisting enqueue failed: ${msg}`);
+      }
       // Editor-folder watcher: link Edited Post Production drops to the
       // matching drone_shots row and (when all raw_accepted shots are
       // covered) enqueue a render job. Same start-timestamp window.
@@ -169,6 +192,43 @@ async function enqueueIngestForRecentRawDrones(sinceIso: string): Promise<number
     });
     if (rpcErr) {
       console.warn(`[${GENERATOR}] enqueue_drone_ingest_job failed for ${pid}: ${rpcErr.message}`);
+    }
+  }
+  return projectIds.length;
+}
+
+/**
+ * Photos shortlisting branch — parallel to enqueueIngestForRecentRawDrones.
+ *
+ * After every webhook delta, scan project_folder_events for `file_added`
+ * rows in `photos_raws_shortlist_proposed` emitted since the webhook started
+ * and enqueue a debounced kind=ingest shortlisting_jobs row per distinct
+ * project_id. The unique partial index uniq_shortlisting_jobs_pending_ingest_per_project
+ * (mig 284) collapses the burst into a single pending row whose scheduled_for
+ * is ratcheted forward by SHORTLISTING_DEBOUNCE_SECONDS (default 7200s = 2h)
+ * with each new webhook tick.
+ *
+ * Wave 6 P5 SHORTLIST. The drones path is unchanged.
+ */
+async function enqueueShortlistingForRecentPhotos(sinceIso: string): Promise<number> {
+  const admin = getAdminClient();
+  const since = sinceIso;
+  const { data, error } = await admin
+    .from('project_folder_events')
+    .select('project_id')
+    .eq('folder_kind', 'photos_raws_shortlist_proposed')
+    .eq('event_type', 'file_added')
+    .gte('created_at', since);
+  if (error) throw error;
+
+  const projectIds = Array.from(new Set((data || []).map((r) => r.project_id as string).filter(Boolean)));
+  for (const pid of projectIds) {
+    const { error: rpcErr } = await admin.rpc('enqueue_shortlisting_ingest_job', {
+      p_project_id: pid,
+      p_debounce_seconds: SHORTLISTING_DEBOUNCE_SECONDS,
+    });
+    if (rpcErr) {
+      console.warn(`[${GENERATOR}] enqueue_shortlisting_ingest_job failed for ${pid}: ${rpcErr.message}`);
     }
   }
   return projectIds.length;

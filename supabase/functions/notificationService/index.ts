@@ -87,6 +87,9 @@ const NOTIFICATION_TYPES: Record<string, {
   retention_red_flag:           { category: 'system',     severity: 'critical', cta_label: 'View Alerts',     default_roles: ['master_admin'] },
   retention_sweep_complete:     { category: 'system',     severity: 'info',     cta_label: 'View Summary',    default_roles: ['master_admin'] },
   retention_status_changed:     { category: 'system',     severity: 'info',     cta_label: 'View Alert',      default_roles: ['master_admin'] },
+
+  // WORKFLOW (Shortlisting — Wave 6 P5)
+  shortlist_ready_for_review:   { category: 'workflow',   severity: 'info',     cta_label: 'Review shortlist', default_roles: ['master_admin'] },
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
