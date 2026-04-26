@@ -163,7 +163,30 @@ export async function processDropboxDelta(
 }
 
 async function processEntry(entry: DropboxEntry, actorType: 'webhook' | 'system'): Promise<boolean> {
-  const path = entry.path_display || entry.path_lower;
+  // W8 FIX 1 (P0, W6-A1): Dropbox is case-sensitive on /files/download even
+  // though searches/listings are case-insensitive. Falling back to
+  // `path_lower` produced lowercase rows in drone_shots.edited_dropbox_path
+  // ("/flex media team folder/...") that then 409'd with `path/not_found` on
+  // every render_edited attempt. `path_display` is always present for normal
+  // file/folder entries returned by /files/list_folder + /continue; the only
+  // shape lacking path_display is the deleted-tag, which we handle with the
+  // path-tracking branch below. We refuse to proceed with path_lower and
+  // log loudly so any regression is visible.
+  let path = entry.path_display;
+  if (!path) {
+    if (entry['.tag'] === 'deleted' && entry.path_lower) {
+      // Deleted entries don't carry display casing; the lowercase form is
+      // what we receive and what our delete-by-prefix logic uses (the row
+      // we wrote earlier carried the correct case, the path_lower from a
+      // delete event is only used for matching, not for new writes).
+      path = entry.path_lower;
+    } else {
+      console.warn(
+        `[dropboxSync] entry missing path_display (id=${entry.id ?? '?'} tag=${entry['.tag'] ?? '?'} path_lower=${entry.path_lower ?? '?'}) — refusing lowercase fallback to avoid case-sensitive Dropbox 409s`,
+      );
+      return false;
+    }
+  }
   if (!path) return false;
 
   // Skip folder entries — we manage the folder skeleton; user folder edits

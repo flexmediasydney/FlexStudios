@@ -268,7 +268,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
     let enqueued = 0;
     let debounced = 0;
+    let failedToEnqueue = 0;
+    const enqueueErrors: Array<{ shot_id: string; message: string }> = [];
     const enqueuedShootIds = new Set<string>();
+    const enqueuedJobIds: string[] = [];
     for (const shot of eligibleShots) {
       const { data: jobRow, error: jobErr } = await admin
         .from("drone_jobs")
@@ -300,6 +303,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           debounced += 1;
           enqueuedShootIds.add(shot.shoot_id);
         } else {
+          // W8 FIX 5 (P1, W6-A2): non-23505 enqueue failures used to be
+          // logged-and-forgotten while the orchestration row went on to
+          // status='succeeded' — making telemetry lie about partial
+          // failures. Track them in the result so monitoring can flag
+          // cascades where fan-out is lossy. (Future Wave 9 will move to
+          // a proper waiting_children orchestration; for this sprint we
+          // surface the metadata and document the limitation.)
+          failedToEnqueue += 1;
+          enqueueErrors.push({ shot_id: shot.id, message: jobErr.message });
           console.warn(
             `[${GENERATOR}] cascade enqueue failed for shot ${shot.id} (non-fatal): ${jobErr.message}`,
           );
@@ -309,6 +321,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       if (jobRow) {
         enqueued += 1;
         enqueuedShootIds.add(shot.shoot_id);
+        if (jobRow.id) enqueuedJobIds.push(jobRow.id as string);
       }
     }
 
@@ -325,6 +338,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         enqueued,
         debounced,
         eligible_shot_count: eligibleShots.length,
+        // W8 FIX 5: cascade orchestration telemetry. The orchestration row
+        // continues to be marked 'succeeded' once fan-out completes (which
+        // is operationally correct — the orchestrator's job is to enqueue
+        // children, not to wait for them). But monitoring needs visibility
+        // into whether the fan-out itself was clean. fan_out_failed counts
+        // children that hit a non-23505 enqueue error; fan_out_summary
+        // gives a one-line health stamp. KNOWN LIMITATION: this snapshot
+        // only covers enqueue-time outcomes; child execution success/failure
+        // must be observed separately by querying drone_jobs by parent
+        // job_id (Wave 9 will surface this in the orchestration row).
+        fan_out_count: enqueued + debounced,
+        fan_out_failed: failedToEnqueue,
+        fan_out_errors: enqueueErrors.slice(0, 20),
+        fan_out_summary: `enqueued=${enqueued} debounced=${debounced} failed=${failedToEnqueue} eligible=${eligibleShots.length}`,
+        fan_out_job_ids: enqueuedJobIds.slice(0, 50),
       },
       200,
       req,

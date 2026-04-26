@@ -480,7 +480,7 @@ async function _logFrontendFailure(functionName, errorMessage, durationMs) {
 
 /**
  * Invoke a Supabase Edge Function.
- * Signature: api.functions.invoke(functionName, params) → response data
+ * Signature: api.functions.invoke(functionName, params, opts?) → response data
  *
  * Maps to: supabase.functions.invoke(functionName, { body: params })
  *
@@ -488,8 +488,17 @@ async function _logFrontendFailure(functionName, errorMessage, durationMs) {
  * can attribute the call. On errors where the server wrapper could not run
  * (network failure, CORS, auth-gate rejection), we also write a fallback
  * audit row directly from the client.
+ *
+ * W8 FIX 3 (P0, F1): added `opts.throwOnError` (default true). W6 FIX 1 made
+ * us throw a richError on every non-2xx so callers could read .status/.body
+ * — but BoundaryEditor's invokeBoundary helper expects the Supabase
+ * `{ data, error }` shape and branches on status===409 to open the conflict
+ * dialog. Throwing collapsed that into a generic exception and broke the
+ * UX. With `throwOnError: false`, the rich error is returned in the
+ * `error` slot so legacy callers keep working without a refactor.
  */
-async function invokeFunction(client, functionName, params = {}) {
+async function invokeFunction(client, functionName, params = {}, opts = {}) {
+  const throwOnError = opts.throwOnError !== false; // default true
   // Timeout: Edge Functions should not hang indefinitely on slow networks.
   // pulseDataSync runs Apify actors which can take 2-3 min per batch.
   // Other functions use 45s (Supabase default 30s + network overhead).
@@ -558,6 +567,14 @@ async function invokeFunction(client, functionName, params = {}) {
       richError.functionName = functionName;
       // Preserve the original supabase-js error in case a caller needs it.
       richError.cause = error;
+      if (!throwOnError) {
+        // W8 FIX 3: legacy callers (e.g. BoundaryEditor's invokeBoundary)
+        // want the supabase { data, error } shape so they can branch on
+        // status===409 to open the conflict dialog. Surface the richError
+        // in the error slot — the body is also exposed as `data` so
+        // callers that read either path see the server response.
+        return { data: parsedBody ?? null, error: richError };
+      }
       throw richError;
     }
     // Wrap in { data } to match Base44's response format:
@@ -575,7 +592,7 @@ async function invokeFunction(client, functionName, params = {}) {
 }
 
 const functionsApi = {
-  invoke: (name, params) => invokeFunction(supabase, name, params),
+  invoke: (name, params, opts) => invokeFunction(supabase, name, params, opts),
 };
 
 const functionsApiAdmin = {

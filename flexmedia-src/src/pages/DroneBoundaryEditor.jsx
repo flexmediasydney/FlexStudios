@@ -336,7 +336,16 @@ export default function DroneBoundaryEditorPage() {
   // here so the editor stays decoupled from react-query / navigation.
   const invokeBoundary = useCallback(
     async (payload) => {
-      const res = await api.functions.invoke("drone-boundary-save", payload);
+      // W8 FIX 3 (P0, F1): pass throwOnError:false so the rich error is
+      // returned in `error` instead of thrown. W6 FIX 1's default-throw
+      // behavior collapsed our 409 conflict UX into a generic exception
+      // (the dialog never opened); we need the structured shape to branch
+      // on status===409 → server `current_row` / `current_version` → open
+      // the merge dialog with the operator's view of the latest server
+      // state side-by-side.
+      const res = await api.functions.invoke("drone-boundary-save", payload, {
+        throwOnError: false,
+      });
       // api.functions.invoke wraps the function's response in { data, error }.
       // For a non-2xx the wrapper returns either error: { name, status, message }
       // or just .data with the body — check both.
