@@ -515,13 +515,50 @@ async function invokeFunction(client, functionName, params = {}) {
     ]);
     clearTimeout(timeoutId);
     if (error) {
-      // The server wrapper may or may not have recorded this — depends on how
-      // far the request got. Record a frontend-side audit row regardless;
-      // duplicates are fine for outage diagnostics and the volume is low.
-      const msg = error.message || `Function ${functionName} failed`;
+      // W6 FIX 1 (QC3-5 BE3 + QC3-6 S2): supabase-js's FunctionsHttpError
+      // carries the raw Response body on `error.context`. Without surfacing
+      // it, structured 4xx replies (drone-shot-lifecycle's
+      // `{success:false, error:'lifecycle_state_conflict', current_state}`,
+      // drone-boundary-save's 409 with `current_row` / `current_version`,
+      // drone-render-approve's lock-state messages, etc.) collapsed into a
+      // generic "Edge Function returned a non-2xx status code" — callers
+      // couldn't branch on the actual server-side reason.
+      //
+      // Strategy: best-effort extract the body (json or string), throw a
+      // richer Error that exposes `.status` + `.body` for callers, while
+      // preserving the existing audit-row write so outage diagnostics still
+      // see one row per frontend-side failure.
+      let parsedBody = null;
+      const ctx = error?.context;
+      // Prefer a pre-parsed body if supabase-js gave us one; otherwise pull
+      // bytes off the Response (it's only readable once — we await text() and
+      // then JSON.parse, falling back to the raw string).
+      if (ctx?.body && typeof ctx.body === 'object' && !(ctx.body instanceof ReadableStream)) {
+        parsedBody = ctx.body;
+      } else if (typeof ctx?.body === 'string') {
+        try { parsedBody = JSON.parse(ctx.body); } catch { parsedBody = ctx.body; }
+      } else if (ctx && typeof ctx.text === 'function') {
+        try {
+          const txt = await ctx.text();
+          try { parsedBody = JSON.parse(txt); } catch { parsedBody = txt; }
+        } catch { /* response already consumed or unreadable */ }
+      } else if (ctx && typeof ctx.json === 'function') {
+        try { parsedBody = await ctx.json(); } catch { /* not JSON */ }
+      }
+      const status = ctx?.status ?? error?.status ?? null;
+      const serverMsg =
+        (parsedBody && typeof parsedBody === 'object' && parsedBody.error) ||
+        error.message ||
+        `Function ${functionName} failed`;
       loggedFailure = true;
-      _logFrontendFailure(functionName, msg, Date.now() - startMs);
-      throw new Error(msg);
+      _logFrontendFailure(functionName, serverMsg, Date.now() - startMs);
+      const richError = new Error(serverMsg);
+      richError.status = status;
+      richError.body = parsedBody;
+      richError.functionName = functionName;
+      // Preserve the original supabase-js error in case a caller needs it.
+      richError.cause = error;
+      throw richError;
     }
     // Wrap in { data } to match Base44's response format:
     // Frontend code does: result.data.someField
