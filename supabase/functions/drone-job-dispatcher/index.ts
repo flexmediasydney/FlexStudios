@@ -1091,6 +1091,18 @@ async function callEdgeFunction(
   }
 }
 
+// W14-S3: parse "<fnName> returned <NNN>:" / "Modal returned <NNN>" / "sfm_http
+// returned <NNN>:" patterns out of the dispatcher's error strings so the
+// errors[] array entry can carry a typed http_status. Returns null when the
+// error didn't originate from an HTTP call (eg. timeout / shoot_id missing).
+const HTTP_STATUS_FROM_ERR_REGEX = /returned\s+(\d{3})/;
+function parseHttpStatusFromError(errMsg: string): number | null {
+  const m = errMsg.match(HTTP_STATUS_FROM_ERR_REGEX);
+  if (!m) return null;
+  const n = Number.parseInt(m[1], 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function markFailed(
   admin: ReturnType<typeof getAdminClient>,
   job: DroneJob,
@@ -1111,6 +1123,46 @@ async function markFailed(
       `[${GENERATOR}] Modal resource limit detected on job ${job.id}, using longer backoff + smaller batch on retry`,
     );
   }
+
+  // W14-S3: Build the per-attempt audit entry once and append to drone_jobs.errors.
+  // claim_drone_jobs doesn't return the existing errors array (would require an
+  // RPC signature change), so we read it inline. The race window is bounded:
+  // a job is in status='running' when markFailed runs, and only the dispatcher
+  // tick that claimed it ever calls markFailed for that row, so concurrent
+  // writers don't exist for a single job. error_message is preserved as the
+  // most-recent error fragment for backwards compat (frontend / AlertsPanel /
+  // older queries). (QC iter 7 F27 follow-through.)
+  const newErrorEntry = {
+    attempt: attemptsSoFar,
+    message: errMsg.slice(0, 1000),
+    http_status: parseHttpStatusFromError(errMsg),
+    modal_resource_limit: isModalResLimit,
+    occurred_at: new Date().toISOString(),
+  };
+  let nextErrors: Record<string, unknown>[] = [newErrorEntry];
+  try {
+    const { data: existing, error: readErr } = await admin
+      .from("drone_jobs")
+      .select("errors")
+      .eq("id", job.id)
+      .maybeSingle();
+    if (readErr) {
+      console.warn(
+        `[${GENERATOR}] errors[] read failed for job ${job.id}: ${readErr.message} — entry will overwrite prior history`,
+      );
+    } else {
+      const arr = (existing as { errors?: unknown } | null)?.errors;
+      if (Array.isArray(arr)) {
+        nextErrors = [...arr as Record<string, unknown>[], newErrorEntry];
+      }
+    }
+  } catch (readEx) {
+    const m = readEx instanceof Error ? readEx.message : String(readEx);
+    console.warn(
+      `[${GENERATOR}] errors[] read threw for job ${job.id}: ${m} — entry will overwrite prior history`,
+    );
+  }
+
   if (attemptsSoFar >= MAX_ATTEMPTS) {
     const { error: dlErr } = await admin
       .from("drone_jobs")
@@ -1120,14 +1172,11 @@ async function markFailed(
         // job stuck in 'running' forever. (#32 audit fix)
         status: "dead_letter",
         finished_at: new Date().toISOString(),
-        // QC7 F27 (Wave 4): error_message is a single text column so a
-        // multi-shot batch render that fails on shots [3,7,12] only
-        // surfaces ONE message (the last one to land before dead-letter).
-        // Schema upgrade tracked: add `errors jsonb` (array of
-        // {shot_id, attempt, message, ts}) and migrate this writer +
-        // AlertsPanel reader together. Until then, operators must
-        // cross-reference the function logs to see all failures.
+        // W14-S3: error_message is now the most-recent fragment; the full
+        // per-attempt history lives in errors[] (mig 333). Kept for
+        // backwards compat with frontend / older queries.
         error_message: errMsg.slice(0, 1000),
+        errors: nextErrors,
       })
       .eq("id", job.id);
     if (dlErr) {
@@ -1143,6 +1192,7 @@ async function markFailed(
       status: "pending",
       scheduled_for: next,
       error_message: errMsg.slice(0, 1000),
+      errors: nextErrors,
     };
     if (isModalResLimit) {
       // Merge into existing payload so shoot_id/kind/etc are preserved.
