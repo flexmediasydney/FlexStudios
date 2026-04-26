@@ -1293,9 +1293,21 @@ export default function ThemeEditor({
         const sparseConfig = saveAsNew
           ? baseDelta
           : preservePersistedKeys(baseDelta, persistedConfigRef.current || {}, config);
-        // Always echo theme_name into the saved config so DB readers
-        // (RPCs, audit) can identify the theme without joining.
-        sparseConfig.theme_name = name.trim();
+        // (W5 P1 #2) DO NOT echo theme_name into sparseConfig. Doing so
+        // pollutes inheritance_diff (every save asserts theme_name at the
+        // person/org level even when the operator only changed the row name),
+        // making the "Resolved from person level" badge misleading. The
+        // theme name is already passed via the dedicated top-level `name`
+        // payload field, which setDroneTheme stores in drone_themes.name —
+        // config.theme_name should default to "" and be resolver-merged,
+        // never asserted unless the operator explicitly sets it via the
+        // schema-driven editor (which they can't today).
+        //
+        // Explicitly strip even if previously persisted blobs had it (saves
+        // pre-W5 stamped it on every write), so we self-heal the pollution.
+        if (sparseConfig && typeof sparseConfig === "object") {
+          delete sparseConfig.theme_name;
+        }
         const payload = {
           owner_kind: ownerKind,
           owner_id: ownerId,
