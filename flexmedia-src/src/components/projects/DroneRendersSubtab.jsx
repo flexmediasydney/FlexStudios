@@ -59,6 +59,18 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+// QC iter 6 C: confirm dialogs for irreversible editor_returned actions
+// (Mark Final / Reject editor delivery — QC iter 5 P1-6).
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -155,6 +167,12 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
 
   // Lightbox state — { columnKey, index, itemId }
   const [lightbox, setLightbox] = useState(null);
+
+  // QC iter 6 C: confirm-dialog state for irreversible editor_returned
+  // actions (Mark Final / Reject editor delivery). Per QC iter 5 P1-6 these
+  // mutations are one-way → operator should confirm before firing.
+  // Shape: { shotId, target: 'final'|'rejected', label, filename } | null
+  const [confirmEditorAction, setConfirmEditorAction] = useState(null);
 
   // iPad collapse: default to first column with content (or just first column).
   const isCompact = useIsCompactSwimlane();
@@ -717,6 +735,7 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
                 canEdit={isManagerOrAbove}
                 pendingShotAction={pendingShotAction}
                 onMutateShot={mutateShotLifecycle}
+                onRequestConfirmEditorAction={(payload) => setConfirmEditorAction(payload)}
                 onPreview={({ columnKey, itemId }) => {
                   const items = lightboxItemsByColumn[columnKey] || [];
                   const idx = items.findIndex((it) => it.id === itemId);
@@ -785,6 +804,47 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId, pipel
           onClose={() => setLightbox(null)}
         />
       )}
+
+      {/* QC iter 6 C: confirmation dialog for irreversible editor_returned
+          actions (Mark Final / Reject editor delivery). Per QC iter 5 P1-6. */}
+      <AlertDialog
+        open={Boolean(confirmEditorAction)}
+        onOpenChange={(o) => { if (!o) setConfirmEditorAction(null); }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmEditorAction?.target === "final"
+                ? "Mark editor delivery as Final?"
+                : "Reject editor delivery?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmEditorAction?.target === "final"
+                ? "This locks the editor's delivery as the final shot. The operator can revert later via the Revert button if a re-edit is needed."
+                : "This rejects the editor's delivery. The shot moves to Rejected. You can restore it later from the Show rejected list."}
+              {confirmEditorAction?.filename && (
+                <span className="block mt-2 font-mono text-xs">
+                  {confirmEditorAction.filename}
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const a = confirmEditorAction;
+                setConfirmEditorAction(null);
+                if (a?.shotId && a?.target) {
+                  mutateShotLifecycle(a.shotId, a.target, a.label || `Moved to ${a.target}`);
+                }
+              }}
+            >
+              {confirmEditorAction?.target === "final" ? "Mark Final" : "Reject"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </TooltipProvider>
   );
 }
@@ -797,6 +857,7 @@ function PipelineColumn({
   canEdit,
   pendingShotAction,
   onMutateShot,
+  onRequestConfirmEditorAction,
   onPreview,
   isCompact,
 }) {
@@ -845,6 +906,7 @@ function PipelineColumn({
               canEdit={canEdit}
               pendingShotAction={pendingShotAction}
               onMutateShot={onMutateShot}
+              onRequestConfirmEditorAction={onRequestConfirmEditorAction}
               onPreview={({ itemId }) =>
                 onPreview && onPreview({ columnKey: column.key, itemId })
               }
@@ -869,6 +931,7 @@ function ShotLifecycleCard({
   canEdit,
   pendingShotAction,
   onMutateShot,
+  onRequestConfirmEditorAction,
   onPreview,
 }) {
   const thumbPath = previewPath || shot?.dropbox_path || null;
@@ -1019,7 +1082,16 @@ function ShotLifecycleCard({
                   variant="default"
                   size="sm"
                   className="h-6 text-[10px] px-2"
-                  onClick={() => onMutateShot(shot.id, "final", "Marked Final")}
+                  onClick={() =>
+                    onRequestConfirmEditorAction
+                      ? onRequestConfirmEditorAction({
+                          shotId: shot.id,
+                          target: "final",
+                          label: "Marked Final",
+                          filename: shot.filename || null,
+                        })
+                      : onMutateShot(shot.id, "final", "Marked Final")
+                  }
                   disabled={Boolean(pendingState)}
                   title="Approve editor delivery — moves to Final"
                 >
@@ -1034,7 +1106,16 @@ function ShotLifecycleCard({
                   variant="ghost"
                   size="sm"
                   className="h-6 text-[10px] px-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40"
-                  onClick={() => onMutateShot(shot.id, "rejected", "Rejected editor delivery")}
+                  onClick={() =>
+                    onRequestConfirmEditorAction
+                      ? onRequestConfirmEditorAction({
+                          shotId: shot.id,
+                          target: "rejected",
+                          label: "Rejected editor delivery",
+                          filename: shot.filename || null,
+                        })
+                      : onMutateShot(shot.id, "rejected", "Rejected editor delivery")
+                  }
                   disabled={Boolean(pendingState)}
                   title="Reject the editor delivery"
                 >
