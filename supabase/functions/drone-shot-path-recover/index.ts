@@ -224,8 +224,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             column_state: 'pool',
           },
         });
-      if (!jobErr) reenqueued += 1;
-      else console.warn(`[${GENERATOR}] re-enqueue insert failed for ${shotId}: ${jobErr.message}`);
+      if (!jobErr) {
+        reenqueued += 1;
+      } else {
+        // QC iter 6 Stream B: mig 294b's idx_drone_jobs_unique_pending_render
+        // covers render_edited per (shoot_id, pipeline, payload->>shot_id). A
+        // prior pending row that we couldn't supersede above means a fresh
+        // enqueue debounces — log + treat as success rather than warn.
+        const code = (jobErr as { code?: string }).code;
+        if (code === '23505') {
+          console.info(`[${GENERATOR}] re-enqueue debounced for ${shotId} (existing pending render_edited)`);
+          reenqueued += 1;
+        } else {
+          console.warn(`[${GENERATOR}] re-enqueue insert failed for ${shotId}: ${jobErr.message}`);
+        }
+      }
     }
   }
 
