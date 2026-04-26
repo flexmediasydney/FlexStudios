@@ -86,6 +86,7 @@ const Dashboard = React.lazy(() => import('./pages/Dashboard'));
 const AdminDroneThemes = React.lazy(() => import('./pages/AdminDroneThemes'));
 const DroneCommandCenter = React.lazy(() => import('./pages/DroneCommandCenter'));
 const DronePinEditor = React.lazy(() => import('./pages/DronePinEditor'));
+const DroneBoundaryEditor = React.lazy(() => import('./pages/DroneBoundaryEditor'));
 const ProjectLocationPage = React.lazy(() => import('./pages/ProjectLocationPage'));
 const Feedback = React.lazy(() => import('./pages/Feedback'));
 const FieldMode = React.lazy(() => import('./pages/FieldMode'));
@@ -146,6 +147,7 @@ export const PAGES = {
     "Dashboard": Dashboard,
     "DroneCommandCenter": DroneCommandCenter,
     "DronePinEditor": DronePinEditor,
+    "DroneBoundaryEditor": DroneBoundaryEditor,
     "EdgeFunctionHealth": EdgeFunctionHealth,
     "EdgeFunctionAuditLog": EdgeFunctionAuditLog,
     "EmailSyncSettings": EmailSyncSettings,

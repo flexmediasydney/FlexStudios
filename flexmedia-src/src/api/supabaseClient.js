@@ -94,6 +94,10 @@ function toTableName(entityName) {
     'drone_pois_caches': 'drone_pois_cache',
     'drone_cadastral_caches': 'drone_cadastral_cache',
     'drone_external_caches': 'drone_external_cache',
+    // drone_property_boundary is singular (one row per project). Wave 5 P2
+    // S5 — without this override api.entities.DronePropertyBoundary would
+    // resolve to a non-existent drone_property_boundaries table and 404.
+    'drone_property_boundaries': 'drone_property_boundary',
   };
 
   snake = overrides[snake] || snake;
