@@ -930,8 +930,50 @@ def _draw_property_pin(canvas_bgr: np.ndarray, x: int, y: int, pin_style: dict, 
 # ─────────────────────────────────────────────────────────────────────────────
 # Boundary layer pass
 # ─────────────────────────────────────────────────────────────────────────────
-def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[np.ndarray]:
-    """Project a list of [lat, lon] tuples to pixel coords. Returns Nx2 int32 or None.
+def _lerp_latlon(ll1, ll2, t):
+    """Antimeridian-safe lat/lon linear interpolation at parameter t in [0,1].
+
+    Latitude lerps trivially. Longitude is interpolated via the unit-vector
+    method on the equatorial circle so a (lon1=179.9, lon2=-179.9, t=0.5)
+    pair maps to ±180° rather than 0° (Indian Ocean). At polar latitudes the
+    longitude difference itself is meaningless, but the unit-vector form
+    degrades gracefully — a pole-spanning polygon edge isn't a real-world
+    drone scene anyway.
+
+    Args:
+      ll1: (lat, lon) tuple at t=0
+      ll2: (lat, lon) tuple at t=1
+      t:   parameter in [0, 1]
+    Returns:
+      (lat, lon) tuple at parameter t.
+    """
+    lat1, lon1 = ll1[0], ll1[1]
+    lat2, lon2 = ll2[0], ll2[1]
+    # Lat: simple lerp (no wrap; lat is already constrained to [-90, 90]).
+    lat = lat1 + (lat2 - lat1) * t
+    # Lon: interpolate the cosine/sine on the unit circle, then atan2 back.
+    # This is the antimeridian-safe equivalent of a plain numeric lerp.
+    lon1_r = math.radians(lon1)
+    lon2_r = math.radians(lon2)
+    x = math.cos(lon1_r) + (math.cos(lon2_r) - math.cos(lon1_r)) * t
+    y = math.sin(lon1_r) + (math.sin(lon2_r) - math.sin(lon1_r)) * t
+    if x == 0.0 and y == 0.0:
+        # Antipodal pair — meaningless edge; fall back to lon1.
+        return (lat, lon1)
+    lon = math.degrees(math.atan2(y, x))
+    return (lat, lon)
+
+
+def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None):
+    """Project a list of [lat, lon] tuples to pixel coords.
+
+    Returns ``(polygon_px, polygon_latlon_clipped)`` where:
+      - ``polygon_px`` is an Nx2 int32 array (pixel coords)
+      - ``polygon_latlon_clipped`` is a list of (lat, lon) tuples, length N,
+        IN THE SAME ORDER as polygon_px
+
+    Returns ``(None, None)`` if the polygon is fully outside the near-plane
+    or has fewer than 3 surviving vertices.
 
     Performs Sutherland-Hodgman clipping against the camera near-plane (Z_c > 0)
     in CAMERA SPACE before projecting to pixels. The previous behaviour
@@ -940,11 +982,17 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
     the polygon fell behind the focal plane — even though the visible portion
     of the boundary covers most of the frame. (QC2 finding #2.)
 
+    QC2-2 #1: when SH inserts an intersection vertex on edge AB at parameter t,
+    the corresponding lat/lon is also interpolated (antimeridian-safe) and
+    returned in parallel — otherwise downstream side_measurements / sqm_total
+    iterating ``range(len(polygon_px))`` would IndexError into the original
+    (shorter) polygon_latlon array.
+
     Worst case: a triangle whose 1 visible vertex is in front of the camera
     is clipped to a triangle (one vertex + two edge intersections).
     """
     if not polygon_latlon:
-        return None
+        return None, None
 
     # Resolve intrinsics + drone pose once (per-vertex re-derivation matched
     # the legacy _gps_to_px signature, but for the clip we need the underlying
@@ -986,16 +1034,19 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
     cam_pts = [latlon_to_cam(lat, lon) for lat, lon in polygon_latlon]
 
     # Sutherland-Hodgman: keep vertices with Z > Z_NEAR; for an edge crossing
-    # the plane, append the interpolated intersection.
+    # the plane, append the interpolated intersection (cam-space + lat/lon).
     Z_NEAR = 0.1  # 10 cm in front of the camera; > 0 to avoid div-by-zero
     n = len(cam_pts)
     if n == 0:
-        return None
-    output = []
+        return None, None
+    output_cam: list = []
+    output_ll: list = []
     behind_count = 0
     for i in range(n):
         cur = cam_pts[i]
         prev = cam_pts[(i - 1) % n]
+        cur_ll = (polygon_latlon[i][0], polygon_latlon[i][1])
+        prev_ll = (polygon_latlon[(i - 1) % n][0], polygon_latlon[(i - 1) % n][1])
         cur_in = cur[2] > Z_NEAR
         prev_in = prev[2] > Z_NEAR
         if cur_in:
@@ -1004,8 +1055,10 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
                 t = (Z_NEAR - prev[2]) / (cur[2] - prev[2])
                 ix = prev[0] + t * (cur[0] - prev[0])
                 iy = prev[1] + t * (cur[1] - prev[1])
-                output.append((ix, iy, Z_NEAR))
-            output.append(cur)
+                output_cam.append((ix, iy, Z_NEAR))
+                output_ll.append(_lerp_latlon(prev_ll, cur_ll, t))
+            output_cam.append(cur)
+            output_ll.append(cur_ll)
         else:
             behind_count += 1
             if prev_in:
@@ -1013,27 +1066,30 @@ def _project_polygon(polygon_latlon, scene, w, h, intrinsics=None) -> Optional[n
                 t = (Z_NEAR - prev[2]) / (cur[2] - prev[2])
                 ix = prev[0] + t * (cur[0] - prev[0])
                 iy = prev[1] + t * (cur[1] - prev[1])
-                output.append((ix, iy, Z_NEAR))
+                output_cam.append((ix, iy, Z_NEAR))
+                output_ll.append(_lerp_latlon(prev_ll, cur_ll, t))
 
     if behind_count > 0:
         print(
             f"[_project_polygon] near-plane clip: {behind_count}/{n} vertices "
-            f"behind camera; clipped polygon has {len(output)} verts"
+            f"behind camera; clipped polygon has {len(output_cam)} verts"
         )
 
-    if len(output) < 3:
+    if len(output_cam) < 3:
         # Less than a triangle remaining — nothing to draw.
-        return None
+        return None, None
 
     pts = []
-    for Xc, Yc, Zc in output:
+    pts_ll = []
+    for (Xc, Yc, Zc), ll in zip(output_cam, output_ll):
         if Zc <= 0:
             continue
         pts.append((fx * Xc / Zc + cx, fy * Yc / Zc + cy))
+        pts_ll.append(ll)
 
     if len(pts) < 3:
-        return None
-    return np.array(pts, dtype=np.int32)
+        return None, None
+    return np.array(pts, dtype=np.int32), pts_ll
 
 
 def _apply_exterior_treatment(canvas_bgr: np.ndarray, polygon_px: np.ndarray, treatment: dict) -> np.ndarray:
@@ -1362,7 +1418,14 @@ def _render_boundary(
     if not polygon_latlon or len(polygon_latlon) < 3:
         return canvas_bgr  # nothing to draw
 
-    polygon_px = _project_polygon(polygon_latlon, scene, w, h, intrinsics=intrinsics)
+    # _project_polygon returns BOTH px array and parallel-clipped lat/lon —
+    # SH clipping inserts intersection vertices, so the original
+    # polygon_latlon (length M) cannot be paired with polygon_px (length N>=M)
+    # any more. The clipped lat/lon is what side_measurements + sqm_total
+    # must iterate (QC2-2 #1).
+    polygon_px, polygon_latlon_clipped = _project_polygon(
+        polygon_latlon, scene, w, h, intrinsics=intrinsics
+    )
     if polygon_px is None:
         return canvas_bgr
 
@@ -1379,12 +1442,16 @@ def _render_boundary(
     # 3. Side measurements
     sm_cfg = boundary_cfg.get("side_measurements", {})
     if sm_cfg:
-        canvas_bgr = _draw_side_measurements(canvas_bgr, polygon_px, polygon_latlon, sm_cfg, w, h)
+        canvas_bgr = _draw_side_measurements(
+            canvas_bgr, polygon_px, polygon_latlon_clipped, sm_cfg, w, h
+        )
 
     # 4. SQM total
     sqm_cfg = boundary_cfg.get("sqm_total", {})
     if sqm_cfg:
-        canvas_bgr = _draw_sqm_total(canvas_bgr, polygon_px, polygon_latlon, sqm_cfg, w, h)
+        canvas_bgr = _draw_sqm_total(
+            canvas_bgr, polygon_px, polygon_latlon_clipped, sqm_cfg, w, h
+        )
 
     # 5. Address overlay
     addr_cfg = boundary_cfg.get("address_overlay", {})
