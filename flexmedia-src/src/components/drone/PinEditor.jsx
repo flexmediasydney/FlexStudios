@@ -1072,28 +1072,40 @@ export default function PinEditor({
           (result?.applied?.updates ?? result?.updates ?? 0) +
           (result?.applied?.deletes ?? result?.deletes ?? 0);
 
-        // W3 cascade telemetry: when a world-anchored pin is touched the
-        // server fans out one render per shoot in the project (POIs and the
-        // property pin project to every shot). The toast surfaces the count
-        // so the operator sees that sibling shoots are also re-rendering.
-        const cascadeCount = Number(result?.cascade?.cascaded_shoot_count ?? 0);
-        const cascadeReason = result?.cascade?.reason;
-        const isCascade = cascadeReason === "pin_edit_cascade" && cascadeCount > 1;
-
-        toast.success(
-          `Saved ${totalApplied || edits.length} pin${
-            (totalApplied || edits.length) === 1 ? "" : "s"
-          }`,
-          {
-            description: usedFallback
-              ? "Edge function unavailable — saved direct (no re-render queued)."
-              : isCascade
-              ? `Re-rendering ${cascadeCount} shoots — project-wide pin update.`
-              : result?.job_id || cascadeCount > 0
-              ? "Re-render queued — your renders will refresh shortly."
-              : undefined,
-          },
+        // W6 FIX 3 (QC3-4 P1): the server's response shape changed from
+        // the legacy nested `cascade.{reason,cascaded_shoot_count}` to a
+        // top-level `{cascade_enqueued, cascade_kind, cascade_job_id}`.
+        // The legacy reads silently returned 0 / undefined, so the toast
+        // never told the operator a project-wide re-render was queued —
+        // they'd save and then sit waiting wondering if the cascade fired.
+        const cascadeEnqueued = result?.cascade_enqueued === true;
+        const cascadeKind = result?.cascade_kind;
+        // Legacy fallback (older deployments still on nested shape) so a
+        // half-deployed environment still shows _some_ cascade signal.
+        const legacyCascadeCount = Number(
+          result?.cascade?.cascaded_shoot_count ?? 0,
         );
+        const baseSavedMessage = `Saved ${totalApplied || edits.length} pin${
+          (totalApplied || edits.length) === 1 ? "" : "s"
+        }`;
+
+        let toastDescription;
+        if (usedFallback) {
+          toastDescription =
+            "Edge function unavailable — saved direct (no re-render queued).";
+        } else if (cascadeEnqueued && cascadeKind === "render_edited") {
+          toastDescription =
+            "Re-rendering edited shoots — cards will refresh shortly.";
+        } else if (cascadeEnqueued) {
+          // Unknown cascade_kind but server queued one — surface generic.
+          toastDescription = "Re-render queued — your renders will refresh shortly.";
+        } else if (legacyCascadeCount > 1) {
+          toastDescription = `Re-rendering ${legacyCascadeCount} shoots — project-wide pin update.`;
+        } else if (result?.job_id) {
+          toastDescription = "Re-render queued — your renders will refresh shortly.";
+        }
+
+        toast.success(baseSavedMessage, { description: toastDescription });
         // #7: clear local dirty markers and history stacks after a successful
         // save so dirtyCount drops to 0, the Save button disables, and the
         // beforeunload / useBlocker / "Discard unsaved changes?" modal stops
@@ -1137,6 +1149,13 @@ export default function PinEditor({
                 ...i,
                 _dirty: false,
                 _new: false,
+                // W6 FIX 5 (QC3-4 P3): also clear the lifecycle flags so a
+                // subsequent save in the same session doesn't replay the
+                // suppress / unsuppress / reset_to_ai actions for already-
+                // committed items (which would 409 or no-op needlessly).
+                _suppress: false,
+                _unsuppress: false,
+                _reset_to_ai: false,
                 ...(newDbId ? { dbId: newDbId, id: newDbId } : {}),
               };
             }),
@@ -2475,8 +2494,16 @@ function computeSaveEdits({ items, shootId, imageNatural }) {
       continue;
     }
     if (it._unsuppress && it.dbId) {
+      // W6 FIX 6 (QC3-4 P4): mirror F39's pattern — when an unsuppress is
+      // paired with a coord/content change in the same edit, emit BOTH
+      // the un_suppress action AND a regular update edit (in that order
+      // so the update lands on an already-restored row). Without this
+      // the dirty content change was silently dropped.
       edits.push({ action: "un_suppress", pin_id: it.dbId });
-      continue;
+      if (!hasCoordOrContentChange) continue;
+      // Fall through into the normal update path so a paired edit emits
+      // both rows. The base.{action,pin_id,...} construction below picks
+      // up the dbId as an update edit for the just-unsuppressed pin.
     }
     if (it._reset_to_ai && it.dbId) {
       edits.push({ action: "reset_to_ai", pin_id: it.dbId });
@@ -2546,6 +2573,9 @@ async function directEntityFallback({ edits }) {
   let creates = 0;
   let updates = 0;
   let deletes = 0;
+  let suppresses = 0;
+  let unsuppresses = 0;
+  let skipped = 0;
   for (const e of edits) {
     if (e.action === "delete" && e.pin_id) {
       await api.entities.DroneCustomPin.delete(e.pin_id);
@@ -2556,9 +2586,48 @@ async function directEntityFallback({ edits }) {
     } else if (e.action === "create") {
       await api.entities.DroneCustomPin.create(payloadFromEdit(e));
       creates++;
+    } else if (e.action === "suppress" && e.pin_id) {
+      // W6 FIX 4 (QC3-4 P2): mirror the server's suppress action — flip
+      // lifecycle to 'suppressed'. RLS allows the pin owner to write this.
+      await api.entities.DroneCustomPin.update(e.pin_id, {
+        lifecycle: "suppressed",
+      });
+      suppresses++;
+    } else if (e.action === "un_suppress" && e.pin_id) {
+      await api.entities.DroneCustomPin.update(e.pin_id, {
+        lifecycle: "active",
+      });
+      unsuppresses++;
+    } else if (e.action === "reset_to_ai" && e.pin_id) {
+      // Reset to AI requires the snapshot column from the row + a re-write
+      // of world coords + label — the server reads latest_ai_snapshot which
+      // we don't ship to the client by default. There's no safe way to
+      // restore offline; warn the operator + skip.
+      console.warn(
+        `[PinEditor] reset_to_ai fallback skipped for pin ${e.pin_id} — server unavailable; latest_ai_snapshot only readable server-side.`,
+      );
+      try {
+        // Lazy import to avoid a top-level circular and keep the fallback
+        // self-contained.
+        const { toast: _toast } = await import("sonner");
+        _toast.warning(
+          "Couldn't reset pin to AI offline — try again when online",
+        );
+      } catch {
+        /* sonner unavailable in this context — log only */
+      }
+      skipped++;
     }
   }
-  return { creates, updates, deletes, fallback: true };
+  return {
+    creates,
+    updates,
+    deletes,
+    suppresses,
+    unsuppresses,
+    skipped,
+    fallback: true,
+  };
 }
 
 function payloadFromEdit(e) {
