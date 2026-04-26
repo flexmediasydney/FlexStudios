@@ -955,7 +955,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           const eventType = initialColumnState === 'adjustments'
             ? 'render_edited_adjustments'
             : 'render_edited_pool';
-          await admin.from("drone_events").insert({
+          const { error: evErr } = await admin.from("drone_events").insert({
             project_id: project.id,
             shoot_id: shot.shoot_id,
             shot_id: shot.id,
@@ -973,6 +973,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
               boundary_source: boundaryRow?.source || (cadastral ? 'cadastral' : null),
             },
           });
+          if (evErr) {
+            console.warn(`[${GENERATOR}] drone_events insert failed (non-fatal): ${evErr.message}`);
+          }
 
           variantResults.push({ variant: v.name, out_path: (uploadRes.path_display || uploadRes.path_lower) });
         } catch (vErr) {
@@ -1082,7 +1085,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     };
     if (body.column_state) continuationPayload.column_state = body.column_state;
     else if (initialColumnState !== 'pool') continuationPayload.column_state = initialColumnState;
-    await admin.from("drone_jobs").insert({
+    // QC iter 6 A: capture continuation enqueue error — silent failure here
+    // strands the remaining shots indefinitely (no retry path).
+    const { error: contErr } = await admin.from("drone_jobs").insert({
       project_id: project.id,
       shoot_id: shoot.id,
       kind: "render_edited",
@@ -1091,6 +1096,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       payload: continuationPayload,
       scheduled_for: new Date(Date.now() + 5_000).toISOString(),
     });
+    if (contErr) {
+      console.error(`[${GENERATOR}] continuation enqueue failed for shoot ${shoot.id} (${moreRemaining} shots stranded): ${contErr.message}`);
+    }
   }
 
   // Update shoot status. Edited pipeline lands in 'adjustments_ready'
@@ -1103,7 +1111,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   } else if (moreRemaining === 0 && successCount === 0) {
     nextStatus = 'render_failed';
   }
-  await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
+  const { error: shootStatusErr } = await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
+  if (shootStatusErr) {
+    console.warn(`[${GENERATOR}] shoot status update to '${nextStatus}' failed for shoot ${shoot.id}: ${shootStatusErr.message}`);
+  }
 
   return jsonResponse(
     {
