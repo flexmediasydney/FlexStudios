@@ -61,16 +61,26 @@ interface RequestBody {
 //   IMG_5620 (1).jpg       → Finder numbered duplicate
 //   IMG_5620-Edit.jpg      → named edit
 //
-// Strategy: the "stem" is the camera-style root — `LETTERS+DIGITS` or
-// `IMG_DIGITS` (Canon/iPhone convention). Anything after that root is a
-// suffix indicator: `-`, `_`, or a paren block. We greedy-match the root
-// then take everything until the extension as the suffix.
+// Strategy: the "stem" is the camera-style root. Real-world camera filename
+// conventions we accept:
+//   IMG_5620   — Canon, iPhone (underscore between letters and digits)
+//   DSC_1234   — Nikon (underscore convention)
+//   _DSC1234   — Nikon alt (leading underscore)
+//   DSC04567   — Sony (no separator)
+//   DSCF0987   — Fujifilm
+//   KELV4091   — generic letters+digits
+// Anything after the stem until the extension is the suffix.
 //
 // Variant count = 1 (no suffix) | 2 (any suffix) | n (numeric chain of n−1
 // segments). Numeric chains are detected separately so the
 // 1.0 + 0.2*(n-1) weight formula keeps its meaning.
+//
+// Burst 2 H1 fix: original regex did `IMG_\d+|[A-Za-z]+\d+` which missed
+// Nikon DSC_1234.jpg (underscore in stem) and _DSC1234.jpg (leading
+// underscore). Generalised stem: optional leading underscore, letters,
+// optional internal underscore, digits.
 const VARIANT_FILENAME_RE =
-  /^(?<stem>(?:IMG_\d+|[A-Za-z]+\d+))(?<suffix>[^.]*)\.(?:jpg|jpeg|png|webp)$/i;
+  /^(?<stem>_?[A-Za-z]+_?\d+)(?<suffix>[^.]*)\.(?:jpg|jpeg|png|webp)$/i;
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
