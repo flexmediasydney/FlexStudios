@@ -201,7 +201,14 @@ async function enqueueIngestForRecentRawDrones(sinceIso: string): Promise<number
     .from('project_folder_events')
     .select('project_id')
     .eq('folder_kind', 'drones_raws_shortlist_proposed')
-    .eq('event_type', 'file_added')
+    // P-runtime-fix Bug D: include file_modified, not just file_added.
+    // Pilots/photographers often DRAG files into the Dropbox folder from an
+    // existing Dropbox location (camera-imported folder, Downloads, etc).
+    // Dropbox treats those moves as file_modified for the same dropbox_id,
+    // not file_added. Filtering on file_added alone misses every "move-in"
+    // upload. The downstream enqueue RPC has its own debounce so duplicate
+    // events for the same project_id collapse to one pending ingest row.
+    .in('event_type', ['file_added', 'file_modified'])
     .gte('created_at', since);
   if (error) throw error;
 
@@ -238,7 +245,13 @@ async function enqueueShortlistingForRecentPhotos(sinceIso: string): Promise<num
     .from('project_folder_events')
     .select('project_id')
     .eq('folder_kind', 'photos_raws_shortlist_proposed')
-    .eq('event_type', 'file_added')
+    // P-runtime-fix Bug D: see drones branch above. Round 1 of 8/2 Everton
+    // surfaced 7,413 file_modified events on this folder + ZERO file_added
+    // because the photographer dragged 170 CR3s in from a synced Dropbox
+    // location rather than fresh-uploading. The narrow file_added filter
+    // missed all of them → auto-fire never triggered → user had to manually
+    // invoke shortlisting-ingest. Including file_modified self-heals.
+    .in('event_type', ['file_added', 'file_modified'])
     .gte('created_at', since);
   if (error) throw error;
 
@@ -275,7 +288,11 @@ async function fanoutFinalsWatcher(sinceIso: string): Promise<number> {
     .from('project_folder_events')
     .select('project_id, file_name, metadata')
     .in('folder_kind', ['photos_finals', 'photos_editors_final_enriched'])
-    .eq('event_type', 'file_added')
+    // P-runtime-fix Bug D: editors typically COPY exported JPGs from their
+    // working folder into Finals/, which Dropbox often emits as file_modified
+    // for the dropbox_id created earlier. Without including file_modified,
+    // the variant_count tracker silently misses real deliveries.
+    .in('event_type', ['file_added', 'file_modified'])
     .gte('created_at', sinceIso);
   if (error) throw error;
   if (!data || data.length === 0) return 0;
