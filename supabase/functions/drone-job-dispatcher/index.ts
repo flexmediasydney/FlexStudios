@@ -373,7 +373,7 @@ async function runDispatcherTick(
         continue;
       }
       if (ok.ok) {
-        await admin
+        const { error: succErr } = await admin
           .from("drone_jobs")
           .update({
             status: "succeeded",
@@ -382,6 +382,9 @@ async function runDispatcherTick(
             result: ok.result ?? null,
           })
           .eq("id", job.id);
+        if (succErr) {
+          console.warn(`[${GENERATOR}] mark-succeeded update failed for job ${job.id}: ${succErr.message}`);
+        }
         dispatched++;
         results.push({ id: job.id, kind: job.kind, ok: true });
 
@@ -1104,7 +1107,7 @@ async function markFailed(
     );
   }
   if (attemptsSoFar >= MAX_ATTEMPTS) {
-    await admin
+    const { error: dlErr } = await admin
       .from("drone_jobs")
       .update({
         // The drone_jobs CHECK constraint allows 'dead_letter', not 'dead'.
@@ -1122,6 +1125,9 @@ async function markFailed(
         error_message: errMsg.slice(0, 1000),
       })
       .eq("id", job.id);
+    if (dlErr) {
+      console.warn(`[${GENERATOR}] dead-letter mark failed for job ${job.id}: ${dlErr.message}`);
+    }
   } else {
     const backoffCurve = isModalResLimit
       ? MODAL_RESOURCE_BACKOFF_SECONDS
@@ -1140,9 +1146,12 @@ async function markFailed(
         next_attempt_smaller_batch: true,
       };
     }
-    await admin
+    const { error: retryErr } = await admin
       .from("drone_jobs")
       .update(updateRow)
       .eq("id", job.id);
+    if (retryErr) {
+      console.warn(`[${GENERATOR}] retry-pending update failed for job ${job.id}: ${retryErr.message}`);
+    }
   }
 }
