@@ -420,9 +420,23 @@ async function enqueueNextPassJob(
     scheduled_for: new Date().toISOString(),
   });
   if (error) {
-    console.warn(
-      `[${GENERATOR}] failed to chain ${args.kind} for round ${args.roundId}: ${error.message}`,
-    );
+    // Audit defect #16: mig 326 added uniq_shortlisting_jobs_active_pass_per_round
+    // which makes concurrent ticks racing on the same chain insert produce a
+    // unique violation rather than a duplicate row. That's the desired outcome —
+    // sibling tick already enqueued the next pass — so log at info level instead
+    // of warn so it doesn't pollute the error stream.
+    const isChainRaceLost =
+      /uniq_shortlisting_jobs_active_pass_per_round/.test(error.message) ||
+      /duplicate key value/i.test(error.message);
+    if (isChainRaceLost) {
+      console.log(
+        `[${GENERATOR}] chain ${args.kind} for round ${args.roundId} skipped — sibling tick won the race (mig 326): ${error.message}`,
+      );
+    } else {
+      console.warn(
+        `[${GENERATOR}] failed to chain ${args.kind} for round ${args.roundId}: ${error.message}`,
+      );
+    }
   } else {
     console.log(
       `[${GENERATOR}] chained ${args.kind} for round ${args.roundId} (after ${args.chainedFrom})`,

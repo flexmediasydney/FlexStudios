@@ -211,14 +211,24 @@ interface Pass0RoundResult {
 async function runPass0(roundId: string, concurrency: number): Promise<Pass0RoundResult> {
   const admin = getAdminClient();
 
-  // 1. Round + project lookup.
+  // 1. Round + project lookup, status guard.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
-    .select('id, project_id')
+    .select('id, project_id, status')
     .eq('id', roundId)
     .maybeSingle();
   if (roundErr) throw new Error(`round lookup failed: ${roundErr.message}`);
   if (!round) throw new Error(`round ${roundId} not found`);
+  // Audit defect #17: Pass 1/2/3 all guard on status='processing'; Pass 0 was
+  // missing the same guard. A re-run on a round in 'proposed' or 'locked' state
+  // would re-emit pass0_complete events, re-update round counters, and
+  // re-INSERT quarantine rows — corrupting state. Mirror Pass 1's pattern.
+  if (round.status !== 'processing') {
+    throw new Error(
+      `round ${roundId} status='${round.status}' — Pass 0 requires status='processing'. ` +
+      `Use the dispatcher's resurrect flow if recovery is intended.`,
+    );
+  }
   const projectId: string = round.project_id;
 
   // 2. Pull every succeeded extract job for this round.

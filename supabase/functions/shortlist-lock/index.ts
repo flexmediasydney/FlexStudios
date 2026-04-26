@@ -62,6 +62,11 @@ interface CompositionGroupRow {
   files_in_group: string[] | null;
   best_bracket_stem: string | null;
   delivery_reference_stem: string | null;
+  // Audit defect #19: Pass 0 stores files_in_group as STEMS (no extension).
+  // We carry exif_metadata so we can derive the actual filename (e.g. IMG_5620.CR3)
+  // from exif_metadata[stem].fileName when constructing Dropbox source/dest paths.
+  // deno-lint-ignore no-explicit-any
+  exif_metadata: Record<string, any> | null;
 }
 
 interface ClassificationRow {
@@ -146,7 +151,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const [groupsRes, classRes, eventsRes, overridesRes] = await Promise.all([
     admin
       .from('composition_groups')
-      .select('id, project_id, files_in_group, best_bracket_stem, delivery_reference_stem')
+      // Audit defect #19: include exif_metadata so we can derive full filenames
+      // (with extension) from the stems in files_in_group.
+      .select('id, project_id, files_in_group, best_bracket_stem, delivery_reference_stem, exif_metadata')
       .eq('round_id', roundId),
     admin
       .from('composition_classifications')
@@ -255,22 +262,41 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Helper to move all files in a composition group to a destination folder.
   // RAW files in files_in_group live under Photos/Raws/Shortlist Proposed/ —
   // we move them to dest. We don't write back into composition_groups (their
-  // files_in_group is just a list of stems/filenames; the canonical RAW path
-  // is constructed from sourceDest + filename).
+  // files_in_group is just a list of stems; the canonical RAW path is
+  // constructed from sourceDest + filename).
+  //
+  // Audit defect #19: Pass 0 writes files_in_group as STEMS (no extension —
+  // e.g. 'IMG_5620'). The actual Dropbox file is 'IMG_5620.CR3'. Pass 0 also
+  // stores per-stem exif_metadata where exif_metadata[stem].fileName is the
+  // full filename with extension. We resolve via that map; fall back to
+  // `${stem}.CR3` defensively if the map lookup fails (Canon RAW is the
+  // dominant path through this codebase).
+  // deno-lint-ignore no-explicit-any
+  function resolveFullFilename(stem: string, exifMetadata: Record<string, any> | null): string {
+    if (stem.includes('.')) return stem; // already has an extension — pass through
+    const meta = exifMetadata?.[stem];
+    const fname = meta?.fileName;
+    if (typeof fname === 'string' && fname.length > 0) return fname;
+    return `${stem}.CR3`;
+  }
+
   async function moveGroupFiles(
     groupId: string,
     files: string[],
+    // deno-lint-ignore no-explicit-any
+    exifMetadata: Record<string, any> | null,
     dest: string,
   ): Promise<{ moved: number; skipped: number; errors: Array<{ file: string; message: string }> }> {
     const result = { moved: 0, skipped: 0, errors: [] as Array<{ file: string; message: string }> };
     const sourcePrefix = sourceDest.replace(/\/+$/, '') + '/';
     const destPrefix = dest.replace(/\/+$/, '') + '/';
-    for (const filename of files) {
-      if (!filename) continue;
-      // files_in_group entries may be bare filenames or full paths (unclear);
-      // construct the source path defensively.
-      const looksLikePath = filename.startsWith('/');
-      const sourcePath = looksLikePath ? filename : `${sourcePrefix}${filename}`;
+    for (const stem of files) {
+      if (!stem) continue;
+      // Defensive: if a caller ever passes a full path, honour it; otherwise
+      // resolve stem → full filename via exif_metadata (defect #19).
+      const looksLikePath = stem.startsWith('/');
+      const filename = looksLikePath ? stem : resolveFullFilename(stem, exifMetadata);
+      const sourcePath = looksLikePath ? stem : `${sourcePrefix}${filename}`;
       const baseName = filename.split('/').pop() || filename;
       const destPath = `${destPrefix}${baseName}`;
 
@@ -295,10 +321,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         // but don't fail the whole batch (the round may have been partly
         // re-shoot or the file was renamed).
         if (msg.includes('not_found')) {
-          result.errors.push({ file: filename, message: `source not found: ${sourcePath}` });
+          result.errors.push({ file: stem, message: `source not found: ${sourcePath}` });
           continue;
         }
-        result.errors.push({ file: filename, message: msg });
+        result.errors.push({ file: stem, message: msg });
       }
     }
     return result;
@@ -315,12 +341,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (files.length === 0) continue;
 
     if (approvedSet.has(g.id)) {
-      const r = await moveGroupFiles(g.id, files, approvedDest);
+      const r = await moveGroupFiles(g.id, files, g.exif_metadata, approvedDest);
       movedApproved += r.moved;
       totalSkipped += r.skipped;
       for (const e of r.errors) allErrors.push({ group_id: g.id, ...e });
     } else if (rejectedSet.has(g.id)) {
-      const r = await moveGroupFiles(g.id, files, rejectedDest);
+      const r = await moveGroupFiles(g.id, files, g.exif_metadata, rejectedDest);
       movedRejected += r.moved;
       totalSkipped += r.skipped;
       for (const e of r.errors) allErrors.push({ group_id: g.id, ...e });

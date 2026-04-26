@@ -83,11 +83,12 @@ const GENERATOR = 'shortlisting-pass2';
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const SONNET_MODEL = 'claude-sonnet-4-6';
-// Pass 2 emits: full shortlist (~24 stems) + slot_assignments (12 slots) +
-// slot_alternatives (24 stems) + phase3 array + rejected_near_duplicates
-// (~30 stems) + coverage_notes paragraph. ~1500 tokens output is realistic;
-// 4000 gives headroom for the largest 38-image Premium shoot.
-const SONNET_MAX_TOKENS = 4000;
+// Audit defect #9: Premium (38-image) and Day-to-Dusk (31-image) packages can
+// produce JSON responses approaching 4000 tokens (winners + 2x alternatives +
+// rejected_near_duplicates + coverage_notes + slot_assignments). The previous
+// 4000 cap could truncate Sonnet mid-JSON, causing parse failure and a Pass 2
+// throw. 8192 gives 2x headroom; Sonnet 4-6 supports up to 8192 output tokens.
+const SONNET_MAX_TOKENS = 8192;
 
 // Default package ceilings per spec §12. Used as fallback when round.package_ceiling
 // is null. Looked up by package_type case-insensitively.
@@ -196,6 +197,36 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
     throw new Error(
       `round ${roundId} status='${round.status}' — Pass 2 requires status='processing'`,
     );
+  }
+
+  // 1b. Idempotency cleanup — clear all state from any prior Pass 2 invocation
+  // for this round so re-runs produce clean output. Without this:
+  //   - pass2_slot_assigned events accumulate (multiple winners per slot)
+  //   - pass2_phase3_recommendation events accumulate
+  //   - is_near_duplicate_candidate flags stay TRUE on classifications that
+  //     the new run no longer rejects
+  //   - downstream Pass 3 + lock + swimlane double-count
+  // The status guard above protects against accidental clears on a round in
+  // 'proposed' or 'locked' state. Audit refs: defects #3, #4, #8, #33.
+  const { error: evtCleanupErr } = await admin
+    .from('shortlisting_events')
+    .delete()
+    .eq('round_id', roundId)
+    .in('event_type', [
+      'pass2_slot_assigned',
+      'pass2_phase3_recommendation',
+      'pass2_complete',
+    ]);
+  if (evtCleanupErr) {
+    warnings.push(`pass2 idempotency event-cleanup failed: ${evtCleanupErr.message}`);
+  }
+  const { error: dupCleanupErr } = await admin
+    .from('composition_classifications')
+    .update({ is_near_duplicate_candidate: false })
+    .eq('round_id', roundId)
+    .eq('is_near_duplicate_candidate', true);
+  if (dupCleanupErr) {
+    warnings.push(`pass2 idempotency near-dup cleanup failed: ${dupCleanupErr.message}`);
   }
 
   // 2. Resolve package + project metadata for prompt context.
