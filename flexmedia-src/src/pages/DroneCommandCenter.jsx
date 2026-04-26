@@ -51,6 +51,10 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
 import { createPageUrl } from "@/utils";
+// Wave 14-mini Pick D: replace the local InlineStageProgress shim (which read
+// the wrong stage vocabulary and always rendered 0%) with the canonical
+// DroneStageProgress component now that Wave 9 S2 has shipped.
+import DroneStageProgress from "@/components/drone/DroneStageProgress";
 
 // ── Pipeline kanban columns ─────────────────────────────────────────────────
 // Subset of the drone_shoots.status enum that represents "active" work.
@@ -740,8 +744,8 @@ function InFlightPipelinesSection() {
               </div>
             </div>
             <div className="flex-1">
-              {/* TODO Wave 9 S2: replace with <DroneStageProgress pipelineState={p} compact /> */}
-              <InlineStageProgress pipelineState={p} />
+              {/* Wave 14-mini Pick D: shim replaced with canonical W9 component. */}
+              <DroneStageProgress pipelineState={p} compact />
             </div>
             <Link
               to={`/ProjectDetails?id=${p.project_id}&tab=drones`}
