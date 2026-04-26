@@ -53,28 +53,46 @@ import { cn } from "@/lib/utils";
 import ProjectFilesActivityLog from "./ProjectFilesActivityLog";
 
 // ── Folder taxonomy (mirrors supabase/functions/_shared/projectFolders.ts) ──
+//
+// Wave 6 W6-T2-FE fix (QC iter 3): the legacy drone folder kinds (`raw_drones`,
+// `enrichment_drone_renders_*`, `final_delivery_drones`) were dropped from
+// project_folders by mig 247 + mig 291. The Files tab clicking those kinds
+// was throwing 500s because getProjectFolderFiles couldn't resolve the path.
+// Removed them from the taxonomy below and added the new `drones_*` tree
+// (drone restructure 2026-04, see _shared/projectFolders.ts NEW_PROJECT_FOLDER_KINDS).
 const ALL_FOLDER_KINDS = [
   "raw_photos",
-  "raw_drones",
   "raw_videos",
-  "enrichment_drone_renders_proposed",
-  "enrichment_drone_renders_adjusted",
   "enrichment_orthomosaics",
   "enrichment_sfm_meshes",
-  "final_delivery_drones",
   "audit",
+  // Drone restructure 2026-04
+  "drones_raws_shortlist_proposed",
+  "drones_raws_shortlist_proposed_previews",
+  "drones_raws_final_shortlist",
+  "drones_raws_rejected",
+  "drones_raws_others",
+  "drones_editors_edited_post_production",
+  "drones_editors_ai_proposed_enriched",
+  "drones_editors_final_enriched",
+  "drones_finals",
 ];
 
 const LABELS = {
   raw_photos: "Photos",
-  raw_drones: "Drones",
   raw_videos: "Videos",
-  enrichment_drone_renders_proposed: "Drone Renders (Proposed)",
-  enrichment_drone_renders_adjusted: "Drone Renders (Adjusted)",
   enrichment_orthomosaics: "Orthomosaics",
   enrichment_sfm_meshes: "SfM Meshes",
-  final_delivery_drones: "Final Drone Deliveries",
   audit: "Audit Log",
+  drones_raws_shortlist_proposed: "Raws — Shortlist Proposed",
+  drones_raws_shortlist_proposed_previews: "Raws — Shortlist Previews",
+  drones_raws_final_shortlist: "Raws — Final Shortlist",
+  drones_raws_rejected: "Raws — Rejected",
+  drones_raws_others: "Raws — Others",
+  drones_editors_edited_post_production: "Editors — Edited Post-Production",
+  drones_editors_ai_proposed_enriched: "Editors — AI Proposed Enriched",
+  drones_editors_final_enriched: "Editors — Final Enriched",
+  drones_finals: "Finals",
 };
 
 // Group definition: parent display name → { folderKinds[] }
@@ -82,22 +100,37 @@ const GROUPS = [
   {
     key: "01_RAW_WORKING",
     label: "01_RAW_WORKING",
-    kinds: ["raw_photos", "raw_drones", "raw_videos"],
+    kinds: ["raw_photos", "raw_videos"],
   },
   {
     key: "06_ENRICHMENT",
     label: "06_ENRICHMENT",
+    kinds: ["enrichment_orthomosaics", "enrichment_sfm_meshes"],
+  },
+  {
+    key: "Drones/Raws",
+    label: "Drones — Raws",
     kinds: [
-      "enrichment_drone_renders_proposed",
-      "enrichment_drone_renders_adjusted",
-      "enrichment_orthomosaics",
-      "enrichment_sfm_meshes",
+      "drones_raws_shortlist_proposed",
+      "drones_raws_shortlist_proposed_previews",
+      "drones_raws_final_shortlist",
+      "drones_raws_rejected",
+      "drones_raws_others",
     ],
   },
   {
-    key: "07_FINAL_DELIVERY",
-    label: "07_FINAL_DELIVERY",
-    kinds: ["final_delivery_drones"],
+    key: "Drones/Editors",
+    label: "Drones — Editors",
+    kinds: [
+      "drones_editors_edited_post_production",
+      "drones_editors_ai_proposed_enriched",
+      "drones_editors_final_enriched",
+    ],
+  },
+  {
+    key: "Drones/Finals",
+    label: "Drones — Finals",
+    kinds: ["drones_finals"],
   },
   {
     key: "_AUDIT",
