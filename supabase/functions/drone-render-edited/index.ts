@@ -93,6 +93,7 @@ import {
   capPinsByMax,
   filenameForRender,
 } from "../_shared/droneRenderCommon.ts";
+import { updateShootStatus } from "../_shared/droneShootStatus.ts";
 
 const GENERATOR = "drone-render-edited";
 
@@ -765,11 +766,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const outFolder = await getFolderPath(project.id, "drones_editors_ai_proposed_enriched");
 
   // ── Update shoot status to 'rendering' ───────────────────────────
-  await admin
-    .from("drone_shoots")
-    .update({ status: "rendering" })
-    .eq("id", shoot.id)
-    .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
+  // W14-S3: routed through unified updateShootStatus helper for audit logs.
+  await updateShootStatus(admin, shoot.id, "rendering", {
+    generator: GENERATOR,
+    reason: "render_start",
+  }, {
+    allowedFromStatuses: ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"],
+  });
 
   // ── Render each shot (concurrency 1 — see drone-render notes) ────
   const renderResults: RenderResult[] = [];
@@ -1105,16 +1108,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // when the cascade target is the adjustments lane; otherwise
   // 'proposed_ready' (fresh editor delivery feels equivalent to the
   // raw-side proposed_ready terminus).
+  // W14-S3: routed through unified updateShootStatus helper (centralises
+  // the per-site console.warn that previously lived inline here).
   let nextStatus = shoot.status;
   if (moreRemaining === 0 && successCount > 0) {
     nextStatus = initialColumnState === 'adjustments' ? 'adjustments_ready' : 'proposed_ready';
   } else if (moreRemaining === 0 && successCount === 0) {
     nextStatus = 'render_failed';
   }
-  const { error: shootStatusErr } = await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
-  if (shootStatusErr) {
-    console.warn(`[${GENERATOR}] shoot status update to '${nextStatus}' failed for shoot ${shoot.id}: ${shootStatusErr.message}`);
-  }
+  await updateShootStatus(admin, shoot.id, nextStatus, {
+    generator: GENERATOR,
+    reason: "render_complete",
+  });
 
   return jsonResponse(
     {

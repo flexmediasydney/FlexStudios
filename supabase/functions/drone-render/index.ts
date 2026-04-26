@@ -66,6 +66,7 @@ import {
   capPinsByMax,
   filenameForRender,
 } from "../_shared/droneRenderCommon.ts";
+import { updateShootStatus } from "../_shared/droneShootStatus.ts";
 
 const GENERATOR = "drone-render";
 
@@ -406,11 +407,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // ── Update shoot status to 'rendering' ───────────────────────────
   // Optimistic update — only flip if not already in a terminal state.
-  await admin
-    .from("drone_shoots")
-    .update({ status: "rendering" })
-    .eq("id", shoot.id)
-    .in("status", ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"]);
+  // W14-S3: routed through unified updateShootStatus helper for audit logs.
+  await updateShootStatus(admin, shoot.id, "rendering", {
+    generator: GENERATOR,
+    reason: "render_start",
+  }, {
+    allowedFromStatuses: ["ingested", "sfm_complete", "rendering", "proposed_ready", "adjustments_ready", "render_failed"],
+  });
 
   // ── Render each shot in parallel chunks ──────────────────────────────
   const renderResults: RenderResult[] = [];
@@ -749,11 +752,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // Update shoot status. Move to 'proposed_ready' only when ALL shots are done
   // (partial progress keeps it at 'rendering' so the UI shows a spinner).
+  // W14-S3: routed through unified updateShootStatus helper for audit logs
+  // (this UPDATE was previously silent on failure, leaving shoots stuck).
   let nextStatus = shoot.status;
   if (moreRemaining === 0 && successCount > 0) nextStatus = "proposed_ready";
   else if (moreRemaining === 0 && successCount === 0) nextStatus = "render_failed";
   // else leave at 'rendering' — there's still more to do
-  await admin.from("drone_shoots").update({ status: nextStatus }).eq("id", shoot.id);
+  await updateShootStatus(admin, shoot.id, nextStatus, {
+    generator: GENERATOR,
+    reason: "render_complete",
+  });
 
   return jsonResponse(
     {
