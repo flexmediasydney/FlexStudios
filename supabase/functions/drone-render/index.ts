@@ -599,7 +599,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           // a single column_state (pool) by default. Operators distinguish
           // accepted/rejected via the column_state field on the row, not
           // the event_type.
-          await admin.from("drone_events").insert({
+          const { error: evErr } = await admin.from("drone_events").insert({
             project_id: project.id,
             shoot_id: shot.shoot_id,
             shot_id: shot.id,
@@ -615,6 +615,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
               column_state: initialColumnState,
             },
           });
+          if (evErr) {
+            console.warn(`[${GENERATOR}] drone_events insert failed (non-fatal): ${evErr.message}`);
+          }
 
           variantResults.push({ variant: v.name, out_path: (uploadRes.path_display || uploadRes.path_lower) });
         } catch (vErr) {
@@ -728,7 +731,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     // wipe_existing is one-shot — we already wiped above, don't re-wipe on
     // the continuation tick (would race with rows we just inserted). Leave
     // out of the continuation payload by design.
-    await admin.from("drone_jobs").insert({
+    // QC iter 6 A: capture enqueue error — if the continuation insert fails
+    // silently, the remaining shots stall forever (no retry path).
+    const { error: contErr } = await admin.from("drone_jobs").insert({
       project_id: project.id,
       shoot_id: shoot.id,
       kind: "render",
@@ -737,6 +742,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       payload: continuationPayload,
       scheduled_for: new Date(Date.now() + 5_000).toISOString(),
     });
+    if (contErr) {
+      console.error(`[${GENERATOR}] continuation enqueue failed for shoot ${shoot.id} (${moreRemaining} shots stranded): ${contErr.message}`);
+    }
   }
 
   // Update shoot status. Move to 'proposed_ready' only when ALL shots are done
