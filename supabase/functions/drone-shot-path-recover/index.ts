@@ -179,17 +179,25 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         continue;
       }
       for (const j of (stale || []) as Array<{ id: string; status: string; error_message: string | null; payload: Record<string, unknown>; shoot_id: string | null }>) {
-        // Cancel any pending job — once cancelled the unique partial index
-        // (which keys on status='pending') frees up so we can insert fresh.
+        // Cancel any pending job — once dead-lettered the unique partial index
+        // (which keys on status IN ('pending','running')) frees up so we can
+        // insert fresh. QC iter 5 P1-3: drone_jobs.status CHECK only allows
+        // (pending,running,succeeded,failed,dead_letter) — 'cancelled' was a
+        // 23514. Use 'dead_letter' to convey the same intent ("operator
+        // intervention superseded this row") within the allowed enum.
         if (j.status === 'pending' || (j.status === 'failed' && (j.error_message || '').includes('path/not_found'))) {
-          await admin
+          const { error: cancelErr } = await admin
             .from('drone_jobs')
             .update({
-              status: 'cancelled',
-              error_message: `${j.error_message || ''} | cancelled by ${GENERATOR}`,
+              status: 'dead_letter',
+              error_message: `${j.error_message || ''} | superseded by ${GENERATOR}`,
               finished_at: new Date().toISOString(),
             })
             .eq('id', j.id);
+          if (cancelErr) {
+            console.warn(`[${GENERATOR}] supersede flip failed for ${j.id}: ${cancelErr.message}`);
+            continue; // Don't increment + don't re-enqueue if we couldn't free the slot
+          }
           cancelled += 1;
         }
       }
