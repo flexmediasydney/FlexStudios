@@ -69,6 +69,91 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
 
 const ALLOWED_ROLES = ['master_admin', 'admin', 'manager', 'employee'];
 
+/**
+ * W14-S3: Resolves project_id (and shoot_id) for a drone_renders row.
+ *
+ * drone_events.project_id is NOT NULL, so a missing project_id silently
+ * drops the audit event for the approve / reject / restore action. This
+ * helper consolidates the four lookups that previously sat inline (#25
+ * audit fix from the earlier wave) into a single resolver:
+ *
+ *   1. drone_shots.shoot_id via render.shot_id
+ *   2. drone_shoots.project_id via the shot's shoot_id
+ *   3. Fallback A: drone_shoots.project_id via render.shoot_id directly
+ *      (covers hard-deleted shots / FK-denormalised older snapshots).
+ *   4. Fallback B: project_folders.project_id via dropbox_path prefix match
+ *      (last-resort recovery when both shot and shoot are gone but the
+ *      render's dropbox_path still nests under a known project folder).
+ *
+ * Pure refactor of the inline chain — no behavioural change. Returns
+ * shoot_id alongside project_id because the audit-event insert downstream
+ * needs both.
+ */
+async function resolveProjectIdForRender(
+  admin: ReturnType<typeof getAdminClient>,
+  render: { id: string; shot_id?: string | null; shoot_id?: string | null; dropbox_path?: string | null },
+): Promise<{ projectId: string | null; shootId: string | null }> {
+  let shootId: string | null = null;
+  let projectId: string | null = null;
+
+  // (1) drone_shots → shoot_id
+  if (render.shot_id) {
+    const { data: shotRow } = await admin
+      .from('drone_shots')
+      .select('id, shoot_id')
+      .eq('id', render.shot_id)
+      .maybeSingle();
+    shootId = (shotRow as { shoot_id?: string | null } | null)?.shoot_id ?? null;
+  }
+
+  // (2) drone_shoots via the shot's shoot_id
+  if (shootId) {
+    const { data: shootRow } = await admin
+      .from('drone_shoots')
+      .select('id, project_id')
+      .eq('id', shootId)
+      .maybeSingle();
+    projectId = (shootRow as { project_id?: string | null } | null)?.project_id ?? null;
+  }
+
+  // (3) Fallback A: render row carries shoot_id directly (hard-deleted shot
+  // / older FK-denormalised snapshot). Defensive cast guards against schema drift.
+  if (!projectId) {
+    const renderShootId = render.shoot_id ?? null;
+    if (renderShootId) {
+      const { data: shootRow2 } = await admin
+        .from('drone_shoots')
+        .select('id, project_id')
+        .eq('id', renderShootId)
+        .maybeSingle();
+      projectId = (shootRow2 as { project_id?: string | null } | null)?.project_id ?? null;
+      // Backfill shootId so the downstream audit insert still has it even
+      // when the primary shot lookup whiffed.
+      if (!shootId && projectId) shootId = renderShootId;
+    }
+  }
+
+  // (4) Fallback B: longest-prefix-match against project_folders. The render
+  // landed somewhere under 06_ENRICHMENT/.../<project>/... so the slice(2,4)
+  // segment of dropbox_path is what we match on.
+  if (!projectId && render.dropbox_path) {
+    const { data: folderHit } = await admin
+      .from('project_folders')
+      .select('project_id, dropbox_path')
+      .ilike('dropbox_path', '%/' + render.dropbox_path.split('/').slice(2, 4).join('/') + '%')
+      .limit(1)
+      .maybeSingle();
+    projectId = (folderHit as { project_id?: string | null } | null)?.project_id ?? null;
+    if (projectId) {
+      console.warn(
+        `[${GENERATOR}] resolved project_id ${projectId} for render ${render.id} via dropbox_path fallback (shot/shoot lookup missed)`,
+      );
+    }
+  }
+
+  return { projectId, shootId };
+}
+
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -214,58 +299,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // ── Resolve project_id (for the audit event) via shot → shoot ──────────────
   // drone_events.project_id is NOT NULL in the schema, so a missing project_id
-  // means we silently drop the audit event. Try harder: shot → shoot first,
-  // then fall back to looking up the shoot via project_folders that prefix
-  // the render's dropbox_path. (#25 audit fix)
-  const { data: shotRow } = await admin
-    .from('drone_shots')
-    .select('id, shoot_id')
-    .eq('id', render.shot_id)
-    .maybeSingle();
-
-  let projectId: string | null = null;
-  if (shotRow?.shoot_id) {
-    const { data: shootRow } = await admin
-      .from('drone_shoots')
-      .select('id, project_id')
-      .eq('id', shotRow.shoot_id)
-      .maybeSingle();
-    projectId = shootRow?.project_id ?? null;
-  }
-
-  // Fallback A: render row has shot_id but the shot was hard-deleted. Walk
-  // back via shoot_id (sometimes drone_renders carries shoot_id directly via
-  // FK denormalisation in older snapshots — defensive cast guards against
-  // schema drift).
-  if (!projectId) {
-    const renderShootId = (render as { shoot_id?: string | null }).shoot_id;
-    if (renderShootId) {
-      const { data: shootRow2 } = await admin
-        .from('drone_shoots')
-        .select('id, project_id')
-        .eq('id', renderShootId)
-        .maybeSingle();
-      projectId = shootRow2?.project_id ?? null;
-    }
-  }
-
-  // Fallback B: derive from the render's dropbox_path → project_folders.
-  // The render landed somewhere under 06_ENRICHMENT/.../<project>/... so
-  // longest-prefix-match against project_folders gives us the owner.
-  if (!projectId && render.dropbox_path) {
-    const { data: folderHit } = await admin
-      .from('project_folders')
-      .select('project_id, dropbox_path')
-      .ilike('dropbox_path', '%/' + render.dropbox_path.split('/').slice(2, 4).join('/') + '%')
-      .limit(1)
-      .maybeSingle();
-    projectId = folderHit?.project_id ?? null;
-    if (projectId) {
-      console.warn(
-        `[${GENERATOR}] resolved project_id ${projectId} for render ${body.render_id} via dropbox_path fallback (shot/shoot lookup missed)`,
-      );
-    }
-  }
+  // means we silently drop the audit event. The chain (shot → shoot, direct
+  // shoot fallback, dropbox_path fallback) lives in resolveProjectIdForRender
+  // (#25 audit fix; consolidated W14-S3).
+  const { projectId, shootId: resolvedShootId } = await resolveProjectIdForRender(admin, {
+    id: body.render_id as string,
+    shot_id: render.shot_id,
+    shoot_id: (render as { shoot_id?: string | null }).shoot_id ?? null,
+    dropbox_path: render.dropbox_path,
+  });
 
   // ── Auto-supersede prior occupant of the target slot ─────────────────────
   // The uniq_drone_renders_active_per_variant index (migration 233) prevents
@@ -436,7 +478,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .from('drone_events')
       .insert({
         project_id: projectId,
-        shoot_id: shotRow?.shoot_id ?? null,
+        shoot_id: resolvedShootId,
         shot_id: render.shot_id,
         event_type: eventType,
         actor_type: isService ? 'system' : 'user',
