@@ -264,7 +264,16 @@ async function fetchPoisOfType(
   const res = await fetch(url.toString());
   if (!res.ok) {
     // Surface non-2xx but don't leak the key from the URL.
-    console.warn(`[${GENERATOR}] Places ${type} HTTP ${res.status}`);
+    // Wave 5 P1 (QC2-1 #15): elevate to console.error + metric line so a
+    // billing/network failure trips alerting on the FIRST request rather
+    // than silently returning empty for every subsequent call. HTTP-level
+    // failure is the loudest signal Google gives us.
+    console.error(
+      `[${GENERATOR}] Places ${type} HTTP ${res.status} (non-OK transport)`,
+    );
+    console.error(
+      `metric drone_pois_google_places_error type=${type} kind=http status=${res.status}`,
+    );
     return [];
   }
   const json = await res.json().catch(() => null);
@@ -274,9 +283,20 @@ async function fetchPoisOfType(
   const status = json.status as string | undefined;
   if (status === 'ZERO_RESULTS') return [];
   if (status && status !== 'OK') {
-    // We log status but never the key. error_message often hints at quota / billing.
-    console.warn(
+    // Wave 5 P1 (QC2-1 #15): non-OK statuses are operational failures
+    // (REQUEST_DENIED = key revoked, OVER_QUERY_LIMIT = billing cap hit,
+    // INVALID_REQUEST = code regression). Previously logged at warn-only;
+    // a billing event would silently degrade until the cache expired and
+    // every render fell back to "no POIs". Log as error AND emit a metric
+    // line so downstream alerts catch this on the very first failure.
+    // We log status + error_message (Google's hint about the cause) but
+    // NEVER the key — the URL's `key` query string is intentionally not
+    // included in this log.
+    console.error(
       `[${GENERATOR}] Places ${type} status=${status} message=${json.error_message ?? ''}`,
+    );
+    console.error(
+      `metric drone_pois_google_places_error type=${type} kind=status status=${status}`,
     );
     return [];
   }
