@@ -594,145 +594,204 @@ async function materialiseAiPins(
     errors: 0,
   };
 
-  // Load existing AI pins for this project so we can: (a) detect operator
-  // edits via updated_by, and (b) supersede anything no longer in the
-  // fresh fetch.
-  const { data: existingRaw, error: exErr } = await admin
-    .from('drone_custom_pins')
-    .select('id, external_ref, updated_by, lifecycle, world_lat, world_lng')
-    .eq('project_id', projectId)
-    .eq('source', 'ai');
-  if (exErr) {
-    console.warn(`[${GENERATOR}] materialise: existing-row lookup failed: ${exErr.message}`);
-    summary.errors += 1;
-    return summary;
-  }
-  const existingByRef = new Map<string, {
-    id: string;
-    external_ref: string | null;
-    updated_by: string | null;
-    lifecycle: string;
-  }>();
-  for (const r of existingRaw || []) {
-    if (r.external_ref) existingByRef.set(r.external_ref, r as never);
-  }
-
-  const freshRefs = new Set<string>();
-  for (const poi of curated) {
-    if (!poi.place_id) continue;
-    freshRefs.add(poi.place_id);
-
-    const existing = existingByRef.get(poi.place_id);
-    const snapshot = {
-      place_id: poi.place_id,
-      name: poi.name,
-      type: poi.type,
-      lat: poi.lat,
-      lng: poi.lng,
-      distance_m: poi.distance_m,
-      rating: poi.rating,
-      user_ratings_total: poi.user_ratings_total,
-      fetched_at: new Date().toISOString(),
-    };
-    const content = {
-      label: poi.name,
-      type: poi.type,
-      distance_m: poi.distance_m,
-      rating: poi.rating,
-      user_ratings_total: poi.user_ratings_total,
-      place_id: poi.place_id,
-    };
-
-    if (!existing) {
-      // INSERT fresh
-      const { error } = await admin.from('drone_custom_pins').insert({
-        project_id: projectId,
-        shoot_id: null,
-        pin_type: 'poi_manual',
-        source: 'ai',
-        subsource: 'google_places',
-        external_ref: poi.place_id,
-        lifecycle: 'active',
-        priority: 10,
-        world_lat: poi.lat,
-        world_lng: poi.lng,
-        content,
-        latest_ai_snapshot: snapshot,
-        // updated_by is null on insert — flags "never operator-edited"
-      });
-      if (error) {
-        // Race with a concurrent drone-pois invocation: the unique index
-        // catches dupes; treat 23505 as a benign no-op.
-        if ((error as { code?: string }).code === '23505') {
-          // Re-load + treat as refresh
-          summary.refreshed_ai += 1;
-        } else {
-          console.warn(`[${GENERATOR}] materialise insert ${poi.place_id} failed: ${error.message}`);
-          summary.errors += 1;
-        }
-      } else {
-        summary.inserted += 1;
-      }
-      continue;
+  // ── Wave 5 P1 (QC2-8 #9 + QC2-1 #14): serialise concurrent runs ────────
+  // Two parallel webhooks for the same project both used to walk
+  // existingByRef → branch into "new POI" insert path → run supersede
+  // sweep. Window: invocation A reads, invocation B inserts, A's supersede
+  // (working from its stale snapshot) then flipped B's freshly-inserted
+  // row to lifecycle='superseded'. Result: a refresh that should yield 25
+  // active pins yielded ~12 active + 13 superseded.
+  //
+  // The lock key is hashtext('drone-pois:' || project_id) which buckets
+  // per-project but never cross-contaminates with other modules. Lock is
+  // session-scoped (advisory_lock not advisory_xact_lock) because a
+  // PostgREST RPC call is its own transaction — we acquire + release
+  // around the whole materialise block.
+  let lockAcquired = false;
+  try {
+    const { error: lockErr } = await admin.rpc(
+      'drone_pois_acquire_lock',
+      { p_project_id: projectId },
+    );
+    if (lockErr) {
+      console.warn(`[${GENERATOR}] materialise: advisory lock acquire failed (continuing without lock): ${lockErr.message}`);
+    } else {
+      lockAcquired = true;
     }
 
-    // Existing row — choose path based on operator-edit flag
-    const wasOperatorEdited = existing.updated_by !== null;
-    if (wasOperatorEdited) {
-      // Preserve world coords + content; refresh snapshot only so
-      // "Reset to AI" works against the latest data.
-      const { error } = await admin
-        .from('drone_custom_pins')
-        .update({
-          latest_ai_snapshot: snapshot,
-          // Re-activate if previously superseded — fresh data brings it back.
-          lifecycle: existing.lifecycle === 'superseded' ? 'active' : existing.lifecycle,
-        })
-        .eq('id', existing.id);
-      if (error) {
-        console.warn(`[${GENERATOR}] materialise refresh-snapshot ${poi.place_id} failed: ${error.message}`);
-        summary.errors += 1;
-      } else {
-        summary.preserved_operator_edits += 1;
-      }
-    } else {
-      // Overwrite from fresh AI data
-      const { error } = await admin
-        .from('drone_custom_pins')
-        .update({
+    // Load existing AI pins for this project so we can: (a) detect operator
+    // edits via updated_by, and (b) supersede anything no longer in the
+    // fresh fetch.
+    //
+    // Wave 5 P1 (QC2-1 #14): filter to lifecycle IN ('active','superseded')
+    // — soft-deleted ('deleted') and 'suppressed' rows must NOT poison the
+    // existingByRef map. Without this filter, refresh routes every
+    // existing-key match through the operator-edit branch even when the
+    // row was suppressed by the operator (correct for suppressed: re-bring
+    // it back if the data is fresh) or soft-deleted (incorrect: a deleted
+    // pin should be re-created). 'deleted' is excluded so the new INSERT
+    // path runs and the unique index 23505-rebuilds the row cleanly.
+    const { data: existingRaw, error: exErr } = await admin
+      .from('drone_custom_pins')
+      .select('id, external_ref, updated_by, lifecycle, world_lat, world_lng')
+      .eq('project_id', projectId)
+      .eq('source', 'ai')
+      .in('lifecycle', ['active', 'superseded']);
+    if (exErr) {
+      console.warn(`[${GENERATOR}] materialise: existing-row lookup failed: ${exErr.message}`);
+      summary.errors += 1;
+      return summary;
+    }
+    const existingByRef = new Map<string, {
+      id: string;
+      external_ref: string | null;
+      updated_by: string | null;
+      lifecycle: string;
+    }>();
+    for (const r of existingRaw || []) {
+      if (r.external_ref) existingByRef.set(r.external_ref, r as never);
+    }
+
+    const freshRefs = new Set<string>();
+    for (const poi of curated) {
+      if (!poi.place_id) continue;
+      freshRefs.add(poi.place_id);
+
+      const existing = existingByRef.get(poi.place_id);
+      const snapshot = {
+        place_id: poi.place_id,
+        name: poi.name,
+        type: poi.type,
+        lat: poi.lat,
+        lng: poi.lng,
+        distance_m: poi.distance_m,
+        rating: poi.rating,
+        user_ratings_total: poi.user_ratings_total,
+        fetched_at: new Date().toISOString(),
+      };
+      const content = {
+        label: poi.name,
+        type: poi.type,
+        distance_m: poi.distance_m,
+        rating: poi.rating,
+        user_ratings_total: poi.user_ratings_total,
+        place_id: poi.place_id,
+      };
+
+      if (!existing) {
+        // INSERT fresh
+        const { error } = await admin.from('drone_custom_pins').insert({
+          project_id: projectId,
+          shoot_id: null,
+          pin_type: 'poi_manual',
+          source: 'ai',
+          subsource: 'google_places',
+          external_ref: poi.place_id,
+          lifecycle: 'active',
+          priority: 10,
           world_lat: poi.lat,
           world_lng: poi.lng,
           content,
           latest_ai_snapshot: snapshot,
-          lifecycle: 'active',
-        })
-        .eq('id', existing.id);
-      if (error) {
-        console.warn(`[${GENERATOR}] materialise refresh ${poi.place_id} failed: ${error.message}`);
-        summary.errors += 1;
+          // updated_by is null on insert — flags "never operator-edited"
+        });
+        if (error) {
+          // Race with a concurrent drone-pois invocation: the unique index
+          // catches dupes; treat 23505 as a benign no-op.
+          if ((error as { code?: string }).code === '23505') {
+            // Re-load + treat as refresh
+            summary.refreshed_ai += 1;
+          } else {
+            console.warn(`[${GENERATOR}] materialise insert ${poi.place_id} failed: ${error.message}`);
+            summary.errors += 1;
+          }
+        } else {
+          summary.inserted += 1;
+        }
+        continue;
+      }
+
+      // Existing row — choose path based on operator-edit flag
+      const wasOperatorEdited = existing.updated_by !== null;
+      if (wasOperatorEdited) {
+        // Preserve world coords + content; refresh snapshot only so
+        // "Reset to AI" works against the latest data.
+        const { error } = await admin
+          .from('drone_custom_pins')
+          .update({
+            latest_ai_snapshot: snapshot,
+            // Re-activate if previously superseded — fresh data brings it back.
+            lifecycle: existing.lifecycle === 'superseded' ? 'active' : existing.lifecycle,
+          })
+          .eq('id', existing.id);
+        if (error) {
+          console.warn(`[${GENERATOR}] materialise refresh-snapshot ${poi.place_id} failed: ${error.message}`);
+          summary.errors += 1;
+        } else {
+          summary.preserved_operator_edits += 1;
+        }
       } else {
-        summary.refreshed_ai += 1;
+        // Overwrite from fresh AI data
+        const { error } = await admin
+          .from('drone_custom_pins')
+          .update({
+            world_lat: poi.lat,
+            world_lng: poi.lng,
+            content,
+            latest_ai_snapshot: snapshot,
+            lifecycle: 'active',
+          })
+          .eq('id', existing.id);
+        if (error) {
+          console.warn(`[${GENERATOR}] materialise refresh ${poi.place_id} failed: ${error.message}`);
+          summary.errors += 1;
+        } else {
+          summary.refreshed_ai += 1;
+        }
       }
     }
-  }
 
-  // Supersede AI rows no longer in the fresh fetch (preserve, don't delete).
-  const stale: string[] = [];
-  for (const [ref, row] of existingByRef) {
-    if (!freshRefs.has(ref) && row.lifecycle === 'active') {
-      stale.push(row.id);
-    }
-  }
-  if (stale.length > 0) {
-    const { error } = await admin
-      .from('drone_custom_pins')
-      .update({ lifecycle: 'superseded' })
-      .in('id', stale);
-    if (error) {
-      console.warn(`[${GENERATOR}] materialise supersede failed: ${error.message}`);
+    // ── Wave 5 P1 (QC2-8 #9): atomic supersede via single SQL ──────────
+    // Replaces the JS-side stale-list build + bulk update. The RPC runs:
+    //   UPDATE drone_custom_pins
+    //      SET lifecycle='superseded', updated_at=NOW()
+    //    WHERE project_id=$1
+    //      AND source='ai'
+    //      AND lifecycle='active'
+    //      AND external_ref IS NOT NULL
+    //      AND external_ref NOT IN (unnest($2::text[]))
+    //      AND updated_by IS NULL              ← QC2-4 F49 preserve
+    //
+    // The QC2-4 F49 operator-preservation clause: if a human touched the
+    // pin (updated_by NOT NULL), DON'T supersede on a refresh that
+    // doesn't return its place_id — the pin stays active. The smart-merge
+    // refresh-snapshot branch above will keep its snapshot fresh too.
+    //
+    // The advisory lock above PLUS the WHERE-clause atomicity mean a
+    // concurrent invocation B that just inserted a fresh row cannot have
+    // its row clobbered by invocation A's supersede — A sees B's row in
+    // the existingByRef snapshot it just took (post-lock acquire) and
+    // its freshRefs set will include B's place_id (because both ran the
+    // same Google fetch pointing at the same property), so the NOT IN
+    // clause excludes it.
+    const freshRefArr = Array.from(freshRefs);
+    const { data: supRow, error: supErr } = await admin.rpc(
+      'drone_pois_supersede_stale',
+      { p_project_id: projectId, p_fresh_refs: freshRefArr },
+    );
+    if (supErr) {
+      console.warn(`[${GENERATOR}] materialise supersede RPC failed: ${supErr.message}`);
       summary.errors += 1;
-    } else {
-      summary.superseded = stale.length;
+    } else if (typeof supRow === 'number') {
+      summary.superseded = supRow;
+    }
+  } finally {
+    if (lockAcquired) {
+      try {
+        await admin.rpc('drone_pois_release_lock', { p_project_id: projectId });
+      } catch (e) {
+        console.warn(`[${GENERATOR}] materialise: advisory lock release failed (will expire on session close): ${(e as Error)?.message}`);
+      }
     }
   }
 
