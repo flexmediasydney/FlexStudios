@@ -36,10 +36,15 @@ export default function DroneSwimlaneLockOverlay({ pipelineState, children }) {
   //   active_job.function_name — current edge function name when running
   const stages = Array.isArray(pipelineState?.stages) ? pipelineState.stages : [];
   const currentStage = stages.find((s) => s?.stage_key === pipelineState?.current_stage) || null;
-  // Prefer the live active_job's function name if available (it's the
+  // Prefer the live active job's function name if available (it's the
   // authoritative "what's executing right now"), fall back to stage_key.
+  // QC iter 6 C: RPC exposes active_jobs (plural array, sorted running first
+  // per mig 301), not active_job. Pick the first running/pending entry.
+  const activeJobs = Array.isArray(pipelineState?.active_jobs) ? pipelineState.active_jobs : [];
+  const activeJob = activeJobs[0] || null;
   const fnName =
-    pipelineState?.active_job?.function_name ||
+    activeJob?.function_name ||
+    currentStage?.function_name ||
     currentStage?.stage_key ||
     "processing";
   const startedAt = currentStage?.started_at;
