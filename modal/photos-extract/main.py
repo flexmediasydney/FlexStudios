@@ -155,7 +155,11 @@ def _exif_extract(cr3_path: Path) -> Dict[str, Any]:
         raise RuntimeError(
             f"exiftool failed ({proc.returncode}): {proc.stderr.decode('utf-8', 'ignore')[:300]}"
         )
-    out = proc.stdout.decode("utf-8", "ignore")
+    # Burst 3 I3: use 'replace' instead of 'ignore' so non-UTF-8 bytes become
+    # � placeholders. 'ignore' silently drops bytes which can corrupt the
+    # JSON delimiter sequence and turn a single weird-char file into a JSON
+    # parse failure for the whole call.
+    out = proc.stdout.decode("utf-8", "replace")
     if not out.strip():
         return {}
     parsed = json.loads(out)
@@ -285,15 +289,24 @@ def _process_one(
         camera_model = exif_raw.get("Model")
         date_time_original = exif_raw.get("DateTimeOriginal")
         sub_sec = exif_raw.get("SubSecTimeOriginal")
-        shutter_value = (
-            _shutter_speed_to_seconds(exif_raw.get("ShutterSpeedValue"))
-            or _shutter_speed_to_seconds(exif_raw.get("ShutterSpeed"))
-            or _shutter_speed_to_seconds(exif_raw.get("ExposureTime"))
+        # Burst 3 I1: explicit "is not None" rather than `or` chain. The chain
+        # short-circuits on falsy values, so a legitimate 0 (impossible for
+        # shutter/aperture in practice but sloppy semantically) would skip to
+        # the next fallback. Defensive coding for future variability.
+        def _first_not_none(*vals):
+            for v in vals:
+                if v is not None:
+                    return v
+            return None
+        shutter_value = _first_not_none(
+            _shutter_speed_to_seconds(exif_raw.get("ShutterSpeedValue")),
+            _shutter_speed_to_seconds(exif_raw.get("ShutterSpeed")),
+            _shutter_speed_to_seconds(exif_raw.get("ExposureTime")),
         )
-        aperture = (
-            _aperture_to_float(exif_raw.get("Aperture"))
-            or _aperture_to_float(exif_raw.get("ApertureValue"))
-            or _aperture_to_float(exif_raw.get("FNumber"))
+        aperture = _first_not_none(
+            _aperture_to_float(exif_raw.get("Aperture")),
+            _aperture_to_float(exif_raw.get("ApertureValue")),
+            _aperture_to_float(exif_raw.get("FNumber")),
         )
         iso = _int_or_none(exif_raw.get("ISO"))
         focal_length = _aperture_to_float(exif_raw.get("FocalLength"))

@@ -86,6 +86,13 @@ function settingsContinuous(prev: ExifSignals, curr: ExifSignals): boolean {
   if (Math.abs(prev.aperture - curr.aperture) > APERTURE_EPSILON) return false;
   if (Math.abs(prev.focalLength - curr.focalLength) > FOCAL_LENGTH_EPSILON) return false;
   if (prev.iso !== curr.iso) return false;
+  // Burst 3 I4: AEB nullability transition is a hard break — a non-bracketed
+  // test shot followed immediately by an AEB sequence (or vice versa) must
+  // NOT merge into one group even with same camera settings + tight timestamp,
+  // otherwise the 5-shot max enforcement produces a heterogeneous group + an
+  // orphan. Real-world: photographer fires a manual-exposure test, switches
+  // to AEB mode, fires the 5-bracket sequence within 4s.
+  if ((prev.aebBracketValue == null) !== (curr.aebBracketValue == null)) return false;
   return true;
 }
 
