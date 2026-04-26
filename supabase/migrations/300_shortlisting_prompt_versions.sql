@@ -1,4 +1,9 @@
--- Wave 6 P8 follow-up: mig 296: shortlisting_prompt_versions table + seed
+-- Wave 6 P8 follow-up: mig 300: shortlisting_prompt_versions table + seed
+-- (originally numbered 296; renamed to 300 to resolve a filesystem collision
+-- with 296_drone_security_hardening_sweep.sql that landed on main concurrently.
+-- Both migrations were already applied to prod via apply_migration — the DB
+-- identifies them by name, not filesystem prefix, so the rename is filesystem
+-- hygiene only.)
 --
 -- Lets master_admin edit the engine's prompt scaffolding (Pass 0 hard-reject
 -- text, Pass 1 system message, Pass 2 system message) without a code deploy.
