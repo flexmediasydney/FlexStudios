@@ -202,6 +202,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         .insert({
           project_id: projectId,
           shoot_id: shootId,
+          shot_id: shotId, // Wave 11 S2 Cluster D — surface per-shot identity at top level for joins/audit
           kind: 'render_edited',
           status: 'pending',
           pipeline: 'edited',
