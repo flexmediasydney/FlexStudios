@@ -10,9 +10,9 @@
  *      drone_events row with from/to state, actor, project_id. Direct
  *      updates bypass this and the audit log silently rots.
  *   2. Auth — RLS allows `manager` and `employee` to update drone_shots
- *      column-by-column via PostgREST, which is too coarse: contractors
- *      should never trigger a lifecycle flip. We enforce the role gate
- *      explicitly here.
+ *      column-by-column via PostgREST, which is too coarse. We enforce the
+ *      role gate explicitly here, and (Wave 12 D) further restrict
+ *      `contractor` callers to the project's assigned `drone_editor_id`.
  *   3. Idempotency — repeated clicks (typical when an operator double-taps
  *      a card) shouldn't generate duplicate audit rows. The function no-ops
  *      cleanly when the shot is already at the target state.
@@ -26,7 +26,11 @@
  * thrash). This function only updates the app-side `drone_shots.lifecycle_state`
  * column + emits the audit event.
  *
- * Auth: master_admin / admin / manager / employee. Contractors are excluded.
+ * Auth: master_admin / admin / manager / employee. Contractors admitted in
+ * Wave 12 D ONLY when their user.id matches the project's drone_editor_id —
+ * see the multi-contractor isolation gate below. Other contractors on the
+ * same project (or contractors on projects where they aren't drone_editor_id)
+ * receive 403.
  *
  * Deployed verify_jwt=false; we authenticate via getUserFromReq.
  */
@@ -51,7 +55,10 @@ interface Body {
 }
 
 const VALID_TARGETS: LifecycleTarget[] = ['raw_proposed', 'raw_accepted', 'rejected'];
-const ALLOWED_ROLES = ['master_admin', 'admin', 'manager', 'employee'];
+// Wave 12 D: contractor admitted at the role-membership gate, then narrowed
+// per-project below to the assigned projects.drone_editor_id. Manager+/admin
+// roles bypass the per-project narrow.
+const ALLOWED_ROLES = ['master_admin', 'admin', 'manager', 'employee', 'contractor'];
 
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
@@ -107,6 +114,42 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`Failed to load shot: ${fetchErr.message}`, 500, req);
   }
   if (!shot) return errorResponse('shot_id not found', 404, req);
+
+  // ── Wave 12 D: multi-contractor isolation gate ───────────────────────────
+  // Role gate above only checks role membership; without this, two contractors
+  // assigned to the same project could both flip lifecycle state on every
+  // shot regardless of intended ownership. When the caller is a contractor
+  // (not service-role), resolve the project's drone_editor_id and require
+  // user.id match. Manager+/admin/master_admin/employee unaffected.
+  if (!isService && role === 'contractor') {
+    let gateProjectId: string | null = null;
+    if (shot.shoot_id) {
+      const { data: gateShootRow } = await admin
+        .from('drone_shoots')
+        .select('id, project_id')
+        .eq('id', shot.shoot_id)
+        .maybeSingle();
+      gateProjectId = gateShootRow?.project_id ?? null;
+    }
+    if (!gateProjectId) {
+      return errorResponse('shot not found or project missing', 404, req);
+    }
+    const { data: gateProjectRow } = await admin
+      .from('projects')
+      .select('drone_editor_id')
+      .eq('id', gateProjectId)
+      .maybeSingle();
+    if (
+      gateProjectRow?.drone_editor_id &&
+      gateProjectRow.drone_editor_id !== user.id
+    ) {
+      return errorResponse(
+        'forbidden: drone_editor_id mismatch — only the assigned drone editor can run lifecycle transitions on contractor seats for this project',
+        403,
+        req,
+      );
+    }
+  }
 
   // SfM-only shots are nadir-grid alignment frames — they never appear in the
   // operator swimlane and shouldn't be re-routed via this function. Reject
