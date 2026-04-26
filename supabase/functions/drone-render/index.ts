@@ -133,6 +133,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
      * update its endpoint rather than silently producing wrong-pipeline rows.
      */
     reason?: string;
+    /**
+     * W10-S2: dispatcher sets this on the retry payload after detecting a
+     * Modal-side resource limit (WORKER_RESOURCE_LIMIT or 5xx). When true,
+     * we lower PER_INVOCATION_CAP from 4 to 2 for THIS invocation only so
+     * the next attempt has a smaller per-call working set and is less
+     * likely to OOM the Modal worker. The flag is one-shot — the
+     * continuation enqueue does not propagate it.
+     */
+    next_attempt_smaller_batch?: boolean;
     _health_check?: boolean;
   } = {};
   try {
@@ -305,7 +314,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // only ONE shot's footprint is live at any time, so the cap is wall-clock-
   // bound (4 × ~40s = 160s, slightly over the 145s wall-clock cap; the
   // continuation enqueue below picks up where we left off).
-  const PER_INVOCATION_CAP = 4;
+  //
+  // W10-S2: when the dispatcher sets payload.next_attempt_smaller_batch=true
+  // (on a retry after detecting a Modal WORKER_RESOURCE_LIMIT or 5xx), drop
+  // the cap from 4 to 2 for THIS invocation. Smaller working set = less
+  // RAM contention on the Modal worker = better chance of clean completion.
+  // The continuation enqueue below intentionally does NOT propagate the
+  // flag — we only want the smaller batch on the immediate retry tick.
+  const PER_INVOCATION_CAP = body.next_attempt_smaller_batch === true ? 2 : 4;
+  if (body.next_attempt_smaller_batch === true) {
+    console.warn(
+      `[${GENERATOR}] next_attempt_smaller_batch=true — capping invocation at ${PER_INVOCATION_CAP} shots (Modal resource-limit retry)`,
+    );
+  }
   const shotsCapped = shots.slice(0, PER_INVOCATION_CAP);
   const moreRemaining = shots.length - shotsCapped.length;
 
