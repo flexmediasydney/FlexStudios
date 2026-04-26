@@ -260,12 +260,17 @@ async function runDispatcherTick(
   // per-shot error would. Without the decrement, a 3-strike retry budget
   // evaporates after 3 unrelated platform timeouts.
   const STALE_CLAIM_MIN = 20;
-  const { data: stale } = await admin
+  const { data: stale, error: sweepErr } = await admin
     .from("drone_jobs")
     .update({ status: "pending", started_at: null })
     .eq("status", "running")
     .lt("started_at", new Date(Date.now() - STALE_CLAIM_MIN * 60 * 1000).toISOString())
     .select("id");
+  if (sweepErr) {
+    console.warn(
+      `[${GENERATOR}] stale-claim sweep failed: ${sweepErr.message} — stuck-running rows may persist until next tick`,
+    );
+  }
   if ((stale?.length ?? 0) > 0) {
     // Refund the attempt via the dedicated RPC — supabase-js can't express
     // attempt_count = GREATEST(0, attempt_count - 1) in .update(), so this
