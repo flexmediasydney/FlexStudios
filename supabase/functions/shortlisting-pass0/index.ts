@@ -489,7 +489,13 @@ async function insertCompositionGroups(
 
     const bestEntry = fileMap.get(bestBracketStem);
     const dropboxPreviewPath = bestEntry?.preview_dropbox_path || '';
-    const previewSizeKb = bestEntry?.preview_size_kb || null;
+    // P-runtime-fix: Modal returns a fractional kB value (e.g. 198.8) but the
+    // composition_groups.preview_size_kb column is INTEGER — bare insert
+    // crashes Postgres with 'invalid input syntax for type integer'. Round.
+    const previewSizeKbRaw = bestEntry?.preview_size_kb;
+    const previewSizeKb = typeof previewSizeKbRaw === 'number' && isFinite(previewSizeKbRaw)
+      ? Math.round(previewSizeKbRaw)
+      : null;
 
     // EXIF metadata snapshot — full ExifSignals for all 5 brackets keyed by
     // stem. Pass 1 consumes this so it doesn't have to round-trip the
