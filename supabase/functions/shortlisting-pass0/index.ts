@@ -717,9 +717,13 @@ async function classifyOne(row: InsertedGroupRow): Promise<ClassificationResult>
 function parseHardRejectJson(text: string): HardRejectResult | null {
   if (!text) return null;
   let body = text.trim();
-  // Strip ```json ... ``` fences.
-  const fenceMatch = body.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenceMatch) body = fenceMatch[1].trim();
+  // Burst 9 O1: pick the JSON-bearing fence when Haiku emits multiple fenced
+  // blocks (same fix as Pass 1 L2 / Pass 2 M5).
+  const fenceMatches = Array.from(body.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi));
+  if (fenceMatches.length > 0) {
+    const jsonFence = fenceMatches.find((m) => m[1].includes('{'));
+    body = (jsonFence ?? fenceMatches[0])[1].trim();
+  }
   // Last-ditch: take first {...} block.
   const braceStart = body.indexOf('{');
   const braceEnd = body.lastIndexOf('}');
@@ -729,10 +733,31 @@ function parseHardRejectJson(text: string): HardRejectResult | null {
   try {
     const parsed = JSON.parse(jsonStr);
     if (typeof parsed !== 'object' || parsed == null) return null;
+    // Burst 9 O2: lenient hard_reject coercion. Haiku usually emits true/false
+    // but occasionally produces "true" / 1 / "yes". A strict v===true silently
+    // flipped a real-true to false and let an out-of-scope or accidentally-
+    // triggered frame slip into Pass 1.
+    let hardReject = false;
+    if (parsed.hard_reject === true) hardReject = true;
+    else if (typeof parsed.hard_reject === 'string') {
+      const s = parsed.hard_reject.trim().toLowerCase();
+      hardReject = s === 'true' || s === 'yes' || s === 'y' || s === '1';
+    } else if (parsed.hard_reject === 1) hardReject = true;
+
+    // Burst 9 O4: clamp confidence to [0,1]. Haiku occasionally emits 95
+    // (treating it as a percent) — we'd otherwise persist confidence=95
+    // which breaks downstream stats and the human-review threshold.
+    const confRaw = typeof parsed.confidence === 'number'
+      ? parsed.confidence
+      : Number(parsed.confidence);
+    const confidence = Number.isFinite(confRaw)
+      ? Math.max(0, Math.min(1, confRaw > 1 ? confRaw / 100 : confRaw))
+      : 0;
+
     return {
-      hard_reject: parsed.hard_reject === true,
+      hard_reject: hardReject,
       reject_reason: typeof parsed.reject_reason === 'string' ? parsed.reject_reason : null,
-      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
+      confidence,
       observation: typeof parsed.observation === 'string' ? parsed.observation : '',
     };
   } catch {
