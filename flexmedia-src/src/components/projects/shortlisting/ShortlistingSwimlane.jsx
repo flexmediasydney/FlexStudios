@@ -1,0 +1,829 @@
+/**
+ * ShortlistingSwimlane — Wave 6 Phase 6 SHORTLIST
+ *
+ * The 3-column swimlane review UI. Per spec §20:
+ *   ┌──────────────────┬──────────────────┬──────────────────┐
+ *   │    REJECTED       │  AI PROPOSED      │  HUMAN APPROVED  │
+ *   │    ~25% width     │  ~50% width       │  ~25% width      │
+ *   └──────────────────┴──────────────────┴──────────────────┘
+ *
+ * Initial column assignment per composition_group:
+ *   AI PROPOSED if there's a pass2_slot_assigned (rank=1) event OR a
+ *               pass2_phase3_recommendation event for this group_id
+ *   REJECTED   otherwise (everything else: explicit near-dups + soft rejects)
+ *   HUMAN APPROVED starts empty
+ *
+ * Apply overrides on top:
+ *   approved_as_proposed → move from PROPOSED to APPROVED
+ *   added_from_rejects   → move from REJECTED to APPROVED
+ *   removed              → move from PROPOSED to REJECTED
+ *   swapped              → ai_proposed_group_id moves to REJECTED;
+ *                          human_selected_group_id moves to APPROVED
+ *
+ * Drag handler:
+ *   1. Optimistic local-state update (move card)
+ *   2. Compute override event payload
+ *   3. POST to shortlisting-overrides edge function
+ *   4. On error: revert + toast
+ *
+ * Top of swimlane:
+ *   - Lock & Reorganize button (calls shortlist-lock)
+ *   - Round metadata (status, ceiling, package_type, started_at)
+ *   - Coverage summary
+ *
+ * DnD library: @hello-pangea/dnd (already used in KanbanBoard).
+ */
+import {
+  useEffect,
+  useMemo,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
+import { api } from "@/api/supabaseClient";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Lock,
+  Loader2,
+  AlertCircle,
+  CheckCircle2,
+  X,
+} from "lucide-react";
+import { format } from "date-fns";
+import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import ShortlistingCard from "./ShortlistingCard";
+
+// Column definitions
+const COLUMNS = [
+  {
+    key: "rejected",
+    label: "REJECTED",
+    headerTone:
+      "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300",
+  },
+  {
+    key: "proposed",
+    label: "AI PROPOSED",
+    headerTone:
+      "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+  },
+  {
+    key: "approved",
+    label: "HUMAN APPROVED",
+    headerTone:
+      "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
+  },
+];
+
+// human_action enum mapping based on (fromColumn -> toColumn)
+function deriveHumanAction(fromColumn, toColumn) {
+  if (fromColumn === toColumn) return null;
+  if (fromColumn === "proposed" && toColumn === "approved")
+    return "approved_as_proposed";
+  if (fromColumn === "proposed" && toColumn === "rejected") return "removed";
+  if (fromColumn === "rejected" && toColumn === "approved")
+    return "added_from_rejects";
+  if (fromColumn === "approved" && toColumn === "rejected") return "removed";
+  if (fromColumn === "approved" && toColumn === "proposed")
+    return "approved_as_proposed"; // unusual; treat as toggle back
+  if (fromColumn === "rejected" && toColumn === "proposed")
+    return "added_from_rejects";
+  return null;
+}
+
+export default function ShortlistingSwimlane({
+  roundId,
+  round,
+  projectId,
+  project,
+}) {
+  const queryClient = useQueryClient();
+
+  // Track when the reviewer landed on this page so we can compute review_duration_seconds.
+  const reviewStartRef = useRef(Date.now());
+
+  // ── Data fetches ────────────────────────────────────────────────────────
+  const groupsQuery = useQuery({
+    queryKey: ["composition_groups", roundId],
+    queryFn: async () => {
+      const rows = await api.entities.CompositionGroup.filter(
+        { round_id: roundId },
+        "group_index",
+        2000,
+      );
+      return rows || [];
+    },
+    enabled: Boolean(roundId),
+    staleTime: 15_000,
+  });
+
+  const classificationsQuery = useQuery({
+    queryKey: ["composition_classifications", roundId],
+    queryFn: async () => {
+      const rows = await api.entities.CompositionClassification.filter(
+        { round_id: roundId },
+        null,
+        2000,
+      );
+      return rows || [];
+    },
+    enabled: Boolean(roundId),
+    staleTime: 15_000,
+  });
+
+  const slotEventsQuery = useQuery({
+    queryKey: ["shortlisting_events_slots", roundId],
+    queryFn: async () => {
+      const rows = await api.entities.ShortlistingEvent.filter(
+        {
+          round_id: roundId,
+          event_type: { $in: ["pass2_slot_assigned", "pass2_phase3_recommendation"] },
+        },
+        "created_at",
+        2000,
+      );
+      return rows || [];
+    },
+    enabled: Boolean(roundId),
+    staleTime: 15_000,
+  });
+
+  const overridesQuery = useQuery({
+    queryKey: ["shortlisting_overrides", roundId],
+    queryFn: async () => {
+      const rows = await api.entities.ShortlistingOverride.filter(
+        { round_id: roundId },
+        "created_at",
+        2000,
+      );
+      return rows || [];
+    },
+    enabled: Boolean(roundId),
+    staleTime: 15_000,
+  });
+
+  const isLoading =
+    groupsQuery.isLoading ||
+    classificationsQuery.isLoading ||
+    slotEventsQuery.isLoading ||
+    overridesQuery.isLoading;
+  const queryError =
+    groupsQuery.error ||
+    classificationsQuery.error ||
+    slotEventsQuery.error ||
+    overridesQuery.error;
+
+  const groups = groupsQuery.data || [];
+  const classifications = classificationsQuery.data || [];
+  const slotEvents = slotEventsQuery.data || [];
+  const overrides = overridesQuery.data || [];
+
+  // ── Build columns from data ─────────────────────────────────────────────
+  // Per-group classification lookup
+  const classByGroupId = useMemo(() => {
+    const m = new Map();
+    for (const c of classifications) m.set(c.group_id, c);
+    return m;
+  }, [classifications]);
+
+  // Per-group slot info from pass2 events: { slot_id, phase, rank }
+  const slotByGroupId = useMemo(() => {
+    const m = new Map();
+    for (const ev of slotEvents) {
+      if (!ev.group_id) continue;
+      const p = ev.payload || {};
+      if (ev.event_type === "pass2_phase3_recommendation") {
+        if (!m.has(ev.group_id)) {
+          m.set(ev.group_id, {
+            slot_id: p.slot_id || "ai_recommended",
+            phase: 3,
+            rank: p.rank || 1,
+          });
+        }
+      } else if (ev.event_type === "pass2_slot_assigned") {
+        const rank = p.rank;
+        // Only the rank=1 winner determines the group's primary slot.
+        if (rank === 1 && !m.has(ev.group_id)) {
+          m.set(ev.group_id, {
+            slot_id: p.slot_id,
+            phase: p.phase,
+            rank: 1,
+          });
+        }
+      }
+    }
+    return m;
+  }, [slotEvents]);
+
+  // Alternatives map: slot_id -> [{ group_id, stem, combined_score, room_type, analysis }]
+  // From pass2_slot_assigned events with rank in (2, 3).
+  const altsBySlotId = useMemo(() => {
+    const m = new Map();
+    for (const ev of slotEvents) {
+      if (ev.event_type !== "pass2_slot_assigned") continue;
+      const p = ev.payload || {};
+      const rank = p.rank;
+      if (rank == null || rank === 1) continue;
+      const slotId = p.slot_id;
+      if (!slotId) continue;
+      if (!m.has(slotId)) m.set(slotId, []);
+      const cls = classByGroupId.get(ev.group_id);
+      m.get(slotId).push({
+        group_id: ev.group_id,
+        stem: p.stem,
+        rank,
+        combined_score: cls?.combined_score ?? null,
+        analysis: cls?.analysis ?? null,
+      });
+    }
+    // Sort by rank (2 before 3)
+    for (const arr of m.values()) {
+      arr.sort((a, b) => (a.rank || 99) - (b.rank || 99));
+    }
+    return m;
+  }, [slotEvents, classByGroupId]);
+
+  // Initial AI shortlist set + classification-based rejection set
+  const initialColumns = useMemo(() => {
+    const proposed = new Set();
+    for (const ev of slotEvents) {
+      if (!ev.group_id) continue;
+      if (ev.event_type === "pass2_phase3_recommendation") {
+        proposed.add(ev.group_id);
+      } else if (ev.event_type === "pass2_slot_assigned") {
+        const rank = ev.payload?.rank;
+        if (rank === 1 || rank === undefined) proposed.add(ev.group_id);
+      }
+    }
+    const rejected = new Set();
+    for (const g of groups) {
+      if (proposed.has(g.id)) continue;
+      rejected.add(g.id);
+    }
+    return { proposed, rejected, approved: new Set() };
+  }, [slotEvents, groups]);
+
+  // Apply overrides on top of initial assignment, in chronological order.
+  // Local override state (for pending optimistic moves before server acks).
+  const [pendingOverrides, setPendingOverrides] = useState([]);
+
+  const computedColumns = useMemo(() => {
+    const proposed = new Set(initialColumns.proposed);
+    const rejected = new Set(initialColumns.rejected);
+    const approved = new Set();
+
+    const allOverrides = [...overrides, ...pendingOverrides];
+    for (const ov of allOverrides) {
+      const aiId = ov.ai_proposed_group_id;
+      const humanId = ov.human_selected_group_id;
+      switch (ov.human_action) {
+        case "approved_as_proposed":
+          if (aiId) {
+            proposed.delete(aiId);
+            rejected.delete(aiId);
+            approved.add(aiId);
+          }
+          break;
+        case "added_from_rejects":
+          if (humanId) {
+            rejected.delete(humanId);
+            proposed.delete(humanId);
+            approved.add(humanId);
+          }
+          break;
+        case "removed":
+          if (aiId) {
+            proposed.delete(aiId);
+            approved.delete(aiId);
+            rejected.add(aiId);
+          }
+          break;
+        case "swapped":
+          if (aiId) {
+            approved.delete(aiId);
+            proposed.delete(aiId);
+            rejected.add(aiId);
+          }
+          if (humanId) {
+            rejected.delete(humanId);
+            proposed.delete(humanId);
+            approved.add(humanId);
+          }
+          break;
+      }
+    }
+    return { proposed, rejected, approved };
+  }, [initialColumns, overrides, pendingOverrides]);
+
+  // Build column-keyed arrays of composition objects, decorated for the card.
+  const columnItems = useMemo(() => {
+    const out = { rejected: [], proposed: [], approved: [] };
+    for (const g of groups) {
+      const decorated = {
+        ...g,
+        classification: classByGroupId.get(g.id) || null,
+        slot: slotByGroupId.get(g.id) || null,
+      };
+      if (computedColumns.approved.has(g.id)) out.approved.push(decorated);
+      else if (computedColumns.proposed.has(g.id)) out.proposed.push(decorated);
+      else out.rejected.push(decorated);
+    }
+    // Stable sort: approved first by slot-phase, proposed by slot-phase,
+    // rejected by group_index.
+    const slotKey = (d) =>
+      d.slot
+        ? `${(d.slot.phase ?? 9)}-${d.slot.slot_id || "z"}`
+        : "z-" + (d.group_index ?? 999);
+    out.proposed.sort((a, b) => slotKey(a).localeCompare(slotKey(b)));
+    out.approved.sort((a, b) => slotKey(a).localeCompare(slotKey(b)));
+    out.rejected.sort((a, b) => (a.group_index ?? 0) - (b.group_index ?? 0));
+    return out;
+  }, [groups, classByGroupId, slotByGroupId, computedColumns]);
+
+  // ── Override capture ────────────────────────────────────────────────────
+  // Send to shortlisting-overrides edge function. Supports batching but for
+  // simplicity each drag fires its own request — typical reviewer pace is
+  // one drag every few seconds.
+  const sendOverride = useCallback(
+    async (event) => {
+      try {
+        const resp = await api.functions.invoke("shortlisting-overrides", {
+          events: [event],
+        });
+        const result = resp?.data ?? resp ?? {};
+        if (result?.ok === false) {
+          throw new Error(result?.error || "Override capture failed");
+        }
+        // Refresh server-side overrides + reset pendingOverrides for that event.
+        queryClient.invalidateQueries({
+          queryKey: ["shortlisting_overrides", roundId],
+        });
+        return true;
+      } catch (err) {
+        console.error("[ShortlistingSwimlane] sendOverride failed:", err);
+        toast.error(err?.message || "Override capture failed");
+        return false;
+      }
+    },
+    [queryClient, roundId],
+  );
+
+  // Drag handler from @hello-pangea/dnd
+  const onDragEnd = useCallback(
+    async (result) => {
+      const { source, destination, draggableId } = result;
+      if (!destination) return;
+      if (
+        source.droppableId === destination.droppableId &&
+        source.index === destination.index
+      )
+        return;
+
+      const fromColumn = source.droppableId;
+      const toColumn = destination.droppableId;
+      const action = deriveHumanAction(fromColumn, toColumn);
+      if (!action) return;
+
+      const groupId = draggableId;
+      const composition = groups.find((g) => g.id === groupId);
+      if (!composition) return;
+      const cls = classByGroupId.get(groupId);
+      const slot = slotByGroupId.get(groupId);
+
+      const reviewSecs = Math.floor(
+        (Date.now() - reviewStartRef.current) / 1000,
+      );
+
+      // Build payload — distinguish approved-from-rejects (humanId) vs
+      // approved-as-proposed (aiId).
+      const isFromRejects =
+        action === "added_from_rejects" || fromColumn === "rejected";
+      const event = {
+        project_id: projectId,
+        round_id: roundId,
+        ai_proposed_group_id: isFromRejects ? null : groupId,
+        ai_proposed_slot_id: slot?.slot_id || null,
+        ai_proposed_score: cls?.combined_score ?? null,
+        human_action: action,
+        human_selected_group_id: isFromRejects ? groupId : null,
+        human_selected_slot_id: isFromRejects ? null : slot?.slot_id || null,
+        slot_group_id: slot?.slot_id || null,
+        review_duration_seconds: reviewSecs,
+        alternative_offered: (altsBySlotId.get(slot?.slot_id) || []).length > 0,
+        alternative_selected: false, // dragging isn't selecting an alt
+      };
+
+      // Optimistic update — append to pendingOverrides immediately. Use a
+      // unique pendingId so concurrent drags don't step on each other when
+      // we drop the pending entry on success/failure.
+      const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setPendingOverrides((prev) => [
+        ...prev,
+        {
+          ai_proposed_group_id: event.ai_proposed_group_id,
+          human_selected_group_id: event.human_selected_group_id,
+          human_action: event.human_action,
+          created_at: new Date().toISOString(),
+          _pending: true,
+          _pendingId: pendingId,
+        },
+      ]);
+
+      const ok = await sendOverride(event);
+      // Drop only this pending entry — leave any other in-flight pendings alone.
+      setPendingOverrides((prev) =>
+        prev.filter((p) => p._pendingId !== pendingId),
+      );
+      // On failure, the user sees an error toast (sendOverride emitted it)
+      // and the optimistic move is reverted by dropping the pending entry.
+      // On success, the server-side refetch will replace this entry with the
+      // canonical row (no duplication because we filtered by _pendingId).
+      void ok;
+    },
+    [
+      groups,
+      classByGroupId,
+      slotByGroupId,
+      altsBySlotId,
+      projectId,
+      roundId,
+      sendOverride,
+    ],
+  );
+
+  // Swap-via-alt-tray: same as a drag (proposed/approved gets swapped)
+  const handleSwapAlternative = useCallback(
+    async (winnerGroupId, altGroupId) => {
+      const winnerSlot = slotByGroupId.get(winnerGroupId);
+      const reviewSecs = Math.floor(
+        (Date.now() - reviewStartRef.current) / 1000,
+      );
+      const winnerCls = classByGroupId.get(winnerGroupId);
+      const event = {
+        project_id: projectId,
+        round_id: roundId,
+        ai_proposed_group_id: winnerGroupId,
+        ai_proposed_slot_id: winnerSlot?.slot_id || null,
+        ai_proposed_score: winnerCls?.combined_score ?? null,
+        human_action: "swapped",
+        human_selected_group_id: altGroupId,
+        human_selected_slot_id: winnerSlot?.slot_id || null,
+        slot_group_id: winnerSlot?.slot_id || null,
+        review_duration_seconds: reviewSecs,
+        alternative_offered: true,
+        alternative_selected: true,
+      };
+
+      const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      setPendingOverrides((prev) => [
+        ...prev,
+        {
+          ai_proposed_group_id: winnerGroupId,
+          human_selected_group_id: altGroupId,
+          human_action: "swapped",
+          created_at: new Date().toISOString(),
+          _pending: true,
+          _pendingId: pendingId,
+        },
+      ]);
+
+      const ok = await sendOverride(event);
+      setPendingOverrides((prev) =>
+        prev.filter((p) => p._pendingId !== pendingId),
+      );
+      if (ok) toast.success("Slot swapped — original moved to Rejected");
+    },
+    [classByGroupId, slotByGroupId, projectId, roundId, sendOverride],
+  );
+
+  // ── Lock & Reorganize ───────────────────────────────────────────────────
+  const [isLocking, setIsLocking] = useState(false);
+  const [confirmLockOpen, setConfirmLockOpen] = useState(false);
+  const lockShortlist = useCallback(async () => {
+    if (!roundId) return;
+    setIsLocking(true);
+    try {
+      const resp = await api.functions.invoke("shortlist-lock", {
+        round_id: roundId,
+      });
+      const result = resp?.data ?? resp ?? {};
+      if (result?.ok === false) {
+        const errs = Array.isArray(result?.errors) ? result.errors : [];
+        if (errs.length > 0) {
+          throw new Error(`Lock partial: ${errs.length} error(s) — see console`);
+        }
+        throw new Error(result?.error || "Lock failed");
+      }
+      const moved = result?.moved || {};
+      const total = (moved.approved || 0) + (moved.rejected || 0);
+      toast.success(
+        total > 0
+          ? `Shortlist locked — moved ${total} file(s) into Final Shortlist / Rejected.`
+          : "Shortlist locked.",
+      );
+      queryClient.invalidateQueries({
+        queryKey: ["shortlisting_rounds", projectId],
+      });
+    } catch (err) {
+      console.error("[ShortlistingSwimlane] lockShortlist failed:", err);
+      toast.error(err?.message || "Lock failed");
+    } finally {
+      setIsLocking(false);
+      setConfirmLockOpen(false);
+    }
+  }, [roundId, projectId, queryClient]);
+
+  // ── Loading / error states ──────────────────────────────────────────────
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <div className="space-y-2 animate-pulse">
+            <div className="h-8 bg-muted rounded w-1/3" />
+            <div className="h-64 bg-muted rounded" />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+  if (queryError) {
+    return (
+      <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/30 p-3 flex items-start gap-2">
+        <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
+        <div className="text-sm text-red-700 dark:text-red-300">
+          <p className="font-medium">Failed to load swimlane data</p>
+          <p className="text-xs mt-0.5">
+            {queryError.message || "Unknown error"}
+          </p>
+        </div>
+      </div>
+    );
+  }
+  if (groups.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-10 text-center text-sm text-muted-foreground">
+          No compositions yet for this round. Wait for Pass 0 to enumerate
+          RAWs.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // ── Round metadata + coverage ──────────────────────────────────────────
+  const ceiling = round?.package_ceiling || 24;
+  const total = groups.length;
+  const approvedCount = columnItems.approved.length;
+  const proposedCount = columnItems.proposed.length;
+  const rejectedCount = columnItems.rejected.length;
+  const isLocked = round?.status === "locked" || round?.status === "delivered";
+
+  return (
+    <div className="space-y-3">
+      {/* Round metadata strip */}
+      <Card>
+        <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3 flex-wrap">
+            <div>
+              <div className="text-xs text-muted-foreground">Round</div>
+              <div className="text-sm font-medium">
+                #{round?.round_number ?? "—"}
+                {round?.package_type ? (
+                  <span className="text-muted-foreground font-normal">
+                    {" · "}
+                    {round.package_type}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+            <div className="border-l h-8" />
+            <div>
+              <div className="text-xs text-muted-foreground">Approved</div>
+              <div className="text-sm font-medium tabular-nums">
+                {approvedCount} / {ceiling} max
+              </div>
+            </div>
+            <div className="border-l h-8" />
+            <div>
+              <div className="text-xs text-muted-foreground">Proposed</div>
+              <div className="text-sm font-medium tabular-nums">
+                {proposedCount}
+              </div>
+            </div>
+            <div className="border-l h-8" />
+            <div>
+              <div className="text-xs text-muted-foreground">Total</div>
+              <div className="text-sm font-medium tabular-nums">{total}</div>
+            </div>
+            {round?.started_at && (
+              <>
+                <div className="border-l h-8" />
+                <div>
+                  <div className="text-xs text-muted-foreground">Started</div>
+                  <div
+                    className="text-sm font-medium"
+                    title={format(new Date(round.started_at), "d MMM yyyy, h:mm a")}
+                  >
+                    {format(new Date(round.started_at), "d MMM, h:mm a")}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <Button
+            variant={isLocked ? "outline" : "default"}
+            size="sm"
+            onClick={() => setConfirmLockOpen(true)}
+            disabled={isLocking || isLocked || approvedCount === 0}
+            title={
+              isLocked
+                ? "Round already locked"
+                : approvedCount === 0
+                  ? "Add at least one composition to Approved before locking"
+                  : "Lock the shortlist and move RAWs in Dropbox"
+            }
+          >
+            {isLocking ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : isLocked ? (
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+            ) : (
+              <Lock className="h-4 w-4 mr-2" />
+            )}
+            {isLocked ? "Locked" : "Lock & Reorganize"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Coverage notes (if any) */}
+      {round?.coverage_notes && (
+        <Card className="border-blue-200 dark:border-blue-900">
+          <CardContent className="p-3 text-xs text-muted-foreground">
+            <div className="font-medium text-foreground mb-1">
+              Coverage notes
+            </div>
+            <p className="leading-snug whitespace-pre-line">
+              {round.coverage_notes}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 3-column swimlane */}
+      <DragDropContext onDragEnd={onDragEnd}>
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] gap-3">
+          {COLUMNS.map((col) => {
+            const items = columnItems[col.key] || [];
+            return (
+              <SwimlaneColumn
+                key={col.key}
+                column={col}
+                items={items}
+                isLocked={isLocked}
+                onSwapAlternative={handleSwapAlternative}
+                altsBySlotId={altsBySlotId}
+                classByGroupId={classByGroupId}
+              />
+            );
+          })}
+        </div>
+      </DragDropContext>
+
+      {/* Confirm Lock dialog */}
+      <Dialog open={confirmLockOpen} onOpenChange={setConfirmLockOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Lock & reorganize shortlist?</DialogTitle>
+            <DialogDescription>
+              This moves <strong>{approvedCount}</strong> approved composition
+              {approvedCount === 1 ? "" : "s"} into{" "}
+              <code className="text-[11px]">Photos/Raws/Final Shortlist/</code>{" "}
+              and <strong>{rejectedCount}</strong> rejected
+              {rejectedCount === 1 ? "" : "s"} into{" "}
+              <code className="text-[11px]">Photos/Raws/Rejected/</code>. The
+              round status becomes <strong>locked</strong>. This cannot be
+              undone (but you can manually move files back in Dropbox).
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setConfirmLockOpen(false)}
+              disabled={isLocking}
+            >
+              Cancel
+            </Button>
+            <Button onClick={lockShortlist} disabled={isLocking}>
+              {isLocking && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Lock & Reorganize
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ── Column ────────────────────────────────────────────────────────────────
+function SwimlaneColumn({
+  column,
+  items,
+  isLocked,
+  onSwapAlternative,
+  altsBySlotId,
+  classByGroupId,
+}) {
+  return (
+    <Droppable droppableId={column.key} isDropDisabled={isLocked}>
+      {(provided, snapshot) => (
+        <div
+          ref={provided.innerRef}
+          {...provided.droppableProps}
+          className={cn(
+            "rounded-md border-2 bg-card transition-colors",
+            snapshot.isDraggingOver && "ring-2 ring-primary/60 border-primary/40",
+          )}
+        >
+          <div
+            className={cn(
+              "px-2 py-1.5 text-xs font-semibold flex items-center justify-between rounded-t-sm",
+              column.headerTone,
+            )}
+          >
+            <span className="uppercase tracking-wide">{column.label}</span>
+            <span className="tabular-nums">{items.length}</span>
+          </div>
+          <div className="p-2 space-y-2 min-h-[200px] max-h-[70vh] overflow-y-auto">
+            {items.length === 0 ? (
+              <div className="text-center py-6 text-[11px] text-muted-foreground">
+                {snapshot.isDraggingOver
+                  ? "Drop here"
+                  : column.key === "approved"
+                    ? "Drag from Proposed or Rejected"
+                    : "Empty"}
+              </div>
+            ) : (
+              items.map((item, index) => {
+                const slotId = item.slot?.slot_id;
+                const altsRaw = slotId ? altsBySlotId.get(slotId) || [] : [];
+                // Show top 2 alts, decorated for ShortlistingCard.
+                const alternatives = altsRaw.slice(0, 2).map((alt) => ({
+                  group_id: alt.group_id,
+                  stem: alt.stem,
+                  combined_score: alt.combined_score,
+                  analysis: alt.analysis,
+                }));
+                return (
+                  <Draggable
+                    key={item.id}
+                    draggableId={item.id}
+                    index={index}
+                    isDragDisabled={isLocked}
+                  >
+                    {(dragProvided, dragSnapshot) => (
+                      <div
+                        ref={dragProvided.innerRef}
+                        {...dragProvided.draggableProps}
+                        {...dragProvided.dragHandleProps}
+                        className={cn(
+                          !isLocked && "cursor-grab active:cursor-grabbing",
+                        )}
+                      >
+                        <ShortlistingCard
+                          composition={item}
+                          column={column.key}
+                          alternatives={alternatives}
+                          isDragging={dragSnapshot.isDragging}
+                          onSwapAlternative={
+                            column.key !== "rejected"
+                              ? (altGroupId) =>
+                                  onSwapAlternative(item.id, altGroupId)
+                              : null
+                          }
+                        />
+                      </div>
+                    )}
+                  </Draggable>
+                );
+              })
+            )}
+            {provided.placeholder}
+          </div>
+        </div>
+      )}
+    </Droppable>
+  );
+}

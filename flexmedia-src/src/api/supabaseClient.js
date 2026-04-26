@@ -94,6 +94,11 @@ function toTableName(entityName) {
     'drone_pois_caches': 'drone_pois_cache',
     'drone_cadastral_caches': 'drone_cadastral_cache',
     'drone_external_caches': 'drone_external_cache',
+    // Wave 6 P6 SHORTLIST: shortlisting_quarantine is singular by design
+    // (one row per quarantined item; the table name uses the bucket noun
+    // rather than a count noun). Override so api.entities.ShortlistingQuarantine
+    // resolves to the right table.
+    'shortlisting_quarantines': 'shortlisting_quarantine',
   };
 
   snake = overrides[snake] || snake;

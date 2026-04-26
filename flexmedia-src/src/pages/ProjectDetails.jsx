@@ -56,6 +56,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useProjectHasDroneWork } from "@/hooks/useProjectHasDroneWork";
 import TonomoTab from "@/components/tonomo/TonomoTab";
+import ProjectShortlistingTab from "@/components/projects/ProjectShortlistingTab";
 import { createNotification, createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import AIChat from "@/components/ai/AIChat";
@@ -64,7 +65,7 @@ import AIChat from "@/components/ai/AIChat";
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
 const statuses = PROJECT_STAGES;
-const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'files', 'drones', 'tonomo']);
+const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'files', 'shortlisting', 'drones', 'tonomo']);
 
 const serviceLabels = {
   photography: "📷 Photography",
@@ -1586,13 +1587,14 @@ export default function ProjectDetails() {
 
           <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <div className="overflow-x-auto border-b bg-muted/30">
-              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${project.source === 'tonomo' ? 'sm:grid-cols-8' : 'sm:grid-cols-7'} h-auto bg-transparent`}>
+              <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${project.source === 'tonomo' ? 'sm:grid-cols-9' : 'sm:grid-cols-8'} h-auto bg-transparent`}>
                 <TabsTrigger value="tasks"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tasks</TabsTrigger>
                 <TabsTrigger value="revisions" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Requests</TabsTrigger>
                 <TabsTrigger value="effort"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Effort</TabsTrigger>
                 <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
                 <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
                 <TabsTrigger value="files"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Files</TabsTrigger>
+                <TabsTrigger value="shortlisting" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Shortlisting</TabsTrigger>
                 {hasDroneWork || hasDroneWorkLoading ? (
                   <TabsTrigger value="drones"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Drones</TabsTrigger>
                 ) : (
@@ -1664,6 +1666,14 @@ export default function ProjectDetails() {
             <TabsContent value="files" className="mt-4">
               {mountedTabs.has("files") ? (
                 <ErrorBoundary><ProjectFilesTab project={project} /></ErrorBoundary>
+              ) : (
+                <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="shortlisting" className="mt-4">
+              {mountedTabs.has("shortlisting") ? (
+                <ErrorBoundary><ProjectShortlistingTab project={project} /></ErrorBoundary>
               ) : (
                 <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
               )}
