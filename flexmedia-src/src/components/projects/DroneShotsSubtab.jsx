@@ -181,15 +181,20 @@ export default function DroneShotsSubtab({ shoot, pipelineState = null, onForceF
     // pending, surface the upload path + a "Skip wait — ingest now"
     // affordance backed by S2's onForceFire(active_job.id).
     //
-    // S2 RPC stage_key for ingest is 'drone-ingest'. status === 'pending'
-    // means the job is enqueued and the dispatcher will fire it soon.
+    // QC iter 6 C contract fix: RPC stage_key is the bare key 'ingest' (per
+    // mig 301:282-375), not 'drone-ingest' (the function_name). And the RPC
+    // exposes active_jobs (plural array, sorted running first), not
+    // active_job. Old code never matched → "Skip wait" affordance never
+    // surfaced and the countdown was always blank.
     const stages = Array.isArray(pipelineState?.stages) ? pipelineState.stages : [];
-    const ingestStage = stages.find((s) => s?.stage_key === "drone-ingest");
+    const ingestStage = stages.find((s) => s?.stage_key === "ingest");
     const ingestPending = ingestStage?.status === "pending";
-    const activeJob = pipelineState?.active_job || null;
+    const activeJobs = Array.isArray(pipelineState?.active_jobs) ? pipelineState.active_jobs : [];
+    const activeJob = activeJobs[0] || null;
     const ingestJobId =
+      ingestStage?.active_job_id ||
       ingestStage?.job_id ||
-      (activeJob?.function_name === "drone-ingest" ? activeJob.id : null);
+      (activeJob?.kind === "ingest" ? activeJob.job_id : null);
     const scheduledFor =
       ingestStage?.scheduled_for || activeJob?.scheduled_for || null;
     const secondsUntil = scheduledFor
