@@ -28,7 +28,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
@@ -48,17 +48,25 @@ const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 // Solution: every Pin Editor mount owns its own cache. The page revokes any
 // blobs it created on unmount, and the swimlane's SHARED_THUMB_CACHE is
 // never touched.
+//
+// W6 FIX 9 (QC3-2 B14): Authorization was hard-coded to the anon key, which
+// fails for getDeliveryMediaFeed's session-checked proxy path (operator
+// rows aren't always anon-readable). Use the live session token; fall back
+// to anon if no session is present (preserves the previous failure mode
+// rather than crashing the editor mount).
 async function _pinEditorFetchProxy(path) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 25000);
   try {
+    const { data: sessData } = await supabase.auth.getSession();
+    const token = sessData?.session?.access_token || SUPABASE_ANON;
     const res = await fetch(
       `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${SUPABASE_ANON}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ action: "proxy", file_path: path }),
         signal: controller.signal,

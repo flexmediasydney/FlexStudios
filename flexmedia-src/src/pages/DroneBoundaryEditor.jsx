@@ -35,29 +35,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createPageUrl } from "@/utils";
 import { toast } from "sonner";
 import DroneBoundaryEditor from "@/components/drone/DroneBoundaryEditor";
 import { enqueueFetch } from "@/utils/mediaPerf";
+import { usePermissions } from "@/components/auth/PermissionGuard";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
 
 // Authenticated POST → blob URL fetcher (mirrors DronePinEditor).
+//
+// W6 FIX 9 (QC3-2 B14): the Authorization header was hard-coded to the
+// anon key — but getDeliveryMediaFeed's `action:'proxy'` path requires a
+// real user session (the function checks RLS via the user's row in
+// `users` to decide which Dropbox account to proxy through). With anon,
+// the proxy returned 401 for any operator who hadn't been auto-bootstrapped
+// into the anon-allowed row set. Switch to the live session token; fall
+// back to anon if (somehow) no session is present, preserving the previous
+// failure mode rather than blowing up the editor mount.
 async function _proxyFetchToBlob(path) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 25000);
   try {
+    const { data: sessData } = await supabase.auth.getSession();
+    const token = sessData?.session?.access_token || SUPABASE_ANON;
     const res = await fetch(
       `${SUPABASE_URL}/functions/v1/getDeliveryMediaFeed`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${SUPABASE_ANON}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ action: "proxy", file_path: path }),
         signal: controller.signal,
@@ -94,6 +106,13 @@ export default function DroneBoundaryEditorPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // W6 FIX 9 (route guard): the boundary editor mutates project-scoped
+  // drone_property_boundary + cascades a project-wide re-render. The
+  // DroneEditsSubtab's "Boundary" button is gated on isManagerOrAbove,
+  // but a deep-link to /DroneBoundaryEditor?project=... bypassed that.
+  // Add the equivalent check here. Hook lives at the top so the early-
+  // return gate below it doesn't trigger React #310 (cf. FIX 2).
+  const { isManagerOrAbove } = usePermissions();
 
   const projectId = searchParams.get("project");
   const shootIdParam = searchParams.get("shoot");
@@ -378,6 +397,7 @@ export default function DroneBoundaryEditorPage() {
   }, [navigate, projectId]);
 
   // ── Loading / error states ──────────────────────────────────────────────
+  // (No more hook calls below this line — only render branches.)
   if (!projectId) {
     return (
       <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background">
@@ -385,6 +405,27 @@ export default function DroneBoundaryEditorPage() {
         <p className="text-sm">Missing project id in URL.</p>
         <Button variant="outline" onClick={() => navigate(-1)}>
           Go back
+        </Button>
+      </div>
+    );
+  }
+
+  // W6 FIX 9 (route guard): editing the boundary cascades a project-wide
+  // re-render — must be gated like the swimlane button. Deep-links from
+  // shared URLs / browser history hit this; non-managers see a friendly
+  // forbidden screen rather than a hung Save call.
+  if (!isManagerOrAbove) {
+    return (
+      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-background p-8">
+        <AlertCircle className="h-10 w-10 text-amber-500" />
+        <p className="text-sm font-medium">You don't have access to the Boundary Editor</p>
+        <p className="text-xs text-muted-foreground max-w-md text-center">
+          Editing the property boundary requires Manager-or-above
+          permissions. Ask an admin to make the change for you, or
+          request a role upgrade.
+        </p>
+        <Button variant="outline" onClick={() => navigate(-1)} className="gap-1">
+          <ArrowLeft className="h-3 w-3" /> Go back
         </Button>
       </div>
     );
