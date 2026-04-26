@@ -1251,18 +1251,49 @@ def _apply_exterior_treatment(canvas_bgr: np.ndarray, polygon_px: np.ndarray, tr
     """Blur/darken/desaturate/hue-shift everything OUTSIDE the polygon.
 
     Early-returns the original canvas when EVERY treatment is a no-op
-    (blur disabled OR strength 0; all factors == 1.0; hue_shift == 0).
-    Without this guard, themes that ship with the block present-but-
+    (blur disabled OR strength 0; all factors == 1.0; hue_shift normalised
+    to 0). Without this guard, themes that ship with the block present-but-
     inactive still trigger 80–150 ms per render of canvas copies + mask
     fills + per-pixel writes for zero visual change. (QC2 finding #7.)
+
+    Three input-validation bugs the previous version silently let through
+    (QC2-2 #6 + #7):
+      - int(0.5) truncates to 0 → fractional hue_shift was eaten
+      - hue_shift=360 (full circle, visual no-op) ran the full ~80-150 ms
+        HSV pipeline because int(360) != 0
+      - darken_factor=-1 (negative) corrupted output via clamped negative
+        multiplication
+
+    Coerce + normalise via _safe_float, then test the no-op fast-path on
+    the NORMALISED values (hue_shift folded to (-180, 180], darken/blur
+    floored to legal positive ranges).
     """
-    blur_strength = int(treatment.get("blur_strength_px", 0))
-    blur_active = bool(treatment.get("blur_enabled", False)) and blur_strength > 0
-    darken = float(treatment.get("darken_factor", 1.0))
-    sat = float(treatment.get("saturation_factor", 1.0))
-    light = float(treatment.get("lightness_factor", 1.0))
-    hue_shift = int(treatment.get("hue_shift_degrees", 0))
-    color_active = (darken != 1.0) or (sat != 1.0) or (light != 1.0) or (hue_shift != 0)
+    # Coerce inputs with _safe_float so NaN / non-numeric / negative don't
+    # slip past. allow_zero=True for blur_strength and hue_shift (zero is
+    # the legitimate "off" value); allow_neg=True ONLY for hue_shift
+    # (a negative shift is a valid clockwise rotation).
+    raw_blur = treatment.get("blur_strength_px", 0)
+    blur_strength = int(round(_safe_float(raw_blur, 0.0, allow_zero=True, allow_neg=False)))
+    blur_strength = max(0, blur_strength)
+    blur_active = bool(treatment.get("blur_enabled", False)) and blur_strength >= 1
+
+    darken = _safe_float(treatment.get("darken_factor", 1.0), 1.0, allow_zero=False, allow_neg=False)
+    sat = _safe_float(treatment.get("saturation_factor", 1.0), 1.0, allow_zero=True, allow_neg=False)
+    light = _safe_float(treatment.get("lightness_factor", 1.0), 1.0, allow_zero=True, allow_neg=False)
+
+    # Hue shift: keep the float input (a fractional 0.5° shift is meaningful)
+    # and normalise to (-180, 180]. 360° folds to 0 (visual no-op); 540 → 180.
+    hue_shift_raw = _safe_float(
+        treatment.get("hue_shift_degrees", 0), 0.0, allow_zero=True, allow_neg=True
+    )
+    hue_shift = ((hue_shift_raw + 180.0) % 360.0) - 180.0
+
+    color_active = (
+        abs(darken - 1.0) >= 0.01
+        or abs(sat - 1.0) >= 0.01
+        or abs(light - 1.0) >= 0.01
+        or abs(hue_shift) >= 1.0
+    )
 
     if not blur_active and not color_active:
         return canvas_bgr  # no-op short-circuit
@@ -1280,12 +1311,13 @@ def _apply_exterior_treatment(canvas_bgr: np.ndarray, polygon_px: np.ndarray, tr
 
     if color_active:
         hsv = cv2.cvtColor(treated, cv2.COLOR_BGR2HSV).astype(np.float32)
-        if hue_shift != 0:
-            # OpenCV hue is 0..179 (180 = full circle)
+        if abs(hue_shift) >= 1.0:
+            # OpenCV hue is 0..179 (180 = full circle). Use the normalised
+            # hue_shift so 360→0 short-circuited; 540→180.
             hsv[..., 0] = (hsv[..., 0] + (hue_shift / 360.0) * 180) % 180
-        if sat != 1.0:
+        if abs(sat - 1.0) >= 0.01:
             hsv[..., 1] = np.clip(hsv[..., 1] * sat, 0, 255)
-        if light != 1.0 or darken != 1.0:
+        if abs(light - 1.0) >= 0.01 or abs(darken - 1.0) >= 0.01:
             hsv[..., 2] = np.clip(hsv[..., 2] * light * darken, 0, 255)
         treated = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2BGR)
 
