@@ -458,12 +458,17 @@ export default function DroneRendersSubtab({ shoot, projectId: _projectId }) {
     if (!shootId) return;
     setIsRerenderingAll(true);
     try {
-      const data = await api.functions.invoke("drone-render", {
+      // QC4 F3 fix: api.functions.invoke wraps response as { data: <body> }
+      // (supabaseClient.js:565). data?.success === false was always false (undefined !== false)
+      // so server-side {success:false, error:...} replies silently passed as success.
+      // Same class as Wave 7's ProjectFilesTab fix.
+      const result = await api.functions.invoke("drone-render", {
         shoot_id: shootId,
         kind: "poi_plus_boundary",
         wipe_existing: true,
         reason: "stale_theme_rerender_all",
       });
+      const data = result?.data;
       if (data?.success === false) {
         throw new Error(data?.error || "Re-render failed");
       }

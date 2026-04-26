@@ -340,10 +340,15 @@ export default function DroneEditsSubtab({ shoot, projectId }) {
         setOptimisticRenderColumns((p) => ({ ...p, [renderId]: targetState }));
       }
       try {
-        const data = await api.functions.invoke("drone-render-approve", {
+        // QC4 F2 fix: api.functions.invoke wraps response as { data: <body> }
+        // (supabaseClient.js:565). Reading data.success directly was always
+        // undefined → every successful 200 threw → operators see optimistic UI
+        // succeed then rollback then retry. Same class as Wave 7's ProjectFilesTab fix.
+        const result = await api.functions.invoke("drone-render-approve", {
           render_id: renderId,
           target_state: targetState,
         });
+        const data = result?.data;
         if (!data?.success) {
           throw new Error(data?.error || `Failed to ${targetState}`);
         }
