@@ -246,7 +246,12 @@ export default function ProjectDronesTab({ project }) {
     let active = true;
     const unsubscribe = api.entities.DroneSfmRun.subscribe((evt) => {
       if (!active) return;
-      if (evt.data?.shoot_id && evt.data.shoot_id !== selectedShootId) return;
+      // (W5 P1 #3) DELETE events have evt.data === null — the previous
+      // `if (evt.data?.shoot_id && ...)` short-circuited to false on deletes,
+      // so EVERY drone_sfm_run delete app-wide invalidated this shoot's
+      // queries → app-wide refetch storm. Mirror DroneShotsSubtab.jsx:111
+      // / DroneRendersSubtab.jsx:330: skip when shoot_id missing OR mismatched.
+      if (!evt.data?.shoot_id || evt.data.shoot_id !== selectedShootId) return;
       queryClient.invalidateQueries({ queryKey: ["drone_sfm_runs", selectedShootId] });
     });
     return () => {
