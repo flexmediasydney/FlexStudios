@@ -275,7 +275,7 @@ implementation.
 `["Gold", "Day to Dusk", "Premium"]` in the frontend. Marketing adding a
 new package or à la carte add-on = silent breakage.
 
-### P1-7 — Tier configs with versioned dimension weights + re-simulation safeguard
+### P1-7 — Tier configs with versioned dimension weights + re-simulation safeguard ✅ shipped
 
 Depends on P1-6 (`tiers` table must exist).
 
@@ -291,6 +291,15 @@ last 30 locked rounds under the proposed weights and shows a diff table
 Admin must confirm before activation.
 
 **Estimated effort.** 1 week.
+
+**Shipped as Wave 8** — `docs/design-specs/W8-tier-configs.md`. Mig 344
+(`shortlisting_tier_configs` versioned table + v1 seed + RLS), edge fns
+`update-tier-config` (save_draft/activate/discard) + `simulate-tier-config`,
+admin UI `flexmedia-src/src/pages/SettingsTierConfigs.jsx`. Pass 1 uses
+`computeWeightedScore` from `_shared/scoreRollup.ts`; Pass 2 receives the
+tier_config-aware `tierWeightingContext` prompt block. v1 weights:
+0.25/0.30/0.25/0.20 (lighting-biased). Re-simulation replays last 30 locked
+rounds via pure-function `_shared/slotAssignment.ts` — zero LLM cost.
 
 ---
 
@@ -539,7 +548,7 @@ Joseph + I must:
 **Lives in Wave 11.** Effort estimate moved from "scope expansion" to
 "core wave deliverable" — ~5-6 weeks total Wave 11 (was 3-4 wk).
 
-### P1-15 — Round metadata columns (engine_version / tier_used / tier_config_version)
+### P1-15 — Round metadata columns (engine_version / tier_used / tier_config_version) ✅ shipped
 
 **Origin.** Spec mandates these columns for traceability — replaying any
 historical round under exact-match weights requires the version stamp.
@@ -550,6 +559,14 @@ historical round under exact-match weights requires the version stamp.
 - `tier_config_version INT` (FK to tier_configs.version)
 
 Lands as part of P1-7 (tier configs). Pass 1/Pass 2 stamp on emit.
+
+**Shipped as Wave 8 (W8.4)** — mig 344 added `engine_version TEXT` +
+`tier_config_version INT` to `shortlisting_rounds`. `tier_used` was NOT
+added separately — `engine_tier_id` (W7.7, mig 339) is canonical and
+`tier_code` is one join hop to `shortlisting_tiers`. shortlisting-ingest
+pins both columns at round bootstrap from `_shared/engineVersion.ts`
+constant + `getActiveTierConfig().version`. Pre-W8 rounds backfilled to
+`engine_version='wave-8-v1'` + `tier_config_version=1`.
 
 ### P1-16 — Override metadata columns
 
@@ -571,7 +588,7 @@ captures we're not making.
 Lands as part of P1-10's Wave 10 schema work + corresponding swimlane
 state tracking.
 
-### P1-17 — Re-simulation safeguard (explicit deliverable)
+### P1-17 — Re-simulation safeguard (explicit deliverable) ✅ shipped
 
 **Origin.** Was implicit in P1-7 prose; should be its own work item so
 it doesn't get dropped.
@@ -586,6 +603,15 @@ weights or signal weights:
 4. Only on confirm does the new config become active
 
 **Lives in Wave 8.** ~3 days additional effort within that wave.
+
+**Shipped as Wave 8 (W8.3)** — `simulate-tier-config` edge fn replays
+the last 30 locked rounds for the draft's tier under the draft weights
++ optional hard-reject thresholds. Pure-function replay via
+`_shared/slotAssignment.ts` — zero LLM cost. Returns per-round diff
+(unchanged_count + changed_count + per-slot stems + score deltas).
+Admin UI `SettingsTierConfigs.jsx` renders the "Preview impact" modal;
+activation is a separate POST via `update-tier-config` after admin
+confirms. master_admin only for activation; admins can simulate.
 
 ---
 

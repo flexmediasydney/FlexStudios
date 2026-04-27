@@ -1,6 +1,6 @@
 # W8 — Tier Configs (versioned dimension/signal weights + admin UI + Pass-side integration + re-simulation safeguard + round metadata) — Design Spec
 
-**Status:** ⚙️ Ready to dispatch (pending Joseph sign-off on Q1-Q4 below).
+**Status:** ✅ **Shipped** — migration 344 + edge fns (`update-tier-config`, `simulate-tier-config`) + Pass 1/2 integration + audit JSON schema 1.1 + admin UI all landed. All 4 open Qs (Q1-Q4) implemented per orchestrator recommendations.
 **Backlog ref:** P1-7 + P1-15 + P1-17.
 **Wave plan ref:** Wave 8 (subsumes W8.1, W8.2, W8.3, W8.4 from `docs/WAVE_PLAN.md`).
 **Dependencies:**

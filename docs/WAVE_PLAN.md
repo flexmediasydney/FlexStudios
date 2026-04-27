@@ -75,18 +75,18 @@ W7.12 ── independent (chip spawned, ready when picked up)
 
 **Theme:** make tier-specific behaviour DB-driven and admin-configurable.
 
-**Status:** ⚙️ **Spec ready** — `docs/design-specs/W8-tier-configs.md` (subsumes W8.1-W8.4). Dispatchable now.
+**Status:** ✅ **Shipped** — `docs/design-specs/W8-tier-configs.md` shipped as the consolidated W8 burst (subsumes W8.1-W8.4).
 
-### Bursts (all subsumed into single dispatchable W8 burst)
+### Bursts (all subsumed into single shipped W8 burst)
 
-| # | Item | Backlog ref | Ready? |
+| # | Item | Backlog ref | Status |
 |---|---|---|---|
-| W8.1 | `shortlisting_tier_configs` versioned table + admin UI + per-tier dimension weights | P1-7 | ⚙️ subsumed into W8 spec |
-| W8.2 | Pass 1 + Pass 2 read tier config; combined_score formula becomes weighted | P1-7 | ⚙️ subsumed into W8 spec |
-| W8.3 | Re-simulation safeguard — replay last 30 rounds under proposed weights, show diff | P1-17 | ⚙️ subsumed into W8 spec |
-| W8.4 | Round metadata columns (`engine_version`, `tier_config_version` — `tier_used` already covered by W7.7's `engine_tier_id`) | P1-15 | ⚙️ subsumed into W8 spec |
+| W8.1 | `shortlisting_tier_configs` versioned table + admin UI + per-tier dimension weights | P1-7 | ✅ shipped |
+| W8.2 | Pass 1 + Pass 2 read tier config; combined_score formula becomes weighted | P1-7 | ✅ shipped |
+| W8.3 | Re-simulation safeguard — replay last 30 rounds under proposed weights, show diff | P1-17 | ✅ shipped |
+| W8.4 | Round metadata columns (`engine_version`, `tier_config_version` — `tier_used` already covered by W7.7's `engine_tier_id`) | P1-15 | ✅ shipped |
 
-**Migration:** 344. **Estimated effort:** 6-7 days per spec. **4 open Qs** all with orchestrator recommendations.
+**Migration:** 344. Edge fns: `update-tier-config` + `simulate-tier-config`. Admin UI: `flexmedia-src/src/pages/SettingsTierConfigs.jsx`. Audit JSON schema bumped to 1.1 with `engine_version` + `tier_config` block. v1 weights: 0.25/0.30/0.25/0.20 (Q1), uniform 1.0 signal weights (Q2), 30-round re-simulation (Q3), optimistic concurrency via partial unique index (Q4).
 
 ---
 
@@ -309,7 +309,7 @@ With parallelism + design-phase prep work in flight: ~3-4 months.
 | W7.9 | ✅ subsumed by W7.7 (target/min/max counts handled dynamically) |
 | W7.11 | ✅ ready after W7.7 |
 | W7.10 / W7.12 | ✅ ready (independent) |
-| W8 | ✅ yes after W7.7 |
+| W8 | ✅ **shipped** — mig 344 + edge fns + admin UI + audit JSON schema 1.1 |
 | W10 | ✅ yes |
 | **W11** | 🛑 **design phase active** — full spec exists at `docs/design-specs/W11-universal-vision-response-schema.md`; needs Joseph's sign-off on the 22 measurement prompts before execution |
 | W12 | ⚠️ trigger threshold decisions captured in `docs/design-specs/W12-trigger-thresholds.md`; ready when W11 lands |
