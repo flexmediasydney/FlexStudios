@@ -20,7 +20,7 @@ the open questions, then dispatch the execution to a subagent.
 | [W7-4-shortlisting-confirm-flow.md](./W7-4-shortlisting-confirm-flow.md) | W7.4 | ✅ shipped | Audit JSON mirror; lands at `Photos/_AUDIT/round_N_locked_<ts>.json` after every lock |
 | [W7-5-pg-advisory-lock-fix.md](./W7-5-pg-advisory-lock-fix.md) | W7.5 | ✅ shipped | Row-based `dispatcher_locks` mutex (mig 336) — atomic acquire+release confirmed in prod |
 | [W7-6-vision-prompt-blocks.md](./W7-6-vision-prompt-blocks.md) | W7.6 | ⚙️ ready | Composable prompt blocks API. Self-resolved by orchestrator; ready for subagent dispatch. Unblocks W11 plug-in point |
-| [W7-7-package-shortlist-configs.md](./W7-7-package-shortlist-configs.md) | W7.7 | ⚙️ ready | Dynamic package/product/tier architecture (rewritten 2026-04-27 after Joseph's correction). Derived counts, tier intersection, engine_settings, shortlisting_supported flag. Ready to dispatch |
+| [W7-7-package-shortlist-configs.md](./W7-7-package-shortlist-configs.md) | W7.7 | ✅ shipped | Dynamic package/product/tier architecture. Mig 339, helpers, engine integration, 3 admin UIs — commits d410845, 66df867, 83d8fa7, 2751ff4, e6c161e, 1b21675. Subsumes W7.9 / P1-13 |
 | [W7-13-manual-shortlisting-mode.md](./W7-13-manual-shortlisting-mode.md) | W7.13 | ⚙️ ready | UX fork for project types where AI shortlisting doesn't apply. Manual swimlane + lock-triggers-move. Depends on W7.7 + W7.12 |
 | [W7-8-product-driven-slot-eligibility.md](./W7-8-product-driven-slot-eligibility.md) | W7.8 | ✅ shipped | `engine_role` enum + `eligible_when_engine_roles` (mig 337) — 28 products + 12 slots backfilled; latent quarantine CHECK bug fixed as bonus |
 | [W11-universal-vision-response-schema.md](./W11-universal-vision-response-schema.md) | W11 | 🛑 | THE keystone — universal schema for vision API across all sources (RAW/finals/external). Pass 1 prompt + per-signal scoring + 22 measurement prompts |
@@ -28,9 +28,7 @@ the open questions, then dispatch the execution to a subagent.
 
 ## Specs not yet written (lower priority)
 
-| Wave | Why deferred |
-|---|---|
-| W7.7 (`package_shortlist_configs` migration plan) | Migration safety pattern in `MIGRATION_SAFETY.md` covers most of it; need joint review with Joseph for cross-engine impacts (drone, billing) |
+(none — W7.7 followup specs absorbed into the v3 spec.)
 
 ## Workflow
 

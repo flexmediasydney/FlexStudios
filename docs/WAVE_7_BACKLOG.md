@@ -234,27 +234,35 @@ distinct slots.
 
 **Estimated effort.** 2-3 days.
 
-### P1-6 — `package_shortlist_configs` sidecar + `tiers` first-class table
+### P1-6 — Dynamic package/product/tier architecture ✅ SHIPPED 2026-04-27
 
-**Problem.** Today the engine has hardcoded `PACKAGE_CEILINGS` (Gold=24,
-D2D=31, Premium=38) in TS and hardcoded `["Gold", "Day to Dusk", "Premium"]`
-in the frontend. Disconnected from the real `packages` table. Marketing
-adding a new package = silent breakage.
+**Status.** ✅ **Shipped** as W7.7. See
+`docs/design-specs/W7-7-package-shortlist-configs.md` for the final design
+and commits d410845, 66df867, 83d8fa7, 2751ff4, e6c161e, 1b21675 for the
+implementation.
 
-**Fix.** See earlier conversation transcript for full design. In summary:
+**What landed:**
+1. `shortlisting_tiers` first-class table (S/P/A score anchors).
+2. `package_engine_tier_mapping` — (package_id, tier_choice) → engine_tier
+   intersection. Joseph-confirmed Gold→S/P + Flex→A/A; rest seeded
+   editable in `Settings → Shortlist · Tier Mapping`.
+3. `shortlisting_rounds.engine_tier_id` — pre-resolved at ingest, no
+   re-derivation per inference.
+4. `shortlisting_rounds.expected_count_target/_min/_max` — computed
+   dynamically from project products via
+   `_shared/packageCounts.computeExpectedFileCount` (no hardcoded
+   ceilings; subsumes P1-13).
+5. `engine_settings` table for universal config (hard reject thresholds
+   seeded).
+6. `project_types.shortlisting_supported` BOOLEAN — manual-mode plumbing
+   for P1-19.
+7. `shortlisting_slot_definitions.package_types` column dropped (W7.8
+   `eligible_when_engine_roles` is the single source of truth).
 
-1. `package_shortlist_configs` (1:1 sidecar to `packages`):
-   shortlist_target_min/max/ceiling, default_tier_id, has_drone/dusk/
-   video/floorplan_deliverables
-2. `tiers` table: id, name, description, is_active
-3. `projects.tier_override_id UUID` (nullable)
-4. `shortlisting_slot_definitions.package_ids UUID[]` replacing the
-   text-array `package_types`
-5. Engine switches to FK joins
-6. Frontend dropdowns become TanStack queries against the real packages
-
-**Estimated effort.** 1-2 weeks. Touches a foundational table — must follow
-`MIGRATION_SAFETY.md` additive-then-subtractive pattern.
+**Original problem (preserved for context).** The engine had hardcoded
+`PACKAGE_CEILINGS` (Gold=24, D2D=31, Premium=38) in TS and hardcoded
+`["Gold", "Day to Dusk", "Premium"]` in the frontend. Marketing adding a
+new package or à la carte add-on = silent breakage.
 
 ### P1-7 — Tier configs with versioned dimension weights + re-simulation safeguard
 
@@ -451,22 +459,20 @@ Spec also wants per-event JSON files in `_AUDIT/` Dropbox folder.
 
 **Pairs with P0-1** since both touch the lock function. Land together.
 
-### P1-13 — Per-package `expected_file_count_range`
+### P1-13 — Per-package `expected_file_count_range` ✅ SUBSUMED BY P1-6 (W7.7)
 
-**Origin.** Today's ingest computes expected file count as
-`packageCeiling × 5 × 1.5`. Hardcoded math that breaks when products are
-configurable.
+**Status.** ✅ **Subsumed by W7.7.** The dynamic resolver
+`_shared/packageCounts.computeExpectedFileCount` walks
+`project.packages[].products[]` + `project.products[]` (additive) and
+returns `{ target, min: max(0, target-3), max: target+3 }`. Result is
+written to `shortlisting_rounds.expected_count_target/_min/_max` at
+ingest. No per-package config row needed — the source of truth is the
+project's actual product mix at booking time, which handles à la carte
+add-ons that change the count.
 
-**Fix.** Once P1-6 lands `package_shortlist_configs`, add columns:
-- `expected_file_count_min INT`
-- `expected_file_count_max INT`
-
-Ingest reads these instead of computing. Admin sets them per package via
-the existing config UI.
-
-**Depends on** P1-6.
-
-**Estimated effort.** 2 days after P1-6.
+**Original problem (preserved for context).** Today's ingest computed
+expected file count as `packageCeiling × 5 × 1.5`. Hardcoded math that
+broke when à la carte products changed the deliverable count.
 
 ### P1-14 — Universal vision response schema (Wave 11 keystone)
 

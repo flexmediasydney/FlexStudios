@@ -44,11 +44,11 @@ design phase.
 | W7.4 | `shortlisting-confirm` audit JSON mirror | P1-12 | ✅ **shipped** (commits 90b791a, 6553924, 73bfbbe) — audit JSON written to `Photos/_AUDIT/round_N_locked_<ts>.json` after every successful lock |
 | W7.5 | `pg_advisory_lock` cross-connection unlock fix (row-based mutex on `dispatcher_locks`) | P1-11 | ✅ **shipped** (commits d01f2e0, 4e515e7, 126c285, 2a75480) — mig 336 applied, both dispatchers using new mutex, smoke test confirms atomic acquire+release |
 | W7.6 | Vision prompt refactor into composable `_shared/visionPrompts/` blocks | P1-10 | ⚙️ design spec ready (`docs/design-specs/W7-6-vision-prompt-blocks.md`); next subagent burst |
-| W7.7 | Dynamic package/product/tier architecture: `shortlisting_tiers`, `package_engine_tier_mapping`, derived file counts, `engine_settings`, `project_types.shortlisting_supported`, drop legacy `package_types` | P1-6 | ⚙️ ready — spec rewritten 2026-04-27 after Joseph's architectural correction |
+| W7.7 | Dynamic package/product/tier architecture: `shortlisting_tiers`, `package_engine_tier_mapping`, derived file counts, `engine_settings`, `project_types.shortlisting_supported`, drop legacy `package_types` | P1-6 | ✅ **shipped** (commits d410845, 66df867, 83d8fa7, 2751ff4, e6c161e, 1b21675) — mig 339 + helpers + 35 unit tests + 3 admin UIs; subsumes W7.9 (`expected_count_target/min/max` columns are dynamic, not fixed) |
 | W7.12 | P1-18: migrate 4 remaining edge fns off legacy `DROPBOX_API_TOKEN` (chip spawned 2026-04-27) | P1-18 | ✅ ready (chip available) |
 | W7.13 | Manual shortlisting mode for project types where AI doesn't apply (UX fork; engine bypass; same lock semantics) | P1-19 | ⚙️ spec ready (`docs/design-specs/W7-13-manual-shortlisting-mode.md`); depends on W7.7 + W7.12 |
 | W7.8 | Product-driven slot eligibility (`engine_role` enum) — replaces flawed day/dusk flag | P1-8 | ✅ **shipped** (commits e7b8fb8, aeac3f2, 652a948, 72e0556, 2d4e1a4) — mig 337 applied + backfilled (28 products, 12 slots), smoke test confirms 12/12 slots resolve via engine_role on Everton 8/2; latent quarantine CHECK bug fixed as a bonus |
-| W7.9 | Per-package `expected_file_count_range` (replaces hardcoded math) | P1-13 | ✅ ready after W7.7 |
+| W7.9 | Per-package `expected_file_count_range` (replaces hardcoded math) | P1-13 | ✅ **subsumed by W7.7** — `shortlisting_rounds.expected_count_target/_min/_max` now computed dynamically per round at ingest from project products via `_shared/packageCounts.computeExpectedFileCount()`; no per-package config needed |
 | W7.10 | Notification routing seed (9 spec types) | P1-9 | ✅ ready (independent) |
 | W7.11 | Frontend: replace hardcoded `["Gold", "Day to Dusk", "Premium"]` arrays in slots/training/overrides admin pages | P1-6 sibling | ✅ ready after W7.7 |
 | W7.12 | P1-18: migrate 4 remaining edge fns off legacy `DROPBOX_API_TOKEN` (`listDropboxFiles`, `listDropboxFolders`, `getDropboxFilePreview`, `fetchDropboxShareLink`) | P1-18 | ✅ ready (chip spawned 2026-04-27) |
@@ -314,8 +314,9 @@ With parallelism + design-phase prep work in flight: ~3-4 months.
 | W7.1 / W7.2 / W7.3 | ✅ **shipped** + Path B validated end-to-end |
 | W7.4 / W7.5 / W7.8 | ✅ **shipped** — burst completed 2026-04-27, integrated to main, smoke tests passed |
 | W7.6 | ⚙️ design spec ready (`docs/design-specs/W7-6-vision-prompt-blocks.md`); ready to dispatch as next subagent burst |
-| W7.7 | ⚠️ draft spec authored; 6 cross-engine questions await Joseph's review |
-| W7.9 / W7.11 | ✅ ready after W7.7 |
+| W7.7 | ✅ **shipped** — mig 339, helpers, engine integration, 3 admin UIs (commits d410845, 66df867, 83d8fa7, 2751ff4, e6c161e, 1b21675) |
+| W7.9 | ✅ subsumed by W7.7 (target/min/max counts handled dynamically) |
+| W7.11 | ✅ ready after W7.7 |
 | W7.10 / W7.12 | ✅ ready (independent) |
 | W8 | ✅ yes after W7.7 |
 | W10 | ✅ yes |
