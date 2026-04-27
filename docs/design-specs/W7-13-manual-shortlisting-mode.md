@@ -1,6 +1,6 @@
 # W7.13 — Manual Shortlisting Mode — Design Spec
 
-**Status:** ⚙️ Ready to dispatch (after W7.7 lands the data plumbing).
+**Status:** ✅ Shipped 2026-04-27 (commits 91ea4d3, 068ae67, faa8a2d, 689eb55, ecc01ae).
 **Backlog ref:** P1-19 (new, added 2026-04-27)
 **Wave plan ref:** W7.13 — UX fork for project types where AI shortlisting doesn't apply
 **Dependencies:** W7.7 (adds `project_types.shortlisting_supported` column), W7.4 (audit JSON mirror — works the same in manual mode), W7.5 (lock fn — works the same).
