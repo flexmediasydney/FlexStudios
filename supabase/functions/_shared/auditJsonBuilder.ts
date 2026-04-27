@@ -99,20 +99,37 @@ export interface AuditOverrideRow {
 
 /**
  * Full set of inputs for the audit JSON builder.
+ *
+ * `mode` (Wave 7 P1-19 / W7.13): optional, defaults to 'engine'. Set to
+ * 'manual' for manual-mode locks (no AI passes; operator drag-result).
  */
 export interface AuditJsonInput {
   round: AuditRoundInfo;
   approved: AuditApprovedInput[];
   rejected: AuditRejectedInput[];
   overrides: AuditOverrideRow[];
+  mode?: AuditJsonMode;
 }
 
 /**
  * The JSON object written to Dropbox. `schema_version` allows a future v1.1
  * to add fields without breaking older readers.
+ *
+ * `mode` (Wave 7 P1-19 / W7.13): distinguishes engine-mode locks (Pass 0/1/2/3
+ * driven) from manual-mode locks (operator drag-and-drop, no AI). Defaults to
+ * 'engine' for back-compat — old code paths that don't pass it through still
+ * produce a valid v1.0 audit JSON. Manual-mode audit JSONs have:
+ *   - mode: 'manual'
+ *   - approved entries with slot_id=null + score=null + ai_proposed_score=null
+ *   - rejected: [] (manual mode has no rejections; undecided files stay in source)
+ *   - overrides: [] (no AI proposed anything to override)
+ * The schema_version stays '1.0' — `mode` is an additive optional field.
  */
+export type AuditJsonMode = 'engine' | 'manual';
+
 export interface AuditJsonOutput {
   schema_version: '1.0';
+  mode: AuditJsonMode;
   round_id: string;
   round_number: number;
   project_id: string;
@@ -168,6 +185,7 @@ export function buildAuditJson(input: AuditJsonInput): AuditJsonOutput {
 
   return {
     schema_version: '1.0',
+    mode: input.mode ?? 'engine',
     round_id: input.round.round_id,
     round_number: input.round.round_number,
     project_id: input.round.project_id,

@@ -356,6 +356,79 @@ Deno.test('buildAuditJson: approved entry tolerates null slot_id (phase-3 recomm
   assertEquals(out.approved[0].ai_proposed_score, null);
 });
 
+// ─── Mode field (Wave 7 P1-19 / W7.13) ───────────────────────────────────────
+
+Deno.test('buildAuditJson: mode defaults to "engine" when not provided (back-compat)', () => {
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+  });
+  assertEquals(out.mode, 'engine');
+});
+
+Deno.test('buildAuditJson: mode="engine" passed through explicitly', () => {
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    mode: 'engine',
+  });
+  assertEquals(out.mode, 'engine');
+});
+
+Deno.test('buildAuditJson: mode="manual" passed through explicitly', () => {
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [makeApproved('m-1', { slot_id: null, score: null, ai_proposed_score: null })],
+    rejected: [],
+    overrides: [],
+    mode: 'manual',
+  });
+  assertEquals(out.mode, 'manual');
+  // Manual-mode shape per W7.13 spec § "audit JSON path already correct":
+  // approved entries have null slot_id + score, no rejected entries, no overrides.
+  assertEquals(out.approved[0].slot_id, null);
+  assertEquals(out.approved[0].score, null);
+  assertEquals(out.approved[0].ai_proposed_score, null);
+  assertEquals(out.rejected, []);
+  assertEquals(out.overrides, []);
+});
+
+Deno.test('buildAuditJson: schema_version stays "1.0" regardless of mode', () => {
+  // mode is an additive optional field; schema_version doesn't bump.
+  const engine = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    mode: 'engine',
+  });
+  const manual = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    mode: 'manual',
+  });
+  assertEquals(engine.schema_version, '1.0');
+  assertEquals(manual.schema_version, '1.0');
+});
+
+Deno.test('serializeAuditJson: mode field round-trips through JSON', () => {
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    mode: 'manual',
+  });
+  const parsed = JSON.parse(serializeAuditJson(out));
+  assertEquals(parsed.mode, 'manual');
+});
+
 // ─── Rejected entry contract ─────────────────────────────────────────────────
 
 Deno.test('buildAuditJson: rejected entry preserves reason verbatim', () => {

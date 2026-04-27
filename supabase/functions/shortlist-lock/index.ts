@@ -105,9 +105,15 @@ import {
   buildAuditJsonPath,
   serializeAuditJson,
   type AuditApprovedInput,
+  type AuditJsonMode,
   type AuditOverrideRow,
   type AuditRejectedInput,
 } from '../_shared/auditJsonBuilder.ts';
+import {
+  resolveManualLockMoves,
+  type ManualLockSourceFile,
+} from '../_shared/manualModeResolver.ts';
+import { listFolder } from '../_shared/dropbox.ts';
 
 const GENERATOR = 'shortlist-lock';
 
@@ -123,6 +129,20 @@ interface LockBody {
   round_id?: string;
   resume?: boolean;
   _health_check?: boolean;
+  /**
+   * Wave 7 P1-19 (W7.13): manual-mode opt-in. Default 'engine' (today's
+   * behaviour: read AI proposals + human overrides, resolve approved/rejected
+   * sets via slot events). 'manual' bypasses the engine resolution and uses
+   * `approved_stems` directly — for project types where shortlisting_supported
+   * = false OR expected_count_target = 0.
+   */
+  mode?: 'engine' | 'manual';
+  /**
+   * Wave 7 P1-19 (W7.13): operator-curated approved set in manual mode.
+   * Filename stems (with or without extension) the operator dragged into the
+   * approved column. Required when mode='manual'; ignored when mode='engine'.
+   */
+  approved_stems?: string[];
 }
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -153,6 +173,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const roundId = body.round_id?.trim();
   if (!roundId) return errorResponse('round_id required', 400, req);
   const resume = body.resume === true;
+
+  // Wave 7 P1-19 (W7.13): mode dispatch. 'engine' is the today's-behaviour
+  // default; 'manual' bypasses AI-proposal resolution and uses the operator-
+  // curated approved_stems[] directly. Validation of approved_stems happens
+  // inside lockManualMode after we've loaded the round (the round's status
+  // also needs to be 'manual' — defence in depth).
+  const mode: 'engine' | 'manual' = body.mode === 'manual' ? 'manual' : 'engine';
+  const approvedStems = Array.isArray(body.approved_stems) ? body.approved_stems : [];
+  if (mode === 'manual' && approvedStems.length === 0) {
+    return errorResponse(
+      'mode=manual requires non-empty approved_stems[]',
+      400,
+      req,
+    );
+  }
 
   const admin = getAdminClient();
 
@@ -264,6 +299,27 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       500,
       req,
     );
+  }
+
+  // ── Wave 7 P1-19 (W7.13) Manual-mode branch ─────────────────────────────
+  // Manual mode skips the engine resolution path entirely (no
+  // composition_groups, no classifications, no slot events, no overrides).
+  // We list the source folder, resolve approved_stems against the file list,
+  // run the same move_batch_v2 + finalize + audit-mirror flow.
+  if (mode === 'manual') {
+    return await lockManualMode({
+      req,
+      admin,
+      roundId,
+      round,
+      approvedStems,
+      approvedDest: folders.rawFinalShortlist,
+      sourceDest: folders.rawShortlist,
+      isService,
+      lockedBy: isService ? null : (user?.id ?? null),
+      priorProgress,
+      resume,
+    });
   }
 
   // ── Load groups + classifications + events + overrides ──────────────────
@@ -707,8 +763,14 @@ interface FinalizeArgs {
  * Wave 7 P1-12 (W7.4): everything finalizeRound needs to assemble the audit
  * JSON after the round flips to locked. Pre-computed once in the main lock
  * handler so we don't re-query DB rows per finalize stage.
+ *
+ * Wave 7 P1-19 (W7.13): `mode` field added so the audit JSON distinguishes
+ * engine-mode vs manual-mode locks. Manual-mode contexts have empty
+ * rejected[] + overrides[] and approved entries with slot_id/score/
+ * ai_proposed_score all null.
  */
 interface AuditMirrorContext {
+  mode: AuditJsonMode;
   roundNumber: number;
   packageType: string | null;
   approved: AuditApprovedInput[];
@@ -1005,6 +1067,7 @@ async function writeAuditMirror(args: WriteAuditMirrorArgs): Promise<void> {
     approved: ctx.approved,
     rejected: ctx.rejected,
     overrides: ctx.overrides,
+    mode: ctx.mode,
   });
 
   const path = buildAuditJsonPath(ctx.dropboxRootPath, ctx.roundNumber, args.lockedAt);
@@ -1163,6 +1226,7 @@ function buildAuditMirrorContext(
   }
 
   return {
+    mode: 'engine',
     roundNumber,
     packageType,
     approved,
@@ -1170,4 +1234,356 @@ function buildAuditMirrorContext(
     overrides,
     dropboxRootPath,
   };
+}
+
+// ─── Wave 7 P1-19 (W7.13): Manual-mode lock handler ──────────────────────────
+
+interface LockManualModeArgs {
+  req: Request;
+  // deno-lint-ignore no-explicit-any
+  admin: any;
+  roundId: string;
+  // deno-lint-ignore no-explicit-any
+  round: any;
+  approvedStems: string[];
+  approvedDest: string;
+  sourceDest: string;
+  isService: boolean;
+  lockedBy: string | null;
+  // deno-lint-ignore no-explicit-any
+  priorProgress: any;
+  resume: boolean;
+}
+
+/**
+ * Manual-mode lock handler. Mirrors the engine path's submit/poll/finalize
+ * structure but skips the AI-resolution layer:
+ *
+ *   1. Defence: round must have status='manual' (set by shortlisting-ingest
+ *      when the manual-mode triggers fired)
+ *   2. List the source folder via /files/list_folder
+ *   3. Resolve approved_stems[] against the file list (resolveManualLockMoves
+ *      handles case-insensitive matching, idempotency, dedup)
+ *   4. Build a manual-flavoured AuditMirrorContext (mode='manual', empty
+ *      rejected[] + overrides[], slot_id/score/ai_proposed_score=null on
+ *      approved entries)
+ *   5. Submit move_batch_v2; on inline-complete or async-poll path, finalize
+ *      reuses the existing finalizeRound (writes audit JSON, transitions
+ *      round to status='locked', kicks training extractor — though manual
+ *      rounds have no confirmed_shortlist_group_ids so the extractor noops)
+ */
+async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
+  const {
+    req,
+    admin,
+    roundId,
+    round,
+    approvedStems,
+    approvedDest,
+    sourceDest,
+    isService,
+    lockedBy,
+    priorProgress,
+    resume,
+  } = args;
+
+  // Defence: the round must be a manual-mode round. shortlisting-ingest sets
+  // status='manual' when either trigger (#1 project_type_unsupported, #2
+  // no_photo_products) fires. If a frontend somehow sends mode='manual' for
+  // an engine-mode round, refuse — the engine path is the right answer for
+  // those rounds.
+  if (round.status !== 'manual') {
+    return errorResponse(
+      `mode=manual but round ${roundId} is in status='${round.status}' (expected 'manual'). ` +
+      `Manual mode is only valid for rounds created via shortlisting-ingest with manual-mode triggers.`,
+      400,
+      req,
+    );
+  }
+
+  // ── List the source folder ────────────────────────────────────────────
+  let sourceFiles: ManualLockSourceFile[];
+  try {
+    const { entries } = await listFolder(sourceDest, { recursive: false, maxEntries: 5000 });
+    sourceFiles = entries
+      .filter((e) => e['.tag'] === 'file' && typeof e.name === 'string')
+      .map((e) => ({
+        name: e.name as string,
+        path: (e.path_display as string | undefined) || `${sourceDest}/${e.name}`,
+      }));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return errorResponse(
+      `Failed to list source folder for manual lock (${sourceDest}): ${msg}`,
+      502,
+      req,
+    );
+  }
+
+  // ── Resolve approved stems ────────────────────────────────────────────
+  const { entries: moveEntries, unmatchedStems } = resolveManualLockMoves(
+    approvedStems,
+    sourceFiles,
+    approvedDest,
+  );
+
+  if (unmatchedStems.length > 0) {
+    // Hard fail — operator approved a file that doesn't exist in the source
+    // folder. Stale UI state or a file the operator deleted between drag and
+    // lock. Surface it; don't silently move a partial set.
+    return errorResponse(
+      `Manual lock: ${unmatchedStems.length} approved stem(s) not found in source folder: ${unmatchedStems.slice(0, 5).join(', ')}${unmatchedStems.length > 5 ? '…' : ''}`,
+      400,
+      req,
+    );
+  }
+
+  // ── Pre-fetch dropbox_root_path for audit JSON write ──────────────────
+  let dropboxRootPath: string | null = null;
+  try {
+    const { data: projRow } = await admin
+      .from('projects')
+      .select('dropbox_root_path')
+      .eq('id', round.project_id)
+      .maybeSingle();
+    dropboxRootPath = (projRow?.dropbox_root_path as string | null) ?? null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[${GENERATOR}] dropbox_root_path lookup failed for project ${round.project_id} (manual): ${msg}`);
+    dropboxRootPath = null;
+  }
+
+  // ── Build manual-flavoured AuditMirrorContext ─────────────────────────
+  // Per W7.13 spec § "audit JSON path already correct": manual-mode audit
+  // JSONs use a synthetic `group_id` per approved entry (the file stem,
+  // since manual mode has no composition_groups). slot_id / score /
+  // ai_proposed_score are all null. Rejected + overrides are empty arrays —
+  // the spec says "no AI proposed anything to override" and "undecided files
+  // stay in source" (no rejection bucket).
+  const approvedAudit: AuditApprovedInput[] = moveEntries.map((e) => ({
+    group_id: e.stem,
+    slot_id: null,
+    score: null,
+    ai_proposed_score: null,
+    file_stems: [e.stem],
+  }));
+  const auditMirror: AuditMirrorContext = {
+    mode: 'manual',
+    roundNumber: round.round_number as number,
+    packageType: (round.package_type as string | null) ?? null,
+    approved: approvedAudit,
+    rejected: [],
+    overrides: [],
+    dropboxRootPath,
+  };
+
+  // ── Snapshot for shortlisting_rounds.confirmed_shortlist_group_ids ────
+  // Manual mode has no real group_ids; we persist the matched stems so the
+  // dashboard ("X confirmed shortlist") still shows the approved file count.
+  const confirmedShortlistGroupIds = moveEntries.map((e) => e.stem).sort();
+  const approvedCount = moveEntries.length;
+
+  // ── Idempotent + zero-work split ──────────────────────────────────────
+  const toMove = moveEntries.filter((e) => !e.already_at_destination);
+  const idempotentSkipped = moveEntries.length - toMove.length;
+
+  // Zero-work fast path (every approved file is already at destination, or
+  // the operator approved zero — the latter we already 400'd above).
+  if (toMove.length === 0) {
+    const finalizeResult = await finalizeRound({
+      admin,
+      roundId,
+      projectId: round.project_id,
+      lockedBy,
+      isService,
+      movedApproved: 0,
+      movedRejected: 0,
+      idempotentSkipped,
+      confirmedShortlistGroupIds,
+      approvedCount,
+      rejectedCount: 0,
+      failedMovesCount: 0,
+      auditMirror,
+    });
+    if (!finalizeResult.ok) {
+      return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
+    }
+    return jsonResponse(
+      {
+        ok: true,
+        status: 'complete',
+        round_id: roundId,
+        mode: 'manual',
+        total_moves: 0,
+        moved: { approved: 0, rejected: 0 },
+        skipped: idempotentSkipped,
+      },
+      200,
+      req,
+    );
+  }
+
+  // ── Insert progress row ───────────────────────────────────────────────
+  if (priorProgress && resume) {
+    await admin.from('shortlisting_lock_progress').delete().eq('id', priorProgress.id);
+  }
+  const { data: progressRow, error: progressInsErr } = await admin
+    .from('shortlisting_lock_progress')
+    .insert({
+      round_id: roundId,
+      stage: 'submitting',
+      total_moves: toMove.length,
+      approved_count: approvedCount,
+      rejected_count: 0,
+    })
+    .select('id')
+    .single();
+  if (progressInsErr || !progressRow) {
+    return errorResponse(
+      `Failed to create manual lock progress row: ${progressInsErr?.message || 'no row returned'}`,
+      500,
+      req,
+    );
+  }
+  const progressId = progressRow.id as string;
+
+  // ── Submit batch ──────────────────────────────────────────────────────
+  // Reuse engine-path MoveSpec shape so countBatchEntries (engine-side) keeps
+  // working: bucket='approved' (manual mode has no rejected bucket), group_id
+  // = stem (no composition_group exists).
+  const toMoveAsSpecs: MoveSpec[] = toMove.map((e) => ({
+    group_id: e.stem,
+    stem: e.stem,
+    from_path: e.from_path,
+    to_path: e.to_path,
+    bucket: 'approved' as const,
+    already_at_destination: false,
+  }));
+
+  let submitResult;
+  try {
+    const dropboxEntries: DropboxMoveEntry[] = toMove.map((e) => ({
+      from_path: e.from_path,
+      to_path: e.to_path,
+    }));
+    submitResult = await moveBatch(dropboxEntries);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await admin.from('shortlisting_lock_progress')
+      .update({
+        stage: 'failed',
+        error_message: `manual-mode move_batch_v2 submit failed: ${msg}`,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', progressId);
+    return errorResponse(`Dropbox batch submit failed: ${msg}`, 502, req);
+  }
+
+  // ── Inline-complete fast path ─────────────────────────────────────────
+  if (submitResult['.tag'] === 'complete') {
+    const counts = countBatchEntries(toMoveAsSpecs, submitResult.entries || []);
+    await admin.from('shortlisting_lock_progress')
+      .update({
+        stage: 'finalizing',
+        succeeded_moves: counts.succeeded,
+        failed_moves: counts.failed,
+        errors_sample: counts.errors_sample,
+      })
+      .eq('id', progressId);
+
+    const finalizeResult = await finalizeRound({
+      admin,
+      roundId,
+      projectId: round.project_id,
+      lockedBy,
+      isService,
+      movedApproved: counts.movedApproved,
+      movedRejected: 0, // manual mode has no rejected bucket
+      idempotentSkipped,
+      confirmedShortlistGroupIds,
+      approvedCount,
+      rejectedCount: 0,
+      failedMovesCount: counts.failed,
+      auditMirror,
+    });
+    if (!finalizeResult.ok) {
+      await admin.from('shortlisting_lock_progress')
+        .update({
+          stage: 'failed',
+          error_message: finalizeResult.error,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', progressId);
+      return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
+    }
+    await admin.from('shortlisting_lock_progress')
+      .update({ stage: 'complete', completed_at: new Date().toISOString() })
+      .eq('id', progressId);
+
+    return jsonResponse(
+      {
+        ok: true,
+        status: 'complete',
+        round_id: roundId,
+        mode: 'manual',
+        progress_id: progressId,
+        total_moves: toMove.length,
+        moved: { approved: counts.movedApproved, rejected: 0 },
+        skipped: idempotentSkipped,
+      },
+      200,
+      req,
+    );
+  }
+
+  // ── Async path: persist + fire background poll ────────────────────────
+  if (submitResult['.tag'] !== 'async_job_id' || !submitResult.async_job_id) {
+    await admin.from('shortlisting_lock_progress')
+      .update({
+        stage: 'failed',
+        error_message: `unexpected manual-mode move_batch_v2 response tag: ${submitResult['.tag']}`,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', progressId);
+    return errorResponse(`Unexpected Dropbox response tag: ${submitResult['.tag']}`, 502, req);
+  }
+  const asyncJobId = submitResult.async_job_id;
+  await admin.from('shortlisting_lock_progress')
+    .update({ stage: 'polling', async_job_id: asyncJobId })
+    .eq('id', progressId);
+
+  const bgWork = pollUntilComplete({
+    progressId,
+    asyncJobId,
+    toMove: toMoveAsSpecs,
+    roundId,
+    projectId: round.project_id,
+    lockedBy,
+    isService,
+    idempotentSkipped,
+    confirmedShortlistGroupIds,
+    approvedCount,
+    rejectedCount: 0,
+    auditMirror,
+  }).catch((err) => {
+    console.error(`[${GENERATOR}] manual-mode background poll failed:`, err?.message || err);
+  });
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).EdgeRuntime?.waitUntil?.(bgWork);
+
+  return jsonResponse(
+    {
+      ok: true,
+      status: 'in_progress',
+      round_id: roundId,
+      mode: 'manual',
+      progress_id: progressId,
+      async_job_id: asyncJobId,
+      total_moves: toMove.length,
+      moved: { approved: 0, rejected: 0 },
+      skipped: idempotentSkipped,
+    },
+    202,
+    req,
+  );
 }
