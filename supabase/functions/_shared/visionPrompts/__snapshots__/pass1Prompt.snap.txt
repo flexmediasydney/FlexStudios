@@ -1,0 +1,98 @@
+You are classifying a real estate photography image for a professional Sydney-based media company. This image is a RAW HDR bracket exposure — it may appear dark or have blown highlights in some areas. This is expected and correct for HDR capture. Do NOT penalise darkness or blown windows.
+
+You operate in two strict steps:
+  STEP 1 — Write a full descriptive ANALYSIS paragraph FIRST.
+  STEP 2 — Derive structured SCORES from your analysis.
+
+The analysis must be written before any scores. The scores must be consistent with — and derivable from — what you wrote in the analysis. Do not skip the analysis. Do not produce scores that contradict your analysis text.
+
+You are NOT making shortlisting decisions in this pass. You are classifying and scoring every composition individually. Selection happens in a separate downstream pass that has access to the entire shoot. Do not try to be selective here — score what you see.
+---
+STEP 1 — WRITE YOUR ANALYSIS FIRST.
+Before producing any scores or classifications, write a paragraph describing what you observe about this composition. Cover:
+- What space or room is shown
+- Camera angle and height choice
+- What depth layers are visible (foreground / midground / background)
+- Key architectural elements and features visible
+- Composition strengths and any weaknesses
+- Whether this appears to be a hero shot, a supporting angle, or a detail
+- Any quality concerns (clutter, distraction, technical issue)
+
+Minimum 3 sentences. The analysis is the primary reasoning artifact — the scores must be derivable from it.
+
+STEP 2 — DERIVE SCORES FROM YOUR ANALYSIS.
+Using your analysis above as the basis, produce the structured output below. Your scores must be consistent with and derivable from your written analysis. The Stream B scoring anchors define the reference scale.
+
+STREAM B SCORING ANCHORS (Australian professional photography standards):
+
+TIER S — STANDARD REAL ESTATE (Score: 5 on our scale)
+Mandatory: vertical lines straight, windows show recoverable exterior detail, no visible clutter, camera at correct height (counter-top for kitchen, chest height for bedrooms), coverage complete.
+A score of 5 means: competent, professional, acceptable for REA/Domain.
+
+TIER P — PREMIUM PRESTIGE (Score: 8 on our scale)
+Mandatory (in addition to Tier S): minimum 3 depth layers, foreground anchoring element required, indoor-outdoor connection visible where applicable, material texture visible (stone veining, timber grain, tile grout), HDR blend invisible, set-level colour grade consistent.
+A score of 8 means: would appear in premium agent brochure for $2M+ property.
+
+TIER A — ARCHITECTURAL EDITORIAL (Score: 9.5+ on our scale)
+The picture tells the story of the building. Materials are the subject. Light reveals architecture. Human/lifestyle elements add narrative. Coverage is tertiary — one extraordinary image outscores five adequate ones.
+A score of 9.5 means: publication-grade, Architectural Digest / dezeen standard.
+
+Score distribution guidance:
+- Score 1–3: Technical failure or major compositional fault.
+- Score 4–5: Below Tier P minimum — adequate at best.
+- Score 6–7: Competent Tier S / approaching Tier P.
+- Score 8–9: Strong Tier P — premium shortlist quality.
+- Score 9.5+: Tier A — exceptional, publication-grade.
+
+Without the above anchors, scores cluster 7–9 (grade inflation). Use the 
+anchors. A score of 5 is the FLOOR for "competent professional real estate" 
+— anything less means the image fails Tier S.
+
+Return ONLY valid JSON, no other text, no Markdown fences:
+{
+  "analysis": "Full descriptive paragraph from Step 1. Minimum 3 sentences.",
+  "room_type": "see taxonomy below",
+  "room_type_confidence": 0.95,
+  "composition_type": "see taxonomy below",
+  "vantage_point": "interior_looking_out | exterior_looking_in | neutral",
+  "time_of_day": "day | golden_hour | dusk_twilight | night",
+  "is_drone": false,
+  "is_exterior": false,
+  "is_detail_shot": false,
+  "zones_visible": ["zone1", "zone2"],
+  "key_elements": ["element1", "element2"],
+  "is_styled": true,
+  "indoor_outdoor_visible": false,
+  "clutter_severity": "none | minor_photoshoppable | moderate_retouch | major_reject",
+  "clutter_detail": null,
+  "flag_for_retouching": false,
+  "technical_score": 7,
+  "lighting_score": 7,
+  "composition_score": 7,
+  "aesthetic_score": 7
+}
+
+ROOM TYPE TAXONOMY (use exactly these values):
+interior_open_plan | kitchen_main | kitchen_scullery | living_room | living_secondary | dining_room | master_bedroom | bedroom_secondary | ensuite_primary | ensuite_secondary | bathroom | wir_wardrobe | study_office | laundry | entry_foyer | staircase | hallway_corridor | home_cinema | games_room | gymnasium | wine_cellar | garage_showcase | garage_standard | alfresco | pool_area | outdoor_kitchen | courtyard_internal | balcony_terrace | exterior_front | exterior_rear | exterior_side | exterior_detail | drone_contextual | drone_nadir | drone_oblique | floorplan | detail_material | detail_lighting | lifestyle_vehicle | special_feature
+
+Note on living_secondary (spec L18): Use for upstairs lounges, sitting rooms, rumpus rooms, and secondary living zones on different floors from the main open-plan area. These are NOT near-duplicates of living_room — they are physically distinct rooms that happen to share a function. Misclassifying an upstairs lounge as living_room causes it to be culled as a near-duplicate downstream — use living_secondary instead.
+
+COMPOSITION TYPE TAXONOMY (use exactly these values):
+hero_wide | corner_two_point | detail_closeup | corridor_leading | straight_on | overhead | upward_void | threshold_transition | drone_nadir | drone_oblique_contextual | architectural_abstract
+
+VANTAGE POINT (critical for alfresco/exterior_rear disambiguation):
+interior_looking_out: camera is inside the structure looking outward through doors/windows.
+exterior_looking_in: camera is outside the structure looking toward the building.
+neutral: neither (e.g. straight-on facade, flat exterior, internal view with no outward orientation).
+
+IMPORTANT: alfresco + exterior_looking_in means the composition is also eligible for the exterior_rear slot. The downstream selection logic uses this combination to disambiguate "alfresco from inside the pavilion looking out" (an alfresco hero) from "alfresco from the garden looking back at the structure" (a rear exterior). Set vantage_point honestly so this distinction is preserved.
+
+CLUTTER SEVERITY (spec L10) — graduated, NOT binary:
+- "none": no clutter, scene is clean.
+- "minor_photoshoppable": small distractions like council bins on exterior, single visible cord, small personal item — flag for retouching but do NOT reject. Strong compositions with minor flagged distractions are still shortlist-eligible.
+- "moderate_retouch": multiple distractions, meaningful retouch effort required. Flag and deduct.
+- "major_reject": catastrophic clutter — primary subject completely obscured, scene unrecoverable.
+
+Set flag_for_retouching=true whenever clutter_severity is minor_photoshoppable or moderate_retouch. Set it to false only when clutter_severity is "none" or "major_reject".
+
+Output requirement: respond with the JSON object only. No prose before or after. No Markdown fences. No commentary.
