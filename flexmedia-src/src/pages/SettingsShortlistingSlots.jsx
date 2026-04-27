@@ -24,6 +24,7 @@
 import { useMemo, useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { useActivePackages } from "@/hooks/useActivePackages";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import {
   Card,
@@ -66,7 +67,10 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 // ── Constants ───────────────────────────────────────────────────────────────
-const PACKAGE_OPTIONS = ["Gold", "Day to Dusk", "Premium"];
+// Wave 7 P1-11: package options now come from the live `packages` table via
+// useActivePackages(). Previously: const PACKAGE_OPTIONS = ["Gold", "Day to
+// Dusk", "Premium"]. Joseph's architectural correction (2026-04-27): packages
+// must NOT be hardcoded anywhere in the frontend — they live in the DB.
 
 // Wave 7 P1-8: shortlisting engine roles. MUST match the migration 337
 // backfill rules and supabase/functions/_shared/slotEligibility.ts ENGINE_ROLES.
@@ -109,12 +113,15 @@ const PHASE_LABELS = {
 };
 
 // ── Form helpers ────────────────────────────────────────────────────────────
-function emptyForm() {
+// Wave 7 P1-11: defaultPackageNames flows in from useActivePackages so a
+// fresh slot defaults to "applies to every active package". Empty array is
+// a valid resting state until the live list resolves.
+function emptyForm(defaultPackageNames = []) {
   return {
     slot_id: "",
     display_name: "",
     phase: 2,
-    package_types: [...PACKAGE_OPTIONS],
+    package_types: [...defaultPackageNames],
     // W7.8: which product engine roles trigger this slot. Empty array =
     // fall back to package_types substring match (legacy path during the
     // transition window).
@@ -255,16 +262,31 @@ function ChipMultiselect({ value, onChange, options, placeholder }) {
   );
 }
 
-function PackageMultiselect({ value, onChange }) {
+function PackageMultiselect({ value, onChange, options }) {
   const arr = Array.isArray(value) ? value : [];
+  const opts = Array.isArray(options) ? options : [];
   const toggle = (p) => {
     if (arr.includes(p)) onChange(arr.filter((x) => x !== p));
     else onChange([...arr, p]);
   };
+  // Surface any legacy values that aren't in the live `packages` list so the
+  // admin can see + remove them. Otherwise an old slot tagged "Gold" while
+  // the marketing team renamed it to "Gold Package" would silently lose its
+  // chip rendering.
+  const legacy = arr.filter((p) => !opts.includes(p));
+  const renderable = [...opts, ...legacy];
+  if (renderable.length === 0) {
+    return (
+      <p className="text-[10px] text-muted-foreground italic">
+        No active packages defined yet — visit Settings · Packages to add one.
+      </p>
+    );
+  }
   return (
     <div className="flex flex-wrap gap-2">
-      {PACKAGE_OPTIONS.map((p) => {
+      {renderable.map((p) => {
         const on = arr.includes(p);
+        const isLegacy = !opts.includes(p);
         return (
           <button
             key={p}
@@ -275,9 +297,14 @@ function PackageMultiselect({ value, onChange }) {
               on
                 ? "bg-primary text-primary-foreground border-primary"
                 : "bg-background hover:bg-muted/40 border-border",
+              isLegacy && "border-dashed",
             )}
+            title={isLegacy ? "Legacy package — no longer in the live list" : undefined}
           >
             {p}
+            {isLegacy && (
+              <span className="ml-1 text-[9px] opacity-70">(legacy)</span>
+            )}
           </button>
         );
       })}
@@ -329,6 +356,7 @@ function EditSlotDialog({
   onSave,
   isSaving,
   currentVersion,
+  packageOptions,
 }) {
   const [form, setForm] = useState(initialForm);
   const errors = useMemo(
@@ -453,6 +481,7 @@ function EditSlotDialog({
             <PackageMultiselect
               value={form.package_types}
               onChange={(v) => update("package_types", v)}
+              options={packageOptions}
             />
             <p className="text-[10px] text-muted-foreground">
               Used as the fallback rule when "Eligible when engine roles" is empty. Once every
@@ -533,6 +562,9 @@ function EditSlotDialog({
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function SettingsShortlistingSlots() {
   const queryClient = useQueryClient();
+  // Wave 7 P1-11: live list of active packages drives the dropdowns + the
+  // multiselect default. No more hardcoded ["Gold", "Day to Dusk", "Premium"].
+  const { names: packageNames } = useActivePackages();
   const [phaseFilter, setPhaseFilter] = useState("all");
   const [packageFilter, setPackageFilter] = useState("all");
   const [activeOnly, setActiveOnly] = useState(true);
@@ -734,11 +766,13 @@ export default function SettingsShortlistingSlots() {
     setEditorState({
       open: true,
       isNew: true,
-      initialForm: emptyForm(),
+      // Wave 7 P1-11: default a brand-new slot to "applies to every active
+      // package" — the admin can deselect any they don't want.
+      initialForm: emptyForm(packageNames),
       currentVersion: 0,
       editingSlotId: null,
     });
-  }, []);
+  }, [packageNames]);
 
   return (
     <PermissionGuard require={["master_admin"]}>
@@ -792,7 +826,7 @@ export default function SettingsShortlistingSlots() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All packages</SelectItem>
-                    {PACKAGE_OPTIONS.map((p) => (
+                    {packageNames.map((p) => (
                       <SelectItem key={p} value={p}>
                         {p}
                       </SelectItem>
@@ -986,6 +1020,7 @@ export default function SettingsShortlistingSlots() {
             existingSlotIds={existingSlotIds}
             currentVersion={editorState.currentVersion}
             isSaving={saveMutation.isPending}
+            packageOptions={packageNames}
             onSave={(form) => {
               const currentRow = editorState.editingSlotId
                 ? (bySlotId.get(editorState.editingSlotId) || []).find(
