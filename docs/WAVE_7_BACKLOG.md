@@ -623,6 +623,72 @@ the soak window as a quick rollback escape valve.
 
 ---
 
+### P1-19 — Manual shortlisting mode for unsupported project types ✅ DONE 2026-04-27
+
+**Origin.** Surfaced 2026-04-27 by Joseph during W7.7 design review. The
+shortlisting subtab assumes every project goes through Pass 0/1/2/3 — RAW
+HDR brackets, room-type classification, slot resolution, score-driven
+shortlisting. That's the right behaviour for property photography, but
+FlexMedia takes other kinds of work (corporate event coverage, raw deliverable
+archives, niche commercial work) where AI shortlisting doesn't fit. The
+operator should still get the swimlane UI to manage shortlisting, but
+**without any AI passes** — just list the files in Dropbox, drag-to-approved
+one-by-one, hit Lock to trigger the existing move_batch_v2 flow against the
+human-curated set.
+
+**Spec.** `docs/design-specs/W7-13-manual-shortlisting-mode.md` (Option A
+— synthetic shortlisting_rounds row with status='manual' + manual_mode_reason
+keeps the state machine + audit JSON unified).
+
+**Triggers.** Two conditions force manual mode (precedence: #1 over #2):
+1. `project_types.shortlisting_supported = false` — operator explicitly
+   disabled AI for this type
+2. `computeExpectedFileCount(...).target === 0` — project has no photo
+   deliverables
+
+**What landed (5 commits).**
+1. `91ea4d3` — backend `_shared/manualModeResolver.ts` (pure helper for
+   trigger detection + manual-lock approved-stem resolution); 21 tests;
+   mig 340 extends `shortlisting_rounds.status` enum with 'manual'
+2. `068ae67` — `shortlist-lock` accepts `mode: 'engine' | 'manual'` (default
+   engine); manual-mode branch reuses move_batch_v2 + finalize + audit-mirror
+   path; audit JSON gets `mode` field (additive optional, schema_version
+   stays '1.0')
+3. `faa8a2d` — `ManualShortlistingSwimlane` (two-column drag-drop using
+   @hello-pangea/dnd); ProjectShortlistingTab forks on
+   `project_type.shortlisting_supported`; engine-mode UI strings adapt
+4. `689eb55` — per-row inline AI-shortlisting toggle in Settings → Project
+   Types (matches existing "Set as default" pattern; toast confirms mode)
+5. `[Commit 5]` — frontend test (`ManualShortlistingSwimlane.test.jsx`,
+   8 tests) + this doc + WAVE_PLAN + design-specs/README updates
+
+**Test count delta.** Backend 329 → 355 (+26: 21 manualModeResolver +
+5 auditJsonBuilder mode tests). Frontend +8 tests (new file).
+
+**LoC delta.** ~+1,200 lines (mostly the new ManualShortlistingSwimlane
+component + extensive test coverage).
+
+**Migration.** Mig 340 (`340_shortlisting_rounds_manual_status.sql`) — pure
+additive: drops the existing CHECK constraint and re-adds it with 'manual'
+included. No data migration. Rollback shrinks the enum back; safe so long as
+no manual-mode rounds exist (none do — the feature ships with this commit).
+
+**Engine guards.** Manual rounds never enqueue `shortlisting_jobs` rows, so
+`shortlisting-job-dispatcher` naturally ignores them. No defensive 400 added
+to the dispatcher (would be defence-in-depth, but the no-jobs invariant is
+already strong). The frontend `hasInflightRound` check now blocks "New
+Manual Round" when an unfinished manual round exists for the project (same
+gate as engine mode's processing/pending guard).
+
+**Out of scope (explicitly NOT shipped, per spec § Out of scope).**
+- Bulk-approve UX (drag-multiple, "approve all")
+- Pre-existing files in `Final Shortlist/` from prior locks (left alone;
+  new lock additions append)
+- Engine-mode → manual-mode mid-round migration (next round runs as manual
+  if the flag flips while one's in flight)
+
+---
+
 ## P3 — UX (from Joseph's Round 2 review)
 
 Numbered per his original list:
