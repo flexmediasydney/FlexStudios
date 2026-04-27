@@ -146,9 +146,9 @@ Deno.test('resolveFromChain: 3-level merge — field precedence verified', () =>
 
   // source_chain reports all three, in priority order (highest first)
   assertEquals(result.source_chain, [
-    { owner_kind: 'person', theme_id: 'person-id', theme_name: 'Joseph Override' },
-    { owner_kind: 'organisation', theme_id: 'org-id', theme_name: 'Belle Property' },
-    { owner_kind: 'system', theme_id: 'sys-id', theme_name: 'FlexMedia Default' },
+    { owner_kind: 'person', theme_id: 'person-id', theme_name: 'Joseph Override', version_int: 1 },
+    { owner_kind: 'organisation', theme_id: 'org-id', theme_name: 'Belle Property', version_int: 1 },
+    { owner_kind: 'system', theme_id: 'sys-id', theme_name: 'FlexMedia Default', version_int: 1 },
   ]);
 });
 
