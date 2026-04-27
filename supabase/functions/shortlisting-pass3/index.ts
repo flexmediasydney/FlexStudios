@@ -37,6 +37,8 @@ import {
   fireNotif,
   callerHasProjectAccess,
 } from '../_shared/supabase.ts';
+import { resolveProjectEngineRoles as resolveProjectEngineRolesPure } from '../_shared/projectEngineRoles.ts';
+import type { ProductRow } from '../_shared/slotEligibility.ts';
 
 const GENERATOR = 'shortlisting-pass3';
 
@@ -508,9 +510,11 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
 
 /**
  * Resolve a project's distinct engine_role set from
- * projects.packages[].products[] + projects.products[]. Used by Pass 3 to
- * filter shortlisting_slot_definitions for the coverage map. Matches the
- * Pass 2 resolver's behaviour (additive bundled + à la carte per W7.7).
+ * projects.packages[].products[] + projects.products[]. Thin async I/O
+ * shim around the pure shared helper in `_shared/projectEngineRoles.ts`
+ * (Wave 7 P1-6 follow-up consolidation). Matches Pass 2's behaviour
+ * exactly — additive bundled + à la carte, forward-compat ENGINE_ROLES
+ * filter applied via the shared helper.
  */
 async function resolveProjectEngineRolesForCoverage(
   admin: ReturnType<typeof getAdminClient>,
@@ -525,45 +529,35 @@ async function resolveProjectEngineRolesForCoverage(
     console.warn(`[${GENERATOR}] project fetch for engine_role resolution failed: ${error.message}`);
     return [];
   }
+  if (!project) return [];
 
   const productIds = new Set<string>();
   // deno-lint-ignore no-explicit-any
-  const projectPackages: any[] = Array.isArray((project as any)?.packages)
+  for (const pkg of (Array.isArray((project as any)?.packages) ? (project as any).packages : [])) {
     // deno-lint-ignore no-explicit-any
-    ? ((project as any).packages as any[])
-    : [];
-  for (const pkg of projectPackages) {
-    if (!pkg) continue;
-    const embedded = Array.isArray(pkg.products) ? pkg.products : [];
-    for (const ent of embedded) {
+    for (const ent of (Array.isArray(pkg?.products) ? (pkg as any).products : [])) {
       if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
     }
   }
   // deno-lint-ignore no-explicit-any
-  const projectProducts: any[] = Array.isArray((project as any)?.products)
-    // deno-lint-ignore no-explicit-any
-    ? ((project as any).products as any[])
-    : [];
-  for (const ent of projectProducts) {
+  for (const ent of (Array.isArray((project as any)?.products) ? (project as any).products : [])) {
     if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
   }
-
   if (productIds.size === 0) return [];
 
   const { data: prodRows } = await admin
     .from('products')
     .select('id, engine_role, is_active')
     .in('id', Array.from(productIds));
-  if (!prodRows) return [];
 
-  const roles = new Set<string>();
+  const productsList: ProductRow[] = ((prodRows ?? []) as ProductRow[]).map((p) => ({
+    id: String(p.id),
+    engine_role: p.engine_role ?? null,
+    is_active: p.is_active === true,
+  }));
+
   // deno-lint-ignore no-explicit-any
-  for (const p of (prodRows as any[])) {
-    if (p?.is_active === true && typeof p?.engine_role === 'string' && p.engine_role) {
-      roles.add(p.engine_role);
-    }
-  }
-  return Array.from(roles);
+  return resolveProjectEngineRolesPure(project as any, productsList);
 }
 
 function sumNumbers(vals: Array<number | null | undefined>): number {

@@ -80,11 +80,11 @@ import {
 import { getActivePrompt } from '../_shared/promptLoader.ts';
 import {
   filterSlotsForRound,
-  resolvePackageEngineRoles,
   type ProductRow,
   type SlotDefinitionRow,
   type EngineRole,
 } from '../_shared/slotEligibility.ts';
+import { resolveProjectEngineRoles as resolveProjectEngineRolesPure } from '../_shared/projectEngineRoles.ts';
 
 const GENERATOR = 'shortlisting-pass2';
 
@@ -737,18 +737,16 @@ async function fetchSlotDefinitions(
  * Resolve a project's engine-role union via:
  *   projects.packages[].products[] + projects.products[] → engine_role
  *
- * W7.7: à la carte products (top-level projects.products[]) ALSO contribute
- * roles; bundled and à la carte are additive per Joseph 2026-04-27. The
- * legacy "fall back to live packages table by name match" path is retired
- * — it conflated package names with engine eligibility and was a silent
- * source of drift when Marketing renamed packages.
+ * Thin async I/O shim around the pure shared helper in
+ * `_shared/projectEngineRoles.ts` (Wave 7 P1-6 follow-up consolidation).
+ * Bundled (`packages[].products[]`) and à la carte (`products[]`) entries
+ * are additive per Joseph 2026-04-27.
  */
 async function resolveProjectEngineRoles(
   admin: ReturnType<typeof getAdminClient>,
   projectId: string,
   _packageType: string | null,
 ): Promise<EngineRole[]> {
-  // ─── Step 1: read projects.packages + projects.products JSONB ────────────
   const { data: project, error: projErr } = await admin
     .from('projects')
     .select('packages, products')
@@ -758,36 +756,24 @@ async function resolveProjectEngineRoles(
     console.warn(`[${GENERATOR}] project fetch for engine_role resolution failed: ${projErr.message}`);
     return [];
   }
+  if (!project) return [];
 
+  // Collect all product_ids referenced (bundled + à la carte) so we can
+  // narrow the products SELECT.
   const productIds = new Set<string>();
-
-  // Bundled path
   // deno-lint-ignore no-explicit-any
-  const projectPackages: any[] = Array.isArray((project as any)?.packages)
+  for (const pkg of (Array.isArray((project as any)?.packages) ? (project as any).packages : [])) {
     // deno-lint-ignore no-explicit-any
-    ? ((project as any).packages as any[])
-    : [];
-  for (const pkg of projectPackages) {
-    if (!pkg) continue;
-    const embedded = Array.isArray(pkg.products) ? pkg.products : [];
-    for (const ent of embedded) {
+    for (const ent of (Array.isArray(pkg?.products) ? (pkg as any).products : [])) {
       if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
     }
   }
-
-  // À la carte path (W7.7 — additive with bundled)
   // deno-lint-ignore no-explicit-any
-  const projectProducts: any[] = Array.isArray((project as any)?.products)
-    // deno-lint-ignore no-explicit-any
-    ? ((project as any).products as any[])
-    : [];
-  for (const ent of projectProducts) {
+  for (const ent of (Array.isArray((project as any)?.products) ? (project as any).products : [])) {
     if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
   }
-
   if (productIds.size === 0) return [];
 
-  // ─── Path 3: products lookup → engine_role union ─────────────────────────
   const { data: prodRows, error: prodErr } = await admin
     .from('products')
     .select('id, engine_role, is_active')
@@ -796,19 +782,15 @@ async function resolveProjectEngineRoles(
     console.warn(`[${GENERATOR}] products fetch for engine_role resolution failed: ${prodErr.message}`);
     return [];
   }
-  if (!prodRows) return [];
 
-  const productsList: ProductRow[] = (prodRows as ProductRow[]).map((p) => ({
+  const productsList: ProductRow[] = ((prodRows ?? []) as ProductRow[]).map((p) => ({
     id: String(p.id),
     engine_role: p.engine_role ?? null,
     is_active: p.is_active === true,
   }));
 
-  // Reuse the pure resolver to keep semantics in lockstep with the unit tests.
-  return resolvePackageEngineRoles(
-    Array.from(productIds).map((id) => ({ product_id: id })),
-    productsList,
-  );
+  // deno-lint-ignore no-explicit-any
+  return resolveProjectEngineRolesPure(project as any, productsList);
 }
 
 // ─── Persistence helpers ─────────────────────────────────────────────────────
