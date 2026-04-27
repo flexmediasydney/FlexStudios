@@ -69,13 +69,13 @@ Deno.test('slugifyAddress: handles backslash like forward slash', () => {
 Deno.test('defaultProjectRootPath: composes id_slug', () => {
   assertEquals(
     defaultProjectRootPath('abc-123', '6/3 Silver St'),
-    '/FlexMedia/Projects/abc-123_6-3-silver-st',
+    '/Flex Media Team Folder/Projects/abc-123_6-3-silver-st',
   );
 });
 
 Deno.test('defaultProjectRootPath: null address falls back', () => {
   assertEquals(
     defaultProjectRootPath('abc-123', null),
-    '/FlexMedia/Projects/abc-123_unknown',
+    '/Flex Media Team Folder/Projects/abc-123_unknown',
   );
 });
