@@ -342,11 +342,225 @@ banner in swimlane.
 
 ---
 
+## P1 — Items added 2026-04-27 (audit-pass for Wave 0 closure)
+
+These items surfaced during today's session but were missed in the first
+backlog draft. Added here so nothing slips between today and Wave 7 kickoff.
+
+### P1-8 — Product-driven slot eligibility (replaces flawed day/dusk flag)
+
+**Origin.** Joseph's correction during Wave 0 closure. My original proposal
+was an `is_time_of_day_relevant` boolean flag on slot definitions — engine
+hardcoding masquerading as configuration. The correct architecture is
+product-driven: slots are eligible for a project based on the products
+inside the project's package.
+
+**Fix.**
+
+1. `products.product_category TEXT` column. Canonical values TBD via
+   inspection of the existing products table (likely
+   `photo_day` | `photo_dusk` | `drone_orbit` | `drone_nadir` | `floorplan`
+   | `video_walkthrough` | `interior_detail` | `exterior_detail` | etc).
+   **Needs design phase before execution.**
+2. `shortlisting_slot_definitions.eligible_when_product_categories TEXT[]`.
+   When non-empty, the slot is in scope ONLY when the project's resolved
+   package contains at least one product whose category is in this list.
+3. Engine slot-template builder filters slot list per project based on the
+   project's resolved package's products.
+
+**Replaces** the original "day/dusk slot variants" item entirely. Same
+mechanism handles drone (engine only proposes drone slots if package has
+drone products), floorplan (only validates floorplan if product present),
+video, etc.
+
+**Depends on** P1-6 (`package_shortlist_configs` sidecar). Cannot start
+until P1-6 lands the package↔product graph cleanly.
+
+**Estimated effort.** 1 week after design phase.
+
+### P1-9 — Notification routing seed (9 spec types)
+
+**Origin.** Spec section 19 lists 9 notification types with named
+recipients (coverage_gap_error → master_admin + Slack, retouch_flags →
+backend lead, out_of_scope_detected → backend, etc). We have generic
+`notification_routing_rules` infra but only `shortlist_ready_for_review`
+is seeded today.
+
+**Fix.** Migration that seeds `notification_routing_rules` for the
+remaining 8 spec types. Pass 3 dispatches the appropriate type per
+condition. Slack channel binding adds a new column to `notification_routing_rules`
+(currently in-app only).
+
+**Estimated effort.** Half-day.
+
+### P1-10 — Vision prompt refactor into composable blocks
+
+**Origin.** Cheap insurance for Wave 11's universal response schema +
+future Pulse Vision integration. Today's prompts are entangled with
+"RAW HDR bracket" assumptions; tomorrow's finals/external paths need a
+different framing. Forking prompts is the wrong answer — composable
+blocks is right.
+
+**Fix.** Extract `_shared/visionPrompts/` directory with composable blocks:
+`taxonomyBlock`, `streamBBlock`, `clutterSeverityBlock`, `jsonOutputBlock`,
+`reasoningFirstBlock`, `rawHdrCalibrationBlock`. Today's `pass1Prompt`
+assembles all of them. Tomorrow's finals/external assemble different
+subsets.
+
+**Needs design phase** to nail the block API contract (parameters,
+composition rules, error behaviour when blocks conflict).
+
+**Estimated effort.** 1 week after design phase.
+
+### P1-11 — `pg_advisory_lock` cross-connection unlock issue
+
+**Origin.** Surfaced during Round 2 dispatcher debugging today. The
+dispatcher uses `pg_advisory_lock` (session-scoped) for single-flight,
+calls `pg_advisory_unlock` via `admin.rpc(...)`. PostgREST's connection
+pool routes the RPC to whichever connection is free — often a different
+one than the lock acquire. `pg_advisory_unlock` returns `false` silently
+because the new connection doesn't hold the lock. Stale locks accumulate
+until session recycle.
+
+**Fix.** Choose ONE:
+- (a) Switch to `pg_advisory_xact_lock` (transaction-scoped) — auto-released
+  on transaction end. Requires wrapping the dispatcher tick body in an
+  explicit transaction.
+- (b) Use a row-based mutex (insert into `dispatcher_lock` table with a
+  unique constraint; delete on completion). Reliable, audit-trailable,
+  slightly higher overhead.
+
+**Needs decision phase** — write a 1-page tradeoff doc before execution.
+
+**Estimated effort.** Half-day after decision.
+
+### P1-12 — `shortlisting-confirm` copy-then-move semantics + audit mirror
+
+**Origin.** Spec section 18 says lock should COPY files raw → confirmed,
+then COPY confirmed → editor_input. We currently MOVE in a single step.
+Spec also wants per-event JSON files in `_AUDIT/` Dropbox folder.
+
+**Fix.** Lock function rewrites (lands as part of P0-1) to:
+1. Copy from `Photos/Raws/Shortlist Proposed/` to `Photos/Raws/Final
+   Shortlist/`
+2. Copy from Final Shortlist to `Photos/Editors/Edited Post Production/`
+   (currently the editor input folder)
+3. Source files stay in Shortlist Proposed during the audit window;
+   delete only after editor confirms receipt
+4. Per-event JSON written to `_AUDIT/` folder in Dropbox
+
+**Pairs with P0-1** since both touch the lock function. Land together.
+
+### P1-13 — Per-package `expected_file_count_range`
+
+**Origin.** Today's ingest computes expected file count as
+`packageCeiling × 5 × 1.5`. Hardcoded math that breaks when products are
+configurable.
+
+**Fix.** Once P1-6 lands `package_shortlist_configs`, add columns:
+- `expected_file_count_min INT`
+- `expected_file_count_max INT`
+
+Ingest reads these instead of computing. Admin sets them per package via
+the existing config UI.
+
+**Depends on** P1-6.
+
+**Estimated effort.** 2 days after P1-6.
+
+### P1-14 — Universal vision response schema (Wave 11 keystone)
+
+**Origin.** Joseph's "living entity" architecture: ONE structured response
+shape (analysis + image_type classifications + room_type + observed_objects
++ signal_scores + clutter) feeds object_registry + signals + image-type
+tables, regardless of source (RAW/finals/external). The schema decisions
+locked in here propagate forward to Wave 15 (Pulse Vision).
+
+**Fix.** Pass 1 response contract gets:
+- `analysis: string`
+- `image_type: { is_drone, is_dusk, is_day, is_agent_headshot, is_test_shot,
+  is_bts, is_floorplan, is_video_frame, ... }` (full enum TBD)
+- `room_type, composition_type, vantage_point, time_of_day` (current)
+- `observed_objects: [{ object_key, attributes: {...} }, ...]` (NEW —
+  feeds object_registry directly)
+- `signal_scores: {<22 signal_keys>: number}` (NEW — replaces 4 dim
+  aggregates)
+- `clutter_severity, flag_for_retouching, key_elements, zones_visible`
+  (current, kept)
+- Source-aware fields: `is_raw_hdr_bracket, is_post_edit_finals,
+  is_external_listing, source_calibration_hints`
+
+This becomes Pass 1's output schema in Wave 11. Same schema feeds Wave 12
+(object_registry), Wave 13b (description goldmine populates similar
+`observed_objects` rows), Wave 15 (external listing scoring).
+
+**THIS WAVE NEEDS A FULL DESIGN PHASE.** Not delegable to subagents.
+Joseph + I must:
+1. Enumerate the complete `image_type` field set
+2. Define the `observed_objects` JSON shape (canonical key vs free-form
+   on first observation)
+3. Author all 22 signal measurement prompts
+4. Define source-calibration semantics (how does the model know it's
+   processing finals vs RAW?)
+
+**Lives in Wave 11.** Effort estimate moved from "scope expansion" to
+"core wave deliverable" — ~5-6 weeks total Wave 11 (was 3-4 wk).
+
+### P1-15 — Round metadata columns (engine_version / tier_used / tier_config_version)
+
+**Origin.** Spec mandates these columns for traceability — replaying any
+historical round under exact-match weights requires the version stamp.
+
+**Fix.** Migrate `shortlisting_rounds`:
+- `engine_version TEXT` (e.g. 'wave-7-p1')
+- `tier_used TEXT` (snapshot of tier at lock time)
+- `tier_config_version INT` (FK to tier_configs.version)
+
+Lands as part of P1-7 (tier configs). Pass 1/Pass 2 stamp on emit.
+
+### P1-16 — Override metadata columns
+
+**Origin.** Spec defines richer override capture for the learning loop —
+captures we're not making.
+
+**Fix.** Migrate `shortlisting_overrides`:
+- `review_duration_seconds INT` (swimlane records when card was first
+  visible vs when drag emitted)
+- `confirmed_with_review BOOLEAN` (computed: review_duration > 30s)
+- `alternative_offered BOOLEAN` (was the alternatives tray shown for this
+  slot when the override happened?)
+- `alternative_selected BOOLEAN` (did the override come from the alts
+  tray vs free drag from rejected?)
+- `primary_signal_overridden TEXT` (computed: which Pass 1 signal had
+  the largest delta between AI choice and human choice — drives
+  recalibration suggestions)
+
+Lands as part of P1-10's Wave 10 schema work + corresponding swimlane
+state tracking.
+
+### P1-17 — Re-simulation safeguard (explicit deliverable)
+
+**Origin.** Was implicit in P1-7 prose; should be its own work item so
+it doesn't get dropped.
+
+**Fix.** "Preview impact" admin action that, before saving new tier
+weights or signal weights:
+1. Re-runs the last 30 locked rounds under proposed config (blind mode,
+   doesn't write)
+2. Surfaces a diff table: which rounds would have a different winner per
+   slot, with the score deltas
+3. Admin reviews, confirms or aborts
+4. Only on confirm does the new config become active
+
+**Lives in Wave 8.** ~3 days additional effort within that wave.
+
+---
+
 ## P3 — UX (from Joseph's Round 2 review)
 
 Numbered per his original list:
 
-1. **#1** Sub-tab refresh loads first round, not latest
+1. **#1** Sub-tab refresh loads first round, not latest *(investigate first — code in `ProjectShortlistingTab` already orders rounds by `-round_number`; this may not be a real bug, needs 5-min repro)*
 2. **#2** Alternatives tray blows out fullscreen — needs collapsed-card design
 3. **#3** No sort/filter on swimlane — need slot-importance / filename / score sort options
 4. **#5** Preview size controls (small/medium/large) on swimlane
