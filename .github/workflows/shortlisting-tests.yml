@@ -1,0 +1,93 @@
+# Shortlisting engine — build + unit-test gate
+# Runs on every push/PR touching shortlisting code or shared helpers.
+# Wave 0 burst 0.6: minimum-viable safety net for the engine.
+
+name: Shortlisting Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/_shared/**'
+      - 'supabase/functions/shortlisting-**/**'
+      - 'supabase/functions/shortlist-**/**'
+      - 'supabase/migrations/**_shortlisting**'
+      - 'supabase/migrations/**_shortlist**'
+      - 'supabase/migrations/**_composition**'
+      - 'flexmedia-src/src/components/projects/shortlisting/**'
+      - 'flexmedia-src/src/pages/Shortlisting**'
+      - 'flexmedia-src/src/pages/SettingsShortlisting**'
+      - 'modal/photos-extract/**'
+      - '.github/workflows/shortlisting-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'supabase/functions/_shared/**'
+      - 'supabase/functions/shortlisting-**/**'
+      - 'supabase/functions/shortlist-**/**'
+      - 'flexmedia-src/src/components/projects/shortlisting/**'
+      - 'flexmedia-src/src/pages/Shortlisting**'
+      - 'flexmedia-src/src/pages/SettingsShortlisting**'
+
+jobs:
+  deno-tests:
+    name: Deno unit tests + type-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.46.x
+
+      # Pure-function unit tests added in Wave 0 bursts 0.2-0.5.
+      # Currently runs: bracketDetector, pass2Validator, jsonExtractor,
+      # finalsFilenameParser. Future tests under _shared/ auto-included
+      # via the glob.
+      - name: Run shared-helper unit tests
+        run: |
+          deno test \
+            --allow-read \
+            supabase/functions/_shared/*.test.ts
+
+      # Type-check every shortlisting edge function. Catches signature drift
+      # from refactors before deploy. Skips the test files (already
+      # type-checked by `deno test`).
+      - name: Type-check shortlisting edge functions
+        run: |
+          for fn in supabase/functions/shortlisting-* supabase/functions/shortlist-*; do
+            if [ -f "$fn/index.ts" ]; then
+              echo "::group::deno check $fn"
+              deno check "$fn/index.ts"
+              echo "::endgroup::"
+            fi
+          done
+
+  frontend-build:
+    name: Frontend build (npm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: flexmedia-src
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: flexmedia-src/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # `npm run build` runs Vite + esbuild and catches any import / type /
+      # JSX issue in the shortlisting frontend. We run it on every
+      # shortlisting-related push (per the path filter above) so a broken
+      # frontend never silently lands on main.
+      - name: Build
+        run: npm run build
