@@ -348,6 +348,7 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsLegacyCrmReconciliation") && { name: "Legacy Pulse Reconciliation", href: "SettingsLegacyCrmReconciliation" },
           can("EdgeFunctionHealth") && { name: "Edge Function Health", href: "EdgeFunctionHealth", icon: Gauge },
           can("EdgeFunctionAuditLog") && { name: "Edge Function Audit Log", href: "EdgeFunctionAuditLog", icon: ClipboardList },
+          can("SettingsOperationsHealth") && { name: "Operations Health", href: "SettingsOperationsHealth", icon: Activity },
           can("SettingsTonomoIntegration") && { name: "Bookings Setup", href: "SettingsTonomoIntegration" },
           can("SettingsTonomoMappings") && { name: "Mappings", href: "SettingsTonomoMappings" },
           can("SettingsNotifications") && { name: "Notifications", href: "SettingsNotifications" },

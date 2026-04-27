@@ -53,6 +53,7 @@ import EdgeFunctionHealth from './pages/EdgeFunctionHealth';
 import EdgeFunctionAuditLog from './pages/EdgeFunctionAuditLog';
 import EmailSyncSettings from './pages/EmailSyncSettings';
 import SettingsEmailSyncHealth from './pages/SettingsEmailSyncHealth';
+import SettingsOperationsHealth from './pages/SettingsOperationsHealth';
 import HierarchyVisualization from './pages/HierarchyVisualization';
 import Inbox from './pages/Inbox';
 import InternalRoadmap from './pages/InternalRoadmap';
@@ -160,6 +161,7 @@ export const PAGES = {
     "EdgeFunctionAuditLog": EdgeFunctionAuditLog,
     "EmailSyncSettings": EmailSyncSettings,
     "SettingsEmailSyncHealth": SettingsEmailSyncHealth,
+    "SettingsOperationsHealth": SettingsOperationsHealth,
     "Feedback": Feedback,
     "FieldMode": FieldMode,
     "GoalDetails": GoalDetails,
