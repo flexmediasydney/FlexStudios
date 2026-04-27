@@ -6,20 +6,34 @@
  * `shortlisting_rounds` row, and queues `shortlisting_jobs` of kind='extract'
  * (chunked at 50 files per job).
  *
+ * Wave 7 P1-6 (W7.7): the legacy hardcoded {Gold:24, Day-to-Dusk:31,
+ * Premium:38} ceiling map is gone. Photo count target / min / max are now
+ * computed dynamically from the project's products via
+ * computeExpectedFileCount() — see _shared/packageCounts.ts. The engine tier
+ * (S/P/A) is pre-resolved at ingest via resolveEngineTierId() and written to
+ * shortlisting_rounds.engine_tier_id so Pass 2 reads it without
+ * re-derivation.
+ *
+ * Manual-mode triggers (Joseph 2026-04-27, spec Section 4b):
+ *   1. project_type.shortlisting_supported === false → manual round, no
+ *      Pass 0 enqueue. manual_mode_reason = 'project_type_unsupported'.
+ *   2. computeExpectedFileCount(...).target === 0 → graceful manual fallback
+ *      (project has no photo deliverables). manual_mode_reason =
+ *      'no_photo_products'.
+ *
  * Pipeline per invocation:
- *   1. Resolve the project's Photos shortlist-proposed folder via projectFolders.
- *   2. List CR3 / CR2 / ARW / NEF / RAF / DNG files.
- *   3. Determine the booked package (projects.tonomo_package fallback to first
- *      packages[] entry) → derive package_ceiling per spec §12.
- *   4. Sanity-check file count vs expected package count; warn (don't fail) if
- *      drift > ±10 %.
- *   5. INSERT a new shortlisting_rounds row (round_number = next sequence,
- *      status='processing').
- *   6. UPDATE projects.current_shortlist_round_id to the new round.
- *   7. Chunk file_paths at CHUNK_SIZE (50) and INSERT one shortlisting_jobs
- *      row of kind='extract' per chunk.
- *   8. INSERT shortlisting_events row of event_type='round_started'.
- *   9. Return { ok, round_id, job_ids[], file_count }.
+ *   1. Resolve project + project_type, products catalog, package mapping,
+ *      tiers table.
+ *   2. Resolve engine_tier_id and { target, min, max } via the helpers.
+ *   3. Manual-mode check — short-circuit to a synthetic round if either
+ *      trigger fires.
+ *   4. List Dropbox files; refuse on empty folder.
+ *   5. Open shortlisting_rounds row with engine_tier_id +
+ *      expected_count_target/min/max + (legacy package_ceiling kept for
+ *      back-compat with already-migrated rows).
+ *   6. UPDATE projects.current_shortlist_round_id.
+ *   7. Chunk file_paths and INSERT one extract job per chunk.
+ *   8. Emit round_started event.
  *
  * Auth: service_role OR master_admin / admin / manager.
  *
@@ -36,50 +50,25 @@ import {
 } from '../_shared/supabase.ts';
 import { listFolder } from '../_shared/dropbox.ts';
 import { getFolderPath } from '../_shared/projectFolders.ts';
+import {
+  computeExpectedFileCount,
+  flattenProjectProducts,
+  type ProductCatalogEntry,
+} from '../_shared/packageCounts.ts';
+import {
+  resolveEngineTierId,
+  type PackageEngineTierMappingRow,
+  type ShortlistingTierRow,
+} from '../_shared/engineTierResolver.ts';
 
 const GENERATOR = 'shortlisting-ingest';
 const CHUNK_SIZE = 50;
 const SUPPORTED_RAW_EXT = ['.cr3', '.cr2', '.arw', '.nef', '.raf', '.dng'];
 
-// Package ceilings per spec §12.
-const PACKAGE_CEILING_DEFAULT = 24;
-const PACKAGE_CEILINGS: Record<string, number> = {
-  gold: 24,
-  'gold+3': 24,
-  'day to dusk': 31,
-  'day-to-dusk': 31,
-  'day_to_dusk': 31,
-  'daytodusk': 31,
-  premium: 38,
-  architectural: 38,
-};
-
-/** Map a free-form package name onto the ceiling table. Case-insensitive. */
-function resolvePackageCeiling(packageName: string | null | undefined): number {
-  if (!packageName) return PACKAGE_CEILING_DEFAULT;
-  const key = packageName.toLowerCase().trim();
-  if (PACKAGE_CEILINGS[key] != null) return PACKAGE_CEILINGS[key];
-  // Loose match: any key that's a substring of (or is contained within) the
-  // package name. Catches 'Gold Standard', 'Premium Architectural', etc.
-  for (const [needle, ceiling] of Object.entries(PACKAGE_CEILINGS)) {
-    if (key.includes(needle) || needle.includes(key)) return ceiling;
-  }
-  return PACKAGE_CEILING_DEFAULT;
-}
-
-/**
- * Best-effort expected-file-count heuristic for sanity checking. Each composition
- * is 5 brackets, so for a Gold (~21 deliverables) we expect ~21 × 5 = 105 files,
- * with ~30 % over-shoot for editor selection — call it ~140. We use the package
- * ceiling × 5 × 1.5 as a rough upper bound and the lower bound is half of that.
- *
- * Drift > ±10 % is logged as a warning but does NOT block the round — the
- * photographer may have intentionally over-/under-shot.
- */
-function expectedFileCountRange(packageCeiling: number): { low: number; high: number } {
-  const center = packageCeiling * 5 * 1.5;
-  return { low: Math.floor(center * 0.5), high: Math.ceil(center * 1.5) };
-}
+// Engine roles that count toward the photo shortlist target. Drone, video,
+// floorplan, etc. are separate engine_roles handled by their own engines.
+const PHOTO_ENGINE_ROLES = ['photo_day_shortlist', 'photo_dusk_shortlist'];
+const PHOTO_FALLBACK_CATEGORIES = ['Images', 'images'];
 
 interface RequestBody {
   project_id?: string;
@@ -134,7 +123,12 @@ interface IngestResult {
   job_ids: string[];
   file_count: number;
   package_type: string | null;
-  package_ceiling: number;
+  engine_tier_id: string | null;
+  expected_count_target: number;
+  expected_count_min: number;
+  expected_count_max: number;
+  status: 'processing' | 'manual';
+  manual_mode_reason: string | null;
   warnings: string[];
 }
 
@@ -147,16 +141,36 @@ async function ingest(
   const admin = getAdminClient();
   const warnings: string[] = [];
 
-  // 1. Project lookup — package, dropbox_root_path.
+  // 1. Project lookup — full shape for tier + count resolution.
   const { data: project, error: projErr } = await admin
     .from('projects')
-    .select('id, tonomo_package, packages, dropbox_root_path')
+    .select(
+      'id, tonomo_package, packages, products, pricing_tier, project_type_id, dropbox_root_path',
+    )
     .eq('id', projectId)
     .maybeSingle();
   if (projErr) throw new Error(`project lookup failed: ${projErr.message}`);
   if (!project) throw new Error(`project ${projectId} not found`);
 
-  // Resolve package — prefer tonomo_package, fall back to first packages[] entry.
+  // 2. Project type — for manual-mode trigger #1.
+  let shortlistingSupported = true;
+  if (project.project_type_id) {
+    const { data: ptype, error: ptypeErr } = await admin
+      .from('project_types')
+      .select('id, shortlisting_supported')
+      .eq('id', project.project_type_id)
+      .maybeSingle();
+    if (ptypeErr) {
+      warnings.push(`project_types lookup failed: ${ptypeErr.message} (defaulting shortlisting_supported=true)`);
+    } else if (ptype && typeof ptype.shortlisting_supported === 'boolean') {
+      shortlistingSupported = ptype.shortlisting_supported;
+    }
+  }
+
+  // 3. Resolve human-readable package name (for round.package_type, audit
+  // events, prompt context). Prefer tonomo_package (legacy), fall back to
+  // first packages[] entry. Engine logic no longer reads this — engine_tier_id
+  // is the source of truth.
   let packageType: string | null = project.tonomo_package || null;
   if (!packageType && Array.isArray(project.packages) && project.packages.length > 0) {
     const first = project.packages[0];
@@ -165,9 +179,56 @@ async function ingest(
       packageType = first.name;
     }
   }
-  const packageCeiling = resolvePackageCeiling(packageType);
 
-  // 2. Resolve folder path + list CR3 files.
+  // 4. Load products catalog, package mapping, and tiers in parallel.
+  const [productsCatalog, packageEngineTierMapping, tiers] = await Promise.all([
+    loadProductsCatalog(admin),
+    loadPackageEngineTierMapping(admin),
+    loadShortlistingTiers(admin),
+  ]);
+
+  // 5. Resolve engine tier (defensive: if shortlisting_tiers table is unseeded
+  // we'd throw; fall through to a clear error so ops can backfill).
+  let engineTierId: string | null = null;
+  try {
+    engineTierId = resolveEngineTierId(project, packageEngineTierMapping, tiers);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`engine tier resolution failed: ${msg}`);
+  }
+
+  // 6. Compute photo count target via dynamic helper.
+  const flatProducts = flattenProjectProducts(project);
+  const photoCount = computeExpectedFileCount(
+    flatProducts,
+    productsCatalog,
+    PHOTO_ENGINE_ROLES,
+    PHOTO_FALLBACK_CATEGORIES,
+  );
+
+  // 7. Manual-mode triggers (Joseph 2026-04-27, spec Section 4b).
+  const manualReason = !shortlistingSupported
+    ? 'project_type_unsupported'
+    : photoCount.target === 0
+      ? 'no_photo_products'
+      : null;
+
+  if (manualReason) {
+    return await createManualRound({
+      admin,
+      projectId,
+      triggerSource,
+      actorId,
+      actorType,
+      packageType,
+      engineTierId,
+      photoCount,
+      manualReason,
+      warnings,
+    });
+  }
+
+  // 8. Resolve folder path + list CR3 files (engine mode only).
   let folderPath: string;
   try {
     folderPath = await getFolderPath(projectId, 'photos_raws_shortlist_proposed');
@@ -188,14 +249,9 @@ async function ingest(
 
   const fileCount = filePaths.length;
 
-  // Burst 15 X2: refuse to create a round when the folder is empty. Without
-  // this, ingest happily INSERTs a status='processing' shortlisting_rounds
-  // row with zero extract jobs, the dispatcher does nothing, and the round
-  // is stuck forever — visible to ops as a permanently-processing round
-  // that no one can clear without SQL surgery. The frontend's
-  // hasInflightRound guard then ALSO blocks "Run Shortlist Now" until a
-  // human resolves the orphan. Returning a clear 400 keeps DB clean and
-  // tells the photographer/operator to put files in the folder first.
+  // Burst 15 X2: refuse to create a round when the folder is empty (see prior
+  // commit history; preserved here verbatim — empty folder is still an error,
+  // not a manual-mode trigger).
   if (fileCount === 0) {
     throw new Error(
       `Photos shortlist folder is empty for project ${projectId} (folder='${folderPath}'). ` +
@@ -203,15 +259,20 @@ async function ingest(
     );
   }
 
-  // 3. Sanity check — drift > ±10 % from expected range.
-  const { low, high } = expectedFileCountRange(packageCeiling);
-  if (fileCount < low) {
-    warnings.push(`File count ${fileCount} below expected lower bound ${low} for package '${packageType ?? 'unknown'}'`);
-  } else if (fileCount > high) {
-    warnings.push(`File count ${fileCount} above expected upper bound ${high} for package '${packageType ?? 'unknown'}'`);
+  // 9. Sanity check — drift outside the dynamic min/max range.
+  if (fileCount < photoCount.min) {
+    warnings.push(
+      `File count ${fileCount} below expected lower bound ${photoCount.min} (target ${photoCount.target} ± 3 for package '${packageType ?? 'unknown'}')`,
+    );
+  } else if (fileCount > photoCount.max + (photoCount.target * 5)) {
+    // Photographers routinely shoot 5-10× the deliverable count for editor
+    // selection; warn only on truly excessive over-shoots.
+    warnings.push(
+      `File count ${fileCount} substantially above expected target ${photoCount.target} (over-shoot factor ${(fileCount / Math.max(photoCount.target, 1)).toFixed(1)}× for package '${packageType ?? 'unknown'}')`,
+    );
   }
 
-  // 4. Determine next round_number for this project.
+  // 10. Determine next round_number for this project.
   const { data: existingRounds, error: existingErr } = await admin
     .from('shortlisting_rounds')
     .select('round_number')
@@ -223,7 +284,7 @@ async function ingest(
     ? (existingRounds[0].round_number || 0)
     : 0) + 1;
 
-  // 5. Insert the round.
+  // 11. Insert the round.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
     .insert({
@@ -231,7 +292,13 @@ async function ingest(
       round_number: nextRoundNumber,
       status: 'processing',
       package_type: packageType,
-      package_ceiling: packageCeiling,
+      // Legacy column kept populated for back-compat with already-migrated
+      // rows; new code paths read expected_count_target instead.
+      package_ceiling: photoCount.target,
+      engine_tier_id: engineTierId,
+      expected_count_target: photoCount.target,
+      expected_count_min: photoCount.min,
+      expected_count_max: photoCount.max,
       total_compositions: null,
       trigger_source: triggerSource,
       started_at: new Date().toISOString(),
@@ -242,25 +309,16 @@ async function ingest(
 
   const roundId: string = round.id;
 
-  // 6. Bind project to the new round.
+  // 12. Bind project to the new round.
   const { error: linkErr } = await admin
     .from('projects')
     .update({ current_shortlist_round_id: roundId })
     .eq('id', projectId);
   if (linkErr) {
-    // Non-fatal — surface warning but proceed (round + jobs are still valid).
     warnings.push(`projects.current_shortlist_round_id update failed: ${linkErr.message}`);
   }
 
-  // 7. Enqueue extract jobs (chunked).
-  // Burst 11 S4: atomically insert all chunks in ONE statement. The previous
-  // for-loop did one INSERT per chunk; if chunk N failed (network blip, RLS
-  // hiccup) we'd throw with chunks 1..N-1 already committed. The dispatcher's
-  // chain logic counts extract jobs in pending/running and fires pass0 once
-  // all of them complete — but a round with only 3 of 4 chunks ever enqueued
-  // would silently complete pass0 on incomplete data, dropping ~50 files
-  // from the universe. PostgREST's array-form INSERT is atomic — either all
-  // rows commit or none do — so a failure leaves a clean state.
+  // 13. Enqueue extract jobs (chunked).
   const jobIds: string[] = [];
   if (filePaths.length > 0) {
     const chunkRows: Array<Record<string, unknown>> = [];
@@ -294,9 +352,6 @@ async function ingest(
         `extract job batch returned ${insertedJobs.length} rows but expected ${chunkRows.length}`,
       );
     }
-    // Sort by chunk_index so jobIds reflect file order — defensive against
-    // PostgREST returning rows in arbitrary order. Tests/audit consumers
-    // expect job_ids[0] = chunk 0.
     // deno-lint-ignore no-explicit-any
     const sorted = (insertedJobs as any[]).slice().sort((a, b) => {
       const ai = Number(a?.payload?.chunk_index ?? 0);
@@ -306,7 +361,7 @@ async function ingest(
     for (const r of sorted) jobIds.push(r.id);
   }
 
-  // 8. Audit event.
+  // 14. Audit event.
   const { error: evtErr } = await admin
     .from('shortlisting_events')
     .insert({
@@ -319,7 +374,10 @@ async function ingest(
         trigger_source: triggerSource,
         file_count: fileCount,
         package_type: packageType,
-        package_ceiling: packageCeiling,
+        engine_tier_id: engineTierId,
+        expected_count_target: photoCount.target,
+        expected_count_min: photoCount.min,
+        expected_count_max: photoCount.max,
         job_ids: jobIds,
         chunk_size: CHUNK_SIZE,
         warnings,
@@ -335,7 +393,158 @@ async function ingest(
     job_ids: jobIds,
     file_count: fileCount,
     package_type: packageType,
-    package_ceiling: packageCeiling,
+    engine_tier_id: engineTierId,
+    expected_count_target: photoCount.target,
+    expected_count_min: photoCount.min,
+    expected_count_max: photoCount.max,
+    status: 'processing',
+    manual_mode_reason: null,
     warnings,
   };
+}
+
+// ─── Manual-mode synthetic round ─────────────────────────────────────────────
+
+interface CreateManualRoundOpts {
+  admin: ReturnType<typeof getAdminClient>;
+  projectId: string;
+  triggerSource: string;
+  actorId: string | null;
+  actorType: 'system' | 'user';
+  packageType: string | null;
+  engineTierId: string | null;
+  photoCount: { target: number; min: number; max: number };
+  manualReason: string;
+  warnings: string[];
+}
+
+async function createManualRound(opts: CreateManualRoundOpts): Promise<IngestResult> {
+  const {
+    admin,
+    projectId,
+    triggerSource,
+    actorId,
+    actorType,
+    packageType,
+    engineTierId,
+    photoCount,
+    manualReason,
+    warnings,
+  } = opts;
+
+  const { data: existingRounds, error: existingErr } = await admin
+    .from('shortlisting_rounds')
+    .select('round_number')
+    .eq('project_id', projectId)
+    .order('round_number', { ascending: false })
+    .limit(1);
+  if (existingErr) throw new Error(`round_number lookup failed: ${existingErr.message}`);
+  const nextRoundNumber = (existingRounds && existingRounds.length > 0
+    ? (existingRounds[0].round_number || 0)
+    : 0) + 1;
+
+  const { data: round, error: roundErr } = await admin
+    .from('shortlisting_rounds')
+    .insert({
+      project_id: projectId,
+      round_number: nextRoundNumber,
+      status: 'manual',
+      package_type: packageType,
+      package_ceiling: photoCount.target,
+      engine_tier_id: engineTierId,
+      expected_count_target: photoCount.target,
+      expected_count_min: photoCount.min,
+      expected_count_max: photoCount.max,
+      total_compositions: null,
+      trigger_source: triggerSource,
+      started_at: new Date().toISOString(),
+      manual_mode_reason: manualReason,
+    })
+    .select('id, round_number')
+    .single();
+  if (roundErr || !round) {
+    throw new Error(`manual-mode round insert failed: ${roundErr?.message || 'no row returned'}`);
+  }
+
+  const roundId: string = round.id;
+
+  const { error: linkErr } = await admin
+    .from('projects')
+    .update({ current_shortlist_round_id: roundId })
+    .eq('id', projectId);
+  if (linkErr) {
+    warnings.push(`projects.current_shortlist_round_id update failed: ${linkErr.message}`);
+  }
+
+  // Audit event — distinct event_type so dashboards can surface manual-mode
+  // rounds separately from engine rounds.
+  const { error: evtErr } = await admin
+    .from('shortlisting_events')
+    .insert({
+      project_id: projectId,
+      round_id: roundId,
+      event_type: 'round_started_manual',
+      actor_type: actorType,
+      actor_id: actorId,
+      payload: {
+        trigger_source: triggerSource,
+        manual_mode_reason: manualReason,
+        package_type: packageType,
+        engine_tier_id: engineTierId,
+        expected_count_target: photoCount.target,
+        warnings,
+      },
+    });
+  if (evtErr) {
+    warnings.push(`event insert failed: ${evtErr.message}`);
+  }
+
+  return {
+    round_id: roundId,
+    round_number: round.round_number,
+    job_ids: [],
+    file_count: 0,
+    package_type: packageType,
+    engine_tier_id: engineTierId,
+    expected_count_target: photoCount.target,
+    expected_count_min: photoCount.min,
+    expected_count_max: photoCount.max,
+    status: 'manual',
+    manual_mode_reason: manualReason,
+    warnings,
+  };
+}
+
+// ─── DB loaders ──────────────────────────────────────────────────────────────
+
+async function loadProductsCatalog(
+  admin: ReturnType<typeof getAdminClient>,
+): Promise<ProductCatalogEntry[]> {
+  const { data, error } = await admin
+    .from('products')
+    .select('id, category, engine_role')
+    .eq('is_active', true);
+  if (error) throw new Error(`products catalog fetch failed: ${error.message}`);
+  return Array.isArray(data) ? (data as ProductCatalogEntry[]) : [];
+}
+
+async function loadPackageEngineTierMapping(
+  admin: ReturnType<typeof getAdminClient>,
+): Promise<PackageEngineTierMappingRow[]> {
+  const { data, error } = await admin
+    .from('package_engine_tier_mapping')
+    .select('package_id, tier_choice, engine_tier_id');
+  if (error) throw new Error(`package_engine_tier_mapping fetch failed: ${error.message}`);
+  return Array.isArray(data) ? (data as PackageEngineTierMappingRow[]) : [];
+}
+
+async function loadShortlistingTiers(
+  admin: ReturnType<typeof getAdminClient>,
+): Promise<ShortlistingTierRow[]> {
+  const { data, error } = await admin
+    .from('shortlisting_tiers')
+    .select('id, tier_code')
+    .eq('is_active', true);
+  if (error) throw new Error(`shortlisting_tiers fetch failed: ${error.message}`);
+  return Array.isArray(data) ? (data as ShortlistingTierRow[]) : [];
 }
