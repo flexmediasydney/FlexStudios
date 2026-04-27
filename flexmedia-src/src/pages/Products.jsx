@@ -44,6 +44,8 @@ function getChangedFields(oldData, newData) {
     ["pricing_type", oldData?.pricing_type, newData?.pricing_type],
     ["min_quantity", oldData?.min_quantity, newData?.min_quantity],
     ["max_quantity", oldData?.max_quantity, newData?.max_quantity],
+    // W7.8: track shortlisting engine_role changes in product audit log.
+    ["engine_role", oldData?.engine_role, newData?.engine_role],
   ];
   for (const [field, oldVal, newVal] of scalarFields) {
     if (String(oldVal ?? "") !== String(newVal ?? "")) {

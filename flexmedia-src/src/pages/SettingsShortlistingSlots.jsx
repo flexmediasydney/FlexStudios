@@ -68,6 +68,21 @@ import { cn } from "@/lib/utils";
 // ── Constants ───────────────────────────────────────────────────────────────
 const PACKAGE_OPTIONS = ["Gold", "Day to Dusk", "Premium"];
 
+// Wave 7 P1-8: shortlisting engine roles. MUST match the migration 337
+// backfill rules and supabase/functions/_shared/slotEligibility.ts ENGINE_ROLES.
+// Used for the new "Eligible when engine roles" multiselect — the resolver
+// filters slots whose eligible_when_engine_roles overlaps the project's
+// products' engine_role union.
+const ENGINE_ROLE_OPTIONS = [
+  "photo_day_shortlist",
+  "photo_dusk_shortlist",
+  "drone_shortlist",
+  "floorplan_qa",
+  "video_day_shortlist",
+  "video_dusk_shortlist",
+  "agent_portraits",
+];
+
 // Common eligible_room_types autocomplete suggestions, derived from the
 // seeded slot definitions. The DB doesn't enforce a fixed enum, so the
 // list is suggestion-only — admins can type any room key.
@@ -100,6 +115,10 @@ function emptyForm() {
     display_name: "",
     phase: 2,
     package_types: [...PACKAGE_OPTIONS],
+    // W7.8: which product engine roles trigger this slot. Empty array =
+    // fall back to package_types substring match (legacy path during the
+    // transition window).
+    eligible_when_engine_roles: [],
     eligible_room_types: [],
     max_images: 1,
     min_images: 0,
@@ -266,6 +285,40 @@ function PackageMultiselect({ value, onChange }) {
   );
 }
 
+// W7.8: identical UX to PackageMultiselect, scoped to the engine_role enum.
+// Empty selection means "fall back to package_types substring match" — this
+// is intentional, the slot keeps working under the legacy rule until it's
+// explicitly assigned engine roles.
+function EngineRoleMultiselect({ value, onChange }) {
+  const arr = Array.isArray(value) ? value : [];
+  const toggle = (r) => {
+    if (arr.includes(r)) onChange(arr.filter((x) => x !== r));
+    else onChange([...arr, r]);
+  };
+  return (
+    <div className="flex flex-wrap gap-2">
+      {ENGINE_ROLE_OPTIONS.map((r) => {
+        const on = arr.includes(r);
+        return (
+          <button
+            key={r}
+            type="button"
+            onClick={() => toggle(r)}
+            className={cn(
+              "text-xs rounded-md border px-2.5 py-1 transition-colors font-mono",
+              on
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-background hover:bg-muted/40 border-border",
+            )}
+          >
+            {r}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Edit modal ──────────────────────────────────────────────────────────────
 function EditSlotDialog({
   open,
@@ -396,14 +449,31 @@ function EditSlotDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs">Package types</Label>
+            <Label className="text-xs">Package types (legacy fallback)</Label>
             <PackageMultiselect
               value={form.package_types}
               onChange={(v) => update("package_types", v)}
             />
+            <p className="text-[10px] text-muted-foreground">
+              Used as the fallback rule when "Eligible when engine roles" is empty. Once every
+              slot has explicit engine roles, this field can be retired.
+            </p>
             {errors.package_types && (
               <p className="text-[10px] text-red-600">{errors.package_types}</p>
             )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Eligible when engine roles</Label>
+            <EngineRoleMultiselect
+              value={form.eligible_when_engine_roles}
+              onChange={(v) => update("eligible_when_engine_roles", v)}
+            />
+            <p className="text-[10px] text-muted-foreground">
+              W7.8: select all engine roles that should trigger this slot. Slot is included for
+              a round when ANY selected role overlaps the project's products' engine roles. Leave
+              empty to fall back to the legacy package_types match above.
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -527,6 +597,11 @@ export default function SettingsShortlistingSlots() {
           display_name: form.display_name.trim(),
           phase: Number(form.phase),
           package_types: form.package_types,
+          // W7.8: persist the new engine-role list. Empty array is fine —
+          // resolver falls back to package_types substring match.
+          eligible_when_engine_roles: Array.isArray(form.eligible_when_engine_roles)
+            ? form.eligible_when_engine_roles
+            : [],
           eligible_room_types: form.eligible_room_types,
           max_images: Number(form.max_images),
           min_images: Number(form.min_images),
@@ -543,6 +618,10 @@ export default function SettingsShortlistingSlots() {
         display_name: form.display_name.trim(),
         phase: Number(form.phase),
         package_types: form.package_types,
+        // W7.8: persist the new engine-role list on the new version.
+        eligible_when_engine_roles: Array.isArray(form.eligible_when_engine_roles)
+          ? form.eligible_when_engine_roles
+          : [],
         eligible_room_types: form.eligible_room_types,
         max_images: Number(form.max_images),
         min_images: Number(form.min_images),
@@ -629,6 +708,13 @@ export default function SettingsShortlistingSlots() {
           phase: row.phase || 2,
           package_types: Array.isArray(row.package_types)
             ? [...row.package_types]
+            : [],
+          // W7.8: pre-fill with the existing engine roles (or [] for legacy
+          // rows that haven't been edited yet — saving will then write the
+          // value chosen here, leaving the legacy package_types fallback
+          // intact for any unsaved sibling rows).
+          eligible_when_engine_roles: Array.isArray(row.eligible_when_engine_roles)
+            ? [...row.eligible_when_engine_roles]
             : [],
           eligible_room_types: Array.isArray(row.eligible_room_types)
             ? [...row.eligible_room_types]
@@ -763,6 +849,7 @@ export default function SettingsShortlistingSlots() {
                       <th className="px-3 py-2 font-medium">Slot ID</th>
                       <th className="px-3 py-2 font-medium">Name</th>
                       <th className="px-3 py-2 font-medium">Phase</th>
+                      <th className="px-3 py-2 font-medium">Engine roles</th>
                       <th className="px-3 py-2 font-medium">Packages</th>
                       <th className="px-3 py-2 font-medium">Room types</th>
                       <th className="px-3 py-2 font-medium tabular-nums">Min/Max</th>
@@ -780,6 +867,9 @@ export default function SettingsShortlistingSlots() {
                         : [];
                       const pkgs = Array.isArray(row.package_types)
                         ? row.package_types
+                        : [];
+                      const engineRoles = Array.isArray(row.eligible_when_engine_roles)
+                        ? row.eligible_when_engine_roles
                         : [];
                       return (
                         <tr
@@ -800,6 +890,25 @@ export default function SettingsShortlistingSlots() {
                             >
                               {phaseInfo.label}
                             </Badge>
+                          </td>
+                          <td className="px-3 py-2 max-w-[220px]">
+                            {engineRoles.length === 0 ? (
+                              <span className="text-[10px] text-muted-foreground italic">
+                                (legacy fallback)
+                              </span>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {engineRoles.map((r) => (
+                                  <Badge
+                                    key={r}
+                                    variant="outline"
+                                    className="text-[9px] font-mono"
+                                  >
+                                    {r}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
                           </td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap gap-1">

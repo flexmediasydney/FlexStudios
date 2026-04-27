@@ -26,6 +26,22 @@ const categories = [
   { value: "other", label: "Other" }
 ];
 
+// Wave 7 P1-8: shortlisting engine roles. MUST match the migration 337
+// backfill rules and supabase/functions/_shared/slotEligibility.ts ENGINE_ROLES.
+// Stored as TEXT on products.engine_role (no DB enum) for forward-compat.
+// "(none)" means NULL — addons (Editing, Fees) don't trigger any engine
+// behaviour.
+const ENGINE_ROLE_OPTIONS = [
+  { value: "__none__", label: "(none — no engine impact)" },
+  { value: "photo_day_shortlist", label: "Photo · day shortlist" },
+  { value: "photo_dusk_shortlist", label: "Photo · dusk shortlist" },
+  { value: "drone_shortlist", label: "Drone shortlist" },
+  { value: "floorplan_qa", label: "Floorplan QA (tab, not slot)" },
+  { value: "video_day_shortlist", label: "Video · day shortlist" },
+  { value: "video_dusk_shortlist", label: "Video · dusk shortlist" },
+  { value: "agent_portraits", label: "Agent portraits (OOS routing)" }
+];
+
 const initialFormData = {
   name: "",
   description: "",
@@ -35,6 +51,9 @@ const initialFormData = {
   pricing_type: "fixed",
   category: "photography",
   dusk_only: false,
+  // Wave 7 P1-8: shortlisting engine role for this product. NULL = addon
+  // / no engine impact.
+  engine_role: null,
   project_type_ids: [],
   standard_tier: {
     base_price: 0,
@@ -509,6 +528,33 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                   onCheckedChange={(checked) => setFormData(prev => ({ ...prev, dusk_only: checked }))}
                 />
                 <Label htmlFor="dusk" className="flex-1 cursor-pointer">Dusk Only Services</Label>
+              </div>
+
+              {/* W7.8: shortlisting engine role */}
+              <div>
+                <Label htmlFor="engine_role" className="text-xs font-medium text-muted-foreground">
+                  Shortlisting engine role
+                </Label>
+                <Select
+                  value={formData.engine_role ?? "__none__"}
+                  onValueChange={(v) => setFormData(prev => ({
+                    ...prev,
+                    engine_role: v === "__none__" ? null : v
+                  }))}
+                >
+                  <SelectTrigger id="engine_role" className="mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ENGINE_ROLE_OPTIONS.map(opt => (
+                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  Drives which shortlisting slots this product makes eligible. Editing/Fees addons
+                  should leave this as "(none)".
+                </p>
               </div>
             </div>
 
