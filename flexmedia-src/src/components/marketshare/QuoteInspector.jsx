@@ -46,6 +46,7 @@ import {
   Clock, ArrowRight, Cpu, Award,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useActivePackages } from "@/hooks/useActivePackages";
 
 // ── Formatters ───────────────────────────────────────────────────────────
 
@@ -99,14 +100,20 @@ function fmtDate(d) {
 // ── Classifier + default pricing (client-side mirror of migration 159) ───
 // Used only by the What-if card to let the user play with inputs without a
 // round-trip. Canonical authority lives in the SQL — keep these in sync.
+//
+// Wave 7 P1-11.b: the `fallbackName` fields are LAST-RESORT only. Display
+// names come from the live `packages` table via useActivePackages() inside
+// WhatIfCard, matched by the substring contained in the rule key. Per
+// Joseph's architectural correction (2026-04-27): packages must NEVER be
+// hardcoded as the authoritative source of names in the frontend.
 
 const PACKAGE_DEFAULTS = {
-  // [name, stdPrice, prmPrice, baseQty (photos included)]
-  flex:    { name: "Flex Package",       std: 1650, prm: 2200, qty: 40 },
-  dusk:    { name: "Dusk Video Package", std: 1320, prm: 1750, qty: 30 },
-  day:     { name: "Day Video Package",  std:  990, prm: 1320, qty: 20 },
-  gold:    { name: "Gold Package",       std:  660, prm:  880, qty: 15 },
-  silver:  { name: "Silver Package",     std:  440, prm:  550, qty: 10 },
+  // [fallbackName, stdPrice, prmPrice, baseQty (photos included)]
+  flex:    { fallbackName: "Flex Package",       std: 1650, prm: 2200, qty: 40 },
+  dusk:    { fallbackName: "Dusk Video Package", std: 1320, prm: 1750, qty: 30 },
+  day:     { fallbackName: "Day Video Package",  std:  990, prm: 1320, qty: 20 },
+  gold:    { fallbackName: "Gold Package",       std:  660, prm:  880, qty: 15 },
+  silver:  { fallbackName: "Silver Package",     std:  440, prm:  550, qty: 10 },
 };
 
 // Sales image overflow: above base qty you pay per extra photo
@@ -910,6 +917,22 @@ function WhatIfCard({ listing, classification, tierResolution, actualPricing }) 
   );
   const [tier, setTier] = useState(tierResolution.resolved_tier || "standard");
 
+  // Wave 7 P1-11.b: live packages are the source of truth for display names.
+  // We match the rule key (flex/dusk/day/gold/silver) against the live names
+  // case-insensitively — first substring match wins. Falls back to the
+  // hardcoded fallbackName if the live catalog doesn't carry that rule yet.
+  const { names: livePackageNames } = useActivePackages();
+  const pkgKeyToName = useMemo(() => {
+    const out = {};
+    for (const key of Object.keys(PACKAGE_DEFAULTS)) {
+      const live = livePackageNames.find(
+        (n) => String(n).toLowerCase().includes(key.toLowerCase()),
+      );
+      out[key] = live || PACKAGE_DEFAULTS[key].fallbackName;
+    }
+    return out;
+  }, [livePackageNames]);
+
   const askingPrice = useMemo(() => {
     const n = Number(String(askingPriceStr).replace(/[^\d.]/g, ""));
     return isFinite(n) && n > 0 ? n : 0;
@@ -918,8 +941,14 @@ function WhatIfCard({ listing, classification, tierResolution, actualPricing }) 
   const sim = useMemo(() => {
     const pkgKey = classifyLocal({ photos, floorplan, video, askingPrice });
     const price = priceLocal({ pkgKey, tier, photos });
-    return { pkgKey, pkg: pkgKey ? PACKAGE_DEFAULTS[pkgKey] : null, ...price };
-  }, [photos, floorplan, video, askingPrice, tier]);
+    const def = pkgKey ? PACKAGE_DEFAULTS[pkgKey] : null;
+    const displayName = pkgKey ? pkgKeyToName[pkgKey] : null;
+    return {
+      pkgKey,
+      pkg: def ? { ...def, name: displayName } : null,
+      ...price,
+    };
+  }, [photos, floorplan, video, askingPrice, tier, pkgKeyToName]);
 
   const actualTotal = Number(
     (actualPricing.math_lines || []).find((l) => l.total)?.amount || 0
