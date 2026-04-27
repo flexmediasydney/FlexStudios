@@ -1455,19 +1455,27 @@ const rows = __rows_raw.data ?? [];
       .filter(Boolean) as string[];
 
     // Load existing listing prices + types for change detection (MUST be before listingRecords mapping)
-    const existingListingData = new Map<string, { asking_price: number | null; listing_type: string | null }>();
+    // sold_date / first_seen_at are needed by the sold-date fallback so we
+    // can detect already-sold-but-dateless rows and prefer first_seen_at as
+    // the proxy date over today's date.
+    const existingListingData = new Map<string, { asking_price: number | null; listing_type: string | null; sold_date: string | null; first_seen_at: string | null }>();
     if (candidateListingIds.length > 0) {
       const CHUNK = 500;
       for (let i = 0; i < candidateListingIds.length; i += CHUNK) {
         const chunk = candidateListingIds.slice(i, i + CHUNK);
         const __chunkExisting_raw = await admin.from('pulse_listings')
-          .select('source_listing_id, asking_price, listing_type')
+          .select('source_listing_id, asking_price, listing_type, sold_date, first_seen_at')
           .in('source_listing_id', chunk);
 const chunkExisting = __chunkExisting_raw.data ?? [];
         chunkExisting.forEach((l: any) => {
           if (l.source_listing_id) {
             existingListingIds.add(l.source_listing_id);
-            existingListingData.set(l.source_listing_id, { asking_price: l.asking_price, listing_type: l.listing_type });
+            existingListingData.set(l.source_listing_id, {
+              asking_price: l.asking_price,
+              listing_type: l.listing_type,
+              sold_date: l.sold_date,
+              first_seen_at: l.first_seen_at,
+            });
           }
         });
       }
@@ -1519,11 +1527,23 @@ const chunkExisting = __chunkExisting_raw.data ?? [];
       // (migration 217 backfills the historical stragglers; this block
       // prevents new ones). We only populate for the transition — an
       // already-sold row keeps whatever sold_date it had.
+      //
+      // ── 2026-04-28 follow-up: a third gap was missed — an EXISTING row
+      // that was ALREADY listing_type='sold' but with sold_date IS NULL
+      // (e.g. arrived as sold from azzouzana on the very first scrape but
+      // with no soldDate field, then re-touched on every subsequent scrape
+      // without ever entering the for_sale→sold branch). The migration 217
+      // backfill caught the historical batch but more accumulated since.
+      // For these rows the best proxy is first_seen_at (when we first saw
+      // it as sold) — falling back to today's date if even that's missing.
       if (!extractedSoldDate && isSoldListing && !isNew) {
         const prev = existingListingData.get(listingId!);
         const wasNotSoldBefore = prev && prev.listing_type !== 'sold';
-        if (wasNotSoldBefore) {
-          extractedSoldDate = now.slice(0, 10);
+        const wasAlreadySoldButDateless = prev && prev.listing_type === 'sold' && !prev.sold_date;
+        if (wasNotSoldBefore || wasAlreadySoldButDateless) {
+          extractedSoldDate = wasAlreadySoldButDateless && prev?.first_seen_at
+            ? String(prev.first_seen_at).slice(0, 10)
+            : now.slice(0, 10);
           soldDateInferredForThisRow = true;
         }
       }

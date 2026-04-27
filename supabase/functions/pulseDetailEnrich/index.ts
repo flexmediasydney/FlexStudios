@@ -600,19 +600,29 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
 
       // B04: all priority modes sort by detail_enriched_at NULLS FIRST to avoid
       // repeatedly picking the same already-processed listings.
+      //
+      // 2026-04-28: tie-break flipped from `last_synced_at DESC` to ASC.
+      // Rationale: the cron has a hard rate-limit ceiling (~12 listings per
+      // 5-min tick). When a one-time bulk ingest ever exceeds the daily
+      // throughput budget (e.g. the 24,816-row spike on 2026-04-18), the
+      // old DESC tie-break let every fresh resync jump to the front of the
+      // queue, starving the leftover NULL-enriched rows. Today: 2,432 rows
+      // unenriched, oldest from 2026-04-15 (12 days). Switching to ASC
+      // means within the NULL bucket we drain in oldest-last_synced order,
+      // which actually clears backlogs deterministically.
       if (priorityMode === 'sold_first') {
         query = query.eq('listing_type', 'sold').is('sold_date', null)
           .order('detail_enriched_at', { ascending: true, nullsFirst: true })
-          .order('last_synced_at', { ascending: false });
+          .order('last_synced_at', { ascending: true });
       } else if (priorityMode === 'auction_first') {
         query = query.in('listing_type', ['for_sale', 'under_contract']).ilike('price_text', '%auction%')
           .order('detail_enriched_at', { ascending: true, nullsFirst: true })
-          .order('last_synced_at', { ascending: false });
+          .order('last_synced_at', { ascending: true });
       } else {
         // auto: stalest or never-enriched first
         query = query.or('detail_enriched_at.is.null,detail_enriched_at.lt.' + new Date(Date.now() - 14 * 86400 * 1000).toISOString())
           .order('detail_enriched_at', { ascending: true, nullsFirst: true })
-          .order('last_synced_at', { ascending: false });
+          .order('last_synced_at', { ascending: true });
       }
 
       const { data } = await query;
