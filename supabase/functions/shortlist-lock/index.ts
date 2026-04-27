@@ -193,13 +193,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // ── Load round + project ────────────────────────────────────────────────
   // Wave 7 P1-12 (W7.4): also pull round_number + package_type for the audit
-  // JSON mirror written at finalize. engine_version + tier_used are NOT
-  // columns on shortlisting_rounds today (mig 282); the audit builder accepts
-  // null for both and the JSON shape is forward-compat — if a future migration
-  // adds those columns, extend the select here.
+  // JSON mirror written at finalize.
+  // Wave 8 (W8.4): also pull engine_version + tier_config_version + engine_tier_id
+  // so the audit JSON can include provenance (mig 344).
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
-    .select('id, project_id, status, locked_at, locked_by, round_number, package_type')
+    .select(
+      'id, project_id, status, locked_at, locked_by, round_number, package_type, engine_version, tier_config_version, engine_tier_id',
+    )
     .eq('id', roundId)
     .maybeSingle();
   if (roundErr) return errorResponse(`round lookup failed: ${roundErr.message}`, 500, req);
@@ -416,6 +417,52 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Postgres. Sorting by group_id gives a fully deterministic snapshot.
   const confirmedShortlistGroupIds = Array.from(approvedSet).sort();
 
+  // ── Wave 8 (W8.4): resolve tier_used + tier_config for audit JSON ──────
+  // The round.engine_version is already on the row (mig 344). tier_used is
+  // tier_code joined from shortlisting_tiers via engine_tier_id.
+  // tier_config block is the row from shortlisting_tier_configs that was
+  // active at lock time, joined by (engine_tier_id, tier_config_version).
+  // If no row matches (legacy round / mig timing), tier_config stays null
+  // and the audit JSON omits the field per spec §9.
+  const engineVersion = (round.engine_version as string | null) ?? null;
+  let tierUsed: string | null = null;
+  let tierConfig: AuditMirrorContext['tierConfig'] = null;
+  const engineTierId = (round.engine_tier_id as string | null) ?? null;
+  const tierConfigVersion = (round.tier_config_version as number | null) ?? null;
+  if (engineTierId) {
+    try {
+      const { data: tierRow } = await admin
+        .from('shortlisting_tiers')
+        .select('tier_code')
+        .eq('id', engineTierId)
+        .maybeSingle();
+      tierUsed = (tierRow?.tier_code as string | null) ?? null;
+    } catch (e) {
+      console.warn(`[${GENERATOR}] tier_code lookup failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (engineTierId && tierConfigVersion != null) {
+    try {
+      const { data: cfgRow } = await admin
+        .from('shortlisting_tier_configs')
+        .select('dimension_weights, signal_weights, hard_reject_thresholds')
+        .eq('tier_id', engineTierId)
+        .eq('version', tierConfigVersion)
+        .maybeSingle();
+      if (cfgRow) {
+        tierConfig = {
+          tier_code: tierUsed,
+          version: tierConfigVersion,
+          dimension_weights: (cfgRow.dimension_weights as Record<string, number>) ?? null,
+          signal_weights: (cfgRow.signal_weights as Record<string, number>) ?? null,
+          hard_reject_thresholds: (cfgRow.hard_reject_thresholds as Record<string, number> | null) ?? null,
+        };
+      }
+    } catch (e) {
+      console.warn(`[${GENERATOR}] tier_config lookup failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   // ── Build the audit-mirror context once (Wave 7 P1-12 / W7.4) ──────────
   // Indexed inputs assembled here so finalizeRound (sync or async) can write
   // the JSON without touching the DB again. Cast classifications to widen the
@@ -433,6 +480,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     round.round_number as number,
     (round.package_type as string | null) ?? null,
     dropboxRootPath,
+    engineVersion,
+    tierUsed,
+    tierConfig,
   );
 
   // ── Zero-work fast path ─────────────────────────────────────────────────
@@ -783,6 +833,26 @@ interface AuditMirrorContext {
    * If null, the audit mirror is skipped (project hasn't been provisioned).
    */
   dropboxRootPath: string | null;
+  /**
+   * Wave 8 (W8.4) provenance fields. Read from shortlisting_rounds at the
+   * top of the lock handler. Pre-W8 rounds have null engine_version /
+   * tier_used; the audit JSON tolerates null gracefully.
+   */
+  engineVersion: string | null;
+  tierUsed: string | null;
+  /**
+   * Wave 8 (W8.4) tier_config block — populated when an active config
+   * existed at lock time. Resolved from the round's tier_config_version +
+   * engine_tier_id. NULL when the round predates W8 or no active config
+   * existed (engine fallback path).
+   */
+  tierConfig: {
+    tier_code: string | null;
+    version: number | null;
+    dimension_weights: Record<string, number> | null;
+    signal_weights: Record<string, number> | null;
+    hard_reject_thresholds: Record<string, number> | null;
+  } | null;
 }
 
 /**
@@ -1058,16 +1128,17 @@ async function writeAuditMirror(args: WriteAuditMirrorArgs): Promise<void> {
       package_type: ctx.packageType,
       locked_at: args.lockedAt,
       locked_by_user_id: args.lockedBy,
-      // engine_version + tier_used not on shortlisting_rounds today (mig 282).
-      // Forward-compat: the audit JSON shape includes both, set to null until a
-      // future migration adds them to the rounds table.
-      engine_version: null,
-      tier_used: null,
+      // Wave 8 (W8.4): engine_version + tier_used now sourced from
+      // shortlisting_rounds.engine_version + (engine_tier_id → tier_code).
+      engine_version: ctx.engineVersion,
+      tier_used: ctx.tierUsed,
     },
     approved: ctx.approved,
     rejected: ctx.rejected,
     overrides: ctx.overrides,
     mode: ctx.mode,
+    // Wave 8 (W8.4): tier_config provenance block. Schema 1.1.
+    tier_config: ctx.tierConfig,
   });
 
   const path = buildAuditJsonPath(ctx.dropboxRootPath, ctx.roundNumber, args.lockedAt);
@@ -1128,6 +1199,9 @@ function buildAuditMirrorContext(
   roundNumber: number,
   packageType: string | null,
   dropboxRootPath: string | null,
+  engineVersion: string | null,
+  tierUsed: string | null,
+  tierConfig: AuditMirrorContext['tierConfig'],
 ): AuditMirrorContext {
   // Index inputs once for O(1) lookups inside the per-group loop. Keys:
   //   - groupById: composition_groups by id
@@ -1233,6 +1307,9 @@ function buildAuditMirrorContext(
     rejected,
     overrides,
     dropboxRootPath,
+    engineVersion,
+    tierUsed,
+    tierConfig,
   };
 }
 
@@ -1360,6 +1437,9 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
   // ai_proposed_score are all null. Rejected + overrides are empty arrays —
   // the spec says "no AI proposed anything to override" and "undecided files
   // stay in source" (no rejection bucket).
+  // Wave 8 (W8.4): manual rounds also stamp engine_version + tier_used (from
+  // the round row populated by ingest); tier_config block stays null in
+  // manual mode (no rollup happened — no scores to capture provenance for).
   const approvedAudit: AuditApprovedInput[] = moveEntries.map((e) => ({
     group_id: e.stem,
     slot_id: null,
@@ -1367,6 +1447,21 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
     ai_proposed_score: null,
     file_stems: [e.stem],
   }));
+  const manualEngineVersion = (round.engine_version as string | null) ?? null;
+  let manualTierUsed: string | null = null;
+  const manualEngineTierId = (round.engine_tier_id as string | null) ?? null;
+  if (manualEngineTierId) {
+    try {
+      const { data: tierRow } = await admin
+        .from('shortlisting_tiers')
+        .select('tier_code')
+        .eq('id', manualEngineTierId)
+        .maybeSingle();
+      manualTierUsed = (tierRow?.tier_code as string | null) ?? null;
+    } catch (e) {
+      console.warn(`[${GENERATOR}] manual tier_code lookup failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   const auditMirror: AuditMirrorContext = {
     mode: 'manual',
     roundNumber: round.round_number as number,
@@ -1375,6 +1470,9 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
     rejected: [],
     overrides: [],
     dropboxRootPath,
+    engineVersion: manualEngineVersion,
+    tierUsed: manualTierUsed,
+    tierConfig: null,
   };
 
   // ── Snapshot for shortlisting_rounds.confirmed_shortlist_group_ids ────

@@ -4,11 +4,13 @@
  *
  * Wave 7 P1-12 (W7.4): the audit JSON is the canonical "what did this round
  * become" record per the spec resolutions. These tests pin the contract:
- *   - schema_version always '1.0'
+ *   - schema_version '1.1' as of Wave 8 (was '1.0' pre-W8)
  *   - approved + rejected are mutually exclusive on group_id (approval wins)
  *   - overrides preserved verbatim (we don't filter or reorder)
  *   - ISO 8601 timestamps round-trip and the Dropbox path-safe stamp is
  *     correct (no colons or periods in filenames)
+ *
+ * Wave 8 (W8.4): added tier_config block tests at the end of this file.
  */
 
 import {
@@ -88,14 +90,14 @@ function makeOverride(partial: Partial<AuditOverrideRow> = {}): AuditOverrideRow
 
 // ─── schema_version ──────────────────────────────────────────────────────────
 
-Deno.test('buildAuditJson: schema_version is always 1.0', () => {
+Deno.test('buildAuditJson: schema_version is 1.1 (Wave 8 bump for tier_config block)', () => {
   const out = buildAuditJson({
     round: makeRound(),
     approved: [],
     rejected: [],
     overrides: [],
   });
-  assertEquals(out.schema_version, '1.0');
+  assertEquals(out.schema_version, '1.1');
 });
 
 Deno.test('buildAuditJson: empty input produces a valid envelope', () => {
@@ -251,10 +253,10 @@ Deno.test('serializeAuditJson: 2-space pretty-printed and round-trips', () => {
   });
   const ser = serializeAuditJson(out);
   // Pretty-print check: should contain a 2-space indent.
-  assert(ser.includes('\n  "schema_version": "1.0"'), 'expected 2-space indent in serialised JSON');
+  assert(ser.includes('\n  "schema_version": "1.1"'), 'expected 2-space indent in serialised JSON');
   // Round-trip through JSON.parse.
   const parsed = JSON.parse(ser);
-  assertEquals(parsed.schema_version, '1.0');
+  assertEquals(parsed.schema_version, '1.1');
   assertEquals(parsed.approved[0].group_id, 'a-1');
   assertEquals(parsed.rejected[0].group_id, 'r-1');
 });
@@ -397,8 +399,9 @@ Deno.test('buildAuditJson: mode="manual" passed through explicitly', () => {
   assertEquals(out.overrides, []);
 });
 
-Deno.test('buildAuditJson: schema_version stays "1.0" regardless of mode', () => {
-  // mode is an additive optional field; schema_version doesn't bump.
+Deno.test('buildAuditJson: schema_version stays "1.1" regardless of mode (mode is additive)', () => {
+  // mode is an additive optional field within schema 1.1; mode does not bump
+  // the schema version (only adding new top-level fields like tier_config does).
   const engine = buildAuditJson({
     round: makeRound(),
     approved: [],
@@ -413,8 +416,8 @@ Deno.test('buildAuditJson: schema_version stays "1.0" regardless of mode', () =>
     overrides: [],
     mode: 'manual',
   });
-  assertEquals(engine.schema_version, '1.0');
-  assertEquals(manual.schema_version, '1.0');
+  assertEquals(engine.schema_version, '1.1');
+  assertEquals(manual.schema_version, '1.1');
 });
 
 Deno.test('serializeAuditJson: mode field round-trips through JSON', () => {
@@ -446,4 +449,112 @@ Deno.test('buildAuditJson: rejected entry preserves reason verbatim', () => {
   assertEquals(out.rejected[0].reason, 'near_duplicate');
   assertEquals(out.rejected[1].group_id, 'r-2');
   assertEquals(out.rejected[1].reason, 'human_action=removed');
+});
+
+// ─── tier_config block (Wave 8 / W8.4) ──────────────────────────────────────
+
+Deno.test('buildAuditJson: tier_config block omitted when input.tier_config is undefined (back-compat)', () => {
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+  });
+  // The field is OPTIONAL — when caller doesn't pass it, the rendered JSON
+  // does not include the key at all (vs explicitly null).
+  assertEquals('tier_config' in out, false);
+});
+
+Deno.test('buildAuditJson: tier_config block included when input.tier_config provided', () => {
+  const out = buildAuditJson({
+    round: makeRound({ engine_version: 'wave-8-v1', tier_used: 'P' }),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    tier_config: {
+      tier_code: 'P',
+      version: 3,
+      dimension_weights: { technical: 0.20, lighting: 0.30, composition: 0.25, aesthetic: 0.25 },
+      signal_weights: { signal_a: 1.0, signal_b: 0.8 },
+      hard_reject_thresholds: { technical: 4.5, lighting: 4.5 },
+    },
+  });
+  assertEquals(out.engine_version, 'wave-8-v1');
+  assertEquals(out.tier_used, 'P');
+  assertEquals(out.tier_config?.tier_code, 'P');
+  assertEquals(out.tier_config?.version, 3);
+  assertEquals(out.tier_config?.dimension_weights?.technical, 0.20);
+  assertEquals(out.tier_config?.dimension_weights?.lighting, 0.30);
+  assertEquals(out.tier_config?.signal_weights?.signal_a, 1.0);
+  assertEquals(out.tier_config?.hard_reject_thresholds?.technical, 4.5);
+});
+
+Deno.test('buildAuditJson: tier_config block null when input is null (engine round, no active config)', () => {
+  // Caller can explicitly pass null to mark "no active tier_config at lock
+  // time" — different from omitting the key (back-compat). Useful for
+  // analytics that want to distinguish "audit JSON written under W8 schema
+  // but no config was active" from "audit JSON pre-W8".
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    tier_config: null,
+  });
+  assertEquals('tier_config' in out, true);
+  assertEquals(out.tier_config, null);
+});
+
+Deno.test('buildAuditJson: tier_config block fields all default to null when partial input', () => {
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    tier_config: {
+      tier_code: 'S',
+      version: null,
+      dimension_weights: null,
+      signal_weights: null,
+      hard_reject_thresholds: null,
+    },
+  });
+  assertEquals(out.tier_config?.tier_code, 'S');
+  assertEquals(out.tier_config?.version, null);
+  assertEquals(out.tier_config?.dimension_weights, null);
+});
+
+Deno.test('serializeAuditJson: tier_config block round-trips through JSON when present', () => {
+  const out = buildAuditJson({
+    round: makeRound({ engine_version: 'wave-8-v1', tier_used: 'P' }),
+    approved: [],
+    rejected: [],
+    overrides: [],
+    tier_config: {
+      tier_code: 'P',
+      version: 1,
+      dimension_weights: { technical: 0.25, lighting: 0.30, composition: 0.25, aesthetic: 0.20 },
+      signal_weights: { signal_a: 1.0 },
+      hard_reject_thresholds: null,
+    },
+  });
+  const ser = serializeAuditJson(out);
+  const parsed = JSON.parse(ser);
+  assertEquals(parsed.tier_config.tier_code, 'P');
+  assertEquals(parsed.tier_config.version, 1);
+  assertEquals(parsed.tier_config.dimension_weights.lighting, 0.30);
+  assertEquals(parsed.tier_config.hard_reject_thresholds, null);
+});
+
+Deno.test('buildAuditJson: schema_version is 1.1 even with tier_config absent (additive field)', () => {
+  // tier_config is optional within 1.1; older readers parsing 1.1 should
+  // tolerate missing tier_config gracefully.
+  const out = buildAuditJson({
+    round: makeRound(),
+    approved: [],
+    rejected: [],
+    overrides: [],
+  });
+  assertEquals(out.schema_version, '1.1');
+  assertEquals('tier_config' in out, false);
 });

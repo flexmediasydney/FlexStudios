@@ -29,10 +29,12 @@
  * Round-level fields the audit JSON needs. Read once at the top of the lock
  * function from `shortlisting_rounds`.
  *
- * `engine_version` and `tier_used` are nullable — the canonical
- * `shortlisting_rounds` schema (mig 282) does NOT include these columns today;
- * we tolerate them being absent and emit `null` so the JSON shape stays stable
- * if/when they're added later.
+ * `engine_version` and `tier_used` are nullable.
+ *
+ * Wave 8 (W8.4): `engine_version` is now sourced from
+ * shortlisting_rounds.engine_version (mig 344) — pinned at ingest from
+ * `_shared/engineVersion.ts`. `tier_used` is the tier_code (S/P/A) joined
+ * from shortlisting_tiers via shortlisting_rounds.engine_tier_id.
  */
 export interface AuditRoundInfo {
   round_id: string;
@@ -43,6 +45,25 @@ export interface AuditRoundInfo {
   locked_by_user_id: string | null;
   engine_version: string | null;
   tier_used: string | null;
+}
+
+/**
+ * Wave 8 (W8.4) tier_config provenance block. Captured at lock time from
+ * the active shortlisting_tier_configs row that produced the round's
+ * combined_score values. Persists to the audit JSON so external auditors
+ * can recompute the rollup without DB access.
+ *
+ * Optional: when null/absent, the audit JSON omits the `tier_config` block
+ * entirely (back-compat with pre-W8 locks where the columns/table didn't
+ * exist). schema_version='1.1' covers both with-block and without-block
+ * shapes — readers should use defensive null checks on `tier_config`.
+ */
+export interface AuditTierConfigBlock {
+  tier_code: string | null;
+  version: number | null;
+  dimension_weights: Record<string, number> | null;
+  signal_weights: Record<string, number> | null;
+  hard_reject_thresholds: Record<string, number> | null;
 }
 
 /**
@@ -102,6 +123,11 @@ export interface AuditOverrideRow {
  *
  * `mode` (Wave 7 P1-19 / W7.13): optional, defaults to 'engine'. Set to
  * 'manual' for manual-mode locks (no AI passes; operator drag-result).
+ *
+ * `tier_config` (Wave 8 / W8.4): optional. When provided, the rendered JSON
+ * gains a top-level `tier_config: AuditTierConfigBlock` field with the
+ * weights and thresholds active at lock time. Allows external auditors to
+ * reproduce the combined_score rollup from JSON alone.
  */
 export interface AuditJsonInput {
   round: AuditRoundInfo;
@@ -109,6 +135,7 @@ export interface AuditJsonInput {
   rejected: AuditRejectedInput[];
   overrides: AuditOverrideRow[];
   mode?: AuditJsonMode;
+  tier_config?: AuditTierConfigBlock | null;
 }
 
 /**
@@ -127,8 +154,21 @@ export interface AuditJsonInput {
  */
 export type AuditJsonMode = 'engine' | 'manual';
 
+/**
+ * Audit JSON output schema.
+ *
+ * Wave 8 (W8.4) bumped schema_version from '1.0' to '1.1' to add:
+ *   - `tier_config?: AuditTierConfigBlock | null` — present when the round
+ *     had an active tier_config at lock time. Older readers see schema 1.1
+ *     and can defensively skip the field. The field is OPTIONAL even at
+ *     1.1: manual-mode locks omit it (no rollup happened); engine rounds
+ *     run pre-tier-config-seed also omit it.
+ *
+ * The `engine_version` field is unchanged shape but now has actual data
+ * (pre-W8 it was always null); see AuditRoundInfo.engine_version comment.
+ */
 export interface AuditJsonOutput {
-  schema_version: '1.0';
+  schema_version: '1.1';
   mode: AuditJsonMode;
   round_id: string;
   round_number: number;
@@ -138,6 +178,9 @@ export interface AuditJsonOutput {
   locked_by_user_id: string | null;
   engine_version: string | null;
   tier_used: string | null;
+  /** Wave 8 (W8.4): optional tier_config provenance block. Omitted entirely
+   *  when the input doesn't supply tier_config (manual mode, pre-W8 round). */
+  tier_config?: AuditTierConfigBlock | null;
   approved: AuditApprovedInput[];
   rejected: AuditRejectedInput[];
   overrides: AuditOverrideRow[];
@@ -183,8 +226,11 @@ export function buildAuditJson(input: AuditJsonInput): AuditJsonOutput {
     a.group_id.localeCompare(b.group_id),
   );
 
-  return {
-    schema_version: '1.0',
+  // Build the base output. tier_config is added conditionally so the field
+  // is omitted entirely (vs explicitly null) when the caller didn't pass
+  // it in — matches the spec's "additive optional" pattern.
+  const out: AuditJsonOutput = {
+    schema_version: '1.1',
     mode: input.mode ?? 'engine',
     round_id: input.round.round_id,
     round_number: input.round.round_number,
@@ -198,6 +244,10 @@ export function buildAuditJson(input: AuditJsonInput): AuditJsonOutput {
     rejected: rejectedSorted,
     overrides: input.overrides,
   };
+  if (input.tier_config !== undefined) {
+    out.tier_config = input.tier_config;
+  }
+  return out;
 }
 
 // ─── Path helper ─────────────────────────────────────────────────────────────
