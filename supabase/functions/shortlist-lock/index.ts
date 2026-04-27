@@ -87,6 +87,7 @@ import { getShortlistingFolders } from '../_shared/shortlistingFolders.ts';
 import {
   moveBatch,
   checkMoveBatch,
+  uploadFile,
   type DropboxBatchEntryResult,
   type DropboxMoveEntry,
 } from '../_shared/dropbox.ts';
@@ -99,6 +100,14 @@ import {
   type ClassificationForLock,
   type MoveSpec,
 } from '../_shared/shortlistLockMoves.ts';
+import {
+  buildAuditJson,
+  buildAuditJsonPath,
+  serializeAuditJson,
+  type AuditApprovedInput,
+  type AuditOverrideRow,
+  type AuditRejectedInput,
+} from '../_shared/auditJsonBuilder.ts';
 
 const GENERATOR = 'shortlist-lock';
 
@@ -148,9 +157,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
 
   // ── Load round + project ────────────────────────────────────────────────
+  // Wave 7 P1-12 (W7.4): also pull round_number + package_type for the audit
+  // JSON mirror written at finalize. engine_version + tier_used are NOT
+  // columns on shortlisting_rounds today (mig 282); the audit builder accepts
+  // null for both and the JSON shape is forward-compat — if a future migration
+  // adds those columns, extend the select here.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
-    .select('id, project_id, status, locked_at, locked_by')
+    .select('id, project_id, status, locked_at, locked_by, round_number, package_type')
     .eq('id', roundId)
     .maybeSingle();
   if (roundErr) return errorResponse(`round lookup failed: ${roundErr.message}`, 500, req);
@@ -253,6 +267,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Load groups + classifications + events + overrides ──────────────────
+  // Wave 7 P1-12 (W7.4): the classifications + overrides selects pull more
+  // fields than buildMoveSpecs strictly needs — combined_score on the
+  // classification, ai_proposed_score on the override, and `select(*)` on
+  // overrides — so finalizeRound can assemble the audit JSON without a second
+  // round-trip after move_batch_v2 lands.
   const [groupsRes, classRes, eventsRes, overridesRes] = await Promise.all([
     admin
       .from('composition_groups')
@@ -260,7 +279,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .eq('round_id', roundId),
     admin
       .from('composition_classifications')
-      .select('group_id, is_near_duplicate_candidate')
+      .select('group_id, is_near_duplicate_candidate, combined_score')
       .eq('round_id', roundId),
     admin
       .from('shortlisting_events')
@@ -272,7 +291,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .order('created_at', { ascending: true }),
     admin
       .from('shortlisting_overrides')
-      .select('ai_proposed_group_id, human_selected_group_id, human_action, created_at, client_sequence')
+      .select('*')
       .eq('round_id', roundId)
       // Burst 4 J1: prefer client_sequence over created_at when present (NULLS
       // LAST puts legacy events at the end).
@@ -289,8 +308,31 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const classifications = (classRes.data || []) as ClassificationForLock[];
   const slotEvents = (eventsRes.data || []) as SlotEventForLock[];
   const overrides = (overridesRes.data || []) as OverrideForLock[];
+  // Wave 7 P1-12 (W7.4): the same overrides rows, retyped for the audit JSON.
+  // computeApprovedRejectedSets only reads the three fields on OverrideForLock;
+  // the audit mirror needs the full row (select('*')) — both views point at
+  // the same array, no second query.
+  const overrideAuditRows = (overridesRes.data || []) as AuditOverrideRow[];
 
   const { approvedSet, rejectedSet } = computeApprovedRejectedSets(slotEvents, overrides, classifications);
+
+  // ── Pre-fetch project dropbox_root_path for the audit JSON write ───────
+  // Wave 7 P1-12 (W7.4): the audit mirror writes to <root>/Photos/_AUDIT/.
+  // Read the root once here so finalizeRound (sync) and pollUntilComplete
+  // (async background) don't each round-trip the DB to find it.
+  let dropboxRootPath: string | null = null;
+  try {
+    const { data: projRow } = await admin
+      .from('projects')
+      .select('dropbox_root_path')
+      .eq('id', round.project_id)
+      .maybeSingle();
+    dropboxRootPath = (projRow?.dropbox_root_path as string | null) ?? null;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[${GENERATOR}] dropbox_root_path lookup failed for project ${round.project_id}: ${msg}`);
+    dropboxRootPath = null;
+  }
 
   // ── Per-disposition dest map ────────────────────────────────────────────
   const approvedDest = folders.rawFinalShortlist;
@@ -318,6 +360,25 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // Postgres. Sorting by group_id gives a fully deterministic snapshot.
   const confirmedShortlistGroupIds = Array.from(approvedSet).sort();
 
+  // ── Build the audit-mirror context once (Wave 7 P1-12 / W7.4) ──────────
+  // Indexed inputs assembled here so finalizeRound (sync or async) can write
+  // the JSON without touching the DB again. Cast classifications to widen the
+  // type — buildAuditMirrorContext reads `combined_score` which isn't on
+  // ClassificationForLock but IS in the row data (we added it to the select).
+  const auditMirror: AuditMirrorContext = buildAuditMirrorContext(
+    groups,
+    classifications as Array<
+      { group_id: string; is_near_duplicate_candidate: boolean | null; combined_score: number | null }
+    >,
+    slotEvents,
+    overrideAuditRows,
+    approvedSet,
+    rejectedSet,
+    round.round_number as number,
+    (round.package_type as string | null) ?? null,
+    dropboxRootPath,
+  );
+
   // ── Zero-work fast path ─────────────────────────────────────────────────
   // No files to move (all already at destination, or empty round). Skip the
   // batch submit + poll entirely; just flip the round to locked synchronously.
@@ -335,6 +396,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       approvedCount: approvedSet.size,
       rejectedCount: rejectedSet.size,
       failedMovesCount: 0,
+      auditMirror,
     });
     if (!finalizeResult.ok) {
       return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
@@ -431,6 +493,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       approvedCount: approvedSet.size,
       rejectedCount: rejectedSet.size,
       failedMovesCount: counts.failed,
+      auditMirror,
     });
     if (!finalizeResult.ok) {
       await admin.from('shortlisting_lock_progress')
@@ -491,6 +554,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     confirmedShortlistGroupIds,
     approvedCount: approvedSet.size,
     rejectedCount: rejectedSet.size,
+    auditMirror,
   }).catch((err) => {
     console.error(`[${GENERATOR}] background poll failed:`, err?.message || err);
   });
@@ -625,6 +689,38 @@ interface FinalizeArgs {
   approvedCount: number;
   rejectedCount: number;
   failedMovesCount: number;
+  /**
+   * Wave 7 P1-12 (W7.4): if present, finalizeRound writes a per-lock audit
+   * JSON to `<dropbox_root_path>/Photos/_AUDIT/round_<N>_locked_<ISO>.json`
+   * after the round update succeeds. Best-effort — failure logs a warning
+   * and does NOT roll the lock back (the audit JSON is an enhancement, not
+   * a hard dependency for lock to succeed; per W7.4 spec § "Where to write").
+   *
+   * Set to null when the lock context can't supply round_number (e.g. a
+   * legacy code path that isn't loading the round row in full); the audit
+   * mirror is then skipped silently with a console.info.
+   */
+  auditMirror: AuditMirrorContext | null;
+}
+
+/**
+ * Wave 7 P1-12 (W7.4): everything finalizeRound needs to assemble the audit
+ * JSON after the round flips to locked. Pre-computed once in the main lock
+ * handler so we don't re-query DB rows per finalize stage.
+ */
+interface AuditMirrorContext {
+  roundNumber: number;
+  packageType: string | null;
+  approved: AuditApprovedInput[];
+  rejected: AuditRejectedInput[];
+  overrides: AuditOverrideRow[];
+  /**
+   * Pre-resolved Dropbox root path for the project. Read from
+   * `projects.dropbox_root_path` once at the top of the handler so the
+   * background poll path doesn't need to round-trip the DB to find it again.
+   * If null, the audit mirror is skipped (project hasn't been provisioned).
+   */
+  dropboxRootPath: string | null;
 }
 
 /**
@@ -686,6 +782,24 @@ async function finalizeRound(args: FinalizeArgs): Promise<{ ok: boolean; error?:
     },
   });
 
+  // Wave 7 P1-12 (W7.4): write the per-lock audit JSON to Dropbox. The DB
+  // event above is the lightweight audit row; this is the canonical "what
+  // did this round become" snapshot, written to
+  // `<root>/Photos/_AUDIT/round_<N>_locked_<ISO>.json`. Best-effort: failure
+  // logs a warning + does NOT roll back the lock (audit mirror is an
+  // enhancement; the move + DB update are the hard dependencies).
+  if (args.auditMirror) {
+    await writeAuditMirror({
+      lockedAt,
+      lockedBy: args.lockedBy,
+      roundId: args.roundId,
+      projectId: args.projectId,
+      ctx: args.auditMirror,
+    });
+  } else {
+    console.info(`[${GENERATOR}] auditMirror context not provided — skipping audit JSON write for round ${args.roundId}`);
+  }
+
   // Phase 8: kick the training extractor (fire-and-forget).
   if (args.confirmedShortlistGroupIds.length > 0) {
     const extractorWork = invokeFunction(
@@ -715,6 +829,8 @@ interface PollArgs {
   confirmedShortlistGroupIds: string[];
   approvedCount: number;
   rejectedCount: number;
+  /** Wave 7 P1-12 (W7.4): forwarded to finalizeRound for the audit JSON write. */
+  auditMirror: AuditMirrorContext | null;
 }
 
 /**
@@ -786,6 +902,7 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
         approvedCount: args.approvedCount,
         rejectedCount: args.rejectedCount,
         failedMovesCount: counts.failed,
+        auditMirror: args.auditMirror,
       });
       if (!finalizeResult.ok) {
         await admin.from('shortlisting_lock_progress')
@@ -827,4 +944,230 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
       completed_at: new Date().toISOString(),
     })
     .eq('id', args.progressId);
+}
+
+// ─── Audit JSON mirror (Wave 7 P1-12 / W7.4) ─────────────────────────────────
+
+interface WriteAuditMirrorArgs {
+  /** Canonical lock timestamp — same value persisted to shortlisting_rounds.locked_at. */
+  lockedAt: string;
+  lockedBy: string | null;
+  roundId: string;
+  projectId: string;
+  ctx: AuditMirrorContext;
+}
+
+/**
+ * Wave 7 P1-12 (W7.4): write the per-lock audit JSON to Dropbox at
+ * `<dropbox_root_path>/Photos/_AUDIT/round_<N>_locked_<ISO>.json`.
+ *
+ * Path safety: Dropbox `/files/upload` does NOT auto-create parent directories.
+ * If `Photos/_AUDIT/` doesn't exist (project provisioned before W7.4 added the
+ * `photos_audit` folder kind), the upload returns path/not_found. We catch
+ * that, create the folder, and retry once — same recovery pattern as the
+ * `_AUDIT/events/` mirror in `_shared/projectFolders.ts`. This is the
+ * "create folder on first lock" backfill behaviour the W7.4 spec calls for.
+ *
+ * Uses `mode: 'add'` (fail if file exists) — combined with a millisecond-
+ * precision ISO stamp in the filename, every lock attempt produces a unique
+ * filename, so 'add' is correct. If two locks somehow land at the same
+ * millisecond (vanishingly unlikely; same-round re-lock is gated by the
+ * resume guard), the second upload errors and we log a warning. We do NOT
+ * fall back to autorename — that would silently break the convention that
+ * filename ↔ lock event is 1:1.
+ *
+ * Best-effort: any exception is logged and swallowed. The audit JSON is an
+ * enhancement; the round is already marked locked at this point.
+ */
+async function writeAuditMirror(args: WriteAuditMirrorArgs): Promise<void> {
+  const { ctx } = args;
+  if (!ctx.dropboxRootPath) {
+    console.warn(
+      `[${GENERATOR}] audit mirror skipped: project ${args.projectId} has no dropbox_root_path (not provisioned)`,
+    );
+    return;
+  }
+
+  const audit = buildAuditJson({
+    round: {
+      round_id: args.roundId,
+      round_number: ctx.roundNumber,
+      project_id: args.projectId,
+      package_type: ctx.packageType,
+      locked_at: args.lockedAt,
+      locked_by_user_id: args.lockedBy,
+      // engine_version + tier_used not on shortlisting_rounds today (mig 282).
+      // Forward-compat: the audit JSON shape includes both, set to null until a
+      // future migration adds them to the rounds table.
+      engine_version: null,
+      tier_used: null,
+    },
+    approved: ctx.approved,
+    rejected: ctx.rejected,
+    overrides: ctx.overrides,
+  });
+
+  const path = buildAuditJsonPath(ctx.dropboxRootPath, ctx.roundNumber, args.lockedAt);
+  const body = serializeAuditJson(audit);
+
+  try {
+    await uploadFile(path, body, 'add');
+    console.info(`[${GENERATOR}] audit mirror written: ${path} (${body.length} bytes)`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // path/not_found means Photos/_AUDIT/ doesn't exist. Recover by creating
+    // it and retrying once — matches projectFolders.mirrorEventToDropbox's
+    // pattern. Using lazy import avoids loading the createFolder dependency
+    // for the (common) hot path where the folder already exists.
+    if (msg.includes('path/not_found') || msg.includes('not_found')) {
+      try {
+        const { createFolder } = await import('../_shared/dropbox.ts');
+        const photosAuditDir = `${ctx.dropboxRootPath.replace(/\/+$/, '')}/Photos/_AUDIT`;
+        await createFolder(photosAuditDir);
+        await uploadFile(path, body, 'add');
+        console.info(`[${GENERATOR}] audit mirror written after creating Photos/_AUDIT/: ${path}`);
+        return;
+      } catch (retryErr) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        console.warn(`[${GENERATOR}] audit mirror retry failed for round ${args.roundId}: ${retryMsg}`);
+        return;
+      }
+    }
+    console.warn(`[${GENERATOR}] audit mirror failed for round ${args.roundId}: ${msg}`);
+  }
+}
+
+/**
+ * Wave 7 P1-12 (W7.4): assemble the AuditMirrorContext from the data already
+ * loaded in the main lock handler. Called once before the move_batch_v2
+ * submit so it's ready for either the inline-complete or async-poll path.
+ *
+ * Approved entries: one per group_id in approvedSet, joining
+ *   - composition_groups (file stems)
+ *   - composition_classifications (combined_score)
+ *   - pass2_slot_assigned events (slot_id)
+ *   - shortlisting_overrides (ai_proposed_score)
+ *
+ * Rejected entries: one per group_id in rejectedSet, with reason resolved
+ * from classifications + overrides:
+ *   - is_near_duplicate_candidate=true       → 'near_duplicate'
+ *   - human_action='removed' for this group  → 'human_action=removed'
+ *   - both                                    → 'near_duplicate' (more specific)
+ */
+function buildAuditMirrorContext(
+  groups: CompositionGroupForLock[],
+  // deno-lint-ignore no-explicit-any
+  classifications: Array<{ group_id: string; is_near_duplicate_candidate: boolean | null; combined_score: number | null }>,
+  slotEvents: SlotEventForLock[],
+  overrides: AuditOverrideRow[],
+  approvedSet: Set<string>,
+  rejectedSet: Set<string>,
+  roundNumber: number,
+  packageType: string | null,
+  dropboxRootPath: string | null,
+): AuditMirrorContext {
+  // Index inputs once for O(1) lookups inside the per-group loop. Keys:
+  //   - groupById: composition_groups by id
+  //   - classByGroup: classification by group_id
+  //   - slotByGroup: latest pass2 event payload per group
+  //   - aiProposedScoreByGroup: ai_proposed_score from any override mentioning
+  //     this group as the AI proposal
+  const groupById = new Map<string, CompositionGroupForLock>();
+  for (const g of groups) groupById.set(g.id, g);
+
+  const classByGroup = new Map<
+    string,
+    { is_near_duplicate_candidate: boolean | null; combined_score: number | null }
+  >();
+  for (const c of classifications) classByGroup.set(c.group_id, c);
+
+  // For each group, prefer the rank=1 pass2_slot_assigned event (the canonical
+  // winner), falling back to a phase-3 recommendation if no rank=1 event
+  // exists. Both event types carry slot_id in payload (phase-3 uses null).
+  const slotByGroup = new Map<string, { slot_id: string | null }>();
+  for (const ev of slotEvents) {
+    if (!ev.group_id) continue;
+    if (slotByGroup.has(ev.group_id)) continue; // first wins (events are ordered)
+    if (ev.event_type === 'pass2_slot_assigned' && ev.payload?.rank !== 1) continue;
+    const slot_id = (ev.payload?.slot_id as string | undefined) || null;
+    slotByGroup.set(ev.group_id, { slot_id });
+  }
+  // Second pass for any groups that only have phase-3 events (no rank=1 winner).
+  for (const ev of slotEvents) {
+    if (!ev.group_id) continue;
+    if (slotByGroup.has(ev.group_id)) continue;
+    const slot_id = (ev.payload?.slot_id as string | undefined) || null;
+    slotByGroup.set(ev.group_id, { slot_id });
+  }
+
+  const aiProposedScoreByGroup = new Map<string, number | null>();
+  for (const ov of overrides) {
+    const gid = ov.ai_proposed_group_id as string | null;
+    if (!gid) continue;
+    if (aiProposedScoreByGroup.has(gid)) continue;
+    const score = ov.ai_proposed_score;
+    aiProposedScoreByGroup.set(
+      gid,
+      typeof score === 'number' ? score : score == null ? null : Number(score),
+    );
+  }
+
+  // Track which groups were explicitly removed via human override (mirrors
+  // shortlistLockMoves.computeApprovedRejectedSets internal logic so the
+  // rejection reasons match the actual disposition).
+  const explicitlyRemovedGroups = new Set<string>();
+  for (const ov of overrides) {
+    if (ov.human_action === 'removed' || ov.human_action === 'swapped') {
+      const gid = ov.ai_proposed_group_id as string | null;
+      if (gid) explicitlyRemovedGroups.add(gid);
+    }
+  }
+
+  // ── Approved entries ───────────────────────────────────────────────────
+  const approved: AuditApprovedInput[] = [];
+  for (const groupId of approvedSet) {
+    const g = groupById.get(groupId);
+    const cls = classByGroup.get(groupId);
+    const slot = slotByGroup.get(groupId);
+    const file_stems = (g?.files_in_group || []).filter((s): s is string => typeof s === 'string');
+    const score = cls?.combined_score == null ? null : Number(cls.combined_score);
+    const ai_proposed_score = aiProposedScoreByGroup.has(groupId)
+      ? aiProposedScoreByGroup.get(groupId) ?? null
+      : null;
+    approved.push({
+      group_id: groupId,
+      slot_id: slot?.slot_id ?? null,
+      score,
+      ai_proposed_score,
+      file_stems,
+    });
+  }
+
+  // ── Rejected entries ───────────────────────────────────────────────────
+  const rejected: AuditRejectedInput[] = [];
+  for (const groupId of rejectedSet) {
+    const g = groupById.get(groupId);
+    const cls = classByGroup.get(groupId);
+    const file_stems = (g?.files_in_group || []).filter((s): s is string => typeof s === 'string');
+    const isNearDup = cls?.is_near_duplicate_candidate === true;
+    const wasRemoved = explicitlyRemovedGroups.has(groupId);
+    // 'near_duplicate' is more specific than 'human_action=removed' — a group
+    // can be both (Pass 1 flagged it AND the human removed it on review), so
+    // we surface the structural signal first.
+    const reason = isNearDup
+      ? 'near_duplicate'
+      : wasRemoved
+        ? 'human_action=removed'
+        : 'unspecified';
+    rejected.push({ group_id: groupId, file_stems, reason });
+  }
+
+  return {
+    roundNumber,
+    packageType,
+    approved,
+    rejected,
+    overrides,
+    dropboxRootPath,
+  };
 }
