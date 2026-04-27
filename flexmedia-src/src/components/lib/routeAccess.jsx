@@ -105,6 +105,7 @@ export const ROUTE_ACCESS = {
   SettingsIntegrations: ADMIN_AND_ABOVE,
   EmailSyncSettings: ADMIN_AND_ABOVE,
   SettingsEmailSyncHealth: ADMIN_AND_ABOVE,
+  SettingsOperationsHealth: ADMIN_AND_ABOVE,
   EdgeFunctionHealth: ADMIN_AND_ABOVE,
   EdgeFunctionAuditLog: ADMIN_AND_ABOVE,
   SettingsTonomoIntegration: ADMIN_AND_ABOVE,
