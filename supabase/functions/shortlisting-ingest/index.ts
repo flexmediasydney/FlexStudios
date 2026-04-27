@@ -60,6 +60,7 @@ import {
   type PackageEngineTierMappingRow,
   type ShortlistingTierRow,
 } from '../_shared/engineTierResolver.ts';
+import { resolveManualModeReason } from '../_shared/manualModeResolver.ts';
 
 const GENERATOR = 'shortlisting-ingest';
 const CHUNK_SIZE = 50;
@@ -207,11 +208,13 @@ async function ingest(
   );
 
   // 7. Manual-mode triggers (Joseph 2026-04-27, spec Section 4b).
-  const manualReason = !shortlistingSupported
-    ? 'project_type_unsupported'
-    : photoCount.target === 0
-      ? 'no_photo_products'
-      : null;
+  // Wave 7 P1-19 (W7.13): trigger logic moved to a pure helper so it can be
+  // unit-tested in isolation. Same precedence (project type unsupported wins
+  // over count-driven fallback).
+  const manualReason = resolveManualModeReason({
+    shortlistingSupported,
+    expectedCountTarget: photoCount.target,
+  });
 
   if (manualReason) {
     return await createManualRound({
