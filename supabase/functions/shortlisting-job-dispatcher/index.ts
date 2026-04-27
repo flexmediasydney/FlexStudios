@@ -51,6 +51,7 @@ import {
   serveWithAudit,
   getAdminClient,
 } from "../_shared/supabase.ts";
+import { validateDispatcherJwt } from "../_shared/dispatcherJwtValidator.ts";
 
 const GENERATOR = "shortlisting-job-dispatcher";
 const SUPABASE_URL =
@@ -58,12 +59,23 @@ const SUPABASE_URL =
 const MAX_JOBS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
 
-// Audit defect #13: warn loudly at cold-start if the dispatcher JWT secret
-// is missing. Catches misconfiguration before the first dispatch tick.
-if (!Deno.env.get("SHORTLISTING_DISPATCHER_JWT")) {
+// Audit defect #13 + Wave 7 P0-2: warn loudly at cold-start if the dispatcher
+// JWT secret is missing OR present-but-malformed. Catches misconfiguration
+// before the first dispatch tick. The shape check matches the runtime check in
+// validateDispatcherJwt() so a deployment with a wrong-shaped value is loud at
+// startup AND fails the health probe (see _health_check below).
+const __startupJwt = Deno.env.get("SHORTLISTING_DISPATCHER_JWT") || "";
+if (!__startupJwt) {
   console.error(
-    `[${GENERATOR}] STARTUP WARNING: SHORTLISTING_DISPATCHER_JWT is not set. All dispatches will fail until this secret is configured.`,
+    `[${GENERATOR}] STARTUP WARNING: SHORTLISTING_DISPATCHER_JWT is not set. All dispatches will fail until this secret is configured. See docs/DEPLOYMENT_RUNBOOK.md.`,
   );
+} else {
+  const __startupCheck = validateDispatcherJwt(__startupJwt);
+  if (!__startupCheck.ok) {
+    console.warn(
+      `[${GENERATOR}] STARTUP WARNING: SHORTLISTING_DISPATCHER_JWT is set but appears malformed: ${__startupCheck.error}. Dispatches will fail until a real service-role JWT is configured.`,
+    );
+  }
 }
 
 // Audit defect #12: single-flight enforcement. Cron schedule `* * * * *`
@@ -127,7 +139,40 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     /* empty body OK — cron sends no body */
   }
   if (body._health_check) {
-    return jsonResponse({ _version: "v1.0", _fn: GENERATOR }, 200, req);
+    // Wave 7 P0-2: fail-loud if the JWT secret is missing or malformed. The
+    // dispatcher cannot chain-call extract/pass0/pass1/pass2/pass3 without a
+    // valid service-role JWT, so a green health probe with a bad JWT was
+    // dangerously misleading. Round 2 cost ~15 minutes debugging this exact
+    // case — the function ran but every dispatch silently 401'd. Returning
+    // 503 here surfaces the misconfiguration to ops dashboards immediately.
+    const jwt = Deno.env.get("SHORTLISTING_DISPATCHER_JWT") || "";
+    if (!jwt) {
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "SHORTLISTING_DISPATCHER_JWT not set — dispatcher cannot chain calls. See docs/DEPLOYMENT_RUNBOOK.md",
+        },
+        503,
+        req,
+      );
+    }
+    const validation = validateDispatcherJwt(jwt);
+    if (!validation.ok) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: "SHORTLISTING_DISPATCHER_JWT is malformed (not a service-role JWT)",
+        },
+        503,
+        req,
+      );
+    }
+    return jsonResponse(
+      { _version: "v1.0", _fn: GENERATOR, secrets_ok: true },
+      200,
+      req,
+    );
   }
 
   const admin = getAdminClient();
