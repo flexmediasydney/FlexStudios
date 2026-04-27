@@ -41,11 +41,11 @@ design phase.
 | W7.1 | `shortlist-lock` rewrite using `move_batch_v2` + `EdgeRuntime.waitUntil` + DB-persisted progress + frontend live progress UI | P0-1 | ✅ **shipped** (commits 3b17526, 0a229b0, d01d96b) — 165-file lock 30 min → 15 s (120× speedup) |
 | W7.2 | `SHORTLISTING_DISPATCHER_JWT` deployment runbook + startup self-check 503 | P0-2 | ✅ **shipped** (commits 8b2ac89, 0948c00, df03a3d) — 109 unit tests + admin ops health page |
 | W7.3 | Modal Dropbox token refresh from edge function (eliminates 4hr expiry) | P0-3 | ✅ **shipped** (commit 7bcf566) — Path B real-file smoke test passed: 5 CR3s, 13 s wall, Modal logs `dropbox token source: caller` |
-| W7.4 | `shortlisting-confirm` audit JSON mirror | P1-12 | 🚧 **in flight** — design spec resolved (commit 397a381), executing in subagent worktree |
-| W7.5 | `pg_advisory_lock` cross-connection unlock fix (row-based mutex on `dispatcher_locks`) | P1-11 | 🚧 **in flight** — Option B chosen, migration 336 reserved, executing in subagent worktree |
-| W7.6 | Vision prompt refactor into composable `_shared/visionPrompts/` blocks | P1-10 | ⚠️ needs API contract design spec (~1 day; orchestrator authoring next) |
-| W7.7 | `package_shortlist_configs` sidecar + `tiers` first-class table + slot FK refactor | P1-6 | ⚠️ needs migration plan review with Joseph (touches projects/packages cross-engine impacts) |
-| W7.8 | Product-driven slot eligibility (`engine_role` enum) — replaces flawed day/dusk flag | P1-8 | 🚧 **in flight** — design spec resolved (commit 397a381), W7.7 verified non-blocking, migration 337 reserved, executing in subagent worktree |
+| W7.4 | `shortlisting-confirm` audit JSON mirror | P1-12 | ✅ **shipped** (commits 90b791a, 6553924, 73bfbbe) — audit JSON written to `Photos/_AUDIT/round_N_locked_<ts>.json` after every successful lock |
+| W7.5 | `pg_advisory_lock` cross-connection unlock fix (row-based mutex on `dispatcher_locks`) | P1-11 | ✅ **shipped** (commits d01f2e0, 4e515e7, 126c285, 2a75480) — mig 336 applied, both dispatchers using new mutex, smoke test confirms atomic acquire+release |
+| W7.6 | Vision prompt refactor into composable `_shared/visionPrompts/` blocks | P1-10 | ⚙️ design spec ready (`docs/design-specs/W7-6-vision-prompt-blocks.md`); next subagent burst |
+| W7.7 | `package_shortlist_configs` sidecar + `tiers` first-class table + slot FK refactor | P1-6 | ⚠️ draft spec authored (`docs/design-specs/W7-7-package-shortlist-configs.md`); 6 cross-engine open questions await Joseph |
+| W7.8 | Product-driven slot eligibility (`engine_role` enum) — replaces flawed day/dusk flag | P1-8 | ✅ **shipped** (commits e7b8fb8, aeac3f2, 652a948, 72e0556, 2d4e1a4) — mig 337 applied + backfilled (28 products, 12 slots), smoke test confirms 12/12 slots resolve via engine_role on Everton 8/2; latent quarantine CHECK bug fixed as a bonus |
 | W7.9 | Per-package `expected_file_count_range` (replaces hardcoded math) | P1-13 | ✅ ready after W7.7 |
 | W7.10 | Notification routing seed (9 spec types) | P1-9 | ✅ ready (independent) |
 | W7.11 | Frontend: replace hardcoded `["Gold", "Day to Dusk", "Premium"]` arrays in slots/training/overrides admin pages | P1-6 sibling | ✅ ready after W7.7 |
@@ -310,9 +310,9 @@ With parallelism + design-phase prep work in flight: ~3-4 months.
 | Wave | Status |
 |---|---|
 | W7.1 / W7.2 / W7.3 | ✅ **shipped** + Path B validated end-to-end |
-| W7.4 / W7.5 / W7.8 | 🚧 **in flight** — three subagents executing in isolated worktrees right now |
-| W7.6 | ⚠️ orchestrator authoring spec next — needed before W11 design phase begins |
-| W7.7 | ⚠️ needs joint review with Joseph on cross-engine impacts (drone, billing); then dispatch |
+| W7.4 / W7.5 / W7.8 | ✅ **shipped** — burst completed 2026-04-27, integrated to main, smoke tests passed |
+| W7.6 | ⚙️ design spec ready (`docs/design-specs/W7-6-vision-prompt-blocks.md`); ready to dispatch as next subagent burst |
+| W7.7 | ⚠️ draft spec authored; 6 cross-engine questions await Joseph's review |
 | W7.9 / W7.11 | ✅ ready after W7.7 |
 | W7.10 / W7.12 | ✅ ready (independent) |
 | W8 | ✅ yes after W7.7 |

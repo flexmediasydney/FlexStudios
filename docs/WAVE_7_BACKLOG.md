@@ -347,7 +347,7 @@ banner in swimlane.
 These items surfaced during today's session but were missed in the first
 backlog draft. Added here so nothing slips between today and Wave 7 kickoff.
 
-### P1-8 — Product-driven slot eligibility (replaces flawed day/dusk flag)
+### P1-8 — Product-driven slot eligibility (replaces flawed day/dusk flag) ✅ SHIPPED 2026-04-27
 
 **Origin.** Joseph's correction during Wave 0 closure. My original proposal
 was an `is_time_of_day_relevant` boolean flag on slot definitions — engine
@@ -412,7 +412,7 @@ composition rules, error behaviour when blocks conflict).
 
 **Estimated effort.** 1 week after design phase.
 
-### P1-11 — `pg_advisory_lock` cross-connection unlock issue
+### P1-11 — `pg_advisory_lock` cross-connection unlock issue ✅ SHIPPED 2026-04-27
 
 **Origin.** Surfaced during Round 2 dispatcher debugging today. The
 dispatcher uses `pg_advisory_lock` (session-scoped) for single-flight,
@@ -434,7 +434,7 @@ until session recycle.
 
 **Estimated effort.** Half-day after decision.
 
-### P1-12 — `shortlisting-confirm` copy-then-move semantics + audit mirror
+### P1-12 — `shortlisting-confirm` copy-then-move semantics + audit mirror ✅ SHIPPED 2026-04-27
 
 **Origin.** Spec section 18 says lock should COPY files raw → confirmed,
 then COPY confirmed → editor_input. We currently MOVE in a single step.
