@@ -258,6 +258,17 @@ implementation.
    for P1-19.
 7. `shortlisting_slot_definitions.package_types` column dropped (W7.8
    `eligible_when_engine_roles` is the single source of truth).
+8. **Follow-up consolidation (commits f6f4773, 1213394):** Pass 2's
+   `resolveProjectEngineRoles`, Pass 3's `resolveProjectEngineRolesForCoverage`,
+   and benchmark-runner's `resolveProjectEngineRolesForBench` were three
+   near-identical inline copies. Extracted to a single pure helper at
+   `_shared/projectEngineRoles.ts` (9 unit tests; _shared/ test count
+   375 → 384). The only behavioural delta between the inline copies was
+   that Pass 3 + benchmark accepted any non-empty `engine_role` string
+   while Pass 2 already filtered against the `ENGINE_ROLES` forward-compat
+   enum — the unified helper applies Pass 2's stricter policy uniformly,
+   which is a no-op in practice (no production product carries an
+   out-of-enum role, and slot definitions only enumerate known roles).
 
 **Original problem (preserved for context).** The engine had hardcoded
 `PACKAGE_CEILINGS` (Gold=24, D2D=31, Premium=38) in TS and hardcoded
