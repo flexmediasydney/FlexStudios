@@ -140,13 +140,28 @@ export interface Pass2PromptOptions {
   /** Resolved street/property address — surfaced in the SHORTLISTING CONTEXT
    *  block. Falls back to "Unknown property" if absent. */
   propertyAddress: string | null;
-  /** 'Gold' | 'Day to Dusk' | 'Premium' | other text from shortlisting_rounds.package_type */
+  /** Free-form text from shortlisting_rounds.package_type — informational
+   *  only (e.g. "Gold Package", "Day Video Package"). */
   packageType: string;
-  /** 24 (Gold) | 31 (Day to Dusk) | 38 (Premium) — hard upper bound on shortlist size. */
+  /** Display name for the package — Wave 7 P1-6 (W7.7) replaces the legacy
+   *  describeCeiling() label that mapped numeric ceilings to fixed strings.
+   *  Caller supplies the actual package name from the DB so the prompt's
+   *  ceiling line stays meaningful when à la carte add-ons change the count. */
+  packageDisplayName: string;
+  /** Hard upper bound on shortlist size — sourced from
+   *  shortlisting_rounds.expected_count_target (W7.7), no longer a hardcoded
+   *  per-package number. */
   packageCeiling: number;
-  /** 'standard' | 'premium' (mostly informational — Stream B handles the heavy lifting). */
-  tier: 'standard' | 'premium' | string;
-  /** Active slot definitions for this package_type (filtered by orchestrator). */
+  /** Customer-facing pricing tier from projects.pricing_tier
+   *  ('standard' | 'premium' | other). Renamed from `tier` in W7.7 to
+   *  disambiguate from the engine_tier (S/P/A) concept. Audit context only —
+   *  Stream B anchors handle the actual scoring scale. */
+  pricingTier: 'standard' | 'premium' | string;
+  /** Project's resolved engine roles (e.g. ['photo_day_shortlist',
+   *  'drone_shortlist']). Wave 7 P1-6 (W7.7) — surfaced in the prompt
+   *  scaffolding so the model knows which deliverable types are in scope. */
+  engineRoles: string[];
+  /** Active slot definitions filtered for this round (engine-role driven). */
   slotDefinitions: Pass2SlotDefinition[];
   /** Stream B tier anchors loaded from streamBInjector. */
   streamBAnchors: StreamBAnchors;
@@ -170,8 +185,10 @@ export function buildPass2Prompt(opts: Pass2PromptOptions): AssembledPrompt {
   const {
     propertyAddress,
     packageType,
+    packageDisplayName,
     packageCeiling,
-    tier,
+    pricingTier,
+    engineRoles,
     slotDefinitions,
     streamBAnchors,
     classifications,
@@ -197,8 +214,10 @@ export function buildPass2Prompt(opts: Pass2PromptOptions): AssembledPrompt {
         text: slotEnumerationBlock({
           propertyAddress,
           packageType,
+          packageDisplayName,
           packageCeiling,
-          tier,
+          pricingTier,
+          engineRoles,
           totalCompositions: classifications.length,
           slotDefinitions,
         }),

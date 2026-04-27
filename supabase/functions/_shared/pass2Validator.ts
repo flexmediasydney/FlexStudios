@@ -13,8 +13,11 @@
  *      This is auto-fixed; produces a warning, not an error.
  *
  *   2. PACKAGE CEILING (L16). shortlist.length must be ≤ packageCeiling.
- *      Gold=24, Day to Dusk=31, Premium=38. EXCEEDS = error, valid=false.
- *      Cannot auto-fix because removing arbitrary stems would create gaps.
+ *      packageCeiling is computed dynamically per round — see
+ *      `packageCounts.computeExpectedFileCount` for the source of truth (sum
+ *      of project products with photo engine roles, ±3 tolerance). EXCEEDS =
+ *      error, valid=false. Cannot auto-fix because removing arbitrary stems
+ *      would create gaps.
  *
  *   3. MANDATORY SLOTS FILLED (§6). Every slot_id in mandatorySlotIds must
  *      appear in slot_assignments. Missing mandatory slots are appended to
@@ -55,7 +58,8 @@ export interface Pass2Output {
 }
 
 export interface Pass2ValidatorConfig {
-  /** Hard cap on shortlist size — Gold=24, Day to Dusk=31, Premium=38. */
+  /** Hard cap on shortlist size — see `packageCounts.computeExpectedFileCount`
+   *  for source of truth (sum of project products with photo engine roles). */
   packageCeiling: number;
   /** slot_ids of every Phase 1 slot for this package. */
   mandatorySlotIds: string[];

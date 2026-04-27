@@ -1,18 +1,21 @@
 /**
- * Unit tests for slotEligibility (Wave 7 P1-8).
+ * Unit tests for slotEligibility (Wave 7 P1-8 + W7.7 cleanup).
  * Run: deno test supabase/functions/_shared/slotEligibility.test.ts --no-check --allow-all
  *
  * Covers:
  *   - resolvePackageEngineRoles: maps embedded JSONB → distinct engine roles,
  *     drops inactive products, ignores unknown role values
- *   - filterSlotsForRound:
+ *   - filterSlotsForRound (W7.7 — engine-role only):
  *       - drone-only package picks only drone slots
  *       - mixed package picks union (day + dusk + drone)
- *       - universal slot (empty engine_roles + empty package_types) survives
- *       - fallback to package_types substring match when engine_roles is empty
- *       - strict mode (no roundPackageName) drops legacy-only slots safely
+ *       - slot with empty engine_roles + is_active=true is defensively dropped
+ *       - empty projectEngineRoles drops engine-role-restricted slots
  *   - resolveEligibleSlots: end-to-end convenience wrapper
  *   - isContentInScope: warn-don't-reject rule
+ *
+ * Wave 7 P1-6 (W7.7): legacy package_types substring fallback test cases
+ * have been removed — the column was dropped in mig 339 and the resolver no
+ * longer consults it.
  */
 
 import { assertEquals, assert } from 'https://deno.land/std@0.224.0/assert/mod.ts';
@@ -41,7 +44,6 @@ function makeSlot(over: Partial<SlotDefinitionRow> = {}): SlotDefinitionRow {
     slot_id: over.slot_id || 'kitchen_hero',
     display_name: over.display_name ?? 'Kitchen — hero',
     phase: over.phase ?? 1,
-    package_types: over.package_types ?? [],
     eligible_when_engine_roles: over.eligible_when_engine_roles ?? [],
     eligible_room_types: over.eligible_room_types ?? ['kitchen_main'],
     max_images: over.max_images ?? 1,
@@ -145,7 +147,7 @@ Deno.test('resolvePackageEngineRoles: accepts Map<id, ProductRow> for the lookup
   assertEquals(resolvePackageEngineRoles(pkgProducts, map), ['photo_day_shortlist']);
 });
 
-// ─── 2. filterSlotsForRound ──────────────────────────────────────────────────
+// ─── 2. filterSlotsForRound (W7.7 — engine-role only) ────────────────────────
 
 Deno.test('filterSlotsForRound: drone-only package picks only drone slots', () => {
   const slots: SlotDefinitionRow[] = [
@@ -157,7 +159,7 @@ Deno.test('filterSlotsForRound: drone-only package picks only drone slots', () =
   const filtered = filterSlotsForRound({
     slots,
     projectEngineRoles: ['drone_shortlist'],
-    roundPackageName: 'Premium Package',
+    roundPackageName: null,
   });
   const ids = filtered.map((s) => s.slot_id).sort();
   assertEquals(ids, ['drone_nadir', 'drone_orbit_primary']);
@@ -174,7 +176,7 @@ Deno.test('filterSlotsForRound: mixed package picks union of relevant slots', ()
   const filtered = filterSlotsForRound({
     slots,
     projectEngineRoles: ['photo_day_shortlist', 'photo_dusk_shortlist', 'drone_shortlist'],
-    roundPackageName: 'Premium Package',
+    roundPackageName: null,
   });
   const ids = filtered.map((s) => s.slot_id).sort();
   assertEquals(ids, ['drone_orbit', 'exterior_front_dusk', 'kitchen_hero']);
@@ -191,103 +193,30 @@ Deno.test('filterSlotsForRound: slot with multiple engine roles matches if ANY o
   const filtered = filterSlotsForRound({
     slots,
     projectEngineRoles: ['photo_day_shortlist'],
-    roundPackageName: 'Gold',
+    roundPackageName: null,
   });
   assertEquals(filtered.length, 1);
 });
 
-Deno.test('filterSlotsForRound: fallback to package_types when engine_roles is empty', () => {
+Deno.test('filterSlotsForRound: empty engine_roles + is_active=true → defensively dropped (W7.7)', () => {
   const slots: SlotDefinitionRow[] = [
-    // Legacy slot — no engine_roles, only package_types.
+    makeSlot({
+      slot_id: 'misconfigured',
+      eligible_when_engine_roles: [],
+      is_active: true,
+    }),
     makeSlot({
       slot_id: 'kitchen_hero',
-      eligible_when_engine_roles: [],
-      package_types: ['Gold Package', 'Premium Package'],
-    }),
-    // Newer slot — has engine_roles, ignores package_types.
-    makeSlot({
-      slot_id: 'drone_orbit',
-      eligible_when_engine_roles: ['drone_shortlist'],
-      package_types: ['Premium Package'],
-    }),
-  ];
-  // Project with NO engine roles (e.g. products not yet backfilled) — only the
-  // fallback slot should survive, via package-name match.
-  const filtered = filterSlotsForRound({
-    slots,
-    projectEngineRoles: [],
-    roundPackageName: 'Gold Package',
-  });
-  const ids = filtered.map((s) => s.slot_id);
-  assertEquals(ids, ['kitchen_hero']);
-});
-
-Deno.test('filterSlotsForRound: fallback uses substring match (audit defect #53 parity)', () => {
-  // Mimics the existing fetchSlotDefinitions pkgMatches() behaviour: "Gold"
-  // and "Gold Package" both match.
-  const slots: SlotDefinitionRow[] = [
-    makeSlot({
-      slot_id: 'kitchen_hero',
-      eligible_when_engine_roles: [],
-      package_types: ['Gold'],
-    }),
-  ];
-  const filteredA = filterSlotsForRound({
-    slots,
-    projectEngineRoles: [],
-    roundPackageName: 'Gold Package',
-  });
-  assertEquals(filteredA.length, 1);
-
-  const filteredB = filterSlotsForRound({
-    slots,
-    projectEngineRoles: [],
-    roundPackageName: 'Premium',
-  });
-  assertEquals(filteredB.length, 0);
-});
-
-Deno.test('filterSlotsForRound: universal slot (both empty) always included', () => {
-  const slots: SlotDefinitionRow[] = [
-    makeSlot({
-      slot_id: 'whatever_room',
-      eligible_when_engine_roles: [],
-      package_types: [],
-    }),
-  ];
-  // Empty engine roles + empty package_types → universal.
-  const filteredA = filterSlotsForRound({
-    slots,
-    projectEngineRoles: [],
-    roundPackageName: 'Gold Package',
-  });
-  assertEquals(filteredA.length, 1);
-
-  // Even with no fallback name supplied.
-  const filteredB = filterSlotsForRound({
-    slots,
-    projectEngineRoles: [],
-    roundPackageName: null,
-  });
-  assertEquals(filteredB.length, 1);
-});
-
-Deno.test('filterSlotsForRound: strict mode (null roundPackageName) drops legacy slots', () => {
-  // When roundPackageName is null AND the slot relies on package_types
-  // fallback, we drop it rather than guessing.
-  const slots: SlotDefinitionRow[] = [
-    makeSlot({
-      slot_id: 'kitchen_hero',
-      eligible_when_engine_roles: [],
-      package_types: ['Gold Package'],
+      eligible_when_engine_roles: ['photo_day_shortlist'],
+      is_active: true,
     }),
   ];
   const filtered = filterSlotsForRound({
     slots,
-    projectEngineRoles: [],
+    projectEngineRoles: ['photo_day_shortlist'],
     roundPackageName: null,
   });
-  assertEquals(filtered.length, 0);
+  assertEquals(filtered.map((s) => s.slot_id), ['kitchen_hero']);
 });
 
 Deno.test('filterSlotsForRound: empty projectEngineRoles drops engine-role-restricted slots', () => {
@@ -297,7 +226,7 @@ Deno.test('filterSlotsForRound: empty projectEngineRoles drops engine-role-restr
   const filtered = filterSlotsForRound({
     slots,
     projectEngineRoles: [],
-    roundPackageName: 'Whatever',
+    roundPackageName: null,
   });
   assertEquals(filtered.length, 0);
 });
@@ -325,48 +254,13 @@ Deno.test('resolveEligibleSlots: end-to-end with day-only package', () => {
     packageProducts: pkgProducts,
     products,
     slots,
-    roundPackageName: 'Gold Package',
+    roundPackageName: null,
   });
   assertEquals(result.projectEngineRoles, ['photo_day_shortlist']);
   assertEquals(
     result.eligibleSlots.map((s) => s.slot_id),
     ['kitchen_hero'],
   );
-});
-
-Deno.test('resolveEligibleSlots: hybrid round mixes engine-role + legacy slots', () => {
-  const products: ProductRow[] = [
-    makeProduct({ id: 'p-sales', engine_role: 'photo_day_shortlist' }),
-  ];
-  const pkgProducts: PackageProductEntry[] = [{ product_id: 'p-sales' }];
-
-  const slots: SlotDefinitionRow[] = [
-    // Engine-role-driven new-style slot.
-    makeSlot({
-      slot_id: 'kitchen_hero',
-      eligible_when_engine_roles: ['photo_day_shortlist'],
-      package_types: [], // even an empty list here doesn't open it up — engine_roles take precedence
-    }),
-    // Legacy fallback slot.
-    makeSlot({
-      slot_id: 'living_room_hero_legacy',
-      eligible_when_engine_roles: [],
-      package_types: ['Gold Package'],
-    }),
-    // Drone slot — should not match.
-    makeSlot({
-      slot_id: 'drone_orbit',
-      eligible_when_engine_roles: ['drone_shortlist'],
-    }),
-  ];
-  const { eligibleSlots } = resolveEligibleSlots({
-    packageProducts: pkgProducts,
-    products,
-    slots,
-    roundPackageName: 'Gold Package',
-  });
-  const ids = eligibleSlots.map((s) => s.slot_id).sort();
-  assertEquals(ids, ['kitchen_hero', 'living_room_hero_legacy']);
 });
 
 // ─── 4. isContentInScope (Pass 0 OOS warning) ────────────────────────────────

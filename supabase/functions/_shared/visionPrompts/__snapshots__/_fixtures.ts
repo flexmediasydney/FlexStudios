@@ -231,8 +231,10 @@ export const FIXTURE_CLASSIFICATIONS: Pass2ClassificationRow[] = [
 export const FIXTURE_PASS2_OPTS: Pass2PromptOptions = {
   propertyAddress: '12 Sample Street, Mosman NSW 2088',
   packageType: 'Premium Package',
+  packageDisplayName: 'Premium Package',
   packageCeiling: 38,
-  tier: 'premium',
+  pricingTier: 'premium',
+  engineRoles: ['photo_day_shortlist', 'photo_dusk_shortlist'],
   slotDefinitions: FIXTURE_SLOT_DEFINITIONS,
   streamBAnchors: FIXTURE_ANCHORS,
   classifications: FIXTURE_CLASSIFICATIONS,

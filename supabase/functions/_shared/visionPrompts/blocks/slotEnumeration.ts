@@ -5,26 +5,41 @@
  * the SLOT REQUIREMENTS section (Phase 1 mandatory + Phase 2 conditional +
  * Phase 3 free-recommendation cap) from the active slot_definitions list.
  *
- * Byte-stable lift from `pass2Prompt.ts` userPrefix lines 261-271 (context) +
- * the inlined `renderSlotRequirements()` helper.
+ * Wave 7 P1-6 (W7.7) updates:
+ *   - `tier` opt renamed to `pricingTier` to disambiguate from engine_tier
+ *     (S/P/A).
+ *   - `describeCeiling()` retired — caller now supplies `packageDisplayName`
+ *     directly (the package's actual DB name), so the prompt no longer
+ *     reverse-engineers a label from the numeric ceiling.
+ *   - `engineRoles` field added — surfaced in the SHORTLISTING CONTEXT block
+ *     so the model knows which deliverable types are in scope.
+ *
+ * Bumped to v1.1 to reflect the new field surface.
  */
 
 import type { Pass2SlotDefinition } from '../../pass2Prompt.ts';
 
-export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.0';
+export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.1';
 
 export interface SlotEnumerationBlockOpts {
   /** Resolved street/property address (falls back to "Unknown property"). */
   propertyAddress: string | null;
-  /** e.g. 'Gold' | 'Day to Dusk' | 'Premium' or any free text. */
+  /** Free-form package name from the round (e.g. "Gold Package"). */
   packageType: string;
-  /** Hard upper bound on shortlist size — Gold=24 | DTD=31 | Premium=38 typically. */
+  /** Caller-supplied display name for the prompt's ceiling line — Wave 7
+   *  P1-6 replacement for the dropped describeCeiling() label. */
+  packageDisplayName: string;
+  /** Hard upper bound on shortlist size — sourced dynamically from the
+   *  round.expected_count_target column under W7.7. */
   packageCeiling: number;
-  /** 'standard' | 'premium' (informational). */
-  tier: string;
+  /** 'standard' | 'premium' (informational; renamed from `tier` in W7.7). */
+  pricingTier: string;
+  /** Project's resolved engine roles. Wave 7 P1-6 — surfaced in the prompt
+   *  so the model knows what deliverables are in play. */
+  engineRoles: string[];
   /** Total compositions available, surfaced in the context block. */
   totalCompositions: number;
-  /** Active slot definitions for this package_type. */
+  /** Active slot definitions for this round. */
   slotDefinitions: Pass2SlotDefinition[];
 }
 
@@ -32,21 +47,32 @@ export function slotEnumerationBlock(opts: SlotEnumerationBlockOpts): string {
   const {
     propertyAddress,
     packageType,
+    packageDisplayName,
     packageCeiling,
-    tier,
+    pricingTier,
+    engineRoles,
     totalCompositions,
     slotDefinitions,
   } = opts;
 
-  const slotRequirements = renderSlotRequirements(slotDefinitions, packageCeiling);
+  const slotRequirements = renderSlotRequirements(
+    slotDefinitions,
+    packageCeiling,
+    packageDisplayName,
+  );
+
+  const enginesLabel = engineRoles.length > 0
+    ? engineRoles.join(', ')
+    : '(none — slot list will be limited to phase 3)';
 
   return [
     'SHORTLISTING CONTEXT:',
     `Property: ${propertyAddress || 'Unknown property'}`,
     `Package: ${packageType}`,
-    `Tier: ${tier}`,
+    `Pricing tier: ${pricingTier}`,
+    `Engine roles in scope: ${enginesLabel}`,
     `Total compositions available: ${totalCompositions}`,
-    `Package ceiling: ${packageCeiling} images (${describeCeiling(packageCeiling)})`,
+    `Package ceiling: ${packageCeiling} images (${packageDisplayName} maximum)`,
     '',
     'SLOT REQUIREMENTS:',
     slotRequirements,
@@ -58,6 +84,7 @@ export function slotEnumerationBlock(opts: SlotEnumerationBlockOpts): string {
 function renderSlotRequirements(
   slotDefs: Pass2SlotDefinition[],
   packageCeiling: number,
+  packageDisplayName: string,
 ): string {
   const phase1 = slotDefs.filter((s) => s.phase === 1);
   const phase2 = slotDefs.filter((s) => s.phase === 2);
@@ -97,16 +124,9 @@ function renderSlotRequirements(
   lines.push('  For each one, ask: does this image show something of genuine buyer value that is not already represented in the proposed shortlist?');
   lines.push('  Recommend additional images in ranked priority order (rank 1 = best). For each, provide a one-sentence justification stating what unique value it adds.');
   lines.push(
-    `  Cap: total shortlist size (Phase 1 + Phase 2 + Phase 3) MUST NOT EXCEED ${packageCeiling} images (${describeCeiling(packageCeiling)}).`,
+    `  Cap: total shortlist size (Phase 1 + Phase 2 + Phase 3) MUST NOT EXCEED ${packageCeiling} images (${packageDisplayName} maximum).`,
   );
   lines.push('  Do not recommend near-duplicates of already-selected images.');
 
   return lines.join('\n');
-}
-
-export function describeCeiling(ceiling: number): string {
-  if (ceiling <= 24) return 'Gold maximum';
-  if (ceiling <= 31) return 'Day to Dusk maximum';
-  if (ceiling <= 38) return 'Premium maximum';
-  return 'package maximum';
 }

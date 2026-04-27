@@ -37,7 +37,7 @@ function makeRound(overrides: Partial<AuditRoundInfo> = {}): AuditRoundInfo {
     round_id: 'round-uuid-001',
     round_number: 2,
     project_id: 'project-uuid-001',
-    package_type: 'Gold',
+    package_type: 'TestPkg',
     locked_at: FIXED_ISO,
     locked_by_user_id: 'user-uuid-001',
     engine_version: null,
@@ -108,7 +108,7 @@ Deno.test('buildAuditJson: empty input produces a valid envelope', () => {
   assertEquals(out.round_id, 'round-uuid-001');
   assertEquals(out.round_number, 2);
   assertEquals(out.project_id, 'project-uuid-001');
-  assertEquals(out.package_type, 'Gold');
+  assertEquals(out.package_type, 'TestPkg');
   assertEquals(out.locked_at, FIXED_ISO);
   assertEquals(out.locked_by_user_id, 'user-uuid-001');
   assertEquals(out.engine_version, null);

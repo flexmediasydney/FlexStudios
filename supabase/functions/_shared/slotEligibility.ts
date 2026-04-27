@@ -1,27 +1,27 @@
 /**
- * slotEligibility — pure resolver for product-driven slot eligibility (W7.8).
+ * slotEligibility — pure resolver for product-driven slot eligibility (W7.8 + W7.7).
  *
- * Replaces the legacy "match slot.package_types[] against round.package_type
- * by string" with a data-driven join through the products table:
+ * Resolves eligible slots for a round via:
  *
- *   round → package → packages.products[] (JSONB) → product_ids
- *   product_ids → products.engine_role[] (distinct, non-null, is_active=true)
+ *   round → package + à la carte products → products.engine_role[] (distinct,
+ *           non-null, is_active=true)
  *   slot eligible iff slot.eligible_when_engine_roles && projectEngineRoles
  *
- * Until every slot row has been backfilled with an explicit engine-role list
- * (Migration 337 + manual review per the design spec), we keep a fallback
- * path: when `eligible_when_engine_roles` is empty/null on a slot, fall back
- * to the legacy `package_types` substring-match. This is intentional defensive
- * coding for the transition window — once 100% of slots have explicit
- * engine-role lists, the fallback becomes unreachable and can be retired in
- * a future subtractive migration.
+ * Wave 7 P1-6 (W7.7) — the legacy `package_types[]` substring-match fallback
+ * has been retired. Migration 339 drops the column entirely; W7.8's backfill
+ * left every active slot with eligible_when_engine_roles populated, so the
+ * fallback path was already dead code at the time of removal.
+ *
+ * Defensive policy: a slot row with `is_active=true` AND `eligible_when_engine_roles`
+ * empty/null is treated as MISCONFIGURED — it's excluded from the result
+ * with a warning. Admins shouldn't be able to ship a slot with no eligibility,
+ * but we don't crash the engine if they do.
  *
  * The function lives in `_shared/` so any edge function can import it (Pass 2
- * is the primary caller, but Pass 3 + admin tools may want it too).
+ * is the primary caller, but Pass 3 + benchmark + admin tools all consume it).
  *
  * KEEP THIS PURE: no DB calls, no env reads, no I/O. The orchestrator does
- * the SELECTs and hands the rows in. This makes the rule trivially unit-
- * testable and survivable across schema migrations.
+ * the SELECTs and hands the rows in.
  */
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -59,12 +59,12 @@ export interface PackageProductEntry {
   pricing_type?: string | null;
 }
 
-/** Subset of `shortlisting_slot_definitions` columns the resolver needs. */
+/** Subset of `shortlisting_slot_definitions` columns the resolver needs.
+ *  W7.7: package_types column dropped from the table; field removed here. */
 export interface SlotDefinitionRow {
   slot_id: string;
   display_name?: string | null;
   phase?: number | null;
-  package_types?: string[] | null;
   eligible_when_engine_roles?: string[] | null;
   eligible_room_types?: string[] | null;
   max_images?: number | null;
@@ -110,35 +110,22 @@ export function resolvePackageEngineRoles(
       // Forward-compat: products may carry a not-yet-recognised role string
       // (someone added a new product type before the frontend enum was
       // updated). We deliberately drop it from the engine-role set rather
-      // than crashing — the slot will fall back to package_types matching.
+      // than crashing — the slot will simply not match.
     }
   }
   return Array.from(roles);
 }
 
 /**
- * Case-insensitive substring match used by the legacy package_types fallback.
- * Mirrors the existing fetchSlotDefinitions() helper in shortlisting-pass2 so
- * behaviour is unchanged when no engine_role data exists yet.
- */
-function pkgMatches(defPkg: string, roundPkg: string): boolean {
-  const a = String(defPkg).toLowerCase().trim();
-  const b = String(roundPkg).toLowerCase().trim();
-  if (!a || !b) return false;
-  if (a === b) return true;
-  return a.includes(b) || b.includes(a);
-}
-
-/**
  * Filter slot definitions by engine-role overlap with the round's resolved
- * roles. Slots with non-empty `eligible_when_engine_roles` use the new path;
- * slots with empty/null `eligible_when_engine_roles` fall back to
- * package_types substring match against `roundPackageName` (legacy behaviour
- * during the migration window).
+ * roles.
  *
- * If `eligible_when_engine_roles` IS empty AND `package_types` is empty,
- * the slot is treated as universal (existing convention from
- * fetchSlotDefinitions).
+ * Wave 7 P1-6 (W7.7): the legacy `package_types[]` substring fallback is
+ * retired. Every active slot must have a non-empty
+ * `eligible_when_engine_roles` array. A slot violating that contract
+ * (empty/null `eligible_when_engine_roles` AND `is_active=true`) is
+ * defensively dropped from the result with a console warning — the engine
+ * doesn't crash, but the misconfiguration is surfaced.
  *
  * Pure: takes already-fetched rows; the caller owns the DB.
  */
@@ -146,45 +133,33 @@ export function filterSlotsForRound(opts: {
   slots: SlotDefinitionRow[];
   projectEngineRoles: EngineRole[] | string[];
   /**
-   * Round's package_type label (e.g. "Gold Package"). Only used by the
-   * fallback path when a slot has no engine-role list. Pass null/empty to
-   * skip the fallback (strictly engine-role-driven mode).
+   * @deprecated Wave 7 P1-6 (W7.7) — kept on the API for source compatibility
+   * with existing call sites; the value is ignored. Slot eligibility is now
+   * strictly engine-role driven.
    */
   roundPackageName: string | null;
 }): SlotDefinitionRow[] {
-  const { slots, projectEngineRoles, roundPackageName } = opts;
+  const { slots, projectEngineRoles } = opts;
   const projectRoleSet = new Set<string>(projectEngineRoles || []);
-  const fallbackPkg = roundPackageName ? String(roundPackageName).toLowerCase().trim() : '';
 
   const out: SlotDefinitionRow[] = [];
   for (const slot of slots) {
     const engineRoles = Array.isArray(slot.eligible_when_engine_roles)
       ? slot.eligible_when_engine_roles
       : [];
-    const pkgTypes = Array.isArray(slot.package_types) ? slot.package_types : [];
 
-    if (engineRoles.length > 0) {
-      // Engine-role-driven path: include if ANY of the slot's roles overlap
-      // with the project's roles. NB: an empty projectEngineRoles set means
-      // we drop all engine-role-restricted slots — that's the correct
-      // behaviour when (e.g.) the round's package has no products with
-      // engine_role set.
-      const overlaps = engineRoles.some((r) => projectRoleSet.has(r));
-      if (overlaps) out.push(slot);
+    if (engineRoles.length === 0) {
+      // Defensive: a slot row that's is_active=true but has no engine roles
+      // is a misconfiguration. Drop it from the result and warn.
+      if (slot.is_active === true) {
+        console.warn(
+          `[slotEligibility] dropping misconfigured slot '${slot.slot_id}' — is_active=true but eligible_when_engine_roles is empty`,
+        );
+      }
       continue;
     }
 
-    // Fallback: legacy package_types substring match. Empty package_types ==
-    // universal (per the existing fetchSlotDefinitions convention).
-    if (pkgTypes.length === 0) {
-      out.push(slot);
-      continue;
-    }
-    if (!fallbackPkg) {
-      // No fallback identifier supplied — drop the slot rather than guessing.
-      continue;
-    }
-    if (pkgTypes.some((p) => pkgMatches(p, fallbackPkg))) {
+    if (engineRoles.some((r) => projectRoleSet.has(r))) {
       out.push(slot);
     }
   }
@@ -201,6 +176,9 @@ export function resolveEligibleSlots(opts: {
   packageProducts: PackageProductEntry[] | null | undefined;
   products: ProductRow[] | Map<string, ProductRow>;
   slots: SlotDefinitionRow[];
+  /**
+   * @deprecated Wave 7 P1-6 (W7.7) — see `filterSlotsForRound.roundPackageName`.
+   */
   roundPackageName: string | null;
 }): {
   eligibleSlots: SlotDefinitionRow[];

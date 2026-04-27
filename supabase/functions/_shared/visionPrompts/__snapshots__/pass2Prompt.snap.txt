@@ -9,9 +9,10 @@ You do not hallucinate slot fills. If no candidate exists for a mandatory slot, 
 SHORTLISTING CONTEXT:
 Property: 12 Sample Street, Mosman NSW 2088
 Package: Premium Package
-Tier: premium
+Pricing tier: premium
+Engine roles in scope: photo_day_shortlist, photo_dusk_shortlist
 Total compositions available: 5
-Package ceiling: 38 images (Premium maximum)
+Package ceiling: 38 images (Premium Package maximum)
 
 SLOT REQUIREMENTS:
 PHASE 1 — MANDATORY SLOTS (always filled; flag as unfilled_mandatory if no candidate exists):
@@ -30,7 +31,7 @@ PHASE 3 — FREE RECOMMENDATIONS (no predefined slot_ids):
   After filling all eligible Phase 1 + Phase 2 slots, review every remaining unselected composition.
   For each one, ask: does this image show something of genuine buyer value that is not already represented in the proposed shortlist?
   Recommend additional images in ranked priority order (rank 1 = best). For each, provide a one-sentence justification stating what unique value it adds.
-  Cap: total shortlist size (Phase 1 + Phase 2 + Phase 3) MUST NOT EXCEED 38 images (Premium maximum).
+  Cap: total shortlist size (Phase 1 + Phase 2 + Phase 3) MUST NOT EXCEED 38 images (Premium Package maximum).
   Do not recommend near-duplicates of already-selected images.
 
 NEAR-DUPLICATE CULLING RULES (within-room only — spec L7):
