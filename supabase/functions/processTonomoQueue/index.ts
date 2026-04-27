@@ -1,5 +1,6 @@
 import { getAdminClient, createEntities, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
-import { PROCESSOR_VERSION, BATCH_SIZE, LOCK_TTL_SECONDS } from './types.ts';
+import { tryAcquireMutex, releaseMutex } from '../_shared/dispatcherMutex.ts';
+import { PROCESSOR_VERSION, BATCH_SIZE } from './types.ts';
 import {
   extractOrderIdFromPayload,
   writeAudit,
@@ -85,31 +86,22 @@ serveWithAudit('processTonomoQueue', async (req) => {
 
   const results: any = { processed: 0, failed: 0, skipped: 0 };
 
+  // ── Wave 7 P1-11 follow-up: row-based dispatcher mutex (replaces broken
+  // pg_try_advisory_lock pattern). Advisory locks are session-scoped and
+  // PostgREST routes the unlock RPC to a different connection than the
+  // acquire RPC — silent unlock failures and stale-lock accumulation. The
+  // dispatcher_locks table (mig 336) is connection-pool agnostic. See
+  // _shared/dispatcherMutex.ts and the W7.5 design spec.
+  const DISPATCHER_LOCK_NAME = 'process-tonomo-queue';
+  const tickId = crypto.randomUUID();
+  let lockAcquired = false;
+
   try {
     await safeUpdate(entities, 'TonomoIntegrationSettings', { heartbeat_at: new Date().toISOString() });
 
-    // Atomic lock — use Postgres advisory lock to prevent concurrent runs (TOCTOU-safe)
-    const LOCK_KEY = 424242; // arbitrary unique integer for this processor
-    let lockResult: any = null;
-    try {
-      const lockResp = await admin.rpc('pg_try_advisory_lock', { lock_id: LOCK_KEY });
-      lockResult = lockResp?.data ?? null;
-    } catch { lockResult = null; }
-    // Fallback to settings-based lock if advisory lock RPC not available
-    const gotAdvisoryLock = lockResult === true;
-    if (!gotAdvisoryLock) {
-      // Fallback: atomic conditional update to prevent TOCTOU race
-      const lockCutoff = new Date(Date.now() - LOCK_TTL_SECONDS * 1000).toISOString();
-      const { data: claimed, error: claimErr } = await admin
-        .from('tonomo_integration_settings')
-        .update({ processing_lock_at: new Date().toISOString() })
-        .or(`processing_lock_at.is.null,processing_lock_at.lt.${lockCutoff}`)
-        .select('id')
-        .limit(1);
-
-      if (claimErr || !claimed?.length) {
-        return jsonResponse({ skipped: true, reason: 'lock_active' });
-      }
+    lockAcquired = await tryAcquireMutex(admin, DISPATCHER_LOCK_NAME, tickId);
+    if (!lockAcquired) {
+      return jsonResponse({ skipped: true, reason: 'concurrent_dispatch' });
     }
 
     if (s?.id) {
@@ -129,7 +121,7 @@ serveWithAudit('processTonomoQueue', async (req) => {
     ) || [];
 
     if (!pendingItems.length) {
-      await releaseLock(entities, s, admin);
+      await releaseLock(entities, s);
       return jsonResponse({ processed: 0, message: 'queue_empty' });
     }
 
@@ -265,13 +257,25 @@ serveWithAudit('processTonomoQueue', async (req) => {
       }
     }
 
-    await releaseLock(entities, s, admin);
+    await releaseLock(entities, s);
     return jsonResponse({ ...results, batch_size: toProcess.length });
 
   } catch (err: any) {
-    await releaseLock(entities, s, admin);
+    await releaseLock(entities, s).catch(() => {});
     console.error('Processor fatal error:', err.message);
     // Return 200 to prevent cron/scheduler retries on internal errors (queue has its own retry logic)
     return jsonResponse({ error: err.message }, 200);
+  } finally {
+    if (lockAcquired) {
+      // Stale-lock pre-clear on the next tick covers the case where this
+      // release fails silently — log and keep moving so a release error
+      // can never wedge subsequent ticks.
+      await releaseMutex(admin, DISPATCHER_LOCK_NAME, tickId).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[processTonomoQueue] mutex release failed (will be cleaned up by stale-lock sweep): ${msg}`,
+        );
+      });
+    }
   }
 });

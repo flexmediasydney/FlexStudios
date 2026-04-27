@@ -1050,12 +1050,14 @@ export async function writeAudit(entities: any, params: any) {
   } catch (e: any) { console.error('Audit log write failed:', e.message); }
 }
 
-export async function releaseLock(entities: any, settings: any, adminClient?: any) {
-  // Release Postgres advisory lock if we have an admin client
-  if (adminClient) {
-    try { await adminClient.rpc('pg_advisory_unlock', { lock_id: 424242 }); }
-    catch { /* advisory lock may not have been acquired */ }
-  }
+// Wave 7 P1-11 follow-up: this only clears the cosmetic `processing_lock_at`
+// column on TonomoIntegrationSettings (read by diagnoseTonomoProcessor for ops
+// visibility). The actual concurrency mutex is now the row-based dispatcher_locks
+// table (mig 336) — see _shared/dispatcherMutex.ts. The previous
+// pg_advisory_unlock call was removed: advisory locks are session-scoped and
+// PostgREST routes the unlock to a different connection than the acquire,
+// causing silent unlock failures and stale-lock accumulation.
+export async function releaseLock(entities: any, settings: any) {
   if (settings?.id) {
     try { await entities.TonomoIntegrationSettings.update(settings.id, { processing_lock_at: null }); }
     catch { /* self-expires after TTL */ }
