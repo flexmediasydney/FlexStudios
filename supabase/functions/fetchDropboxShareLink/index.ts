@@ -1,4 +1,5 @@
 import { getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
+import { getDropboxAccessToken } from '../_shared/dropbox.ts';
 
 const DROPBOX_TIMEOUT_MS = 15_000; // 15s timeout for Dropbox API calls
 
@@ -29,8 +30,7 @@ serveWithAudit('fetchDropboxShareLink', async (req) => {
       return errorResponse('Invalid URL format', 400);
     }
 
-    const token = Deno.env.get('DROPBOX_API_TOKEN');
-    if (!token) return errorResponse('DROPBOX_API_TOKEN not configured', 500);
+    const token = await getDropboxAccessToken({ forceRefresh: false });
 
     // Use Dropbox shared link metadata + list_folder with shared_link to get file list
     // First, get metadata about the shared link
