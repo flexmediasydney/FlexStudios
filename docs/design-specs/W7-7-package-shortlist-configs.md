@@ -71,50 +71,85 @@ CREATE TABLE package_engine_tier_mapping (
 
 Admin UI for this table lands in W7.7 (not W8). Master_admin can edit any cell at any time.
 
-### Section 3 — Capture project's tier choice at booking
+### Section 3 — Engine tier resolution (handles bundled, à la carte, and mixed)
 
-`projects.packages` is a JSONB array today with `{package_id, products: [{product_id, quantity}], quantity}`. Add `tier_choice` per package entry:
+Three real project shapes exist in production:
 
+| Shape | What's set | Tier source |
+|---|---|---|
+| **Bundled** | `projects.packages[].products[]` populated | `packages[?].tier_choice` (new — see below) → `package_engine_tier_mapping` |
+| **À la carte** | `projects.products[]` populated, `packages[]` empty | `projects.pricing_tier` directly (Joseph confirmed 2026-04-27) |
+| **Mixed** | Both populated | Package wins for tier; à la carte products inherit |
+
+(The 16 production à la carte projects today are real customers; the architecture must serve them.)
+
+**Bundled path — capture tier_choice in JSONB:**
+
+`projects.packages` JSONB array gains a `tier_choice` field per entry:
 ```jsonc
 [
   {
     "package_id": "...",
-    "tier_choice": "standard",   // ← NEW: 'standard' | 'premium'
+    "tier_choice": "standard",   // ← NEW: 'standard' | 'premium' (no DDL)
     "products": [...],
     "quantity": 1
   }
 ]
 ```
 
-No DDL needed — JSONB shape change is application-level. Backfill rule for existing projects: every entry gets `tier_choice: 'standard'` (Joseph confirmed: no real production data yet, OK to assume).
+Backfill rule: every existing entry gets `tier_choice: 'standard'` (no production rounds yet, safe).
 
-Propagate to `shortlisting_rounds` so the engine has a stable handle:
+**À la carte path — `projects.pricing_tier` (existing TEXT column):**
+
+```
+pricing_tier='premium' → engine Tier P
+pricing_tier='standard' → engine Tier S
+pricing_tier=null → engine Tier S (default, Joseph confirmed)
+```
+
+`projects.products[].tier_hint` is metadata only — preserved in audit JSON for traceability but the engine ignores it. Single-tier-per-round is the design (one shoot, one shortlist, one quality bar).
+
+**Round bootstrap stores the resolved tier directly:**
+
 ```sql
 ALTER TABLE shortlisting_rounds
-  ADD COLUMN package_tier_choice TEXT CHECK (package_tier_choice IS NULL OR package_tier_choice IN ('standard', 'premium'));
+  ADD COLUMN engine_tier_id UUID REFERENCES shortlisting_tiers(id);
 ```
 
-Round bootstrap reads `projects.packages[?].tier_choice` and writes it onto the round at creation. Pass 2's tier resolution becomes:
-```sql
-SELECT t.*
-FROM shortlisting_rounds r
-JOIN packages p ON p.name = r.package_type
-JOIN package_engine_tier_mapping m ON m.package_id = p.id AND m.tier_choice = r.package_tier_choice
-JOIN shortlisting_tiers t ON t.id = m.engine_tier_id
-WHERE r.id = $1;
+Resolved at ingest via this priority chain:
+
+```typescript
+function resolveEngineTier(project, packageEngineTierMapping, tiersTable): UUID {
+  // 1. Bundled: first package entry's tier_choice → package_engine_tier_mapping
+  const firstPkg = project.packages?.[0];
+  if (firstPkg?.package_id) {
+    const tierChoice = firstPkg.tier_choice 
+      || project.pricing_tier 
+      || 'standard';
+    const mapped = packageEngineTierMapping.find(
+      m => m.package_id === firstPkg.package_id && m.tier_choice === tierChoice
+    );
+    if (mapped) return mapped.engine_tier_id;
+  }
+  // 2. À la carte: project.pricing_tier directly
+  const projectTier = project.pricing_tier === 'premium' ? 'P' : 'S';
+  return tiersTable.find(t => t.tier_code === projectTier)!.id;
+}
 ```
 
-### Section 4 — Dynamic file count resolver (no hardcoded defaults)
+Pass 2 reads `round.engine_tier_id` directly; no re-resolution per inference.
 
-Drop ALL `expected_file_count_*` columns from any sidecar table. Replace with a runtime function:
+### Section 4 — Dynamic file count resolver (operates on union of bundled + à la carte)
+
+Drop ALL `expected_file_count_*` columns. Replace with two runtime helpers:
 
 ```typescript
 // supabase/functions/_shared/packageCounts.ts (new)
 
-export interface PackageProductEntry {
+export interface FlatProductEntry {
   product_id: string;
   quantity: number;
-  // ...
+  tier_hint: string | null;  // metadata only; engine ignores
 }
 
 export interface ProductCatalogEntry {
@@ -124,23 +159,52 @@ export interface ProductCatalogEntry {
 }
 
 /**
+ * Flatten a project's products from BOTH paths into a single list.
+ *
+ * - Bundled path: projects.packages[].products[] (each package entry's
+ *   tier_choice is propagated as the per-product tier_hint)
+ * - À la carte path: projects.products[] (top-level, tier_hint may be set
+ *   per-row but the engine ignores it; project.pricing_tier is the canonical
+ *   tier source)
+ * - Mixed: both arrays unioned. Joseph confirmed 2026-04-27: à la carte
+ *   products are ADDITIVE to bundled products (they're addons; not
+ *   replacements). e.g. Day Video Package (20 Sales Images) + à la carte
+ *   5 Sales Images → target = 25 photos.
+ */
+export function flattenProjectProducts(project: {
+  packages?: Array<{ package_id?: string; tier_choice?: string; products?: FlatProductEntry[] }> | null;
+  products?: FlatProductEntry[] | null;
+}): FlatProductEntry[] {
+  const fromBundled = (project.packages || []).flatMap(pkg =>
+    (pkg.products || []).map(p => ({
+      product_id: p.product_id,
+      quantity: p.quantity,
+      tier_hint: pkg.tier_choice || null,
+    }))
+  );
+  const fromAlaCarte = (project.products || []).map(p => ({
+    product_id: p.product_id,
+    quantity: p.quantity,
+    tier_hint: p.tier_hint || null,
+  }));
+  return [...fromBundled, ...fromAlaCarte];
+}
+
+/**
  * Compute target file count for a round.
  * 
- * Source of truth: the package's products array, filtered by engine_role
- * matching the engine's interest (e.g. ['photo_day_shortlist', 'photo_dusk_shortlist']
- * for the photo shortlist), with a category='Images' fallback for
- * products that haven't been backfilled with engine_role yet.
- * 
- * Returned counts are dynamic on every call — no hardcoded defaults.
+ * Source of truth: the union of bundled + à la carte products, filtered
+ * by engine_role (with category fallback for products lacking engine_role).
+ * Dynamic on every call — no hardcoded defaults.
  */
 export function computeExpectedFileCount(
-  packageProducts: PackageProductEntry[],
+  flatProducts: FlatProductEntry[],
   productsCatalog: ProductCatalogEntry[],
   forEngineRoles: string[],
   fallbackCategories: string[] = [],
 ): { target: number; min: number; max: number } {
   const catalogById = new Map(productsCatalog.map(p => [p.id, p]));
-  const target = packageProducts.reduce((sum, entry) => {
+  const target = flatProducts.reduce((sum, entry) => {
     const product = catalogById.get(entry.product_id);
     if (!product) return sum;
     const matchesEngineRole = product.engine_role
@@ -162,18 +226,37 @@ export function computeExpectedFileCount(
 }
 ```
 
-Pass 2 calls this at round start:
+Pass 2 / ingest calls these at round bootstrap:
 ```typescript
+const flatProducts = flattenProjectProducts(project);
 const photoCount = computeExpectedFileCount(
-  packageProducts,           // from projects.packages[?].products
-  productsCatalog,           // SELECT id, category, engine_role FROM products WHERE is_active
+  flatProducts,
+  productsCatalog,                              // SELECT id, category, engine_role FROM products WHERE is_active
   ['photo_day_shortlist', 'photo_dusk_shortlist'],
-  ['Images', 'images'],      // fallback when engine_role IS NULL
+  ['Images', 'images'],                         // fallback when engine_role IS NULL
 );
-// photoCount.target / .min / .max
+// photoCount.target / .min / .max → write to round.expected_count_target / _min / _max
 ```
 
-For multi-deliverable packages (Day Video, Dusk Video): the photo shortlist sums only photo_day/photo_dusk products. Video / drone / floorplan are separate engine_roles handled by their own engines (or QA tabs).
+For multi-deliverable packages (Day Video, Dusk Video) and à la carte addons: the photo shortlist sums only photo_day/photo_dusk products. Video / drone / floorplan are separate engine_roles handled by their own engines (or QA tabs).
+
+### Section 4b — Manual-mode trigger #2: graceful degradation when target=0
+
+Joseph confirmed 2026-04-27: if `computeExpectedFileCount(...).target === 0` for the photo engine roles, the round falls back to manual mode (W7.13) regardless of `project_type.shortlisting_supported`. This is graceful — a project that somehow ends up with no photo deliverables doesn't run an empty Pass 0/1/2/3 round, doesn't burn Sonnet credits, doesn't emit a confusing "no compositions" failure. It just opens the manual swimlane.
+
+Round bootstrap logic:
+```typescript
+const trigger1 = projectType.shortlisting_supported === false;  // W7.7 flag
+const photoCount = computeExpectedFileCount(...);
+const trigger2 = photoCount.target === 0;
+if (trigger1 || trigger2) {
+  // route to manual mode (W7.13) — synthetic round row, no Pass 0/1/2/3 enqueue
+  return createManualRound(project, { reason: trigger1 ? 'project_type_unsupported' : 'no_photo_products' });
+}
+// engine mode — enqueue Pass 0
+```
+
+The trigger reason is captured on the synthetic round row for auditability. Manual swimlane displays "Manual mode — no photo products in this project" or similar context.
 
 ### Section 5 — Slot FK refactor (kill `package_types`)
 
@@ -391,4 +474,9 @@ NOTIFY pgrst, 'reload schema';
 - [x] Joseph confirmed: drop `package_types` column now (no production data)
 - [x] Joseph confirmed: tiers admin UI punted to W8 (W7.7 only adds the `shortlisting_tiers` table + the package_engine_tier_mapping admin page)
 - [x] Joseph confirmed: category='Images' as fallback scope for products lacking engine_role
-- [ ] Codebase investigation report (in flight) reviewed before dispatch — may surface additional fixups
+- [x] Joseph confirmed 2026-04-27: à la carte tier mapping (premium→P, standard→S, null→S)
+- [x] Joseph confirmed 2026-04-27: mixed projects = additive (package + à la carte products both counted)
+- [x] Joseph confirmed 2026-04-27: target=0 → graceful manual-mode fallback (not hard error)
+- [x] Orchestrator decision 2026-04-27 (Joseph deferred to call): tier_hint is metadata-only; project.pricing_tier wins for engine tier resolution
+- [x] Codebase investigation report consumed: concrete file/line targets baked into dispatch prompt
+- [x] W7.6 vision blocks shipped — pass2Prompt.ts now safe to modify in W7.7 (block-based, no merge collision)
