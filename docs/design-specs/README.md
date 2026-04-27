@@ -23,8 +23,12 @@ the open questions, then dispatch the execution to a subagent.
 | [W7-7-package-shortlist-configs.md](./W7-7-package-shortlist-configs.md) | W7.7 | ✅ shipped | Dynamic package/product/tier architecture. Mig 339, helpers, engine integration, 3 admin UIs — commits d410845, 66df867, 83d8fa7, 2751ff4, e6c161e, 1b21675. Subsumes W7.9 / P1-13 |
 | [W7-13-manual-shortlisting-mode.md](./W7-13-manual-shortlisting-mode.md) | W7.13 | ⚙️ ready | UX fork for project types where AI shortlisting doesn't apply. Manual swimlane + lock-triggers-move. Depends on W7.7 + W7.12 |
 | [W7-8-product-driven-slot-eligibility.md](./W7-8-product-driven-slot-eligibility.md) | W7.8 | ✅ shipped | `engine_role` enum + `eligible_when_engine_roles` (mig 337) — 28 products + 12 slots backfilled; latent quarantine CHECK bug fixed as bonus |
+| [W10-1-multi-camera-partitioning.md](./W10-1-multi-camera-partitioning.md) | W10.1 | ⚙️ ready | Multi-camera partitioning in bracketDetector. New `composition_groups.camera_source` + `is_secondary_camera`. iPhone/secondary singletons banner via W10.2 contract baked in. Mig 340 |
+| [W10-3-override-metadata-columns.md](./W10-3-override-metadata-columns.md) | W10.3 | ⚙️ ready | All 4 named columns already exist (mig 285) — this is frontend instrumentation: per-card timer, drawer interaction tracking, signal attribution modal. One new audit column. Mig 341 |
 | [W11-universal-vision-response-schema.md](./W11-universal-vision-response-schema.md) | W11 | 🛑 | THE keystone — universal schema for vision API across all sources (RAW/finals/external). Pass 1 prompt + per-signal scoring + 22 measurement prompts |
 | [W12-trigger-thresholds.md](./W12-trigger-thresholds.md) | W12 | ⚙️ | AI suggestion engine thresholds for new room_types / slots. Storage tables for suggestion review |
+| [W13a-historical-flexmedia-goldmine.md](./W13a-historical-flexmedia-goldmine.md) | W13a | ⚙️ ready | Synthetic-round backfill for historical FlexMedia delivery training set. New status='backfilled', finals-extract Modal worker, $256 estimated for 100-project pilot |
+| [W13b-pulse-description-goldmine.md](./W13b-pulse-description-goldmine.md) | W13b | ⚙️ ready | Sonnet/Opus extractor over 28k pulse descriptions for object_registry bootstrap. Anthropic tool-use for strict JSON. ~$372 / 7-night batch |
 
 ## Specs not yet written (lower priority)
 
