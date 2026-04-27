@@ -8,7 +8,11 @@ Exposes one HTTP endpoint, `extract_http`, which the Supabase Edge Function
      `dropbox_access_token` secret).
   2. Run `exiftool` to extract the bracket-relevant EXIF tags (AEBBracketValue,
      DateTimeOriginal, SubSecTimeOriginal, ShutterSpeed, Aperture, ISO,
-     FocalLength, Orientation, plus model name).
+     FocalLength, Orientation, Model, plus camera body serial number — Wave
+     10.1 added `-SerialNumber` and `-BodySerialNumber` so the Pass 0
+     partitioner can identify each camera body uniquely. Different Canon
+     firmwares emit different keys; we read whichever is present and surface
+     it as `bodySerial` in the response.).
   3. Run `exiftool -b -PreviewImage` to extract the embedded 1620×1080 preview
      JPEG (Canon CR3 ships three embedded JPEGs — PreviewImage is the perfect
      middle size for vision API calls).
@@ -16,6 +20,18 @@ Exposes one HTTP endpoint, `extract_http`, which the Supabase Edge Function
   5. Compute mean luminance via PIL (used by Pass 0 for best-bracket selection).
   6. Upload the resized preview JPEG to
      `<dropbox_root_path>/Photos/Raws/Shortlist Proposed/Previews/<stem>.jpg`.
+
+Response shape (per file, under `files[stem].exif`):
+  {
+    fileName, cameraModel, bodySerial,           # bodySerial added in W10.1
+    shutterSpeed, shutterSpeedValue, aperture,
+    iso, focalLength, aebBracketValue,
+    dateTimeOriginal, subSecTimeOriginal,
+    captureTimestampMs, orientation
+  }
+Old callers reading `cameraModel` keep working. New W10.1 callers read
+`bodySerial`; missing serials surface as null and the Deno-side partitioner
+falls back to a model-only canonical slug.
 
 We process files concurrently with a thread pool — Dropbox + exiftool both
 release the GIL nicely, and 100 files at 30 KB/s each is ~16 s wall clock
@@ -154,6 +170,17 @@ EXIF_TAGS = [
     "-FocalLength",
     "-Orientation",
     "-Model",
+    # Wave 10.1 (W10.1) — body serial for the camera-source partitioner.
+    # Canon CR3 emits the serial under `SerialNumber` on most modern bodies;
+    # older firmwares (and some other manufacturers) emit `BodySerialNumber`
+    # instead. We read both and prefer SerialNumber when present (matches
+    # exiftool's canonical key on the R5 / R6 / R6 Mark II that dominate the
+    # FlexMedia fleet). iPhone HEIC carries Apple's serial in
+    # `BodySerialNumber` when permissions allow; when missing the partitioner
+    # falls back to a `<model>:unknown` bucket which is the desired behaviour
+    # (all iPhones group together as "the iPhone(s)").
+    "-SerialNumber",
+    "-BodySerialNumber",
 ]
 
 
@@ -297,6 +324,12 @@ def _process_one(
         # 2. EXIF
         exif_raw = _exif_extract(cr3_local)
         camera_model = exif_raw.get("Model")
+        # Wave 10.1 (W10.1): body serial for the camera-source partitioner.
+        # SerialNumber is the canonical key on Canon EOS R5/R6/R6 II; some
+        # older firmwares + non-Canon brands emit BodySerialNumber instead.
+        # Fall back across both — exiftool returns Python None when the tag
+        # is missing, which the Deno partitioner canonicalises to "unknown".
+        body_serial = exif_raw.get("SerialNumber") or exif_raw.get("BodySerialNumber")
         date_time_original = exif_raw.get("DateTimeOriginal")
         sub_sec = exif_raw.get("SubSecTimeOriginal")
         # Burst 3 I1: explicit "is not None" rather than `or` chain. The chain
@@ -351,6 +384,13 @@ def _process_one(
             "exif": {
                 "fileName": Path(file_path).name,
                 "cameraModel": camera_model,
+                # Wave 10.1 (W10.1): bodySerial — null if the tag is missing
+                # (e.g. iPhone with restrictive permissions, older bodies that
+                # don't emit either SerialNumber or BodySerialNumber). The
+                # Deno-side partitioner falls back to a "<model>:unknown"
+                # canonical slug so all unknown-serial files of the same
+                # model still bucket together correctly.
+                "bodySerial": body_serial,
                 "shutterSpeed": str(exif_raw.get("ShutterSpeed") or exif_raw.get("ExposureTime") or ""),
                 "shutterSpeedValue": shutter_value,
                 "aperture": aperture,
