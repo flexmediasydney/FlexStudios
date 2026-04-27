@@ -22,7 +22,15 @@
  * progression is a strong signal), but we don't require it. EXIF subseconds
  * + shutter+aperture+ISO continuity are the load-bearing signals; AEB-zero
  * resets are a corroborating signal.
+ *
+ * Wave 10.1 (W10.1) addition: `groupIntoBracketsPartitioned` composes the
+ * camera-source partitioner with the legacy detector — primary-camera files
+ * still go through full bracket grouping; secondary-camera files emit as
+ * singletons (file_count=1, isSecondaryCamera=true). The flat
+ * `groupIntoBrackets` entry point is unchanged.
  */
+
+import { partitionByCamera } from './cameraPartitioner.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -43,6 +51,15 @@ export interface ExifSignals {
   orientation: string;
   motionBlurRisk: boolean;
   highIsoRisk: boolean;
+  /**
+   * Camera body serial (Wave 10.1 P2-6 / W10.1) — read from EXIF
+   * SerialNumber or BodySerialNumber by the Modal worker. Optional + nullable
+   * for backwards compat with pre-W10.1 callers and Modal responses that
+   * predate the field. The cameraPartitioner falls back to a "<model>:unknown"
+   * canonical slug when missing, so same-model unknown-serial files still
+   * bucket together (the desired iPhone behaviour).
+   */
+  bodySerial?: string | null;
 }
 
 export interface BracketGroup {
@@ -54,6 +71,18 @@ export interface BracketGroup {
   cameraModel: string;
   /** Earliest captureTimestampMs in the group. */
   primaryTimestampMs: number;
+  /**
+   * Wave 10.1 P2-6 (W10.1) — canonical camera_source slug for this group.
+   * Set by `groupIntoBracketsPartitioned` when partitioning is in play;
+   * undefined when the legacy `groupIntoBrackets` entry point is used.
+   */
+  cameraSource?: string;
+  /**
+   * Wave 10.1 P2-6 (W10.1) — TRUE when this group came from a non-primary
+   * camera_source on the round. Such groups are emitted as singletons
+   * (file_count=1, isComplete=false) rather than bracket-merged.
+   */
+  isSecondaryCamera?: boolean;
 }
 
 export interface ValidationResult {
@@ -192,6 +221,112 @@ export function groupIntoBrackets(files: ExifSignals[]): BracketGroup[] {
     }
   }
   return finalGroups;
+}
+
+/**
+ * Wave 10.1 P2-6 (W10.1) — bracket-detect with multi-camera partitioning.
+ *
+ * Drop-in alternative to `groupIntoBrackets` for callers that need to handle
+ * multi-camera shoots. The pipeline:
+ *
+ *   1. Call partitionByCamera(files) to bucket by canonical "<model>:<serial>".
+ *   2. Run the EXISTING groupIntoBrackets logic on the PRIMARY partition only.
+ *      Each resulting group is tagged with cameraSource + isSecondaryCamera=false.
+ *   3. Emit each SECONDARY-partition file as its own composition group of 1
+ *      (singleton). file_count=1, isComplete=false, isMicroAdjustmentSplit=false,
+ *      cameraSource=<their canonical slug>, isSecondaryCamera=true.
+ *
+ * The output is the union (primary brackets + secondary singletons), sorted
+ * with primary groups before secondary singletons within the same timestamp
+ * bucket — the editor expects to see the bracketed flow first.
+ *
+ * Why singletons for secondary?
+ * ─────────────────────────────
+ * Secondary-camera shots (iPhone BTS, junior photographer's R6) are by
+ * definition not part of the primary photographer's AEB sequence. Merging
+ * them by timestamp is exactly the bug we're fixing. file_count=1 +
+ * isComplete=false is SEMANTICALLY DIFFERENT from "incomplete bracket" —
+ * downstream consumers can disambiguate via isSecondaryCamera=true.
+ *
+ * Backwards compat
+ * ────────────────
+ * The legacy `groupIntoBrackets(files)` entry point stays untouched. Callers
+ * that don't need partitioning (existing tests + any caller that explicitly
+ * wants flat behaviour) work as before. New W10.1 callers should use
+ * `groupIntoBracketsPartitioned`.
+ */
+export function groupIntoBracketsPartitioned(files: ExifSignals[]): BracketGroup[] {
+  if (files.length === 0) return [];
+
+  // Build the partitioner-shaped input. We derive stem from fileName so the
+  // caller doesn't have to project it separately. ExifMinimal accepts any
+  // shape extending it, but we keep this projection narrow.
+  const partitionInput = files.map((f) => ({
+    stem: stemOf(f.fileName),
+    cameraModel: f.cameraModel || null,
+    bodySerial: f.bodySerial ?? null,
+    // Stash the original file object so we can pull it back after partitioning.
+    _orig: f,
+  }));
+
+  const partitions = partitionByCamera(partitionInput);
+  const out: BracketGroup[] = [];
+
+  for (const p of partitions) {
+    const partitionFiles = p.files.map((entry) => entry._orig);
+    if (p.isPrimary) {
+      // Run the standard detector on the primary bucket only.
+      const primaryGroups = groupIntoBrackets(partitionFiles);
+      for (const g of primaryGroups) {
+        out.push({
+          ...g,
+          cameraSource: p.cameraSource,
+          isSecondaryCamera: false,
+        });
+      }
+    } else {
+      // Secondary partition → emit each file as its own singleton group.
+      // Sort by timestamp so the group_index assignment downstream stays
+      // deterministic.
+      const sorted = [...partitionFiles].sort(
+        (a, b) => a.captureTimestampMs - b.captureTimestampMs,
+      );
+      for (const f of sorted) {
+        out.push({
+          files: [f],
+          isComplete: false,
+          isMicroAdjustmentSplit: false,
+          cameraModel: f.cameraModel,
+          primaryTimestampMs: f.captureTimestampMs,
+          cameraSource: p.cameraSource,
+          isSecondaryCamera: true,
+        });
+      }
+    }
+  }
+
+  // Stable sort across all partitions: primary groups first, then secondary,
+  // then by primaryTimestampMs within each tier. This matches the editor's
+  // mental model — the bracketed flow comes first; the secondary singletons
+  // (the iPhone BTS, the junior's R6 frames) appear after.
+  return out.sort((a, b) => {
+    const aSecondary = a.isSecondaryCamera === true;
+    const bSecondary = b.isSecondaryCamera === true;
+    if (aSecondary !== bSecondary) {
+      return aSecondary ? 1 : -1;
+    }
+    return a.primaryTimestampMs - b.primaryTimestampMs;
+  });
+}
+
+/**
+ * Local stem helper — duplicated from Pass 0's stemOf to keep this module
+ * I/O-free and dependency-light. Strips the last extension (".CR3", ".HEIC",
+ * etc); tolerates filenames without an extension.
+ */
+function stemOf(fileName: string): string {
+  const dot = fileName.lastIndexOf('.');
+  return dot > 0 ? fileName.slice(0, dot) : fileName;
 }
 
 /**

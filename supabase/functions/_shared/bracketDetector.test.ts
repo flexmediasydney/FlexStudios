@@ -10,6 +10,7 @@
 import { assertEquals, assert } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 import {
   groupIntoBrackets,
+  groupIntoBracketsPartitioned,
   validateBracketCounts,
   type ExifSignals,
 } from './bracketDetector.ts';
@@ -27,6 +28,8 @@ interface FileOverrides {
   iso?: number;
   focalLength?: number;
   cameraModel?: string;
+  /** Wave 10.1: body serial for the partitioned variant tests. */
+  bodySerial?: string | null;
 }
 
 function makeFile(o: FileOverrides = {}): ExifSignals {
@@ -46,6 +49,7 @@ function makeFile(o: FileOverrides = {}): ExifSignals {
     orientation: '1',
     motionBlurRisk: false,
     highIsoRisk: false,
+    bodySerial: 'bodySerial' in o ? (o.bodySerial ?? null) : null,
   };
 }
 
@@ -282,4 +286,115 @@ Deno.test('groupIntoBrackets: lone non-AEB shot followed by AEB burst → 2 grou
   assertEquals(groups.length, 2);
   assertEquals(groups[0].files.length, 1);
   assertEquals(groups[1].files.length, 5);
+});
+
+// ─── W10.1: groupIntoBracketsPartitioned ─────────────────────────────────────
+
+Deno.test('groupIntoBracketsPartitioned: empty input → empty array', () => {
+  assertEquals(groupIntoBracketsPartitioned([]), []);
+});
+
+Deno.test('groupIntoBracketsPartitioned: single-camera shoot → 1 bracket, isSecondaryCamera=false', () => {
+  // Exact same input as the legacy single-bracket test, but going through
+  // the partitioned path. The single Canon body becomes the primary
+  // partition; the bracket detector runs as before.
+  const files = makeBracket(1_000, 'A', { bodySerial: '01234567890' });
+  const groups = groupIntoBracketsPartitioned(files);
+  assertEquals(groups.length, 1);
+  assertEquals(groups[0].files.length, 5);
+  assertEquals(groups[0].isComplete, true);
+  assertEquals(groups[0].isSecondaryCamera, false);
+  assertEquals(groups[0].cameraSource, 'canon-eos-r5:01234567890');
+});
+
+Deno.test('groupIntoBracketsPartitioned: R5 primary + R6 secondary → R5 brackets + R6 singletons', () => {
+  // 10 R5 files = 2 complete brackets (primary). 3 R6 files = 3 singletons.
+  // Expected output: 2 primary BracketGroups (file_count=5 each) + 3
+  // secondary BracketGroups (file_count=1 each) = 5 groups total.
+  const r5 = makeBracket(1_000, 'R5_a', { bodySerial: 'AAA' }).concat(
+    makeBracket(10_000, 'R5_b', { bodySerial: 'AAA' }),
+  );
+  const r6 = [
+    makeFile({ fileName: 'R6_0', captureTimestampMs: 5_000, cameraModel: 'Canon EOS R6', bodySerial: 'BBB', aebBracketValue: null }),
+    makeFile({ fileName: 'R6_1', captureTimestampMs: 7_000, cameraModel: 'Canon EOS R6', bodySerial: 'BBB', aebBracketValue: null }),
+    makeFile({ fileName: 'R6_2', captureTimestampMs: 9_000, cameraModel: 'Canon EOS R6', bodySerial: 'BBB', aebBracketValue: null }),
+  ];
+  const groups = groupIntoBracketsPartitioned([...r5, ...r6]);
+
+  // Primary brackets: 2 groups of 5 each
+  const primary = groups.filter((g) => g.isSecondaryCamera === false);
+  assertEquals(primary.length, 2, 'two R5 brackets on the primary partition');
+  for (const g of primary) {
+    assertEquals(g.files.length, 5);
+    assertEquals(g.isComplete, true);
+    assertEquals(g.cameraSource, 'canon-eos-r5:aaa');
+  }
+
+  // Secondary singletons: 3 groups of 1 each
+  const secondary = groups.filter((g) => g.isSecondaryCamera === true);
+  assertEquals(secondary.length, 3, 'three R6 singletons on the secondary partition');
+  for (const g of secondary) {
+    assertEquals(g.files.length, 1);
+    assertEquals(g.isComplete, false, 'singletons are NOT complete brackets');
+    assertEquals(g.isMicroAdjustmentSplit, false);
+    assertEquals(g.cameraSource, 'canon-eos-r6:bbb');
+  }
+
+  // Sort order: primary before secondary
+  for (let i = 1; i < groups.length; i++) {
+    if (groups[i - 1].isSecondaryCamera === true) {
+      assertEquals(
+        groups[i].isSecondaryCamera,
+        true,
+        'once we hit secondary, no more primary follows',
+      );
+    }
+  }
+});
+
+Deno.test('groupIntoBracketsPartitioned: iPhone files emit as singletons even when outnumbering Canon', () => {
+  // 5 Canon R5 + 12 iPhone shots. Canon STILL primary — iPhone never beats
+  // Canon. iPhone shots emit as 12 singletons (not bracket-merged on
+  // timestamp).
+  const r5 = makeBracket(1_000, 'R5', { bodySerial: 'CCC' });
+  const phone = Array.from({ length: 12 }, (_, i) =>
+    makeFile({
+      fileName: `IMG_phone_${i}`,
+      captureTimestampMs: 2_000 + i * 100,
+      cameraModel: 'iPhone 14 Pro',
+      bodySerial: null,
+      aebBracketValue: null,
+    }),
+  );
+  const groups = groupIntoBracketsPartitioned([...r5, ...phone]);
+
+  const primary = groups.filter((g) => g.isSecondaryCamera === false);
+  const secondary = groups.filter((g) => g.isSecondaryCamera === true);
+
+  assertEquals(primary.length, 1, 'one R5 bracket as the primary');
+  assertEquals(primary[0].files.length, 5);
+  assertEquals(primary[0].cameraSource, 'canon-eos-r5:ccc');
+
+  assertEquals(secondary.length, 12, '12 iPhone singletons (NOT bracket-merged)');
+  for (const g of secondary) {
+    assertEquals(g.files.length, 1);
+    assertEquals(g.cameraSource, 'iphone-14-pro:unknown');
+  }
+});
+
+Deno.test('groupIntoBracketsPartitioned: missing bodySerial collapses model files to one source', () => {
+  // Two R5 sequences with NULL serial — both treated as one camera source
+  // (defensive per R4 in the spec — exiftool fluke shouldn't break).
+  const a = makeBracket(1_000, 'A', { bodySerial: null });
+  const b = makeBracket(10_000, 'B', { bodySerial: null });
+  const groups = groupIntoBracketsPartitioned([...a, ...b]);
+  // One source ("canon-eos-r5:unknown"), so it's primary; bracket detector
+  // produces 2 complete brackets from 10 files (timestamps separated by
+  // GAP_MS).
+  assertEquals(groups.length, 2);
+  for (const g of groups) {
+    assertEquals(g.isSecondaryCamera, false);
+    assertEquals(g.cameraSource, 'canon-eos-r5:unknown');
+    assertEquals(g.files.length, 5);
+  }
 });
