@@ -43,7 +43,7 @@ dashboard or CLI:
 
 | Name                        | Variables                                                     | Notes                                                                                                                                  |
 | --------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `dropbox_access_token`      | `DROPBOX_ACCESS_TOKEN`, optional `DROPBOX_TEAM_NAMESPACE_ID`  | Long-lived Dropbox API token (scoped to the team folder). The optional namespace id mirrors the edge-function pattern for team-folder access. |
+| `dropbox_access_token`      | `DROPBOX_ACCESS_TOKEN`, optional `DROPBOX_TEAM_NAMESPACE_ID`  | **Wave 7 P0-3:** kept as a fallback only. The Edge caller now mints a fresh OAuth token on every invocation via the refresh-token flow and sends it in the request body as `dropbox_access_token`. The static Modal secret is consulted only when the body field is absent (legacy callers / manual curl tests). Will be removed once all callers are confirmed upgraded. |
 | `supabase_service_role_key` | `SUPABASE_SERVICE_ROLE_KEY`                                   | Same value as the Supabase env var of the same name. Used for two-way bearer-token auth between the edge function and Modal.          |
 
 ## Configure the Edge Function side
@@ -70,6 +70,7 @@ curl -X POST "$URL" \
     "_token": "'"$TOKEN"'",
     "project_id": "<some-uuid>",
     "dropbox_root_path": "/Flex Media Team Folder/Projects/<projectId>_<slug>",
+    "dropbox_access_token": "'"$DROPBOX_ACCESS_TOKEN"'",
     "file_paths": [
       "/Flex Media Team Folder/Projects/<projectId>_<slug>/Photos/Raws/Shortlist Proposed/IMG_1234.CR3"
     ]
@@ -115,6 +116,11 @@ Expected response shape (truncated):
 
 - **Auth:** `Authorization: Bearer <token>` header AND `_token` body field both
   must equal the `SUPABASE_SERVICE_ROLE_KEY` Modal secret. Mismatch → HTTP 401.
+- **Dropbox auth:** caller-supplied `dropbox_access_token` body field is
+  preferred (always fresh; minted by the Edge caller via DROPBOX_REFRESH_TOKEN +
+  APP_KEY + APP_SECRET). Falls back to the `DROPBOX_ACCESS_TOKEN` env var if
+  the body field is empty/missing. The container logs `dropbox token source:
+  caller` or `env_fallback` for ops visibility.
 - **Per-file failure:** sets `files[stem].ok = false, error: "..."` but the
   top-level `ok` stays `true` so the dispatcher records the partial result and
   doesn't retry the whole batch.

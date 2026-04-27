@@ -69,16 +69,26 @@ app = modal.App("flexstudios-photos-extract", image=photos_image)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Dropbox helpers (using the Modal-side `dropbox_access_token` secret).
+# Dropbox helpers.
+#
+# Wave 7 P0-3: token resolution order
+#   1. `access_token` argument (passed by the Edge caller — minted via the
+#      DROPBOX_REFRESH_TOKEN flow on the Supabase side; always fresh, no
+#      4-hour expiry to bite us mid-round).
+#   2. `DROPBOX_ACCESS_TOKEN` env var (Modal secret) — backwards-compat
+#      fallback during the deploy window. Will be removed once all Edge
+#      callers are confirmed sending the token.
+#
 # We use the python `dropbox` SDK rather than raw HTTP — it handles retries,
 # auth headers, and team-folder path-root for us.
 # ──────────────────────────────────────────────────────────────────────────────
-def _dropbox_client():
+def _dropbox_client(access_token: str = ""):
     import dropbox
-    token = os.environ.get("DROPBOX_ACCESS_TOKEN", "")
+    token = (access_token or "").strip() or os.environ.get("DROPBOX_ACCESS_TOKEN", "")
     if not token:
         raise RuntimeError(
-            "DROPBOX_ACCESS_TOKEN missing — Modal secret 'dropbox_access_token' not attached"
+            "Dropbox token missing — caller did not supply `dropbox_access_token` and "
+            "DROPBOX_ACCESS_TOKEN env (Modal secret 'dropbox_access_token') is empty"
         )
     client = dropbox.Dropbox(oauth2_access_token=token, timeout=120)
     # Team-folder namespace handling: paths like "/Flex Media Team Folder/..."
@@ -390,10 +400,13 @@ def extract_http(payload: Dict[str, Any], authorization: Optional[str] = None):
 
     POST body:
         {
-            "_token":              shared-secret bearer token (SUPABASE_SERVICE_ROLE_KEY),
-            "project_id":          UUID string,
-            "file_paths":          [ "/Flex Media Team Folder/.../IMG_1234.CR3", ... ],
-            "dropbox_root_path":   project root (for resolving Previews/ destination)
+            "_token":               shared-secret bearer token (SUPABASE_SERVICE_ROLE_KEY),
+            "project_id":           UUID string,
+            "file_paths":           [ "/Flex Media Team Folder/.../IMG_1234.CR3", ... ],
+            "dropbox_root_path":    project root (for resolving Previews/ destination),
+            "dropbox_access_token": optional — fresh OAuth token minted by the
+                                    caller; if empty/missing, falls back to the
+                                    Modal `dropbox_access_token` secret. Wave 7 P0-3.
         }
 
     Auth: header Authorization: Bearer <token> AND body._token both equal
@@ -423,6 +436,10 @@ def extract_http(payload: Dict[str, Any], authorization: Optional[str] = None):
     project_id = payload.get("project_id")
     file_paths = payload.get("file_paths") or []
     dropbox_root_path = payload.get("dropbox_root_path")
+    # Wave 7 P0-3: caller-supplied fresh OAuth token. Optional during the
+    # deploy transition; once all Edge callers are upgraded the env-fallback
+    # branch in `_dropbox_client` will be removed.
+    caller_dropbox_token = payload.get("dropbox_access_token") or ""
 
     if not project_id or not isinstance(project_id, str):
         return JSONResponse({"ok": False, "error": "project_id required (string)"}, status_code=400)
@@ -430,13 +447,17 @@ def extract_http(payload: Dict[str, Any], authorization: Optional[str] = None):
         return JSONResponse({"ok": False, "error": "file_paths required (non-empty list)"}, status_code=400)
     if not dropbox_root_path or not isinstance(dropbox_root_path, str):
         return JSONResponse({"ok": False, "error": "dropbox_root_path required (string)"}, status_code=400)
+    if caller_dropbox_token and not isinstance(caller_dropbox_token, str):
+        return JSONResponse({"ok": False, "error": "dropbox_access_token must be a string"}, status_code=400)
 
     previews_dir = f"{dropbox_root_path}/Photos/Raws/Shortlist Proposed/Previews"
 
     # Set up Dropbox client once per call — re-using it across files reuses
     # the underlying TLS connection (Python urllib3 pool).
     try:
-        client = _dropbox_client()
+        client = _dropbox_client(access_token=caller_dropbox_token)
+        token_source = "caller" if caller_dropbox_token else "env_fallback"
+        print(f"[photos-extract] dropbox token source: {token_source}")
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"dropbox client init failed: {e}"}, status_code=500)
 

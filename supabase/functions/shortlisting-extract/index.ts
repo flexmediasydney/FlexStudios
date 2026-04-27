@@ -30,6 +30,7 @@ import {
   serveWithAudit,
   getAdminClient,
 } from '../_shared/supabase.ts';
+import { getDropboxAccessToken } from '../_shared/dropbox.ts';
 
 const GENERATOR = 'shortlisting-extract';
 const MODAL_TIMEOUT_MS = 15 * 60 * 1000;
@@ -183,12 +184,29 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
       .eq('id', input.jobId);
   }
 
-  // 3. POST to Modal.
+  // 3. Mint a fresh Dropbox access token from edge env (auto-refreshing
+  //    via DROPBOX_REFRESH_TOKEN + APP_KEY + APP_SECRET) and pass it to
+  //    Modal in the request body. This eliminates the 4-hour expiry that
+  //    bit us on Round 2 — Modal's static `dropbox_access_token` secret is
+  //    no longer the source of truth (kept as a fallback in main.py for
+  //    backwards-compat during the deploy window). Wave 7 P0-3.
+  let dropboxAccessToken = '';
+  try {
+    dropboxAccessToken = await getDropboxAccessToken({ forceRefresh: false });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[${GENERATOR}] failed to mint Dropbox access token (Modal will fall back to its env secret): ${msg}`,
+    );
+  }
+
+  // 4. POST to Modal.
   const requestBody = {
     _token: SUPABASE_SERVICE_ROLE_KEY,
     project_id: input.projectId,
     file_paths: input.filePaths,
     dropbox_root_path: project.dropbox_root_path,
+    dropbox_access_token: dropboxAccessToken,  // Wave 7 P0-3: caller-provided token
   };
 
   let modalResponse: Record<string, unknown> | null = null;
