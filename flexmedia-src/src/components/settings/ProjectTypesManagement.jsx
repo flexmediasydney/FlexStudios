@@ -362,6 +362,23 @@ export default function ProjectTypesManagement() {
     onError: (err) => toast.error(err?.message || 'Failed to set default project type'),
   });
 
+  // Wave 7 P1-19 (W7.13): inline toggle for shortlisting_supported. Allows
+  // master_admin to flip the flag without opening the full edit dialog —
+  // matches the per-row "Set default" action pattern.
+  const toggleShortlistingMutation = useMutation({
+    mutationFn: ({ type, value }) =>
+      api.entities.ProjectType.update(type.id, { shortlisting_supported: value }),
+    onSuccess: (_, vars) => {
+      refetchEntityList("ProjectType");
+      toast.success(
+        vars.value
+          ? `"${vars.type.name}" — AI shortlisting enabled`
+          : `"${vars.type.name}" — manual shortlisting mode`,
+      );
+    },
+    onError: (err) => toast.error(err?.message || 'Failed to update shortlisting mode'),
+  });
+
   const handleOpen = (type = null) => {
     setEditingType(type);
     setFormData(type
@@ -459,6 +476,27 @@ export default function ProjectTypesManagement() {
                 {type.slug && <p className="text-xs text-muted-foreground/60 font-mono">{type.slug}</p>}
               </div>
               <div className="flex items-center gap-1">
+                {/* Wave 7 P1-19 (W7.13): inline AI-shortlisting toggle. */}
+                <div
+                  className="flex items-center gap-1.5 mr-2 pr-2 border-r"
+                  title={
+                    type.shortlisting_supported === false
+                      ? "Manual mode — operator drags Dropbox files into Approved (no AI). Click to enable AI shortlisting."
+                      : "AI shortlisting enabled (Pass 0/1/2/3 engine). Click to switch to manual mode."
+                  }
+                >
+                  <Switch
+                    checked={type.shortlisting_supported !== false}
+                    onCheckedChange={(v) =>
+                      toggleShortlistingMutation.mutate({ type, value: v })
+                    }
+                    disabled={!canEdit || toggleShortlistingMutation.isPending}
+                    aria-label="AI shortlisting supported"
+                  />
+                  <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                    AI
+                  </span>
+                </div>
                 {!type.is_default && (
                   <Button
                     variant="ghost"
