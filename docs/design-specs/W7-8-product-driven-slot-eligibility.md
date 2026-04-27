@@ -207,11 +207,25 @@ WHERE engine_role IS NULL;
 
 Total: ~1 week after design phase.
 
+## Resolutions (orchestrator, 2026-04-27)
+
+Master orchestrator resolved open questions in line with the spec's
+recommendations so execution can proceed:
+
+- **engine_role enum.** Accepted as written: `photo_day_shortlist`, `photo_dusk_shortlist`, `drone_shortlist`, `floorplan_qa`, `video_day_shortlist`, `video_dusk_shortlist`, `agent_portraits`. Stored as `TEXT` (no DB enum type — gives us cheap forward-compat for new product categories).
+- **Q1. Yes — include `agent_portraits`.** Lets Pass 0 cross-check "headshot detected but no agent_portraits product on the project" → escalate as quarantine candidate.
+- **Q3. `floorplan_qa` is a tab, not a slot.** No row in `shortlisting_slot_definitions`; the QA tab in the UI consumes products with engine_role='floorplan_qa' directly.
+- **Q4. Out-of-scope content → warn, don't reject.** When Pass 0 detects dusk content but the project has only `photo_day_shortlist` engine roles, surface a UI banner ("you've shot dusk content but no Dusk Images product is in the package — was this intentional?"). Don't auto-reject; editor decides.
+- **W7.7 dependency.** **NOT a blocker.** The existing `packages.products` JSONB column already gives us product↔package mapping (verified 2026-04-27: each product entry has `product_id`, `product_name`, `quantity`). W7.7's `package_shortlist_configs` sidecar is a future quality-of-life addition for per-package tier weights — orthogonal to slot eligibility. W7.8 proceeds independently.
+- **Existing slot review.** Executor task: write a one-shot SQL audit query in the migration that lists every `shortlisting_slot_definitions` row alongside its current `package_types` value and a *recommended* `eligible_when_engine_roles` based on slot semantics. Print the audit output as a comment in the migration so future-me can review the auto-mapping. Conservative default: every existing slot gets `eligible_when_engine_roles = ARRAY['photo_day_shortlist', 'photo_dusk_shortlist']` so nothing regresses; targeted slots (drone, agent_portraits) get tighter mapping.
+
 ## Pre-execution checklist
 
-- [ ] Joseph signs off on the engine_role enum values (Section "Architecture decision")
-- [ ] Joseph confirms Q1 (`agent_portraits` inclusion)
-- [ ] Joseph confirms Q3 (`floorplan_qa` as tab not slot)
-- [ ] Joseph confirms Q4 (out-of-scope warning vs reject)
-- [ ] W7.7 (`package_shortlist_configs` sidecar) has landed
-- [ ] Existing slot definitions reviewed for which `eligible_when_engine_roles` they should have
+- [x] engine_role enum values approved by orchestrator
+- [x] Q1 resolved (agent_portraits included)
+- [x] Q3 resolved (floorplan_qa is a tab)
+- [x] Q4 resolved (warn don't reject)
+- [x] W7.7 verified non-blocking — packages.products JSONB carries the join we need
+- [x] Migration **337** reserved (`337_products_engine_role_slot_eligibility.sql`)
+- [x] Real table name confirmed: **`shortlisting_slot_definitions`** (the spec abbreviates as `slot_definitions`)
+- [ ] Existing slot review = executor task (audit query in migration, see "Resolutions" above)

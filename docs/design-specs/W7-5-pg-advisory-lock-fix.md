@@ -219,6 +219,6 @@ DELETE FROM dispatcher_locks WHERE acquired_at < NOW() - INTERVAL '1 hour';
 
 ## Pre-execution checklist
 
-- [ ] Joseph signs off on Option B
-- [ ] Migration number reserved
-- [ ] Drone dispatcher reviewed for parallel migration (uses same lock pattern)
+- [x] Option B chosen by orchestrator (2026-04-27) — row-based mutex. Reasons: (1) tick body has long-running HTTP calls (Anthropic 30s+, Dropbox batch up to 3min), holding a Postgres transaction across these is fundamentally wrong for option A; (2) the connection-pool sensitivity is the bug we're fixing — option B eliminates the dependency entirely; (3) the table is auditable via SQL.
+- [x] Migration number **336** reserved (`336_dispatcher_locks.sql`) — orchestrator (2026-04-27)
+- [x] Drone dispatcher (`drone-job-dispatcher`) follows same pattern — agent must apply the same row-based mutex with `lock_name='drone-job-dispatcher'` reusing the new `dispatcher_locks` table. One migration; both dispatchers reference different rows.

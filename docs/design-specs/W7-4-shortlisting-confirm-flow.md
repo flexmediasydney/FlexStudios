@@ -183,14 +183,23 @@ Add a smoke check to W7.1's smoke test:
 2. **Should the audit JSON also capture overrides (the human's drag-decisions)?** Recommendation: yes — include the full overrides list with `human_action`, `client_sequence`, timestamps. This makes the audit JSON the canonical "what did this round become" record without needing the DB.
 3. **Per-round file vs append-only log?** Spec implies one JSON file per event. We're going with one JSON per LOCK event (multiple if a round is unlocked + relocked, which P0-1's resume flow allows). Alternative: append all events for a project to a single `project_<id>_audit.jsonl` file. Multi-file is simpler + Dropbox handles versioning.
 
+## Resolutions (orchestrator, 2026-04-27)
+
+Master orchestrator resolved all open questions in line with the doc's
+recommendations so execution can proceed:
+
+- **Q1.** Accepted MOVE+audit-mirror as sufficient compliance posture. Dropbox version history (180 days on the team plan) is the ultimate undelete safety net; the audit JSON is the canonical "what did this round become" record. If FlexMedia later signs a contract requiring N-year RAW retention, that's a separate archival concern (cold-storage burst), not a reason to copy-twice.
+- **Q2. Yes — include overrides** in the audit JSON. Per-row entry carries `human_action`, `client_sequence`, `actor_user_id`, `actor_at`. Makes the JSON file self-contained for "what happened in this round" without needing the DB.
+- **Q3. One JSON file per LOCK event.** Path pattern: `Photos/_AUDIT/round_<N>_locked_<ISO8601>.json`. If a round is unlocked + relocked (P0-1's resume flow), each lock writes its own file — keeps the file system the source of truth for the lock-event timeline.
+
+## Pre-execution checklist
+
+- [x] Q1 resolved by orchestrator (compliance scope: MOVE+audit-mirror sufficient)
+- [x] Q2 resolved by orchestrator (overrides included in audit JSON)
+- [x] Q3 resolved by orchestrator (one file per lock event)
+- [ ] `Photos/_AUDIT/` folder kind verified in `project_folders` for photos projects (executor task — add to `provisionProjectFolders` if missing)
+
 ## Effort estimate
 
 - Half-day implementation (~50 lines added to lock function)
 - Lands as part of P0-1 burst (W7.1)
-
-## Pre-execution checklist
-
-- [ ] Joseph signs off on Q1 (compliance scope)
-- [ ] Joseph confirms Q2 (overrides included)
-- [ ] Joseph confirms Q3 (one file per lock event)
-- [ ] `Photos/_AUDIT/` folder kind verified in `project_folders` for photos projects
