@@ -655,7 +655,13 @@ export default function ShortlistingSwimlane({
   }
 
   // ── Round metadata + coverage ──────────────────────────────────────────
-  const ceiling = round?.package_ceiling || 24;
+  // Wave 7 P1-11: drop the hardcoded `|| 24` Gold fallback. round.package_ceiling
+  // is denormalized onto every round at creation time (shortlisting-ingest →
+  // PACKAGE_CEILING_DEFAULTS) so it should always be present for real rounds.
+  // If it's somehow missing, we render "—" rather than silently lying about
+  // a ceiling. Per Joseph's architectural correction (2026-04-27), packages
+  // must NEVER be hardcoded in the frontend.
+  const ceiling = round?.package_ceiling ?? null;
   const total = groups.length;
   const approvedCount = columnItems.approved.length;
   const proposedCount = columnItems.proposed.length;
@@ -693,7 +699,7 @@ export default function ShortlistingSwimlane({
             <div>
               <div className="text-xs text-muted-foreground">Approved</div>
               <div className="text-sm font-medium tabular-nums">
-                {approvedCount} / {ceiling} max
+                {approvedCount} / {ceiling ?? "—"} max
               </div>
             </div>
             <div className="border-l h-8" />
