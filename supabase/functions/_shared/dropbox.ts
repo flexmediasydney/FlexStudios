@@ -408,6 +408,100 @@ export async function moveFile(fromPath: string, toPath: string): Promise<Dropbo
   return res.metadata;
 }
 
+// ─── Batch move (async) ──────────────────────────────────────────────────────
+//
+// Wave 7 P0-1: Dropbox `/files/move_batch_v2` accepts up to 10,000 entries per
+// call and returns either:
+//   - { '.tag': 'complete', entries: [...] }  — small batches resolve sync
+//   - { '.tag': 'async_job_id', async_job_id: 'dbjid:abc...' } — most batches
+//     return async; caller polls /files/move_batch/check_v2 until complete.
+//
+// Used by shortlist-lock (was per-file /files/move_v2 in a 6-worker loop;
+// timed out at the 150s edge gateway window for >50-file rounds). The async
+// pattern lets us submit all moves in <1s and poll for completion from
+// EdgeRuntime.waitUntil() in the background while returning the async_job_id
+// to the frontend immediately for live progress polling.
+
+export interface DropboxMoveEntry {
+  from_path: string;
+  to_path: string;
+}
+
+export interface DropboxBatchEntryResult {
+  '.tag': 'success' | 'failure';
+  // success path: full metadata
+  success?: DropboxFileMetadata;
+  // failure path: tagged union — `.tag` is one of 'from_lookup'|'from_write'|'to'|'too_many_write_operations'
+  // and the inner shape varies by tag.
+  failure?: {
+    '.tag': string;
+    from_lookup?: { '.tag': string };
+    from_write?: { '.tag': string };
+    to?: { '.tag': string };
+    [key: string]: unknown;
+  };
+}
+
+export interface DropboxMoveBatchSubmitResult {
+  '.tag': 'complete' | 'async_job_id' | 'other';
+  async_job_id?: string;
+  entries?: DropboxBatchEntryResult[];
+}
+
+export interface DropboxMoveBatchCheckResult {
+  '.tag': 'in_progress' | 'complete' | 'failed' | 'other';
+  entries?: DropboxBatchEntryResult[];
+  // failure case: the same failure shape as a per-entry failure but at the
+  // top level — Dropbox surfaces a per-call write conflict here.
+  failure?: {
+    '.tag': string;
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Submit a batch move. Returns either an inline `complete` result (small
+ * batches) or an `async_job_id` to poll. Up to 10,000 entries per call —
+ * for larger batches the caller must chunk.
+ *
+ * Failures inside the batch are NOT thrown — they appear as per-entry results
+ * with `.tag === 'failure'`. Callers must inspect the result list to count
+ * succeeded/failed moves.
+ */
+export async function moveBatch(
+  entries: DropboxMoveEntry[],
+): Promise<DropboxMoveBatchSubmitResult> {
+  if (entries.length === 0) {
+    return { '.tag': 'complete', entries: [] };
+  }
+  if (entries.length > 10_000) {
+    throw new Error(
+      `moveBatch: got ${entries.length} entries, Dropbox cap is 10,000 per call — caller must chunk`,
+    );
+  }
+  return dropboxApi<DropboxMoveBatchSubmitResult>('/files/move_batch_v2', {
+    entries,
+    autorename: false,
+    allow_ownership_transfer: false,
+  });
+}
+
+/**
+ * Poll a batch-move job. Returns the current status. Caller is expected to
+ * handle the .tag === 'in_progress' case by sleeping + retrying.
+ *
+ * Note on costs: each /files/move_batch/check_v2 call is one Dropbox API
+ * unit. We poll every ~3s, so a 60s lock = ~20 polls. Not free, but cheap
+ * vs. the per-file move spam we replace.
+ */
+export async function checkMoveBatch(
+  jobId: string,
+): Promise<DropboxMoveBatchCheckResult> {
+  return dropboxApi<DropboxMoveBatchCheckResult>('/files/move_batch/check_v2', {
+    async_job_id: jobId,
+  });
+}
+
 /**
  * Delete a file or folder. Idempotent: a path/not_found error is treated as
  * success (file already gone). Used by drone-render-approve when un-approving
