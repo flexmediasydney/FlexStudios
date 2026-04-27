@@ -65,6 +65,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ShortlistingCard from "./ShortlistingCard";
+import LockProgressDialog from "./LockProgressDialog";
 
 // Column definitions
 const COLUMNS = [
@@ -564,8 +565,15 @@ export default function ShortlistingSwimlane({
   );
 
   // ── Lock & Reorganize ───────────────────────────────────────────────────
+  // Wave 7 P0-1: the lock fn now submits a Dropbox /files/move_batch_v2 async
+  // job and returns immediately with status='in_progress' + progress_id. We
+  // open the LockProgressDialog which polls shortlist-lock-status for live
+  // progress. The old per-file synchronous response shape (ok+partial+errors)
+  // is gone — terminal state lives in shortlisting_lock_progress.
   const [isLocking, setIsLocking] = useState(false);
   const [confirmLockOpen, setConfirmLockOpen] = useState(false);
+  const [progressDialogOpen, setProgressDialogOpen] = useState(false);
+  const [lockInitialResponse, setLockInitialResponse] = useState(null);
   const lockShortlist = useCallback(async () => {
     if (!roundId) return;
     setIsLocking(true);
@@ -574,40 +582,38 @@ export default function ShortlistingSwimlane({
         round_id: roundId,
       });
       const result = resp?.data ?? resp ?? {};
-      // Audit defect #20: ok:false now means EVERYTHING failed; ok:true with
-      // partial:true means some moves landed but errors exist. We surface
-      // partial as a warning toast (yellow) instead of a red error.
       if (result?.ok === false) {
-        const errs = Array.isArray(result?.errors) ? result.errors : [];
-        if (errs.length > 0) {
-          console.warn("[ShortlistingSwimlane] lock errors:", errs);
-        }
-        throw new Error(result?.error || `Lock failed: ${errs.length} error(s) — see console`);
+        throw new Error(result?.error || "Lock failed");
       }
-      const moved = result?.moved || {};
-      const total = (moved.approved || 0) + (moved.rejected || 0);
-      if (result?.partial === true) {
-        const errs = Array.isArray(result?.errors) ? result.errors : [];
-        console.warn("[ShortlistingSwimlane] lock partial errors:", errs);
-        toast.warning(
-          `Shortlist locked with warnings — moved ${total} file(s); ${errs.length} file(s) skipped (see console).`,
-        );
-      } else {
+      // Three returnable shapes from shortlist-lock:
+      //   1. status='in_progress' (HTTP 202) — async batch in flight, dialog
+      //      will poll shortlist-lock-status until terminal
+      //   2. status='complete'   (HTTP 200) — zero-work or sync-complete fast
+      //      path; dialog opens directly to "done"
+      //   3. already_locked: true — round was already locked; dialog opens to
+      //      done with the cached counts
+      setLockInitialResponse(result);
+      setProgressDialogOpen(true);
+      setConfirmLockOpen(false);
+      // For the immediate-complete cases, refresh swimlane queries now so the
+      // operator sees the locked banner without waiting on the dialog.
+      if (result?.status === "complete" || result?.already_locked) {
+        queryClient.invalidateQueries({
+          queryKey: ["shortlisting_rounds", projectId],
+        });
+        const moved = result?.moved || {};
+        const total = (moved.approved || 0) + (moved.rejected || 0);
         toast.success(
           total > 0
-            ? `Shortlist locked — moved ${total} file(s) into Final Shortlist / Rejected.`
+            ? `Shortlist locked — moved ${total} file(s).`
             : "Shortlist locked.",
         );
       }
-      queryClient.invalidateQueries({
-        queryKey: ["shortlisting_rounds", projectId],
-      });
     } catch (err) {
       console.error("[ShortlistingSwimlane] lockShortlist failed:", err);
       toast.error(err?.message || "Lock failed");
     } finally {
       setIsLocking(false);
-      setConfirmLockOpen(false);
     }
   }, [roundId, projectId, queryClient]);
 
@@ -828,6 +834,15 @@ export default function ShortlistingSwimlane({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Live progress dialog (Wave 7 P0-1) */}
+      <LockProgressDialog
+        open={progressDialogOpen}
+        onOpenChange={setProgressDialogOpen}
+        roundId={roundId}
+        projectId={projectId}
+        initialResponse={lockInitialResponse}
+      />
     </div>
   );
 }
