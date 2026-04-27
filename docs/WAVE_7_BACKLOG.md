@@ -556,6 +556,36 @@ weights or signal weights:
 
 ---
 
+### P1-18 — Migrate remaining edge fns off legacy `DROPBOX_API_TOKEN`
+
+**Origin.** Surfaced 2026-04-27 during P0-3 smoke test (Path B). The
+`shortlisting-extract` → Modal path now mints a fresh OAuth token per call,
+but four other edge functions still read the static `DROPBOX_API_TOKEN`
+env var, which has the same 4-hour expiry that hung Round 2 lock recovery:
+
+- `supabase/functions/listDropboxFiles/index.ts` (caught failing during the smoke test with `expired_access_token`)
+- `supabase/functions/listDropboxFolders/index.ts`
+- `supabase/functions/getDropboxFilePreview/index.ts`
+- `supabase/functions/fetchDropboxShareLink/index.ts`
+
+**Why it matters.** All four are user-facing UI calls — when the static
+token rotates, the file browser / preview / share-link UI silently 401s
+until someone manually rotates the env var. Same brittle dependency the
+Modal worker had until P0-3.
+
+**Fix.** Mechanical migration: import `getDropboxAccessToken` from
+`_shared/dropbox.ts`, replace `Deno.env.get('DROPBOX_API_TOKEN')` with
+`await getDropboxAccessToken({ forceRefresh: false })`. Once all four are
+migrated and verified live for 24h, delete `DROPBOX_API_TOKEN` from the
+Supabase secrets dashboard so the dependency is permanently removed.
+
+**Effort.** ~½ day (4 fns × ~10 LoC each + smoke test of each).
+
+**Sequence.** Independent; can land any time after P0-3 deploy is settled.
+Recommend bundling with the next P1 burst to amortize deploy overhead.
+
+---
+
 ## P3 — UX (from Joseph's Round 2 review)
 
 Numbered per his original list:
