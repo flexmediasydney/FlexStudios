@@ -52,6 +52,7 @@ import {
   getAdminClient,
 } from "../_shared/supabase.ts";
 import { validateDispatcherJwt } from "../_shared/dispatcherJwtValidator.ts";
+import { tryAcquireMutex, releaseMutex } from "../_shared/dispatcherMutex.ts";
 
 const GENERATOR = "shortlisting-job-dispatcher";
 const SUPABASE_URL =
@@ -78,25 +79,19 @@ if (!__startupJwt) {
   }
 }
 
-// Audit defect #12: single-flight enforcement. Cron schedule `* * * * *`
-// plus a long wall-clock means two ticks can overlap. SKIP LOCKED on
-// claim_shortlisting_jobs prevents row double-claim, but the chain logic
+// Audit defect #12 + Wave 7 P1-11: single-flight enforcement. Cron schedule
+// `* * * * *` plus a long wall-clock means two ticks can overlap. SKIP LOCKED
+// on claim_shortlisting_jobs prevents row double-claim, but the chain logic
 // (e.g. ingest → extract spawn) reads + writes that aren't claim-protected.
-// Wrap the entire tick body in pg_try_advisory_lock(LOCK_KEY); a second tick
-// arriving during overlap returns 200 with `skipped:concurrent_dispatch`.
-// Lock id derived from a fixed string (FNV-1a-style hash) so all ticks agree.
-const DISPATCHER_LOCK_KEY = stableHashBigInt("shortlisting-job-dispatcher");
-
-function stableHashBigInt(s: string): number {
-  let h1 = 0x811c9dc5;
-  let h2 = 0x01000193;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 ^= c; h1 = (h1 * 0x01000193) >>> 0;
-    h2 ^= c; h2 = (h2 * 0x811c9dc5) >>> 0;
-  }
-  return (h1 * 0x200000 + (h2 & 0x1fffff)) % Number.MAX_SAFE_INTEGER;
-}
+//
+// W7.5 replaced the previous pg_advisory_lock pattern with a row-based mutex
+// on the dispatcher_locks table (migration 336). Advisory locks are session-
+// scoped; PostgREST's connection pool routes the unlock RPC to a different
+// connection than the acquire RPC, so unlocks silently failed and stale
+// locks accumulated until pool eviction (~10min). The row-based mutex is
+// connection-pool agnostic — see _shared/dispatcherMutex.ts and the design
+// spec at docs/design-specs/W7-5-pg-advisory-lock-fix.md.
+const DISPATCHER_LOCK_NAME = "shortlisting-job-dispatcher";
 
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
@@ -178,23 +173,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const admin = getAdminClient();
   const startedAt = Date.now();
 
-  // ── Audit defect #12: Single-flight advisory lock ────────────────────────
+  // ── Audit defect #12 + Wave 7 P1-11: Single-flight row-based mutex ──────
   // Try to acquire the dispatcher lock. If another invocation already holds
-  // it, exit cleanly (200) without touching the queue.
+  // it, exit cleanly (200) without touching the queue. The mutex sits on
+  // the dispatcher_locks table (mig 336) instead of pg_advisory_lock so it
+  // isn't sensitive to PostgREST's cross-connection pool routing.
+  const tickId = crypto.randomUUID();
   let lockAcquired = false;
   try {
-    const { data: lockResp, error: lockErr } = await admin.rpc(
-      "pg_try_advisory_lock",
-      { lock_id: DISPATCHER_LOCK_KEY },
-    );
-    if (lockErr) {
-      return errorResponse(
-        `pg_try_advisory_lock RPC failed: ${lockErr.message}`,
-        500,
-        req,
-      );
-    }
-    lockAcquired = lockResp === true;
+    lockAcquired = await tryAcquireMutex(admin, DISPATCHER_LOCK_NAME, tickId);
     if (!lockAcquired) {
       console.info(
         `[${GENERATOR}] concurrent dispatch detected — returning early`,
@@ -215,14 +202,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return await runDispatcherTick(admin, req, startedAt);
   } finally {
     if (lockAcquired) {
-      const { error: relErr } = await admin.rpc("pg_advisory_unlock", {
-        lock_id: DISPATCHER_LOCK_KEY,
-      });
-      if (relErr) {
+      // Stale-lock pre-clear on the next tick covers the case where this
+      // release fails silently — log and keep moving so a release error
+      // can never wedge subsequent ticks.
+      await releaseMutex(admin, DISPATCHER_LOCK_NAME, tickId).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
         console.warn(
-          `[${GENERATOR}] pg_advisory_unlock failed (will release on session recycle): ${relErr.message}`,
+          `[${GENERATOR}] mutex release failed (will be cleaned up by stale-lock sweep): ${msg}`,
         );
-      }
+      });
     }
   }
 });
