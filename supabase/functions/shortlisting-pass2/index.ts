@@ -98,14 +98,6 @@ const SONNET_MODEL = 'claude-sonnet-4-6';
 // throw. 8192 gives 2x headroom; Sonnet 4-6 supports up to 8192 output tokens.
 const SONNET_MAX_TOKENS = 8192;
 
-// Default package ceilings per spec §12. Used as fallback when round.package_ceiling
-// is null. Looked up by package_type case-insensitively.
-const PACKAGE_CEILING_DEFAULTS: Record<string, number> = {
-  'gold': 24,
-  'day to dusk': 31,
-  'premium': 38,
-};
-
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface RequestBody {
@@ -118,9 +110,16 @@ interface RoundContext {
   round_id: string;
   project_id: string;
   package_type: string;
+  /** Hard upper bound on shortlist size — sourced from
+   *  shortlisting_rounds.expected_count_target (W7.7). */
   package_ceiling: number;
   property_address: string | null;
-  tier: string;
+  /** Pricing tier ('standard' | 'premium' | other) — used for prompt context
+   *  only. Engine tier (S/P/A) is round.engine_tier_id, sourced separately. */
+  pricingTier: string;
+  /** Engine roles for this project (e.g. ['photo_day_shortlist']). Used by
+   *  Pass 2 prompt scaffolding. */
+  engineRoles: string[];
 }
 
 interface Pass2RoundResult {
@@ -213,7 +212,9 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
   // 1. Round + project lookup, status guard.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
-    .select('id, project_id, status, package_type, package_ceiling')
+    .select(
+      'id, project_id, status, package_type, package_ceiling, expected_count_target, engine_tier_id',
+    )
     .eq('id', roundId)
     .maybeSingle();
   if (roundErr) throw new Error(`round lookup failed: ${roundErr.message}`);
@@ -261,17 +262,30 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
     .eq('id', round.project_id)
     .maybeSingle();
 
-  const packageType = round.package_type || 'Gold';
+  const packageType = round.package_type || 'unknown';
+  // Wave 7 P1-6 (W7.7): expected_count_target is the canonical photo-count
+  // ceiling. Hardcoded {Gold:24, etc} fallback is gone. If this column is
+  // null on a round, that's a data quality bug — the round was created
+  // before mig 339 backfilled the helpers, OR ingest failed to compute the
+  // count. Fail loud so ops can investigate.
   const packageCeiling =
-    round.package_ceiling || PACKAGE_CEILING_DEFAULTS[packageType.toLowerCase()] || 24;
-  const tier = (project?.pricing_tier || 'standard').toLowerCase();
+    typeof round.expected_count_target === 'number'
+      ? round.expected_count_target
+      : (typeof round.package_ceiling === 'number' ? round.package_ceiling : null);
+  if (packageCeiling == null || packageCeiling <= 0) {
+    throw new Error(
+      `round ${roundId} has no usable expected_count_target (${round.expected_count_target}) or legacy package_ceiling (${round.package_ceiling}) — data quality bug; re-run ingest or backfill the column`,
+    );
+  }
+  const pricingTier = (project?.pricing_tier || 'standard').toLowerCase();
   const ctx: RoundContext = {
     round_id: roundId,
     project_id: round.project_id,
     package_type: packageType,
     package_ceiling: packageCeiling,
     property_address: project?.property_address ?? null,
-    tier,
+    pricingTier,
+    engineRoles: [], // populated below from fetchSlotDefinitions side-effect
   };
 
   // 3. Fetch all Pass 1 classifications + their composition_groups (stems).
@@ -283,28 +297,27 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
   }
 
   // 4. Fetch active slot definitions for this round.
-  //    W7.8: prefer the product-driven engine_role path (resolve project →
-  //    package → products → engine_roles → slots whose
-  //    eligible_when_engine_roles overlap). Fall back to the legacy
-  //    package_types substring match for slot rows that haven't been
-  //    backfilled yet (defensive coding during the W7.8 transition).
+  //    W7.7: legacy package_types substring fallback retired. Slot eligibility
+  //    is strictly product-driven via projects.packages → products.engine_role
+  //    → slot.eligible_when_engine_roles overlap (W7.8 backfill is complete).
   const slotFetch = await fetchSlotDefinitions(admin, {
     projectId: round.project_id,
     packageType,
   });
   const slotDefinitions = slotFetch.slots;
+  ctx.engineRoles = slotFetch.projectEngineRoles;
   if (slotFetch.projectEngineRoles.length > 0) {
     warnings.push(
-      `pass2 slot eligibility: project_engine_roles=[${slotFetch.projectEngineRoles.join(',')}] (W7.8 product-driven path)`,
+      `pass2 slot eligibility: project_engine_roles=[${slotFetch.projectEngineRoles.join(',')}]`,
     );
-  } else if (slotFetch.engineRolePathFallback) {
+  } else {
     warnings.push(
-      `pass2 slot eligibility: engine-role lookup yielded zero roles (no products with engine_role on this package's product list) — falling back to legacy package_types match for package='${packageType}'`,
+      `pass2 slot eligibility: project has no engine_roles (no products with engine_role on this package's product list) — slot list will be limited`,
     );
   }
   if (slotDefinitions.length === 0) {
     warnings.push(
-      `no active slot_definitions for package='${packageType}' — Pass 2 will run with empty slot list (model can only do phase 3)`,
+      `no active slot_definitions matched project_engine_roles — Pass 2 will run with empty slot list (model can only do phase 3)`,
     );
   }
 
@@ -316,8 +329,10 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
   const builtPrompt = buildPass2Prompt({
     propertyAddress: ctx.property_address,
     packageType: ctx.package_type,
+    packageDisplayName: ctx.package_type,
     packageCeiling: ctx.package_ceiling,
-    tier: ctx.tier,
+    pricingTier: ctx.pricingTier,
+    engineRoles: ctx.engineRoles,
     slotDefinitions,
     streamBAnchors: anchors,
     classifications,
@@ -640,10 +655,6 @@ interface FetchSlotDefinitionsOpts {
 interface FetchSlotDefinitionsResult {
   slots: Pass2SlotDefinition[];
   projectEngineRoles: EngineRole[];
-  /** True when the engine-role lookup produced zero roles AND we therefore
-   *  rely entirely on the legacy package_types substring fallback for this
-   *  round. Used by the caller to surface a warning. */
-  engineRolePathFallback: boolean;
 }
 
 async function fetchSlotDefinitions(
@@ -671,27 +682,29 @@ async function fetchSlotDefinitions(
   );
 
   // ─── Step 2: fetch active slot definitions ───────────────────────────────
+  // W7.7: package_types column dropped (mig 339). Slot eligibility is
+  // strictly product-driven via eligible_when_engine_roles.
   const { data, error } = await admin
     .from('shortlisting_slot_definitions')
     .select(
-      'slot_id, display_name, phase, package_types, eligible_when_engine_roles, eligible_room_types, max_images, min_images, notes, version',
+      'slot_id, display_name, phase, eligible_when_engine_roles, eligible_room_types, max_images, min_images, notes, version, is_active',
     )
     .eq('is_active', true);
   if (error) {
     throw new Error(`fetchSlotDefinitions failed: ${error.message}`);
   }
   if (!data) {
-    return { slots: [], projectEngineRoles, engineRolePathFallback: false };
+    return { slots: [], projectEngineRoles };
   }
 
-  // ─── Step 3: filter by engine_role overlap (with package_types fallback) ─
+  // ─── Step 3: filter by engine_role overlap ───────────────────────────────
   // Pure resolver — see _shared/slotEligibility.ts for the rule.
   // deno-lint-ignore no-explicit-any
   const slotRows = (data as any[]) as SlotDefinitionRow[];
   const filteredRows = filterSlotsForRound({
     slots: slotRows,
     projectEngineRoles,
-    roundPackageName: packageType,
+    roundPackageName: null, // legacy fallback retired in W7.7
   });
 
   // ─── Step 4: dedupe by latest version per slot_id ────────────────────────
@@ -717,46 +730,38 @@ async function fetchSlotDefinitions(
     .map(({ version: _v, ...rest }) => rest)
     .sort((a, b) => (a.phase - b.phase) || a.slot_id.localeCompare(b.slot_id));
 
-  // engineRolePathFallback: true when projectEngineRoles is empty AND there
-  // are slots that depended on the package_types fallback to be included.
-  // We compute this by checking if any of the included rows had non-empty
-  // eligible_when_engine_roles — if NONE did, every match came via fallback.
-  const anyEngineRoleMatch = filteredRows.some((r) =>
-    Array.isArray(r.eligible_when_engine_roles) && r.eligible_when_engine_roles.length > 0
-  );
-  const engineRolePathFallback =
-    projectEngineRoles.length === 0 || !anyEngineRoleMatch;
-
-  return { slots, projectEngineRoles, engineRolePathFallback };
+  return { slots, projectEngineRoles };
 }
 
 /**
  * Resolve a project's engine-role union via:
- *   projects.packages JSONB → product_ids → products.engine_role
+ *   projects.packages[].products[] + projects.products[] → engine_role
  *
- * Falls back to the live `packages` table (matched by name = packageType)
- * if the project carries no embedded packages JSONB. Returns [] if both
- * paths yield nothing — caller is expected to fall back to package_types.
+ * W7.7: à la carte products (top-level projects.products[]) ALSO contribute
+ * roles; bundled and à la carte are additive per Joseph 2026-04-27. The
+ * legacy "fall back to live packages table by name match" path is retired
+ * — it conflated package names with engine eligibility and was a silent
+ * source of drift when Marketing renamed packages.
  */
 async function resolveProjectEngineRoles(
   admin: ReturnType<typeof getAdminClient>,
   projectId: string,
-  packageType: string | null,
+  _packageType: string | null,
 ): Promise<EngineRole[]> {
-  // ─── Path 1: projects.packages JSONB ─────────────────────────────────────
+  // ─── Step 1: read projects.packages + projects.products JSONB ────────────
   const { data: project, error: projErr } = await admin
     .from('projects')
-    .select('packages')
+    .select('packages, products')
     .eq('id', projectId)
     .maybeSingle();
   if (projErr) {
-    // Don't blow up the round on a transient project lookup failure — Pass 2
-    // can still run via the legacy fallback. Log so the warning surfaces.
     console.warn(`[${GENERATOR}] project fetch for engine_role resolution failed: ${projErr.message}`);
     return [];
   }
 
   const productIds = new Set<string>();
+
+  // Bundled path
   // deno-lint-ignore no-explicit-any
   const projectPackages: any[] = Array.isArray((project as any)?.packages)
     // deno-lint-ignore no-explicit-any
@@ -770,31 +775,14 @@ async function resolveProjectEngineRoles(
     }
   }
 
-  // ─── Path 2: fallback to live packages table by name = packageType ───────
-  // Triggered when projects.packages JSONB is empty (legacy bookings) or
-  // when the embedded products list has no product_ids.
-  if (productIds.size === 0 && packageType) {
-    const { data: pkgRows, error: pkgErr } = await admin
-      .from('packages')
-      .select('id, name, products')
-      .eq('is_active', true);
-    if (pkgErr) {
-      console.warn(`[${GENERATOR}] packages fetch for engine_role resolution failed: ${pkgErr.message}`);
-    } else if (pkgRows) {
-      // Substring match (defect #53 parity).
-      const target = String(packageType).toLowerCase().trim();
-      // deno-lint-ignore no-explicit-any
-      for (const row of pkgRows as any[]) {
-        const name = String(row.name || '').toLowerCase().trim();
-        if (!name) continue;
-        const isMatch = name === target || name.includes(target) || target.includes(name);
-        if (!isMatch) continue;
-        const embedded = Array.isArray(row.products) ? row.products : [];
-        for (const ent of embedded) {
-          if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
-        }
-      }
-    }
+  // À la carte path (W7.7 — additive with bundled)
+  // deno-lint-ignore no-explicit-any
+  const projectProducts: any[] = Array.isArray((project as any)?.products)
+    // deno-lint-ignore no-explicit-any
+    ? ((project as any).products as any[])
+    : [];
+  for (const ent of projectProducts) {
+    if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
   }
 
   if (productIds.size === 0) return [];

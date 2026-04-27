@@ -156,7 +156,10 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
   }
 
   const projectId: string = round.project_id;
-  const packageType: string = round.package_type || 'Gold';
+  // W7.7: package_type is informational only (audit/event payload). Slot
+  // eligibility is engine-role driven (no Gold-default fallback). Pass 3
+  // doesn't filter by package_type any more.
+  const packageType: string = round.package_type || 'unknown';
 
   // 2. Read slot assignments from shortlisting_events (Pass 2 output).
   // We reconstruct the proposed shortlist from event payloads instead of a
@@ -198,28 +201,30 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
     }
   }
 
-  // 3. Fetch active slot definitions for this package_type.
+  // 3. Fetch active slot definitions for this round.
+  // W7.7: package_types column dropped (mig 339). Slot eligibility is
+  // strictly product-driven via eligible_when_engine_roles; we re-resolve
+  // the project's engine roles to filter coverage against the same slot set
+  // that Pass 2 used.
   const { data: slotDefs, error: slotErr } = await admin
     .from('shortlisting_slot_definitions')
-    .select('slot_id, phase, package_types')
+    .select('slot_id, phase, eligible_when_engine_roles, is_active')
     .eq('is_active', true);
   if (slotErr) throw new Error(`slot_definitions fetch failed: ${slotErr.message}`);
 
-  const matchPkg = packageType.toLowerCase();
-  // Audit defect #53: substring-match fallback so marketing-renamed package
-  // labels don't silently break coverage filtering. Mirrors Pass 2.
-  const pkgMatches = (defPkg: string, roundPkg: string): boolean => {
-    const a = String(defPkg).toLowerCase().trim();
-    const b = String(roundPkg).toLowerCase().trim();
-    if (!a || !b) return false;
-    if (a === b) return true;
-    return a.includes(b) || b.includes(a);
-  };
+  // Resolve project engine roles for eligibility filter (mirrors Pass 2).
+  const projectEngineRoles = await resolveProjectEngineRolesForCoverage(admin, projectId);
+  const projectRoleSet = new Set<string>(projectEngineRoles);
   // deno-lint-ignore no-explicit-any
   const activeSlots = ((slotDefs || []) as any[]).filter((row) => {
-    const pkgs: string[] = Array.isArray(row.package_types) ? row.package_types : [];
-    if (pkgs.length === 0) return true;
-    return pkgs.some((p) => pkgMatches(p, matchPkg));
+    const roles: string[] = Array.isArray(row.eligible_when_engine_roles)
+      ? row.eligible_when_engine_roles
+      : [];
+    // Defensive: a slot with empty engine_roles AND is_active=true is a
+    // misconfiguration. Exclude it (matching slotEligibility.filterSlotsForRound's
+    // policy after the W7.7 fallback retirement).
+    if (roles.length === 0) return false;
+    return roles.some((r) => projectRoleSet.has(r));
   });
 
   const mandatorySlotIds = activeSlots.filter((s) => s.phase === 1).map((s) => s.slot_id);
@@ -500,6 +505,66 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Resolve a project's distinct engine_role set from
+ * projects.packages[].products[] + projects.products[]. Used by Pass 3 to
+ * filter shortlisting_slot_definitions for the coverage map. Matches the
+ * Pass 2 resolver's behaviour (additive bundled + à la carte per W7.7).
+ */
+async function resolveProjectEngineRolesForCoverage(
+  admin: ReturnType<typeof getAdminClient>,
+  projectId: string,
+): Promise<string[]> {
+  const { data: project, error } = await admin
+    .from('projects')
+    .select('packages, products')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (error) {
+    console.warn(`[${GENERATOR}] project fetch for engine_role resolution failed: ${error.message}`);
+    return [];
+  }
+
+  const productIds = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  const projectPackages: any[] = Array.isArray((project as any)?.packages)
+    // deno-lint-ignore no-explicit-any
+    ? ((project as any).packages as any[])
+    : [];
+  for (const pkg of projectPackages) {
+    if (!pkg) continue;
+    const embedded = Array.isArray(pkg.products) ? pkg.products : [];
+    for (const ent of embedded) {
+      if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+    }
+  }
+  // deno-lint-ignore no-explicit-any
+  const projectProducts: any[] = Array.isArray((project as any)?.products)
+    // deno-lint-ignore no-explicit-any
+    ? ((project as any).products as any[])
+    : [];
+  for (const ent of projectProducts) {
+    if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+  }
+
+  if (productIds.size === 0) return [];
+
+  const { data: prodRows } = await admin
+    .from('products')
+    .select('id, engine_role, is_active')
+    .in('id', Array.from(productIds));
+  if (!prodRows) return [];
+
+  const roles = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  for (const p of (prodRows as any[])) {
+    if (p?.is_active === true && typeof p?.engine_role === 'string' && p.engine_role) {
+      roles.add(p.engine_role);
+    }
+  }
+  return Array.from(roles);
+}
 
 function sumNumbers(vals: Array<number | null | undefined>): number {
   let total = 0;

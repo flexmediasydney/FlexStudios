@@ -51,12 +51,6 @@ const PASS1_MODEL = 'claude-sonnet-4-6'; // engine current — recorded for prov
 const DEFAULT_LIMIT = 50;
 const HARD_LIMIT_MAX = 200;
 
-const PACKAGE_CEILING_DEFAULTS: Record<string, number> = {
-  'gold': 24,
-  'day to dusk': 31,
-  'premium': 38,
-};
-
 interface RequestBody {
   trigger?: 'manual' | 'quarterly_cron';
   limit?: number;
@@ -170,7 +164,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const { data: rounds, error: rerr } = await admin
     .from('shortlisting_rounds')
     .select(
-      'id, project_id, status, package_type, package_ceiling, confirmed_shortlist_group_ids',
+      'id, project_id, status, package_type, package_ceiling, expected_count_target, engine_tier_id, confirmed_shortlist_group_ids',
     )
     .eq('is_benchmark', true)
     .eq('status', 'locked')
@@ -363,11 +357,22 @@ async function runBlindBenchmark(
   const warnings: string[] = [];
 
   const confirmedIds: string[] = round.confirmed_shortlist_group_ids || [];
-  const packageType = (round.package_type as string) || 'Gold';
-  const packageCeiling =
-    (round.package_ceiling as number) ||
-    PACKAGE_CEILING_DEFAULTS[packageType.toLowerCase()] ||
-    24;
+  const packageType = (round.package_type as string) || 'unknown';
+  // W7.7: read expected_count_target (mig 339); fail loud if missing — that
+  // means the round was created before mig 339 backfilled the column AND
+  // package_ceiling is also unset, which is a data quality bug. Holdout
+  // rounds in production should all have expected_count_target by now.
+  const packageCeiling: number =
+    (typeof round.expected_count_target === 'number' && round.expected_count_target > 0)
+      ? round.expected_count_target
+      : (typeof round.package_ceiling === 'number' && round.package_ceiling > 0)
+        ? round.package_ceiling
+        : 0;
+  if (packageCeiling <= 0) {
+    throw new Error(
+      `round ${round.id} has no usable expected_count_target (${round.expected_count_target}) or package_ceiling (${round.package_ceiling}) — cannot run benchmark`,
+    );
+  }
 
   // Project metadata for prompt context
   const { data: project } = await admin
@@ -396,15 +401,20 @@ async function runBlindBenchmark(
   const stemToGroupId = new Map<string, string>();
   for (const c of classifications) stemToGroupId.set(c.stem, c.group_id);
 
-  // Slot definitions for this package
-  const slotDefinitions = await fetchSlotDefinitions(admin, packageType);
+  // Slot definitions for this round (engine-role driven, mirrors Pass 2)
+  const { slots: slotDefinitions, projectEngineRoles } = await fetchSlotDefinitions(
+    admin,
+    round.project_id,
+  );
 
   // Build prompt — same as Pass 2 production
   const prompt = buildPass2Prompt({
     propertyAddress: ctx.property_address,
     packageType: ctx.package_type,
+    packageDisplayName: ctx.package_type,
     packageCeiling: ctx.package_ceiling,
-    tier: ctx.tier,
+    pricingTier: ctx.tier,
+    engineRoles: projectEngineRoles,
     slotDefinitions,
     streamBAnchors: anchors,
     classifications,
@@ -565,35 +575,35 @@ async function fetchClassifications(
   });
 }
 
+/**
+ * Fetch slot definitions for a benchmark round. W7.7: engine-role driven
+ * filter mirrors the Pass 2 production behaviour — same eligibility rule,
+ * same engine_role union from bundled + à la carte products.
+ */
 async function fetchSlotDefinitions(
   admin: ReturnType<typeof getAdminClient>,
-  packageType: string,
-): Promise<Pass2SlotDefinition[]> {
+  projectId: string,
+): Promise<{ slots: Pass2SlotDefinition[]; projectEngineRoles: string[] }> {
+  // Resolve project engine roles
+  const projectEngineRoles = await resolveProjectEngineRolesForBench(admin, projectId);
+  const projectRoleSet = new Set<string>(projectEngineRoles);
+
   const { data, error } = await admin
     .from('shortlisting_slot_definitions')
-    .select('slot_id, display_name, phase, package_types, eligible_room_types, max_images, min_images, notes, version')
+    .select(
+      'slot_id, display_name, phase, eligible_when_engine_roles, eligible_room_types, max_images, min_images, notes, version, is_active',
+    )
     .eq('is_active', true);
   if (error) throw new Error(`fetchSlotDefinitions failed: ${error.message}`);
-  if (!data) return [];
+  if (!data) return { slots: [], projectEngineRoles };
 
-  const matchPkg = packageType.toLowerCase();
-  // Burst 14 W1: substring fallback for package matching, mirroring Pass 2 +
-  // Pass 3 (audit defect #53). Without this, seed slot definitions for "Gold"
-  // wouldn't match production rounds with package_type="Gold Package",
-  // causing the benchmark to load ZERO slot definitions and the engine to
-  // emit empty slot_assignments — match rate plummets to ~0 spuriously.
-  const pkgMatches = (defPkg: string, roundPkg: string): boolean => {
-    const a = String(defPkg).toLowerCase().trim();
-    const b = String(roundPkg).toLowerCase().trim();
-    if (!a || !b) return false;
-    if (a === b) return true;
-    return a.includes(b) || b.includes(a);
-  };
   // deno-lint-ignore no-explicit-any
   const filtered = (data as any[]).filter((row) => {
-    const pkgs: string[] = Array.isArray(row.package_types) ? row.package_types : [];
-    if (pkgs.length === 0) return true;
-    return pkgs.some((p) => pkgMatches(p, matchPkg));
+    const roles: string[] = Array.isArray(row.eligible_when_engine_roles)
+      ? row.eligible_when_engine_roles
+      : [];
+    if (roles.length === 0) return false; // misconfigured slot — drop
+    return roles.some((r) => projectRoleSet.has(r));
   });
 
   const byId = new Map<string, Pass2SlotDefinition & { version: number }>();
@@ -612,9 +622,61 @@ async function fetchSlotDefinitions(
     if (!existing || cand.version > existing.version) byId.set(cand.slot_id, cand);
   }
 
-  return Array.from(byId.values())
+  const slots = Array.from(byId.values())
     .map(({ version: _v, ...rest }) => rest)
     .sort((a, b) => (a.phase - b.phase) || a.slot_id.localeCompare(b.slot_id));
+  return { slots, projectEngineRoles };
+}
+
+async function resolveProjectEngineRolesForBench(
+  admin: ReturnType<typeof getAdminClient>,
+  projectId: string,
+): Promise<string[]> {
+  const { data: project, error } = await admin
+    .from('projects')
+    .select('packages, products')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (error || !project) return [];
+
+  const productIds = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  const projectPackages: any[] = Array.isArray((project as any)?.packages)
+    // deno-lint-ignore no-explicit-any
+    ? ((project as any).packages as any[])
+    : [];
+  for (const pkg of projectPackages) {
+    if (!pkg) continue;
+    const embedded = Array.isArray(pkg.products) ? pkg.products : [];
+    for (const ent of embedded) {
+      if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+    }
+  }
+  // deno-lint-ignore no-explicit-any
+  const projectProducts: any[] = Array.isArray((project as any)?.products)
+    // deno-lint-ignore no-explicit-any
+    ? ((project as any).products as any[])
+    : [];
+  for (const ent of projectProducts) {
+    if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+  }
+
+  if (productIds.size === 0) return [];
+
+  const { data: prodRows } = await admin
+    .from('products')
+    .select('id, engine_role, is_active')
+    .in('id', Array.from(productIds));
+  if (!prodRows) return [];
+
+  const roles = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  for (const p of (prodRows as any[])) {
+    if (p?.is_active === true && typeof p?.engine_role === 'string' && p.engine_role) {
+      roles.add(p.engine_role);
+    }
+  }
+  return Array.from(roles);
 }
 
 // ─── JSON parser (lightweight version of pass2's) ──────────────────────────
