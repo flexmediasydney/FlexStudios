@@ -1191,6 +1191,150 @@ export async function fireNotif(entities: any, p: any) {
   }
 }
 
+// Order-level actions whose payloads carry a full snapshot of order state
+// (services, packages, payment, lifecycle). When two of these arrive for the
+// same order_id, only the *latest* (by webhook received_at) should win —
+// applying a stale snapshot will overwrite the project with an obsolete view.
+//
+// Appointment-level actions (scheduled / rescheduled / changed appointments,
+// canceled, booking_completed, new_customer) are NOT included: they target
+// individual appointments and must run in chronological order even when
+// stale, because each one carries unique appointment data.
+const ORDER_LEVEL_SNAPSHOT_ACTIONS = new Set([
+  'booking_created_or_changed',
+  'payment_updated',
+]);
+
+// Mark pending order-level queue items as `superseded` if a newer order-level
+// webhook for the same order_id has either (a) already been completed, or
+// (b) is also pending in this same batch. The supersede rule prevents an
+// obsolete order snapshot — typically the very first webhook fired right when
+// Tonomo creates an order shell, before the agent picks the package — from
+// clobbering a project that's already been advanced by a later, populated
+// webhook.
+//
+// Returns the list of pending items minus the superseded ones.
+export async function supersedeStaleOrderItems(
+  entities: any,
+  admin: any,
+  pendingItems: any[],
+): Promise<any[]> {
+  if (!pendingItems.length) return pendingItems;
+
+  // Only order-level snapshot items are candidates for supersede. Appointment
+  // events (scheduled, rescheduled, changed event-level, canceled, etc.) are
+  // returned as-is.
+  const candidates = pendingItems.filter((it: any) =>
+    it.order_id && ORDER_LEVEL_SNAPSHOT_ACTIONS.has(it.action)
+  );
+  if (!candidates.length) return pendingItems;
+
+  // Preload received_at for each candidate's webhook log.
+  const candidateLogIds = Array.from(new Set(
+    candidates.map((it: any) => it.webhook_log_id).filter(Boolean),
+  ));
+  const candidateReceivedAt = new Map<string, string>();
+  if (candidateLogIds.length) {
+    const { data: logs } = await admin
+      .from('tonomo_webhook_logs')
+      .select('id, received_at')
+      .in('id', candidateLogIds);
+    for (const l of (logs || [])) candidateReceivedAt.set(l.id, l.received_at);
+  }
+
+  // For each order touched by a candidate, find the max received_at across
+  // already-completed order-level queue items.
+  const orderIds = Array.from(new Set(candidates.map((it: any) => it.order_id)));
+  const completedReceivedByOrder = new Map<string, string>();
+  if (orderIds.length) {
+    const { data: completedRows } = await admin
+      .from('tonomo_processing_queue')
+      .select('order_id, webhook_log_id, action')
+      .in('order_id', orderIds)
+      .in('action', Array.from(ORDER_LEVEL_SNAPSHOT_ACTIONS))
+      .eq('status', 'completed');
+
+    const completedLogIds = Array.from(new Set(
+      (completedRows || []).map((r: any) => r.webhook_log_id).filter(Boolean),
+    ));
+    const completedReceivedAt = new Map<string, string>();
+    if (completedLogIds.length) {
+      const { data: logs } = await admin
+        .from('tonomo_webhook_logs')
+        .select('id, received_at')
+        .in('id', completedLogIds);
+      for (const l of (logs || [])) completedReceivedAt.set(l.id, l.received_at);
+    }
+    for (const r of (completedRows || [])) {
+      const ts = completedReceivedAt.get(r.webhook_log_id);
+      if (!ts) continue;
+      const cur = completedReceivedByOrder.get(r.order_id);
+      if (!cur || ts > cur) completedReceivedByOrder.set(r.order_id, ts);
+    }
+  }
+
+  // Compute the per-order cutoff = max(received_at) across completed items
+  // AND the latest pending candidate in this batch. Anything strictly older
+  // than the cutoff gets superseded.
+  const latestPendingByOrder = new Map<string, string>();
+  for (const it of candidates) {
+    const ts = candidateReceivedAt.get(it.webhook_log_id);
+    if (!ts) continue;
+    const cur = latestPendingByOrder.get(it.order_id);
+    if (!cur || ts > cur) latestPendingByOrder.set(it.order_id, ts);
+  }
+
+  const supersedeIds: string[] = [];
+  const supersedeNotes = new Map<string, string>();
+  for (const it of candidates) {
+    const ts = candidateReceivedAt.get(it.webhook_log_id);
+    if (!ts) continue;
+
+    const completedCutoff = completedReceivedByOrder.get(it.order_id);
+    const pendingLatest = latestPendingByOrder.get(it.order_id);
+    // We supersede only when something STRICTLY newer exists. Equal timestamps
+    // are left alone — `index.ts` still dedupes by (action, order_id, event_id).
+    const newerCompleted = completedCutoff && ts < completedCutoff;
+    const newerPending = pendingLatest && ts < pendingLatest;
+
+    if (newerCompleted || newerPending) {
+      supersedeIds.push(it.id);
+      supersedeNotes.set(
+        it.id,
+        newerCompleted
+          ? `superseded — newer ${it.action} for ${it.order_id} already processed at ${completedCutoff}`
+          : `superseded — newer ${it.action} for ${it.order_id} pending in same batch (${pendingLatest})`,
+      );
+    }
+  }
+
+  if (supersedeIds.length) {
+    await Promise.all(supersedeIds.map((id) =>
+      entities.TonomoProcessingQueue.update(id, {
+        status: 'superseded',
+        error_message: supersedeNotes.get(id) || 'superseded by newer order webhook',
+      }).catch(() => {})
+    ));
+    // Audit each supersede so ops can see which projects were protected.
+    for (const id of supersedeIds) {
+      const item = candidates.find((c: any) => c.id === id);
+      if (!item) continue;
+      writeAudit(entities, {
+        queue_item_id: id,
+        action: item.action,
+        entity_type: 'System',
+        entity_id: null,
+        operation: 'superseded',
+        tonomo_order_id: item.order_id,
+        notes: supersedeNotes.get(id) || 'superseded by newer order webhook',
+      }).catch(() => {});
+    }
+  }
+
+  const supersededSet = new Set(supersedeIds);
+  return pendingItems.filter((it: any) => !supersededSet.has(it.id));
+}
+
 // Retry recovery
 export async function recoverFailedItems(entities: any) {
   try {

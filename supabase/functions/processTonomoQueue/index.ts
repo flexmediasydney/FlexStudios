@@ -9,6 +9,7 @@ import {
   safeList,
   safeUpdate,
   recoverFailedItems,
+  supersedeStaleOrderItems,
 } from './utils.ts';
 import { handleScheduled } from './handlers/handleScheduled.ts';
 import { handleRescheduled } from './handlers/handleRescheduled.ts';
@@ -114,15 +115,31 @@ serveWithAudit('processTonomoQueue', async (req) => {
 
     await recoverFailedItems(entities);
 
-    const pendingItems = await entities.TonomoProcessingQueue.filter(
+    const rawPending = await entities.TonomoProcessingQueue.filter(
       { status: 'pending' },
       'created_at',
       BATCH_SIZE
     ) || [];
 
-    if (!pendingItems.length) {
+    if (!rawPending.length) {
       await releaseLock(entities, s);
       return jsonResponse({ processed: 0, message: 'queue_empty' });
+    }
+
+    // Supersede stale order-level snapshots — a queue item carrying an
+    // obsolete view of the order (typically the very first webhook fired
+    // when Tonomo creates an order shell, before the agent picks the
+    // package) must not be applied if a newer order-level webhook for the
+    // same order_id has already been processed or is pending in this batch.
+    // This is the root-cause fix for cases like 46 Brays Rd (2026-04-25),
+    // where a 2-day-old empty-services webhook clobbered a populated project.
+    const pendingItems = await supersedeStaleOrderItems(entities, admin, rawPending);
+    const supersededCount = rawPending.length - pendingItems.length;
+    if (supersededCount > 0) results.skipped += supersededCount;
+
+    if (!pendingItems.length) {
+      await releaseLock(entities, s);
+      return jsonResponse({ processed: 0, skipped: supersededCount, message: 'queue_empty_after_supersede' });
     }
 
     const byOrder: Record<string, any[]> = {};
