@@ -51,6 +51,12 @@ import {
 } from '../_shared/bracketDetector.ts';
 import { getDropboxTempLink } from '../_shared/shortlistingFolders.ts';
 import { getActivePrompt } from '../_shared/promptLoader.ts';
+import {
+  resolvePackageEngineRoles,
+  isContentInScope,
+  type EngineRole,
+  type ProductRow,
+} from '../_shared/slotEligibility.ts';
 
 const GENERATOR = 'shortlisting-pass0';
 
@@ -396,9 +402,31 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
   // 7. Hard-reject vision sweep — concurrent, semaphore-controlled.
   const classifications = await classifyAllGroups(groupRows, concurrency);
 
+  // 7b. W7.8: resolve the project's engine roles (union of products in the
+  //     round's package). Lets us downgrade Pass 0's `out_of_scope` reject
+  //     to a `out_of_scope_content` WARNING when the detected content
+  //     actually matches an engine role on the project. Example: Haiku
+  //     flags an agent headshot as out_of_scope, but the project's package
+  //     contains an Agent Portraits product (engine_role='agent_portraits')
+  //     — that's not a true OOS rejection, just routing the editor needs
+  //     to confirm. Per the spec, warn don't auto-reject; editor decides.
+  let projectEngineRoles: EngineRole[] = [];
+  try {
+    projectEngineRoles = await resolvePassZeroProjectEngineRoles(admin, projectId);
+  } catch (e) {
+    // Resolution failure is non-fatal — fall back to legacy behaviour
+    // (treat all out_of_scope as hard quarantine).
+    const msg = e instanceof Error ? e.message : String(e);
+    warnings.push(`pass0 engine_role resolution failed (non-fatal): ${msg}`);
+  }
+  if (projectEngineRoles.length > 0) {
+    warnings.push(`pass0 project_engine_roles=[${projectEngineRoles.join(',')}] (W7.8)`);
+  }
+
   // 8. Persist quarantine / events.
   let hardRejectedCount = 0;
   let outOfScopeCount = 0;
+  let outOfScopeContentCount = 0;
   let totalCostUsd = 0;
   const visionErrors: string[] = [];
 
@@ -414,8 +442,29 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
     if (!c.result.hard_reject) continue;
 
     if (c.result.reject_reason === 'out_of_scope') {
-      outOfScopeCount++;
+      // W7.8: cross-check the OOS reject against the project's engine roles.
+      // The Haiku reject reason 'out_of_scope' covers "agent headshot, test
+      // pattern, completely different building". When the project's package
+      // has products with engine_role='agent_portraits', the agent-headshot
+      // detection is EXPECTED content — surface as a warning row
+      // (`out_of_scope_content`) so the editor can route to the portraits
+      // folder, NOT as a true rejection.
+      const observation = String(c.result.observation || '').toLowerCase();
+      const headshotLikely =
+        observation.includes('headshot') ||
+        observation.includes('portrait') ||
+        observation.includes('agent') ||
+        observation.includes('person');
+      const projectHasPortraits = projectEngineRoles.includes('agent_portraits');
+      const treatAsContentMismatch = headshotLikely && projectHasPortraits;
+
       const groupRow = groupRows.find((g) => g.id === c.groupId);
+      const reasonValue = treatAsContentMismatch ? 'out_of_scope_content' : 'out_of_scope';
+      // isContentInScope is intentionally permissive when projectEngineRoles
+      // is empty (warn-only policy); kept here as a sanity assertion that
+      // documents intent.
+      void isContentInScope('agent_portraits', projectEngineRoles);
+
       const { error: qErr } = await admin
         .from('shortlisting_quarantine')
         .insert({
@@ -423,12 +472,18 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
           round_id: roundId,
           group_id: c.groupId,
           file_stem: groupRow?.bestBracketStem || null,
-          reason: c.result.reject_reason,
+          reason: reasonValue,
           reason_detail: c.result.observation,
           confidence: c.result.confidence,
           requires_human_review: true,
         });
-      if (qErr) visionErrors.push(`quarantine insert failed for ${c.groupId}: ${qErr.message}`);
+      if (qErr) {
+        visionErrors.push(`quarantine insert failed for ${c.groupId}: ${qErr.message}`);
+      } else if (treatAsContentMismatch) {
+        outOfScopeContentCount++;
+      } else {
+        outOfScopeCount++;
+      }
     } else {
       hardRejectedCount++;
       const { error: evtErr } = await admin
@@ -454,7 +509,17 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
     warnings.push(`${visionErrors.length} vision/persistence error(s) — first: ${visionErrors[0]}`);
   }
 
-  const readyForPass1 = groupRows.length - hardRejectedCount - outOfScopeCount;
+  // W7.8: out_of_scope_content rows are also quarantined (just with a
+  // warn/route-please semantics rather than a hard reject), so subtract them
+  // from the ready-for-Pass-1 total too.
+  const readyForPass1 =
+    groupRows.length - hardRejectedCount - outOfScopeCount - outOfScopeContentCount;
+
+  // W7.8: shortlisting_rounds.out_of_scope_count rolls UP both reject + warn
+  // counts so the dashboard's "OOS" tally still reflects every row in the
+  // quarantine bucket. The pass0_complete event payload breaks them out so
+  // observability can distinguish.
+  const totalOosCount = outOfScopeCount + outOfScopeContentCount;
 
   // 9. Round update.
   const { error: roundUpdErr } = await admin
@@ -462,7 +527,7 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
     .update({
       total_compositions: groupRows.length,
       hard_rejected_count: hardRejectedCount,
-      out_of_scope_count: outOfScopeCount,
+      out_of_scope_count: totalOosCount,
       pass0_cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
     })
     .eq('id', roundId);
@@ -480,6 +545,8 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
         total_groups: groupRows.length,
         hard_rejected: hardRejectedCount,
         out_of_scope: outOfScopeCount,
+        out_of_scope_content: outOfScopeContentCount,
+        project_engine_roles: projectEngineRoles,
         ready_for_pass1: readyForPass1,
         cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
         validation,
@@ -498,6 +565,63 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
     cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
     warnings,
   };
+}
+
+/**
+ * W7.8: resolve a project's engine-role union (distinct, non-null) using
+ * `projects.packages` JSONB → product_ids → products.engine_role.
+ *
+ * Mirrors the same resolver used by Pass 2's fetchSlotDefinitions but without
+ * the live-packages-table fallback (Pass 0 only needs the project's committed
+ * package set; if it's missing, we treat the round as having no engine roles
+ * and leave OOS-content detection passive).
+ */
+async function resolvePassZeroProjectEngineRoles(
+  admin: ReturnType<typeof getAdminClient>,
+  projectId: string,
+): Promise<EngineRole[]> {
+  const { data: project, error: projErr } = await admin
+    .from('projects')
+    .select('packages')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (projErr) {
+    throw new Error(`project lookup failed: ${projErr.message}`);
+  }
+
+  const productIds = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  const projectPackages: any[] = Array.isArray((project as any)?.packages)
+    // deno-lint-ignore no-explicit-any
+    ? ((project as any).packages as any[])
+    : [];
+  for (const pkg of projectPackages) {
+    if (!pkg) continue;
+    const embedded = Array.isArray(pkg.products) ? pkg.products : [];
+    for (const ent of embedded) {
+      if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+    }
+  }
+  if (productIds.size === 0) return [];
+
+  const { data: prodRows, error: prodErr } = await admin
+    .from('products')
+    .select('id, engine_role, is_active')
+    .in('id', Array.from(productIds));
+  if (prodErr) {
+    throw new Error(`products lookup failed: ${prodErr.message}`);
+  }
+  if (!prodRows) return [];
+
+  const productsList: ProductRow[] = (prodRows as ProductRow[]).map((p) => ({
+    id: String(p.id),
+    engine_role: p.engine_role ?? null,
+    is_active: p.is_active === true,
+  }));
+  return resolvePackageEngineRoles(
+    Array.from(productIds).map((id) => ({ product_id: id })),
+    productsList,
+  );
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────

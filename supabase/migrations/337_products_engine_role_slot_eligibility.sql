@@ -142,6 +142,33 @@ CREATE INDEX IF NOT EXISTS idx_products_active_engine_role
   ON products (engine_role)
   WHERE is_active = true AND engine_role IS NOT NULL;
 
+-- 7. Widen shortlisting_quarantine.reason CHECK to admit two new values:
+--      'out_of_scope'         — Pass 0 has been emitting this since seed but
+--                               the original CHECK in mig 283 only allowed
+--                               agent_headshot/test_shot/bts/other. This is
+--                               a latent bug discovered during W7.8 review
+--                               (Pass 0 INSERTs would 23514 today).
+--      'out_of_scope_content' — Wave 7 P1-8: emitted when Pass 0 detects
+--                               content that doesn't match any product
+--                               engine_role on the round's package (warn
+--                               policy — requires_human_review=true; do
+--                               NOT auto-reject; editor decides).
+--    Per Postgres semantics we drop the old CHECK and re-add a wider one.
+ALTER TABLE shortlisting_quarantine
+  DROP CONSTRAINT IF EXISTS shortlisting_quarantine_reason_check;
+ALTER TABLE shortlisting_quarantine
+  ADD CONSTRAINT shortlisting_quarantine_reason_check CHECK (reason IN (
+    'agent_headshot',
+    'test_shot',
+    'bts',
+    'other',
+    'out_of_scope',
+    'out_of_scope_content'
+  ));
+
+COMMENT ON CONSTRAINT shortlisting_quarantine_reason_check ON shortlisting_quarantine IS
+  'Wave 7 P1-8: widened from the mig 283 list to also admit out_of_scope (Pass 0 hard-reject reason; was being emitted against a CHECK that excluded it) and out_of_scope_content (Pass 0 product-engine_role mismatch warning).';
+
 -- ─── Audit (read-only, executed at migration time) ──────────────────────────
 --
 -- The block below is a comment-only catalogue of the auto-mapped slot rows.
