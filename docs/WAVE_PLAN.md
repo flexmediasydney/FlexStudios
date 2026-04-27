@@ -75,18 +75,18 @@ W7.12 ── independent (chip spawned, ready when picked up)
 
 **Theme:** make tier-specific behaviour DB-driven and admin-configurable.
 
-**Status:** Ready after Wave 7 lands `tiers` table.
+**Status:** ⚙️ **Spec ready** — `docs/design-specs/W8-tier-configs.md` (subsumes W8.1-W8.4). Dispatchable now.
 
-### Bursts
+### Bursts (all subsumed into single dispatchable W8 burst)
 
 | # | Item | Backlog ref | Ready? |
 |---|---|---|---|
-| W8.1 | `shortlisting_tier_configs` versioned table + admin UI + per-tier dimension weights | P1-7 | ✅ ready (depends on W7.7) |
-| W8.2 | Pass 1 + Pass 2 read tier config; combined_score formula becomes weighted | P1-7 | ✅ ready after W8.1 |
-| W8.3 | Re-simulation safeguard — replay last 30 rounds under proposed weights, show diff | P1-17 | ✅ ready |
-| W8.4 | Round metadata columns (`engine_version`, `tier_used`, `tier_config_version`) | P1-15 | ✅ ready |
+| W8.1 | `shortlisting_tier_configs` versioned table + admin UI + per-tier dimension weights | P1-7 | ⚙️ subsumed into W8 spec |
+| W8.2 | Pass 1 + Pass 2 read tier config; combined_score formula becomes weighted | P1-7 | ⚙️ subsumed into W8 spec |
+| W8.3 | Re-simulation safeguard — replay last 30 rounds under proposed weights, show diff | P1-17 | ⚙️ subsumed into W8 spec |
+| W8.4 | Round metadata columns (`engine_version`, `tier_config_version` — `tier_used` already covered by W7.7's `engine_tier_id`) | P1-15 | ⚙️ subsumed into W8 spec |
 
-**Estimated total:** 1-1.5 weeks.
+**Migration:** 344. **Estimated effort:** 6-7 days per spec. **4 open Qs** all with orchestrator recommendations.
 
 ---
 
@@ -161,31 +161,22 @@ Largest single wave.
 
 **Theme:** the engine grows institutional memory.
 
-**Status:** Schema clear; trigger thresholds need decisions.
+**Status:** ⚙️ **Full spec ready** — `docs/design-specs/W12-object-attribute-registry.md` (companion to the existing `W12-trigger-thresholds.md`). Per-Joseph normalisation runs **manual-trigger only** (no autonomous cron, mirrors W13a/b policy). Migration 345 enables pgvector at native dim 1536. Dispatchable when Joseph wants.
 
-### Design phase deliverables (~half-day)
-
-1. AI suggestion trigger thresholds — "suggest new room_type when
-   model proposes X times in Y days at Z confidence" — pick X/Y/Z
-2. Confirm pgvector similarity thresholds (0.92 / 0.75 / <0.75) or tune
-
-### Bursts
+### Bursts (all covered by W12 spec)
 
 | # | Item | Backlog ref |
 |---|---|---|
-| W12.1 | Migrations: `object_registry`, `attribute_values` (with pgvector), `raw_attribute_observations` | P2-2 |
-| W12.2 | Seed `object_registry` from spec section 11 bootstrap list | P2-2 |
-| W12.3 | New edge function `shortlisting-attribute-extractor` runs after Pass 1 | P2-2 |
-| W12.4 | Pass 1 `key_elements` + `observed_objects` write to `raw_attribute_observations` | P2-2 |
-| W12.5 | Nightly normalisation batch (Modal worker or pg_cron) | P2-2 |
-| W12.6 | Discovery queue UI for new candidate review | P2-2 |
-| W12.7 | AI suggestion engine for room_types + slots | P2-3 |
-| W12.8 | Admin UI mining `pass2_slot_suggestion` events for slot proposals | P2-3 |
+| W12.1 | Migrations: 4 new tables (`object_registry`, `raw_attribute_observations`, `attribute_values`, `object_registry_candidates`) + pgvector | P2-2 |
+| W12.2 | Pass 1 `objectsAndAttributes` block via W7.6 composable pattern (capped at top 200 canonicals by market_frequency) | P2-2 |
+| W12.3 | `shortlisting-attribute-extractor` edge fn (runs after Pass 1, embeds raw_label at insert time) | P2-2 |
+| W12.4 | Manual-trigger normalisation (cosine 0.92 / 0.75-0.92 / <0.75 thresholds) | P2-2 |
+| W12.5 | Discovery queue UI (approve / reject / merge / defer; 14-day auto-archive) | P2-2 |
+| W12.6 | AI suggestion engine reading `pass2_slot_suggestion` events | P2-3 |
 
-**Depends on Wave 11** — Pass 1's `observed_objects` array shape locks
-in here.
+**Depends on Wave 11** — Pass 1's `observed_objects` array shape locks in there.
 
-**Estimated total:** 4-6 weeks.
+**Estimated total:** 9-11 days per spec. **4 open Qs** all with orchestrator recommendations.
 
 ---
 
@@ -235,19 +226,19 @@ in here.
 
 **Theme:** establish the permanent benchmark set + name override patterns.
 
-**Status:** Ready after Wave 12 (so suggestions engine can be tested).
+**Status:** ⚙️ **Spec ready** — `docs/design-specs/W14-calibration-session.md`. Reuses existing `shortlisting-benchmark-runner` (no fork). Hard-blocked on Wave 12 landing. Migration 346.
 
-### Bursts
+### Bursts (covered by W14 spec)
 
 | # | Item | Backlog ref |
 |---|---|---|
-| W14.1 | `CalibrationSession` admin tool — parallel UI showing AI vs human shortlists per project | P2-5 |
-| W14.2 | Editor manually shortlists 50 stratified projects | P2-5 |
-| W14.3 | AI shortlists same 50 in blind mode (using benchmark runner) | P2-5 |
-| W14.4 | Side-by-side diff capture per disagreement → `calibration_decisions` table | P2-5 |
-| W14.5 | Stress-test Wave 12's AI suggestion engine — do editor disagreements correlate with model's proposed slots/room_types? | P2-3 validation |
+| W14.1 | New 3-table schema (`calibration_sessions`, `calibration_editor_shortlists`, `calibration_decisions`) | P2-5 |
+| W14.2 | Blind editor declaration phase (mandatory, not skippable per R2 — prevents AI-anchoring bias) | P2-5 |
+| W14.3 | Side-by-side diff phase + per-disagreement editor reasoning + `primary_signal_diff` capture (mandatory on disagreements per R3) | P2-5 |
+| W14.4 | Stratification: 48 stratified across (package × tier × geography) cells + 2 wildcards | P2-5 |
+| W14.5 | Wave 12 validation hook: cross-reference disagreements against `pass2_slot_suggestion` events | P2-3 validation |
 
-**Estimated total:** 1-2 weeks engineering + 25 hours editor labour.
+**Estimated total:** 9-10 engineering days + 25 hours editor labour. **3 open Qs** (editor budget, stratification cells, annual cadence).
 
 ---
 
