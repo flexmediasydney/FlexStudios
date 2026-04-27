@@ -282,6 +282,12 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
   const prompt = dbSystem
     ? { ...builtPrompt, system: dbSystem.text }
     : builtPrompt;
+  // Wave 7 P1-10 (W7.6): persist the block-version map per Pass 1 inference
+  // so provenance is queryable downstream. When a DB system override is in
+  // effect, the `header` slot reflects the override marker instead of the
+  // built-in v1.0 baseline.
+  const promptBlockVersions: Record<string, string> = { ...builtPrompt.blockVersions };
+  if (dbSystem) promptBlockVersions['header'] = `db_override:${dbSystem.version ?? 'unknown'}`;
 
   // 4. Concurrent classification sweep.
   const results = await classifyAll(compositions, prompt, concurrency);
@@ -371,6 +377,8 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
         eligible_for_exterior_rear: eligibleExtRear,
         is_near_duplicate_candidate: false, // Pass 2 sets this
         model_version: SONNET_MODEL,
+        // Wave 7 P1-10 (W7.6): block-version provenance per migration 338.
+        prompt_block_versions: promptBlockVersions,
       });
 
     if (insErr) {
