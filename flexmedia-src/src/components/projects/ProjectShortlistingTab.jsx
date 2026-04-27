@@ -56,11 +56,13 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ShortlistingSwimlane from "./shortlisting/ShortlistingSwimlane";
+import ManualShortlistingSwimlane from "./shortlisting/ManualShortlistingSwimlane";
 import ShortlistingRoundsList from "./shortlisting/ShortlistingRoundsList";
 import ShortlistingCoverageMap from "./shortlisting/ShortlistingCoverageMap";
 import ShortlistingRetouchFlags from "./shortlisting/ShortlistingRetouchFlags";
 import ShortlistingQuarantine from "./shortlisting/ShortlistingQuarantine";
 import ShortlistingAuditLog from "./shortlisting/ShortlistingAuditLog";
+import { useEntityList } from "@/components/hooks/useEntityData";
 
 // Sub-tab keys
 const SUB_TABS = [
@@ -80,6 +82,10 @@ const ROUND_STATUS_TONE = {
   proposed: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
   locked: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
   delivered: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  // Wave 7 P1-19 (W7.13): manual-mode rounds (no Pass 0/1/2/3, just operator
+  // drag-and-drop). Distinct amber tone so they're visually obvious in the
+  // round selector.
+  manual: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
 };
 
 const ROUND_STATUS_LABEL = {
@@ -88,6 +94,7 @@ const ROUND_STATUS_LABEL = {
   proposed: "Proposed",
   locked: "Locked",
   delivered: "Delivered",
+  manual: "Manual",
 };
 
 // ── URL helpers ───────────────────────────────────────────────────────────
@@ -115,6 +122,24 @@ function writeSearchParam(name, value) {
 export default function ProjectShortlistingTab({ project }) {
   const queryClient = useQueryClient();
   const projectId = project?.id;
+
+  // Wave 7 P1-19 (W7.13): determine if this project runs in manual mode.
+  // Manual mode is set by the project's project_type.shortlisting_supported
+  // flag (W7.7 added the column with default true). When false, the swimlane
+  // skips the engine-mode AI columns and renders the simpler two-column UI.
+  // We don't gate the rounds-list / audit / coverage subtabs on manual mode —
+  // those still work for manual rounds (just with mostly-null data).
+  const { data: projectTypes = [] } = useEntityList("ProjectType", "order");
+  const projectType = useMemo(
+    () =>
+      projectTypes.find((pt) => pt.id === project?.project_type_id) || null,
+    [projectTypes, project?.project_type_id],
+  );
+  // Default to engine-mode (true) if the project_type lookup hasn't resolved
+  // yet OR the project has no project_type_id assigned. Manual mode opts IN —
+  // we don't want a transient FK miss to flip a real engine project.
+  const isManualMode =
+    projectType?.shortlisting_supported === false;
 
   // URL-driven state
   const [activeSubtab, setActiveSubtab] = useState(() => {
@@ -207,9 +232,11 @@ export default function ProjectShortlistingTab({ project }) {
   // ── Manual "Run Shortlist Now" ──────────────────────────────────────────
   const [isRunning, setIsRunning] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
-  // Disable while a round is currently in 'processing' or 'pending'
+  // Disable while a round is currently in 'processing' or 'pending'.
+  // Wave 7 P1-19 (W7.13): also block if there's an unfinished manual round —
+  // the operator should lock or discard it before opening another.
   const hasInflightRound = rounds.some((r) =>
-    ["processing", "pending"].includes(r.status),
+    ["processing", "pending", "manual"].includes(r.status),
   );
 
   const runShortlistNow = useCallback(async () => {
@@ -306,7 +333,11 @@ export default function ProjectShortlistingTab({ project }) {
             </Badge>
           )}
 
-          {/* Run Shortlist Now */}
+          {/* Run Shortlist Now / New Manual Round */}
+          {/* Wave 7 P1-19 (W7.13): label + dialog copy adapt to manual mode.
+              The same shortlisting-ingest call powers both — ingest detects the
+              manual-mode triggers (shortlisting_supported=false OR target=0)
+              and returns a synthetic round without enqueuing Pass 0 jobs. */}
           <Button
             variant="default"
             size="sm"
@@ -315,7 +346,9 @@ export default function ProjectShortlistingTab({ project }) {
             title={
               hasInflightRound
                 ? "A round is already running — wait for it to complete"
-                : "Trigger a new shortlist round for this project"
+                : isManualMode
+                  ? "Open a new manual-mode round for this project"
+                  : "Trigger a new shortlist round for this project"
             }
           >
             {isRunning ? (
@@ -323,7 +356,7 @@ export default function ProjectShortlistingTab({ project }) {
             ) : (
               <Play className="h-4 w-4 mr-2" />
             )}
-            Run Shortlist Now
+            {isManualMode ? "New Manual Round" : "Run Shortlist Now"}
           </Button>
 
           <Button
@@ -363,14 +396,32 @@ export default function ProjectShortlistingTab({ project }) {
               <ImageIcon className="h-6 w-6 text-muted-foreground" />
             </div>
             <div>
-              <p className="text-sm font-medium">No shortlist rounds yet</p>
+              <p className="text-sm font-medium">
+                {isManualMode
+                  ? "No manual rounds yet"
+                  : "No shortlist rounds yet"}
+              </p>
               <p className="text-xs text-muted-foreground mt-1 max-w-md">
-                Upload RAW CR3 photos to{" "}
-                <code className="text-[11px] font-mono">
-                  Photos/Raws/Shortlist Proposed/
-                </code>{" "}
-                in Dropbox to trigger an auto-round, or click{" "}
-                <strong>Run Shortlist Now</strong> above.
+                {isManualMode ? (
+                  <>
+                    This project type runs shortlisting in manual mode (no AI).
+                    Drop files into{" "}
+                    <code className="text-[11px] font-mono">
+                      Photos/Raws/Shortlist Proposed/
+                    </code>{" "}
+                    in Dropbox, then click <strong>New Manual Round</strong>{" "}
+                    above to start triaging them.
+                  </>
+                ) : (
+                  <>
+                    Upload RAW CR3 photos to{" "}
+                    <code className="text-[11px] font-mono">
+                      Photos/Raws/Shortlist Proposed/
+                    </code>{" "}
+                    in Dropbox to trigger an auto-round, or click{" "}
+                    <strong>Run Shortlist Now</strong> above.
+                  </>
+                )}
               </p>
             </div>
           </CardContent>
@@ -412,12 +463,21 @@ export default function ProjectShortlistingTab({ project }) {
 
           <TabsContent value="swimlane" className="mt-3">
             {mountedSubtabs.has("swimlane") && selectedRoundId ? (
-              <ShortlistingSwimlane
-                roundId={selectedRoundId}
-                round={selectedRound}
-                projectId={projectId}
-                project={project}
-              />
+              isManualMode ? (
+                <ManualShortlistingSwimlane
+                  roundId={selectedRoundId}
+                  round={selectedRound}
+                  projectId={projectId}
+                  project={project}
+                />
+              ) : (
+                <ShortlistingSwimlane
+                  roundId={selectedRoundId}
+                  round={selectedRound}
+                  projectId={projectId}
+                  project={project}
+                />
+              )
             ) : (
               <SubtabSkeleton />
             )}
@@ -475,15 +535,17 @@ export default function ProjectShortlistingTab({ project }) {
         </Tabs>
       )}
 
-      {/* Confirm "Run Shortlist Now" */}
+      {/* Confirm "Run Shortlist Now" / "New Manual Round" */}
       <Dialog open={confirmRunOpen} onOpenChange={setConfirmRunOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Run shortlist now?</DialogTitle>
+            <DialogTitle>
+              {isManualMode ? "Open new manual round?" : "Run shortlist now?"}
+            </DialogTitle>
             <DialogDescription>
-              This triggers a new shortlist round for this project. Pass 0
-              through Pass 3 will run end-to-end and may take 1-2 minutes plus
-              vision API cost (~$0.50 per round).
+              {isManualMode
+                ? "Opens a new manual-mode round for this project. No AI passes run — you'll drag files into the Approved column manually and lock when ready."
+                : "This triggers a new shortlist round for this project. Pass 0 through Pass 3 will run end-to-end and may take 1-2 minutes plus vision API cost (~$0.50 per round)."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
