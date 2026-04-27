@@ -14,6 +14,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { useActivePackages } from "@/hooks/useActivePackages";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2, AlertTriangle } from "lucide-react";
@@ -28,6 +29,12 @@ const PHASE_TONE = {
 };
 
 export default function ShortlistingCoverageMap({ roundId, round }) {
+  // Wave 7 P1-11: subscribe to the live packages table so we can canonicalise
+  // the round's package_type against the actual catalog when possible.
+  // Per Joseph's architectural correction (2026-04-27): packages must NEVER
+  // be hardcoded in the frontend — they live in the `packages` table.
+  const { names: livePackageNames } = useActivePackages();
+
   // Fetch all active slot definitions; we'll filter to this round's package
   // client-side (matches the spec's permissive package_types semantics).
   const slotsQuery = useQuery({
@@ -108,12 +115,31 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
   }, [events]);
 
   // Filter slots to this round's package (or treat empty as universal).
-  // Burst 19 NN1: substring fallback for package matching (audit defect #53,
-  // mirrors Pass 2 / Pass 3 / benchmark-runner W1). Without this, a round
-  // with package_type='Gold Package' shows zero slots when seed defs use
-  // 'Gold' — coverage map renders the "no slot definitions configured"
-  // empty-state misleadingly.
+  //
+  // W7.11: the legacy "package_types" array on a slot used to hold raw
+  // strings ("Gold", "Day to Dusk", "Premium"). With the dynamic packages
+  // architecture, the slot editor (SettingsShortlistingSlots) now writes
+  // canonical names sourced from the live `packages` table — but historic
+  // slot rows + new-style rounds may not be perfectly aligned yet.
+  //
+  // Resolution strategy:
+  //   1. Try to canonicalise the round's package_type against the live
+  //      packages list (case-insensitive name lookup).
+  //   2. Match slot.package_types against the canonical name when found.
+  //   3. Fall back to the legacy substring match (Burst 19 NN1, audit
+  //      defect #53) so seed slots tagged "Gold" still resolve when the
+  //      round records "Gold Package". This fallback can retire once
+  //      every slot row has been re-edited via the new admin UI.
   const pkg = round?.package_type;
+  const canonicalPkgName = useMemo(() => {
+    const target = String(pkg || "").toLowerCase().trim();
+    if (!target) return null;
+    const exact = livePackageNames.find(
+      (n) => String(n).toLowerCase().trim() === target,
+    );
+    return exact || null;
+  }, [pkg, livePackageNames]);
+
   const pkgMatches = (defPkg, roundPkg) => {
     const a = String(defPkg || "").toLowerCase().trim();
     const b = String(roundPkg || "").toLowerCase().trim();
@@ -122,13 +148,14 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
     return a.includes(b) || b.includes(a);
   };
   const eligibleSlots = useMemo(() => {
+    const target = canonicalPkgName || pkg;
     return slots.filter((s) => {
       const types = s.package_types || [];
       if (types.length === 0) return true;
-      if (!pkg) return true;
-      return types.some((p) => pkgMatches(p, pkg));
+      if (!target) return true;
+      return types.some((p) => pkgMatches(p, target));
     });
-  }, [slots, pkg]);
+  }, [slots, pkg, canonicalPkgName]);
 
   // Coverage stats: phase 1 + 2 only (phase 3 is AI free, not gap-able).
   const stats = useMemo(() => {
