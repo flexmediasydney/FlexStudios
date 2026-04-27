@@ -475,11 +475,15 @@ function _recordAudit(row: AuditRow): void {
   queueMicrotask(() => {
     try {
       const admin = getAdminClient();
-      admin.from('edge_fn_call_audit').insert(row).then(({ error }) => {
-        if (error) console.warn(`[audit] insert failed for ${row.fn_name}:`, error.message);
-      }).catch((err: any) => {
-        console.warn(`[audit] insert threw for ${row.fn_name}:`, err?.message);
-      });
+      // supabase-js returns PostgrestBuilder which is PromiseLike<void> (no .catch).
+      // Wrap in Promise.resolve to get a real Promise so we can attach .catch().
+      Promise.resolve(admin.from('edge_fn_call_audit').insert(row))
+        .then(({ error }) => {
+          if (error) console.warn(`[audit] insert failed for ${row.fn_name}:`, error.message);
+        })
+        .catch((err: any) => {
+          console.warn(`[audit] insert threw for ${row.fn_name}:`, err?.message);
+        });
     } catch (err: any) {
       console.warn(`[audit] queueMicrotask handler failed for ${row.fn_name}:`, err?.message);
     }

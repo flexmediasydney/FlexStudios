@@ -598,7 +598,7 @@ export async function uploadFile(
     mode: { '.tag': mode },
     autorename: false,
     mute: true,
-  }, body);
+  }, body as BodyInit);  // Uint8Array<ArrayBufferLike> narrowing isn't picked up by Deno's stricter TS — cast is safe; runtime accepts all three branches.
   return res.json();
 }
 
