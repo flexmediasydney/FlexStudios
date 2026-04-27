@@ -452,19 +452,27 @@ const combinedScore =
 
 Tier weights live in `shortlisting_tier_configs` (W8). Per-signal default weights live in `shortlisting_signal_weights` (already exists, populated but unused).
 
-## Open questions for sign-off
+## Open questions
 
-1. **Source enum scope.** Is `'floorplan_image'` a separate `source.type` or does it fold into `'external_listing'` for pulse-discovered floorplans + `'internal_finals'` for ours? Recommendation: separate. Floorplan images have wildly different prompts (room-name OCR, no aesthetic scoring).
+5 of 6 self-resolved by orchestrator on technical/architectural merit. **Only Q4 (cost) genuinely needs Joseph's business decision.**
 
-2. **`observed_objects` confidence floor.** What's the minimum confidence threshold below which the model should NOT emit an observation? Spec doesn't specify. Recommendation: emit at confidence ≥ 0.5; downstream filter at 0.7 for auto-canonicalisation.
+### Self-resolved (orchestrator, 2026-04-27)
 
-3. **Schema versioning policy.** When does `schema_version` increment? Recommendation: any breaking change (new required field, removed field, type change). Backwards-compat additions (new optional field) don't increment.
+- **Q1 — Source enum scope.** ✅ **Separate `'floorplan_image'`.** Floorplan images have OCR-style prompts with no aesthetic scoring; folding into `'external_listing'` would force the prompt to branch on `media_kind` anyway, doubling the surface area. Cleaner as its own source.type.
+- **Q2 — `observed_objects` confidence floor.** ✅ **Emit at ≥0.5; auto-canonicalize at ≥0.7.** Below 0.5 the observation is too noisy to be useful even as raw data; between 0.5-0.7 it goes into the discovery queue for human review (W12.6); ≥0.7 routes straight to `attribute_values` for cosine-similarity matching against existing canonicals. These thresholds match the pgvector similarity tiers (auto-norm >0.92, review 0.75-0.92) one level upstream.
+- **Q3 — Schema versioning policy.** ✅ **SemVer-style.** Major (breaking field removal / type change / required field added) → bump major + transition window. Minor (new optional field, expanded enum) → bump minor without window. Patch (description text changes, no shape impact) → no version bump. Today's launch ships as 1.0.
+- **Q5 — Backwards-compat window.** ✅ **4 weeks of stable production with the new shape before old shape is deprecated.** Rolling window: if a regression forces a rollback, the clock restarts. Pass 1 dual-emits during this window (writes both shapes to two columns); downstream consumers migrate one at a time.
+- **Q6 — Quarantine routing.** ✅ **Single `shortlisting_quarantine` table, `quarantine_reason` enum differentiates.** Existing P0 (hard reject) reasons + new W11 reasons (`agent_headshot`, `test_shot`, `bts`, `equipment_only`, `out_of_scope_content`) all land in the same place. Swimlane UI displays a per-reason count at the top so operators see "8 shortlistable + 3 retouch + 2 OOS + 1 BTS" at a glance. One quarantine table, many reasons, never a separate sidecar table for any subset.
 
-4. **Cost.** Today's Pass 1 ≈ $0.017 per call (60 compositions × $0.017 ≈ $1 per round). Per-signal scoring requires more verbose prompt + longer output → ~30-50% increase. New cost ≈ $1.30-1.50 per Gold round. Acceptable for the accuracy lift; flag for Joseph confirmation.
+### Genuinely open (needs Joseph's decision)
 
-5. **Backwards-compat window length.** How long does Pass 1 emit both shapes? Recommendation: 4 weeks of stable production with the new shape before deprecating old.
+- **Q4 — Cost.** Today's Pass 1 ≈ $0.017/call × 60 compositions = ~$1/round. Per-signal scoring expands the output to 22 signal scores + measurement prose → estimated 30-50% cost increase → ~$1.30-1.50/Gold round. **Joseph: is this acceptable for the accuracy lift?** Alternative: 22 signals scored in batches (e.g. 7-8 per call) at lower per-call cost but 3× the call volume. Recommendation: single-call (the current cost increase is modest against the value of unified per-signal data; batching adds orchestration complexity).
 
-6. **`is_relevant_property_content: false` routing.** Today our quarantine path is conservative (Pass 0 hard reject; quarantine table). With the new flag, should ALL irrelevant content (subject ∈ agent_headshot|test_shot|bts|equipment) route through the same quarantine flow, or should some go to specific handler tables? Recommendation: same quarantine table, with `quarantine_reason` differentiating. Operator UX in the swimlane shows a per-reason count.
+### Sign-off items (separate from open questions)
+
+- Sign-off on the `UniversalVisionResponse` TypeScript interface (the schema itself, ~200 lines)
+- Sign-off on the 22 measurement prompts (verbatim text per signal)
+- Sign-off on the dimension rollup formula (per-signal scores → 4-dim aggregates → tier-weighted combined)
 
 ## What this wave UNBLOCKS
 
@@ -488,11 +496,25 @@ Total: ~5-6 weeks. The largest single wave.
 
 ## Pre-execution checklist
 
-- [ ] Joseph signs off on the schema (`UniversalVisionResponse` interface)
-- [ ] Joseph confirms Q1 (floorplan_image as separate source.type)
-- [ ] Joseph confirms Q2 (confidence thresholds)
-- [ ] Joseph signs off on the 22 measurement prompts
-- [ ] Joseph confirms Q4 (cost increase acceptance)
-- [ ] Joseph confirms Q6 (quarantine routing)
+### Self-resolved by orchestrator (2026-04-27)
+
+- [x] Q1 — floorplan_image as separate source.type
+- [x] Q2 — emit ≥0.5, auto-canonicalize ≥0.7
+- [x] Q3 — SemVer schema versioning
+- [x] Q5 — 4-week backwards-compat window
+- [x] Q6 — single quarantine table with per-reason enum
+
+### Needs Joseph's decision (3 items, ~30-60 min review)
+
+- [ ] **Cost**: ~30-50% increase per Pass 1 round acceptable?
+- [ ] **Schema**: sign off on `UniversalVisionResponse` TypeScript interface
+- [ ] **22 measurement prompts**: sign off on the verbatim prompt text per signal
+
+### Upstream wave dependencies
+
 - [ ] Wave 8 (tier configs) has landed — needed for dimension rollup
-- [ ] Vision prompt blocks (W7.6) have landed — gives composition primitive
+- [ ] Vision prompt blocks (W7.6) have landed — gives the composition primitive that W11 plugs into
+
+### Total review surface for Joseph
+
+After self-resolutions: **3 decisions + 1 schema review + 22 prompts read.** That's a 30-60 min review session, not a full week.
