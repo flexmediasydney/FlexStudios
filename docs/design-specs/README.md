@@ -17,9 +17,10 @@ the open questions, then dispatch the execution to a subagent.
 
 | Doc | Wave | Status | Purpose |
 |---|---|---|---|
-| [W7-4-shortlisting-confirm-flow.md](./W7-4-shortlisting-confirm-flow.md) | W7.4 | ⚙️ | Copy-vs-move decision + audit JSON mirror flow + folder semantics |
-| [W7-5-pg-advisory-lock-fix.md](./W7-5-pg-advisory-lock-fix.md) | W7.5 | ⚠️ | Choose between transaction-scoped lock vs row-based mutex |
-| [W7-8-product-driven-slot-eligibility.md](./W7-8-product-driven-slot-eligibility.md) | W7.8 | ✅ | Replaces flawed day/dusk flag with product-category-driven slot eligibility |
+| [W7-4-shortlisting-confirm-flow.md](./W7-4-shortlisting-confirm-flow.md) | W7.4 | 🚧 in flight | Copy-vs-move decision + audit JSON mirror flow + folder semantics. Resolutions committed; subagent executing 2026-04-27 |
+| [W7-5-pg-advisory-lock-fix.md](./W7-5-pg-advisory-lock-fix.md) | W7.5 | 🚧 in flight | Row-based mutex chosen over xact_lock; migration 336 reserved. Subagent executing 2026-04-27 |
+| [W7-6-vision-prompt-blocks.md](./W7-6-vision-prompt-blocks.md) | W7.6 | ⚙️ ready | Composable prompt blocks API. Self-resolved by orchestrator; ready for subagent dispatch. Unblocks W11 plug-in point |
+| [W7-8-product-driven-slot-eligibility.md](./W7-8-product-driven-slot-eligibility.md) | W7.8 | 🚧 in flight | `engine_role` enum on products + `eligible_when_engine_roles` on slots; migration 337 reserved. Subagent executing 2026-04-27 |
 | [W11-universal-vision-response-schema.md](./W11-universal-vision-response-schema.md) | W11 | 🛑 | THE keystone — universal schema for vision API across all sources (RAW/finals/external). Pass 1 prompt + per-signal scoring + 22 measurement prompts |
 | [W12-trigger-thresholds.md](./W12-trigger-thresholds.md) | W12 | ⚙️ | AI suggestion engine thresholds for new room_types / slots. Storage tables for suggestion review |
 
@@ -27,7 +28,6 @@ the open questions, then dispatch the execution to a subagent.
 
 | Wave | Why deferred |
 |---|---|
-| W7.6 (vision prompt blocks API contract) | Partially covered by W11 — finalise after W11 sign-off |
 | W7.7 (`package_shortlist_configs` migration plan) | Migration safety pattern in `MIGRATION_SAFETY.md` covers most of it; need joint review with Joseph for cross-engine impacts (drone, billing) |
 
 ## Workflow
