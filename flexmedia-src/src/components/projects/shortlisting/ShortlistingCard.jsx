@@ -275,7 +275,19 @@ export default function ShortlistingCard({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setAltsExpanded((v) => !v);
+                setAltsExpanded((prev) => {
+                  const next = !prev;
+                  // Wave 10.3 P1-16: notify the swimlane that the editor is
+                  // opening the drawer for this slot. The swimlane's
+                  // seenAltsBySlotId ref tracks this so the override payload
+                  // can flag alternative_offered_drawer_seen=TRUE on the
+                  // resulting drag. Fire-once-per-open: only on the closed→
+                  // open transition (next=true).
+                  if (next && onAltsDrawerOpen && slot?.slot_id) {
+                    onAltsDrawerOpen(slot.slot_id);
+                  }
+                  return next;
+                });
               }}
               className="flex items-center gap-1 text-[10px] text-primary hover:underline focus:outline-none"
             >

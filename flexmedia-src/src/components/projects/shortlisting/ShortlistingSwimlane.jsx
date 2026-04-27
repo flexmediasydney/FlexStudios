@@ -66,6 +66,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ShortlistingCard from "./ShortlistingCard";
 import LockProgressDialog from "./LockProgressDialog";
+import SignalAttributionModal from "./SignalAttributionModal";
 
 // Column definitions
 const COLUMNS = [
@@ -253,6 +254,69 @@ export default function ShortlistingSwimlane({
       Math.floor((Date.now() - reviewStartRef.current) / 1000),
     );
   }, []);
+
+  // Wave 10.3 P1-16 — drawer-state tracking. Set of slot_ids the editor has
+  // opened the alternatives drawer for during this review session. We use a
+  // ref (not state) because:
+  //   1. Reads happen in the drag/swap handlers, not in render — so no
+  //      re-render is needed when the set updates.
+  //   2. The override payload reads `seenAltsBySlotId.has(slotId)` directly
+  //      at drag-end; using state would risk a stale closure.
+  // Reset on round switch so a stale "seen" set from round N doesn't taint
+  // round N+1.
+  const seenAltsBySlotIdRef = useRef(new Set());
+  useEffect(() => {
+    seenAltsBySlotIdRef.current = new Set();
+  }, [roundId]);
+
+  const handleAltsDrawerOpen = useCallback((slotId) => {
+    if (!slotId) return;
+    seenAltsBySlotIdRef.current.add(slotId);
+  }, []);
+
+  // Wave 10.3 P1-16 — SignalAttributionModal state. Shown after `removed`
+  // and `swapped` overrides; the override row was already inserted, the
+  // modal collects the primary_signal_overridden value and patches it via
+  // shortlisting-overrides.annotate. Non-blocking: dismissal leaves the
+  // signal NULL.
+  const [signalModalState, setSignalModalState] = useState({
+    open: false,
+    overrideId: null,
+    actionLabel: null,
+  });
+
+  const closeSignalModal = useCallback(() => {
+    setSignalModalState((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const submitSignalAttribution = useCallback(
+    async (signalValue) => {
+      const overrideId = signalModalState.overrideId;
+      if (!overrideId) return;
+      try {
+        const resp = await api.functions.invoke("shortlisting-overrides", {
+          annotate: {
+            override_id: overrideId,
+            primary_signal_overridden: signalValue,
+          },
+        });
+        const result = resp?.data ?? resp ?? {};
+        if (result?.ok === false) {
+          throw new Error(result?.error || "Annotate failed");
+        }
+        // Refresh so the analytics page (and any in-flight queries) see the
+        // patched signal. Non-fatal if it fails — the modal already closed.
+        await queryClient.invalidateQueries({
+          queryKey: ["shortlisting_overrides", roundId],
+        });
+        toast.success("Signal recorded");
+      } catch (err) {
+        console.error("[ShortlistingSwimlane] annotate failed:", err);
+        toast.error(err?.message || "Could not save signal");
+      }
+    },
+    [signalModalState.overrideId, queryClient, roundId],
+  );
 
   // ── Data fetches ────────────────────────────────────────────────────────
   const groupsQuery = useQuery({
@@ -579,11 +643,15 @@ export default function ShortlistingSwimlane({
         await queryClient.invalidateQueries({
           queryKey: ["shortlisting_overrides", roundId],
         });
-        return true;
+        // Wave 10.3 P1-16: surface the inserted override id so the caller
+        // can open the SignalAttributionModal to annotate the row. The
+        // edge fn returns ids[0] for single-event POSTs.
+        const insertedId = Array.isArray(result?.ids) ? result.ids[0] : null;
+        return { ok: true, overrideId: insertedId || null };
       } catch (err) {
         console.error("[ShortlistingSwimlane] sendOverride failed:", err);
         toast.error(err?.message || "Override capture failed");
-        return false;
+        return { ok: false, overrideId: null };
       }
     },
     [queryClient, roundId],
@@ -620,18 +688,31 @@ export default function ShortlistingSwimlane({
       // approved-as-proposed (aiId).
       const isFromRejects =
         action === "added_from_rejects" || fromColumn === "rejected";
+      const slotId = slot?.slot_id || null;
+      // Wave 10.3 P1-16: derive the two-part offered/seen pair.
+      //   alternative_offered    — TRUE if the slot has alts in cache OR the
+      //                            editor has opened the drawer for it. The
+      //                            former preserves backwards-compat with the
+      //                            legacy field semantics; the latter covers
+      //                            the case where Pass 2 emitted alts but the
+      //                            classification cache hasn't loaded yet.
+      //   alternative_offered_drawer_seen — TRUE only when the editor opened
+      //                                     the drawer in this session.
+      const slotHasAlts = !!slotId && (altsBySlotId.get(slotId) || []).length > 0;
+      const drawerSeen = !!slotId && seenAltsBySlotIdRef.current.has(slotId);
       const event = {
         project_id: projectId,
         round_id: roundId,
         ai_proposed_group_id: isFromRejects ? null : groupId,
-        ai_proposed_slot_id: slot?.slot_id || null,
+        ai_proposed_slot_id: slotId,
         ai_proposed_score: cls?.combined_score ?? null,
         human_action: action,
         human_selected_group_id: isFromRejects ? groupId : null,
-        human_selected_slot_id: isFromRejects ? null : slot?.slot_id || null,
-        slot_group_id: slot?.slot_id || null,
+        human_selected_slot_id: isFromRejects ? null : slotId,
+        slot_group_id: slotId,
         review_duration_seconds: reviewSecs,
-        alternative_offered: (altsBySlotId.get(slot?.slot_id) || []).length > 0,
+        alternative_offered: slotHasAlts || drawerSeen,
+        alternative_offered_drawer_seen: drawerSeen,
         alternative_selected: false, // dragging isn't selecting an alt
         // Burst 4 J1: client_sequence is a monotonic counter so server-side
         // ordering is independent of network arrival jitter. shortlist-lock
@@ -657,7 +738,7 @@ export default function ShortlistingSwimlane({
         },
       ]);
 
-      const ok = await sendOverride(event);
+      const sendResult = await sendOverride(event);
       // Drop only this pending entry — leave any other in-flight pendings alone.
       setPendingOverrides((prev) =>
         prev.filter((p) => p._pendingId !== pendingId),
@@ -666,7 +747,24 @@ export default function ShortlistingSwimlane({
       // and the optimistic move is reverted by dropping the pending entry.
       // On success, the server-side refetch will replace this entry with the
       // canonical row (no duplication because we filtered by _pendingId).
-      void ok;
+
+      // Wave 10.3 P1-16: open the SignalAttributionModal for `removed` and
+      // `swapped` actions — these are the cases where the editor disagreed
+      // with Pass 2's choice and we want to capture which signal drove it.
+      // `approved_as_proposed` and `added_from_rejects` don't need an
+      // attribution prompt (the former is a confirmation, the latter
+      // typically reflects coverage rather than a quality signal).
+      if (
+        sendResult.ok &&
+        sendResult.overrideId &&
+        (action === "removed" || action === "swapped")
+      ) {
+        setSignalModalState({
+          open: true,
+          overrideId: sendResult.overrideId,
+          actionLabel: action,
+        });
+      }
     },
     [
       groups,
@@ -688,18 +786,26 @@ export default function ShortlistingSwimlane({
       // drawer the editor opened to pick the alt).
       const reviewSecs = computeReviewDurationSeconds(winnerGroupId);
       const winnerCls = classByGroupId.get(winnerGroupId);
+      const slotId = winnerSlot?.slot_id || null;
+      // Selecting an alt definitionally means the drawer was open — even if
+      // the seenAltsBySlotIdRef somehow missed the open transition (e.g. a
+      // shortcut-driven swap), the swap action itself proves visibility.
+      // Mark it eagerly so any subsequent drag on this slot also reflects
+      // drawer_seen=TRUE.
+      if (slotId) seenAltsBySlotIdRef.current.add(slotId);
       const event = {
         project_id: projectId,
         round_id: roundId,
         ai_proposed_group_id: winnerGroupId,
-        ai_proposed_slot_id: winnerSlot?.slot_id || null,
+        ai_proposed_slot_id: slotId,
         ai_proposed_score: winnerCls?.combined_score ?? null,
         human_action: "swapped",
         human_selected_group_id: altGroupId,
-        human_selected_slot_id: winnerSlot?.slot_id || null,
-        slot_group_id: winnerSlot?.slot_id || null,
+        human_selected_slot_id: slotId,
+        slot_group_id: slotId,
         review_duration_seconds: reviewSecs,
         alternative_offered: true,
+        alternative_offered_drawer_seen: true,
         alternative_selected: true,
         client_sequence: nextClientSequence(), // J1
       };
@@ -717,14 +823,26 @@ export default function ShortlistingSwimlane({
         },
       ]);
 
-      const ok = await sendOverride(event);
+      const sendResult = await sendOverride(event);
       setPendingOverrides((prev) =>
         prev.filter((p) => p._pendingId !== pendingId),
       );
       // Burst 4 J2 fix: previous toast said "original moved to Rejected" but
       // no file movement happens until Lock. Toast now reflects that the
       // record is registered, not the move.
-      if (ok) toast.success("Swap recorded — files will move on Lock");
+      if (sendResult.ok) {
+        toast.success("Swap recorded — files will move on Lock");
+        // Wave 10.3 P1-16: open SignalAttributionModal so the editor can
+        // optionally annotate WHY they preferred the alt over Pass 2's
+        // choice. Non-blocking — modal sits beside the toast.
+        if (sendResult.overrideId) {
+          setSignalModalState({
+            open: true,
+            overrideId: sendResult.overrideId,
+            actionLabel: "swapped",
+          });
+        }
+      }
     },
     [
       classByGroupId,
@@ -1012,6 +1130,7 @@ export default function ShortlistingSwimlane({
                 altsBySlotId={altsBySlotId}
                 classByGroupId={classByGroupId}
                 registerCardObserver={registerCardObserver}
+                onAltsDrawerOpen={handleAltsDrawerOpen}
               />
             );
           })}
@@ -1058,6 +1177,21 @@ export default function ShortlistingSwimlane({
         projectId={projectId}
         initialResponse={lockInitialResponse}
       />
+
+      {/* Wave 10.3 P1-16 — non-blocking signal-attribution prompt after a
+          `removed` or `swapped` override. Patches primary_signal_overridden
+          via the shortlisting-overrides.annotate path. */}
+      <SignalAttributionModal
+        open={signalModalState.open}
+        onOpenChange={(open) =>
+          open
+            ? setSignalModalState((prev) => ({ ...prev, open: true }))
+            : closeSignalModal()
+        }
+        overrideId={signalModalState.overrideId}
+        actionLabel={signalModalState.actionLabel}
+        onSubmit={submitSignalAttribution}
+      />
     </div>
   );
 }
@@ -1071,6 +1205,7 @@ function SwimlaneColumn({
   altsBySlotId,
   classByGroupId,
   registerCardObserver,
+  onAltsDrawerOpen,
 }) {
   return (
     <Droppable droppableId={column.key} isDropDisabled={isLocked}>
@@ -1140,6 +1275,7 @@ function SwimlaneColumn({
                               : null
                           }
                           registerCardObserver={registerCardObserver}
+                          onAltsDrawerOpen={onAltsDrawerOpen}
                         />
                       </div>
                     )}
