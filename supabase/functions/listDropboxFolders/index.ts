@@ -1,4 +1,5 @@
 import { getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
+import { getDropboxAccessToken } from '../_shared/dropbox.ts';
 
 const DROPBOX_TIMEOUT_MS = 15_000; // 15s timeout for Dropbox API calls
 
@@ -9,8 +10,7 @@ serveWithAudit('listDropboxFolders', async (req) => {
     const user = await getUserFromReq(req);
     if (!user) return errorResponse('Unauthorized', 401);
 
-    const token = Deno.env.get('DROPBOX_API_TOKEN');
-    if (!token) return errorResponse('Dropbox API token not configured', 500);
+    const token = await getDropboxAccessToken({ forceRefresh: false });
 
     // Get path from request body
     const body = await req.json().catch(() => ({} as any));
