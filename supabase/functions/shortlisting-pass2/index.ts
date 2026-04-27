@@ -78,6 +78,13 @@ import {
   type Pass2Output,
 } from '../_shared/pass2Validator.ts';
 import { getActivePrompt } from '../_shared/promptLoader.ts';
+import {
+  filterSlotsForRound,
+  resolvePackageEngineRoles,
+  type ProductRow,
+  type SlotDefinitionRow,
+  type EngineRole,
+} from '../_shared/slotEligibility.ts';
 
 const GENERATOR = 'shortlisting-pass2';
 
@@ -275,8 +282,26 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
     );
   }
 
-  // 4. Fetch active slot definitions for this package_type.
-  const slotDefinitions = await fetchSlotDefinitions(admin, packageType);
+  // 4. Fetch active slot definitions for this round.
+  //    W7.8: prefer the product-driven engine_role path (resolve project →
+  //    package → products → engine_roles → slots whose
+  //    eligible_when_engine_roles overlap). Fall back to the legacy
+  //    package_types substring match for slot rows that haven't been
+  //    backfilled yet (defensive coding during the W7.8 transition).
+  const slotFetch = await fetchSlotDefinitions(admin, {
+    projectId: round.project_id,
+    packageType,
+  });
+  const slotDefinitions = slotFetch.slots;
+  if (slotFetch.projectEngineRoles.length > 0) {
+    warnings.push(
+      `pass2 slot eligibility: project_engine_roles=[${slotFetch.projectEngineRoles.join(',')}] (W7.8 product-driven path)`,
+    );
+  } else if (slotFetch.engineRolePathFallback) {
+    warnings.push(
+      `pass2 slot eligibility: engine-role lookup yielded zero roles (no products with engine_role on this package's product list) — falling back to legacy package_types match for package='${packageType}'`,
+    );
+  }
   if (slotDefinitions.length === 0) {
     warnings.push(
       `no active slot_definitions for package='${packageType}' — Pass 2 will run with empty slot list (model can only do phase 3)`,
@@ -607,62 +632,195 @@ async function fetchClassifications(
   });
 }
 
+interface FetchSlotDefinitionsOpts {
+  projectId: string;
+  packageType: string;
+}
+
+interface FetchSlotDefinitionsResult {
+  slots: Pass2SlotDefinition[];
+  projectEngineRoles: EngineRole[];
+  /** True when the engine-role lookup produced zero roles AND we therefore
+   *  rely entirely on the legacy package_types substring fallback for this
+   *  round. Used by the caller to surface a warning. */
+  engineRolePathFallback: boolean;
+}
+
 async function fetchSlotDefinitions(
   admin: ReturnType<typeof getAdminClient>,
-  packageType: string,
-): Promise<Pass2SlotDefinition[]> {
-  // Filter by is_active AND package_types either empty (= all) or contains
-  // the round's package_type. We do the filter in JS rather than the
-  // PostgREST `.contains()` call so empty-arrays-mean-all is honoured.
+  opts: FetchSlotDefinitionsOpts,
+): Promise<FetchSlotDefinitionsResult> {
+  const { projectId, packageType } = opts;
+
+  // ─── Step 1: resolve project → package → products → engine_roles ─────────
+  //
+  // We use `projects.packages` JSONB which carries [{package_id, quantity,
+  // products[]}] (see migration 001 line 362). Each entry has a `products`
+  // array that mirrors `packages.products`; either source works, but the
+  // project-embedded copy is what was committed at booking time and is more
+  // reliable than re-deriving from the live packages table (which marketing
+  // may have edited since).
+  //
+  // If `projects.packages` is empty (legacy projects before the JSONB
+  // copy-down was wired up), fall back to looking up the live package by
+  // name from `packages` table using packageType as the key.
+  const projectEngineRoles = await resolveProjectEngineRoles(
+    admin,
+    projectId,
+    packageType,
+  );
+
+  // ─── Step 2: fetch active slot definitions ───────────────────────────────
   const { data, error } = await admin
     .from('shortlisting_slot_definitions')
-    .select('slot_id, display_name, phase, package_types, eligible_room_types, max_images, min_images, notes, version')
+    .select(
+      'slot_id, display_name, phase, package_types, eligible_when_engine_roles, eligible_room_types, max_images, min_images, notes, version',
+    )
     .eq('is_active', true);
   if (error) {
     throw new Error(`fetchSlotDefinitions failed: ${error.message}`);
   }
-  if (!data) return [];
+  if (!data) {
+    return { slots: [], projectEngineRoles, engineRolePathFallback: false };
+  }
 
-  const matchPkg = packageType.toLowerCase();
-  // Audit defect #53: exact-match filter previously failed when marketing
-  // tweaked package names ("Gold Package" vs "Gold"). Add a substring fallback
-  // — case-insensitive contains either way — so seed slot definitions don't
-  // need to be in lockstep with the projects.package_type marketing label.
-  const pkgMatches = (defPkg: string, roundPkg: string): boolean => {
-    const a = String(defPkg).toLowerCase().trim();
-    const b = String(roundPkg).toLowerCase().trim();
-    if (!a || !b) return false;
-    if (a === b) return true;
-    return a.includes(b) || b.includes(a);
-  };
+  // ─── Step 3: filter by engine_role overlap (with package_types fallback) ─
+  // Pure resolver — see _shared/slotEligibility.ts for the rule.
   // deno-lint-ignore no-explicit-any
-  const filtered = (data as any[]).filter((row) => {
-    const pkgs: string[] = Array.isArray(row.package_types) ? row.package_types : [];
-    if (pkgs.length === 0) return true; // empty = all packages
-    return pkgs.some((p) => pkgMatches(p, matchPkg));
+  const slotRows = (data as any[]) as SlotDefinitionRow[];
+  const filteredRows = filterSlotsForRound({
+    slots: slotRows,
+    projectEngineRoles,
+    roundPackageName: packageType,
   });
 
-  // Take latest version per slot_id (defensive — multiple versions may be active).
+  // ─── Step 4: dedupe by latest version per slot_id ────────────────────────
   const byId = new Map<string, Pass2SlotDefinition & { version: number }>();
-  for (const row of filtered) {
+  for (const row of filteredRows) {
     const cand = {
-      slot_id: row.slot_id,
-      display_name: row.display_name,
-      phase: row.phase,
-      eligible_room_types: row.eligible_room_types || [],
-      max_images: row.max_images,
-      min_images: row.min_images,
-      notes: row.notes,
-      version: row.version || 1,
+      slot_id: String(row.slot_id),
+      display_name: String(row.display_name ?? ''),
+      phase: Number(row.phase ?? 2) as 1 | 2 | 3,
+      eligible_room_types: Array.isArray(row.eligible_room_types)
+        ? (row.eligible_room_types as string[])
+        : [],
+      max_images: Number(row.max_images ?? 1),
+      min_images: Number(row.min_images ?? 0),
+      notes: row.notes != null ? String(row.notes) : null,
+      version: Number(row.version ?? 1),
     } as Pass2SlotDefinition & { version: number };
     const existing = byId.get(cand.slot_id);
     if (!existing || cand.version > existing.version) byId.set(cand.slot_id, cand);
   }
 
-  // Stable order: phase asc, then slot_id alpha.
-  return Array.from(byId.values())
+  const slots = Array.from(byId.values())
     .map(({ version: _v, ...rest }) => rest)
     .sort((a, b) => (a.phase - b.phase) || a.slot_id.localeCompare(b.slot_id));
+
+  // engineRolePathFallback: true when projectEngineRoles is empty AND there
+  // are slots that depended on the package_types fallback to be included.
+  // We compute this by checking if any of the included rows had non-empty
+  // eligible_when_engine_roles — if NONE did, every match came via fallback.
+  const anyEngineRoleMatch = filteredRows.some((r) =>
+    Array.isArray(r.eligible_when_engine_roles) && r.eligible_when_engine_roles.length > 0
+  );
+  const engineRolePathFallback =
+    projectEngineRoles.length === 0 || !anyEngineRoleMatch;
+
+  return { slots, projectEngineRoles, engineRolePathFallback };
+}
+
+/**
+ * Resolve a project's engine-role union via:
+ *   projects.packages JSONB → product_ids → products.engine_role
+ *
+ * Falls back to the live `packages` table (matched by name = packageType)
+ * if the project carries no embedded packages JSONB. Returns [] if both
+ * paths yield nothing — caller is expected to fall back to package_types.
+ */
+async function resolveProjectEngineRoles(
+  admin: ReturnType<typeof getAdminClient>,
+  projectId: string,
+  packageType: string | null,
+): Promise<EngineRole[]> {
+  // ─── Path 1: projects.packages JSONB ─────────────────────────────────────
+  const { data: project, error: projErr } = await admin
+    .from('projects')
+    .select('packages')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (projErr) {
+    // Don't blow up the round on a transient project lookup failure — Pass 2
+    // can still run via the legacy fallback. Log so the warning surfaces.
+    console.warn(`[${GENERATOR}] project fetch for engine_role resolution failed: ${projErr.message}`);
+    return [];
+  }
+
+  const productIds = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  const projectPackages: any[] = Array.isArray((project as any)?.packages)
+    // deno-lint-ignore no-explicit-any
+    ? ((project as any).packages as any[])
+    : [];
+  for (const pkg of projectPackages) {
+    if (!pkg) continue;
+    const embedded = Array.isArray(pkg.products) ? pkg.products : [];
+    for (const ent of embedded) {
+      if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+    }
+  }
+
+  // ─── Path 2: fallback to live packages table by name = packageType ───────
+  // Triggered when projects.packages JSONB is empty (legacy bookings) or
+  // when the embedded products list has no product_ids.
+  if (productIds.size === 0 && packageType) {
+    const { data: pkgRows, error: pkgErr } = await admin
+      .from('packages')
+      .select('id, name, products')
+      .eq('is_active', true);
+    if (pkgErr) {
+      console.warn(`[${GENERATOR}] packages fetch for engine_role resolution failed: ${pkgErr.message}`);
+    } else if (pkgRows) {
+      // Substring match (defect #53 parity).
+      const target = String(packageType).toLowerCase().trim();
+      // deno-lint-ignore no-explicit-any
+      for (const row of pkgRows as any[]) {
+        const name = String(row.name || '').toLowerCase().trim();
+        if (!name) continue;
+        const isMatch = name === target || name.includes(target) || target.includes(name);
+        if (!isMatch) continue;
+        const embedded = Array.isArray(row.products) ? row.products : [];
+        for (const ent of embedded) {
+          if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+        }
+      }
+    }
+  }
+
+  if (productIds.size === 0) return [];
+
+  // ─── Path 3: products lookup → engine_role union ─────────────────────────
+  const { data: prodRows, error: prodErr } = await admin
+    .from('products')
+    .select('id, engine_role, is_active')
+    .in('id', Array.from(productIds));
+  if (prodErr) {
+    console.warn(`[${GENERATOR}] products fetch for engine_role resolution failed: ${prodErr.message}`);
+    return [];
+  }
+  if (!prodRows) return [];
+
+  const productsList: ProductRow[] = (prodRows as ProductRow[]).map((p) => ({
+    id: String(p.id),
+    engine_role: p.engine_role ?? null,
+    is_active: p.is_active === true,
+  }));
+
+  // Reuse the pure resolver to keep semantics in lockstep with the unit tests.
+  return resolvePackageEngineRoles(
+    Array.from(productIds).map((id) => ({ product_id: id })),
+    productsList,
+  );
 }
 
 // ─── Persistence helpers ─────────────────────────────────────────────────────
