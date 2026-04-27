@@ -1,10 +1,20 @@
 # W10.3 — Override metadata columns + swimlane state tracking — Design Spec
 
-**Status:** ⚙️ Ready to dispatch (awaiting Joseph sign-off on Q1-Q3 below).
+**Status:** ✅ Shipped (mig 342, edge fn annotate path, swimlane instrumentation).
 **Backlog ref:** P1-16
 **Wave plan ref:** W10.3 — richer override telemetry to feed Wave 8 tier configs and Wave 13a training set
 **Dependencies:** None hard. Mig 285 already created the four columns; this wave is overwhelmingly **frontend instrumentation** (per-row timing, drawer-state capture, signal-dropdown UI) with a small migration to backfill defaults and add an evidence audit column.
 **Unblocks:** W8.4 (round metadata reads `tier_used` + `tier_config_version` — uncorrelated to W10.3 directly, but the override row's signal context becomes the signal that W8 weights tune against), W13a (training set extracted from `shortlisting_overrides` rows uses the new context fields as feature columns).
+
+**Shipped artefacts:**
+- `supabase/migrations/342_alternative_offered_drawer_seen.sql` — single new column for the "drawer rendered vs editor opened drawer" distinction.
+- `supabase/functions/_shared/overrideAnnotate.ts` + `.test.ts` — pure validation helper for the annotate action (14 unit tests).
+- `supabase/functions/shortlisting-overrides/index.ts` — `annotate` action, `alternative_offered_drawer_seen` plumbed through the events path.
+- `flexmedia-src/src/components/projects/shortlisting/ShortlistingSwimlane.jsx` — IntersectionObserver per-card timer, `seenAltsBySlotIdRef` drawer tracking, modal integration.
+- `flexmedia-src/src/components/projects/shortlisting/ShortlistingCard.jsx` — `registerCardObserver` + `onAltsDrawerOpen` props, outer-card data-group-id.
+- `flexmedia-src/src/components/projects/shortlisting/SignalAttributionModal.jsx` — non-blocking 14-item curated dropdown + free-text "other".
+
+**Migration number used:** 342 (340=camera_source / 341=manual status enum / 342=drawer_seen).
 
 ---
 
