@@ -363,6 +363,8 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsShortlistingTraining") && { name: "Shortlist · Training", href: "SettingsShortlistingTraining", icon: Sparkles },
           can("SettingsShortlistingOverrides") && { name: "Shortlist · Overrides", href: "SettingsShortlistingOverrides", icon: Sparkles },
           can("SettingsShortlistingPrompts") && { name: "Shortlist · Prompts", href: "SettingsShortlistingPrompts", icon: Sparkles },
+          can("SettingsEngineSettings") && { name: "Shortlist · Engine Settings", href: "SettingsEngineSettings", icon: Sparkles },
+          can("SettingsPackageTierMapping") && { name: "Shortlist · Tier Mapping", href: "SettingsPackageTierMapping", icon: Sparkles },
         ].filter(Boolean)
       },
     ].filter(Boolean);

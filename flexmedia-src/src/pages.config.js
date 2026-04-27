@@ -127,6 +127,8 @@ const ShortlistingCalibration = React.lazy(() => import('./pages/ShortlistingCal
 const SettingsShortlistingTraining = React.lazy(() => import('./pages/SettingsShortlistingTraining'));
 const SettingsShortlistingOverrides = React.lazy(() => import('./pages/SettingsShortlistingOverrides'));
 const SettingsShortlistingPrompts = React.lazy(() => import('./pages/SettingsShortlistingPrompts'));
+const SettingsEngineSettings = React.lazy(() => import('./pages/SettingsEngineSettings'));
+const SettingsPackageTierMapping = React.lazy(() => import('./pages/SettingsPackageTierMapping'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
 const SettingsLegacyImport = React.lazy(() => import('./pages/SettingsLegacyImport'));
@@ -201,6 +203,8 @@ export const PAGES = {
     "SettingsShortlistingTraining": SettingsShortlistingTraining,
     "SettingsShortlistingOverrides": SettingsShortlistingOverrides,
     "SettingsShortlistingPrompts": SettingsShortlistingPrompts,
+    "SettingsEngineSettings": SettingsEngineSettings,
+    "SettingsPackageTierMapping": SettingsPackageTierMapping,
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,
     "SettingsClients": SettingsClients,

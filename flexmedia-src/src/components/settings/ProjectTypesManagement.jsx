@@ -67,6 +67,10 @@ const DEFAULT_FORM = {
   is_default: false,
   order: 0,
   task_templates: [],
+  // Wave 7 P1-6 (W7.7): when false, the shortlisting subtab runs in manual
+  // mode (no AI passes; operator drags Dropbox files into approved). When
+  // true (default), full Pass 0/1/2/3 engine runs.
+  shortlisting_supported: true,
 };
 
 function slugify(str) {
@@ -437,6 +441,14 @@ export default function ProjectTypesManagement() {
                   {!type.is_active && (
                     <Badge variant="secondary" className="text-xs">Inactive</Badge>
                   )}
+                  {type.shortlisting_supported === false && (
+                    <Badge
+                      variant="outline"
+                      className="text-xs bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300"
+                    >
+                      Manual shortlist
+                    </Badge>
+                  )}
                   {type.task_templates?.length > 0 && (
                     <Badge variant="outline" className="text-xs gap-1">
                       {type.task_templates.length} task{type.task_templates.length !== 1 ? "s" : ""}
@@ -542,6 +554,26 @@ export default function ProjectTypesManagement() {
                   onCheckedChange={(v) => setFormData(prev => ({ ...prev, is_default: v }))}
                 />
                 <Label>Default type</Label>
+              </div>
+            </div>
+
+            {/* Wave 7 P1-6 (W7.7): manual-mode plumbing for the shortlisting subtab */}
+            <div className="flex items-start gap-2 p-3 rounded-md bg-muted/30 border">
+              <Switch
+                checked={formData.shortlisting_supported !== false}
+                onCheckedChange={(v) =>
+                  setFormData(prev => ({ ...prev, shortlisting_supported: v }))
+                }
+                className="mt-0.5"
+              />
+              <div className="flex-1">
+                <Label className="text-sm font-medium">AI shortlisting supported</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  When ON (default), the project's shortlisting subtab runs the full
+                  AI engine (Pass 0/1/2/3). When OFF, it falls back to manual mode —
+                  operator drags Dropbox files into the approved set; lock-triggers-move.
+                  Disable for project types where AI scoring doesn't make sense.
+                </p>
               </div>
             </div>
 
