@@ -556,7 +556,7 @@ weights or signal weights:
 
 ---
 
-### P1-18 — Migrate remaining edge fns off legacy `DROPBOX_API_TOKEN`
+### P1-18 — Migrate remaining edge fns off legacy `DROPBOX_API_TOKEN` ✅ DONE 2026-04-27
 
 **Origin.** Surfaced 2026-04-27 during P0-3 smoke test (Path B). The
 `shortlisting-extract` → Modal path now mints a fresh OAuth token per call,
@@ -573,16 +573,31 @@ token rotates, the file browser / preview / share-link UI silently 401s
 until someone manually rotates the env var. Same brittle dependency the
 Modal worker had until P0-3.
 
-**Fix.** Mechanical migration: import `getDropboxAccessToken` from
-`_shared/dropbox.ts`, replace `Deno.env.get('DROPBOX_API_TOKEN')` with
-`await getDropboxAccessToken({ forceRefresh: false })`. Once all four are
-migrated and verified live for 24h, delete `DROPBOX_API_TOKEN` from the
-Supabase secrets dashboard so the dependency is permanently removed.
+**Fix shipped.** Each fn imports `getDropboxAccessToken` from
+`_shared/dropbox.ts` and calls `await getDropboxAccessToken({ forceRefresh:
+false })` in place of the old `Deno.env.get('DROPBOX_API_TOKEN')`. The
+"DROPBOX_API_TOKEN not configured" early-return was removed in each fn —
+the helper throws a typed error on misconfiguration that the existing
+try/catch surfaces. Team-namespace handling preserved where present.
 
-**Effort.** ~½ day (4 fns × ~10 LoC each + smoke test of each).
+**Commits.** P1-18.1 listDropboxFiles, P1-18.2 listDropboxFolders,
+P1-18.3 getDropboxFilePreview, P1-18.4 fetchDropboxShareLink — each as
+its own commit so reverts are surgical.
 
-**Sequence.** Independent; can land any time after P0-3 deploy is settled.
-Recommend bundling with the next P1 burst to amortize deploy overhead.
+**Smoke tests** (all green via deployed fn + service-role JWT):
+- `listDropboxFiles` — 175 entries from a real Shortlist Proposed path
+- `listDropboxFolders` — `Previews` subfolder returned
+- `getDropboxFilePreview` — temporary `dropboxusercontent.com` URL minted
+- `fetchDropboxShareLink` — fresh-mint token authenticated past Dropbox's
+  SSRF gate (fake link returned `shared_link_not_found` from Dropbox API)
+
+**LoC delta.** 4 fns × (+1 import, -2 lines token-read+early-return) =
++4 / -8 net.
+
+**Static secret cleanup.** Joseph to delete the `DROPBOX_API_TOKEN`
+Supabase secret manually after observing 24h of green production
+traffic across all four UI paths. Intentionally left in place during
+the soak window as a quick rollback escape valve.
 
 ---
 
