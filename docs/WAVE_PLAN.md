@@ -44,7 +44,9 @@ design phase.
 | W7.4 | `shortlisting-confirm` audit JSON mirror | P1-12 | ✅ **shipped** (commits 90b791a, 6553924, 73bfbbe) — audit JSON written to `Photos/_AUDIT/round_N_locked_<ts>.json` after every successful lock |
 | W7.5 | `pg_advisory_lock` cross-connection unlock fix (row-based mutex on `dispatcher_locks`) | P1-11 | ✅ **shipped** (commits d01f2e0, 4e515e7, 126c285, 2a75480) — mig 336 applied, both dispatchers using new mutex, smoke test confirms atomic acquire+release |
 | W7.6 | Vision prompt refactor into composable `_shared/visionPrompts/` blocks | P1-10 | ⚙️ design spec ready (`docs/design-specs/W7-6-vision-prompt-blocks.md`); next subagent burst |
-| W7.7 | `package_shortlist_configs` sidecar + `tiers` first-class table + slot FK refactor | P1-6 | ⚠️ draft spec authored (`docs/design-specs/W7-7-package-shortlist-configs.md`); 6 cross-engine open questions await Joseph |
+| W7.7 | Dynamic package/product/tier architecture: `shortlisting_tiers`, `package_engine_tier_mapping`, derived file counts, `engine_settings`, `project_types.shortlisting_supported`, drop legacy `package_types` | P1-6 | ⚙️ ready — spec rewritten 2026-04-27 after Joseph's architectural correction |
+| W7.12 | P1-18: migrate 4 remaining edge fns off legacy `DROPBOX_API_TOKEN` (chip spawned 2026-04-27) | P1-18 | ✅ ready (chip available) |
+| W7.13 | Manual shortlisting mode for project types where AI doesn't apply (UX fork; engine bypass; same lock semantics) | P1-19 | ⚙️ spec ready (`docs/design-specs/W7-13-manual-shortlisting-mode.md`); depends on W7.7 + W7.12 |
 | W7.8 | Product-driven slot eligibility (`engine_role` enum) — replaces flawed day/dusk flag | P1-8 | ✅ **shipped** (commits e7b8fb8, aeac3f2, 652a948, 72e0556, 2d4e1a4) — mig 337 applied + backfilled (28 products, 12 slots), smoke test confirms 12/12 slots resolve via engine_role on Everton 8/2; latent quarantine CHECK bug fixed as a bonus |
 | W7.9 | Per-package `expected_file_count_range` (replaces hardcoded math) | P1-13 | ✅ ready after W7.7 |
 | W7.10 | Notification routing seed (9 spec types) | P1-9 | ✅ ready (independent) |
