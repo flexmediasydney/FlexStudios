@@ -23,6 +23,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { useActivePackages } from "@/hooks/useActivePackages";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -58,12 +59,14 @@ import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-const PACKAGE_TYPES = [
-  { value: "all", label: "All packages" },
-  { value: "Gold", label: "Gold" },
-  { value: "Day to Dusk", label: "Day to Dusk" },
-  { value: "Premium", label: "Premium" },
-];
+// Wave 7 P1-11: package options now come from the live `packages` table via
+// useActivePackages() inside the page component. Previously hardcoded:
+//   const PACKAGE_TYPES = [
+//     { value: "all", label: "All packages" },
+//     { value: "Gold", label: "Gold" },
+//     { value: "Day to Dusk", label: "Day to Dusk" },
+//     { value: "Premium", label: "Premium" },
+//   ];
 
 const TIERS = [
   { value: "all", label: "All tiers" },
@@ -195,6 +198,18 @@ function TrainingExampleDrawer({ example, open, onOpenChange, onMark, onExclude 
 // ── Main page ───────────────────────────────────────────────────────────────
 export default function SettingsShortlistingTraining() {
   const queryClient = useQueryClient();
+
+  // Wave 7 P1-11: live list of active packages — replaces the hardcoded
+  // PACKAGE_TYPES array. Always includes the "All packages" sentinel up
+  // front so the filter UI keeps the same shape.
+  const { names: packageNames } = useActivePackages();
+  const packageTypes = useMemo(
+    () => [
+      { value: "all", label: "All packages" },
+      ...packageNames.map((n) => ({ value: n, label: n })),
+    ],
+    [packageNames],
+  );
 
   // Filters
   const [minVariantCount, setMinVariantCount] = useState(1);
@@ -372,7 +387,7 @@ export default function SettingsShortlistingTraining() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {PACKAGE_TYPES.map((p) => (
+                    {packageTypes.map((p) => (
                       <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
                     ))}
                   </SelectContent>
