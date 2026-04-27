@@ -12,24 +12,34 @@
  * POST { events: OverrideEvent[] }
  *
  * Each event:
- *   project_id                    UUID
- *   round_id                      UUID
- *   ai_proposed_group_id          UUID | null
- *   ai_proposed_slot_id           string | null
- *   ai_proposed_score             number | null
- *   ai_proposed_analysis          string | null    (optional; usually omitted to keep payload small)
- *   human_action                  'approved_as_proposed' | 'removed' | 'swapped' | 'added_from_rejects'
- *   human_selected_group_id       UUID | null
- *   human_selected_slot_id        string | null
- *   override_reason               'quality_preference' | 'client_instruction' | 'coverage_adjustment' | 'error_correction' | null
- *   override_note                 string | null
- *   slot_group_id                 string | null
- *   project_tier                  'standard' | 'premium' | null
- *   primary_signal_overridden     string | null
- *   review_duration_seconds       number    (gates training inclusion: > 30s = confirmed_with_review=TRUE)
- *   alternative_offered           bool      (did the swimlane show top-3 alts?)
- *   alternative_selected          bool      (did the editor pick an alt?)
- *   variant_count                 number | null
+ *   project_id                       UUID
+ *   round_id                         UUID
+ *   ai_proposed_group_id             UUID | null
+ *   ai_proposed_slot_id              string | null
+ *   ai_proposed_score                number | null
+ *   ai_proposed_analysis             string | null    (optional; usually omitted to keep payload small)
+ *   human_action                     'approved_as_proposed' | 'removed' | 'swapped' | 'added_from_rejects'
+ *   human_selected_group_id          UUID | null
+ *   human_selected_slot_id           string | null
+ *   override_reason                  'quality_preference' | 'client_instruction' | 'coverage_adjustment' | 'error_correction' | null
+ *   override_note                    string | null
+ *   slot_group_id                    string | null
+ *   project_tier                     'standard' | 'premium' | null
+ *   primary_signal_overridden        string | null
+ *   review_duration_seconds          number    (gates training inclusion: > 30s = confirmed_with_review=TRUE)
+ *   alternative_offered              bool      (did Pass 2 emit alts AND the swimlane render the drawer?)
+ *   alternative_offered_drawer_seen  bool      Wave 10.3: did the editor actually OPEN the drawer?
+ *   alternative_selected             bool      (did the editor pick an alt?)
+ *   variant_count                    number | null
+ *
+ * Wave 10.3 P1-16 — annotate path:
+ *
+ *   POST { annotate: { override_id: UUID, primary_signal_overridden: string|null } }
+ *
+ * Used by the SignalAttributionModal to PATCH the primary_signal_overridden
+ * onto a row that was already inserted via the events path. Validation lives
+ * in _shared/overrideAnnotate.ts (pure helper); this fn wires it to the DB
+ * UPDATE + project-access guard. Response: { ok: true, override_id: UUID }.
  *
  * Auth: master_admin / admin / manager (humans hit this directly).
  *
@@ -45,6 +55,7 @@ import {
   getAdminClient,
   callerHasProjectAccess,
 } from '../_shared/supabase.ts';
+import { validateAnnotate } from '../_shared/overrideAnnotate.ts';
 
 const GENERATOR = 'shortlisting-overrides';
 
@@ -82,6 +93,12 @@ interface OverrideEventInput {
   primary_signal_overridden?: string | null;
   review_duration_seconds?: number | null;
   alternative_offered?: boolean;
+  // Wave 10.3 P1-16 (mig 342): TRUE only when the editor actually opened the
+  // alternatives drawer for this slot. Distinguishes "alts existed but ignored"
+  // (alternative_offered=TRUE, drawer_seen=FALSE) from "alts existed and
+  // editor actively rejected them" (both TRUE). Default FALSE — legacy clients
+  // that don't send the field are treated as "drawer not seen".
+  alternative_offered_drawer_seen?: boolean;
   alternative_selected?: boolean;
   variant_count?: number | null;
   // Burst 4 J1: monotonic client-side counter set by the swimlane on each
@@ -106,7 +123,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
-  let body: { events?: OverrideEventInput[]; _health_check?: boolean } = {};
+  let body: {
+    events?: OverrideEventInput[];
+    annotate?: unknown;
+    _health_check?: boolean;
+  } = {};
   try {
     body = await req.json();
   } catch {
@@ -115,6 +136,70 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   if (body._health_check) {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
+  }
+
+  // ── Annotate path (Wave 10.3 P1-16) ─────────────────────────────────────
+  // PATCH a primary_signal_overridden value onto a row that was already
+  // inserted via the events path. The frontend SignalAttributionModal calls
+  // this after the modal is dismissed (or a signal is chosen). If the modal
+  // is dismissed without choosing, the frontend simply skips the call → row
+  // stays NULL, which is a legitimate signal in itself ("editor was in flow,
+  // didn't want to interrupt with annotation").
+  if (body.annotate !== undefined) {
+    const validation = validateAnnotate(body.annotate);
+    if (!validation.ok) {
+      return jsonResponse(
+        { ok: false, error: validation.message, error_code: validation.error_code },
+        400,
+        req,
+      );
+    }
+
+    const admin = getAdminClient();
+    const { data: existing, error: fetchErr } = await admin
+      .from('shortlisting_overrides')
+      .select('project_id')
+      .eq('id', validation.override_id)
+      .maybeSingle();
+    if (fetchErr) {
+      return errorResponse(`annotate lookup failed: ${fetchErr.message}`, 500, req);
+    }
+    if (!existing) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: 'override not found',
+          error_code: 'ANNOTATE_OVERRIDE_NOT_FOUND',
+        },
+        404,
+        req,
+      );
+    }
+
+    if (!isService) {
+      const ok = await callerHasProjectAccess(user, existing.project_id as string);
+      if (!ok) {
+        return errorResponse(
+          `Forbidden — caller has no access to project ${existing.project_id}`,
+          403,
+          req,
+        );
+      }
+    }
+
+    const { error: updErr } = await admin
+      .from('shortlisting_overrides')
+      .update({ primary_signal_overridden: validation.primary_signal_overridden })
+      .eq('id', validation.override_id);
+    if (updErr) {
+      return errorResponse(`annotate failed: ${updErr.message}`, 500, req);
+    }
+
+    return jsonResponse(
+      { ok: true, override_id: validation.override_id },
+      200,
+      req,
+    );
   }
 
   const events = Array.isArray(body.events) ? body.events : [];
@@ -215,6 +300,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           ? Math.max(0, Math.floor(e.variant_count))
           : null,
       alternative_offered: !!e.alternative_offered,
+      // Wave 10.3 P1-16 (mig 342): default FALSE for legacy clients that omit
+      // the field. The swimlane (W10.3 frontend) sets it TRUE iff the editor
+      // opened the AlternativesDrawer for this slot in the current session.
+      alternative_offered_drawer_seen: !!e.alternative_offered_drawer_seen,
       alternative_selected: !!e.alternative_selected,
       client_sequence: clientSequence,
     });
