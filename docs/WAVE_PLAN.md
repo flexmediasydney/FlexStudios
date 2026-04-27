@@ -107,8 +107,8 @@ eligibility). Wave 9 no longer exists.
 
 | # | Item | Backlog ref | Ready? |
 |---|---|---|---|
-| W10.1 | Multi-camera partitioning in `bracketDetector` (`camera_source`, `is_secondary_camera`) | P2-6 | ✅ ready |
-| W10.2 | Swimlane secondary-camera banner + iPhone "treated as singletons" notice | P2-6 | ✅ ready |
+| W10.1 | Multi-camera partitioning in `bracketDetector` (`camera_source`, `is_secondary_camera`) | P2-6 | ✅ shipped |
+| W10.2 | Swimlane secondary-camera banner + iPhone "treated as singletons" notice | P2-6 | ✅ shipped |
 | W10.3 | Override metadata columns (`review_duration_seconds`, `alternative_offered`, `alternative_selected`, `primary_signal_overridden`) + swimlane state tracking | P1-16 | ✅ ready |
 
 **Estimated total:** 1 week.

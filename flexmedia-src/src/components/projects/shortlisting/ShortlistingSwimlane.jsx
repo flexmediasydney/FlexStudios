@@ -100,6 +100,46 @@ function nextClientSequence() {
   return ++_clientSeq;
 }
 
+/**
+ * Wave 10.1 (W10.1) — humanise a canonical camera_source slug into a user-
+ * friendly label for the secondary-camera banner. Pure function, no DB lookup.
+ * Falls back gracefully on unknown prefixes so a fleet expansion doesn't
+ * require a code change before the banner reads correctly.
+ *
+ * Bootstrap mapping (ordered — first match wins):
+ *   canon-eos-r5:*       → "Canon EOS R5"
+ *   canon-eos-r6m2:*     → "Canon EOS R6 Mark II"
+ *   canon-eos-r6:*       → "Canon EOS R6"
+ *   apple:iphone-* / iphone-* → "iPhone <model>" with title-cased rest
+ *   any other            → derive from prefix before ":"
+ */
+function humaniseCameraSource(slug) {
+  if (!slug || typeof slug !== "string") return "Unknown camera";
+  // Drop the serial portion for display — operators don't care which body
+  // it was, just which model.
+  const modelPart = slug.split(":")[0] || slug;
+
+  // Order matters: r6m2 BEFORE r6 so the more specific prefix wins.
+  if (modelPart.startsWith("canon-eos-r5")) return "Canon EOS R5";
+  if (modelPart.startsWith("canon-eos-r6m2")) return "Canon EOS R6 Mark II";
+  if (modelPart.startsWith("canon-eos-r6")) return "Canon EOS R6";
+  if (modelPart.startsWith("iphone-") || modelPart.startsWith("apple-iphone-")) {
+    const rest = modelPart.replace(/^apple-/, "").replace(/^iphone-/, "");
+    if (!rest) return "iPhone";
+    // "14-pro" → "14 Pro"
+    const titled = rest
+      .split("-")
+      .map((tok) =>
+        tok.length === 0 ? "" : tok[0].toUpperCase() + tok.slice(1),
+      )
+      .join(" ");
+    return `iPhone ${titled}`.trim();
+  }
+  // Fallback: title-case the first hyphen-separated word and call it good.
+  const head = modelPart.split("-")[0] || modelPart;
+  return head ? head[0].toUpperCase() + head.slice(1) : "Unknown camera";
+}
+
 function deriveHumanAction(fromColumn, toColumn) {
   if (fromColumn === toColumn) return null;
   if (fromColumn === "proposed" && toColumn === "approved")
@@ -277,6 +317,52 @@ export default function ShortlistingSwimlane({
     }
     return m;
   }, [slotEvents, classByGroupId]);
+
+  // Wave 10.1 (W10.1) — secondary-camera bucket summary for the banner.
+  // Counts files (not groups) per source so the operator sees "12 iPhone
+  // images" rather than "12 iPhone groups" — same number for singletons but
+  // clearer phrasing.
+  const secondaryBuckets = useMemo(() => {
+    const m = new Map();
+    for (const g of groups) {
+      if (!g.is_secondary_camera) continue;
+      const key = g.camera_source || "unknown";
+      const fileCount = Number(g.file_count) || 1;
+      m.set(key, (m.get(key) || 0) + fileCount);
+    }
+    return [...m.entries()].map(([source, count]) => ({ source, count }));
+  }, [groups]);
+
+  // Per-round dismissal of the banner. Persist in localStorage so refreshing
+  // the page doesn't bring it back; keyed by round so dismissing in one
+  // round doesn't dismiss it for another.
+  const bannerDismissKey = `shortlisting:secondaryBanner:dismissed:${roundId}`;
+  const [bannerDismissed, setBannerDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(bannerDismissKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    // When switching rounds, re-read the persisted state for the new round.
+    if (typeof window === "undefined") return;
+    try {
+      setBannerDismissed(window.localStorage.getItem(bannerDismissKey) === "1");
+    } catch {
+      setBannerDismissed(false);
+    }
+  }, [bannerDismissKey]);
+  const dismissBanner = useCallback(() => {
+    setBannerDismissed(true);
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(bannerDismissKey, "1");
+    } catch {
+      /* ignore quota or private-mode errors */
+    }
+  }, [bannerDismissKey]);
 
   // Initial AI shortlist set + classification-based rejection set
   const initialColumns = useMemo(() => {
@@ -773,6 +859,42 @@ export default function ShortlistingSwimlane({
             </CardContent>
           </Card>
         )}
+
+      {/* Wave 10.1 (W10.1) — secondary-camera banner. Shown when the round
+          contains files from a non-primary camera_source (e.g. iPhone BTS,
+          junior photographer's R6). Per-round dismissal persisted in
+          localStorage so reviewing across rounds doesn't surface the same
+          notice repeatedly. Amber tone matches W7.4's audit-status banner
+          pattern (informational, no action required). */}
+      {!bannerDismissed && secondaryBuckets.length > 0 && (
+        <div className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
+          <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+          <div className="flex-1 leading-relaxed">
+            <div className="font-medium mb-0.5">
+              Multi-camera shoot detected
+            </div>
+            <div>
+              {secondaryBuckets
+                .map(
+                  ({ source, count }) =>
+                    `${count} ${humaniseCameraSource(source)} image${count !== 1 ? "s" : ""}`,
+                )
+                .join(" and ")}{" "}
+              treated as singletons (not bracket-merged). They still compete
+              for shortlist slots on quality alone.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={dismissBanner}
+            className="text-amber-700 dark:text-amber-300 hover:text-amber-900 dark:hover:text-amber-100 flex-shrink-0"
+            title="Dismiss for this round"
+            aria-label="Dismiss multi-camera notice"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Burst 16 AA2: in-progress banner so the swimlane doesn't look empty/
           stuck while the engine is mid-pipeline. Hidden once the round

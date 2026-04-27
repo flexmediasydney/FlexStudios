@@ -44,7 +44,7 @@ import {
   type VisionMessage,
 } from '../_shared/anthropicVision.ts';
 import {
-  groupIntoBrackets,
+  groupIntoBracketsPartitioned,
   validateBracketCounts,
   type ExifSignals,
   type BracketGroup,
@@ -110,6 +110,13 @@ interface ModalFileResult {
   exif?: {
     fileName?: string;
     cameraModel?: string | null;
+    /**
+     * Wave 10.1 (W10.1): camera body serial. The Modal worker reads
+     * SerialNumber or BodySerialNumber from EXIF and surfaces whichever
+     * is present (preferring SerialNumber). Optional for backwards compat
+     * with pre-W10.1 Modal responses.
+     */
+    bodySerial?: string | null;
     shutterSpeed?: string;
     shutterSpeedValue?: number | null;
     aperture?: number | null;
@@ -361,6 +368,13 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
     exifSignals.push({
       fileName: exif.fileName || `${fe.stem}.CR3`,
       cameraModel: exif.cameraModel || 'unknown',
+      // Wave 10.1 (W10.1): bodySerial passes through into the partitioner
+      // via groupIntoBracketsPartitioned. Null when the Modal response
+      // pre-dates W10.1 or the EXIF tag isn't readable; the partitioner
+      // canonicalises to "<model>:unknown" in that case.
+      bodySerial: typeof exif.bodySerial === 'string' && exif.bodySerial.trim() !== ''
+        ? exif.bodySerial
+        : null,
       shutterSpeed: exif.shutterSpeed || '',
       shutterSpeedValue,
       aperture,
@@ -382,12 +396,36 @@ async function runPass0(roundId: string, concurrency: number): Promise<Pass0Roun
     );
   }
 
-  // 5. Bracket grouping + validation.
-  const groups = groupIntoBrackets(exifSignals);
-  const validation = validateBracketCounts(groups, exifSignals.length);
+  // 5. Wave 10.1 (W10.1): bracket grouping with multi-camera partitioning.
+  // The partitioned variant buckets files by canonical camera_source first,
+  // then runs the standard bracket detector on the primary partition only.
+  // Secondary-camera files (iPhone BTS, junior photographer's R6) emit as
+  // singletons (file_count=1, isSecondaryCamera=true) — NOT bracket-merged
+  // on timestamp, which is the bug we're fixing.
+  const groups = groupIntoBracketsPartitioned(exifSignals);
+  // Validate against the PRIMARY partition only — secondary singletons by
+  // design satisfy group_count == file_count, so any "drift" there would
+  // always be 0 and dilute the meaningful primary signal.
+  const primaryGroups = groups.filter((g) => g.isSecondaryCamera !== true);
+  const primaryFileCount = primaryGroups.reduce((acc, g) => acc + g.files.length, 0);
+  const validation = validateBracketCounts(primaryGroups, primaryFileCount);
   const warnings = [...validation.warnings];
   if (skipped.length > 0) {
     warnings.push(`${skipped.length} files skipped during EXIF projection`);
+  }
+  // Surface multi-camera detection so the dispatcher can log it; the swimlane
+  // reads camera_source + is_secondary_camera off composition_groups.
+  const secondarySources = new Map<string, number>();
+  for (const g of groups) {
+    if (g.isSecondaryCamera === true && g.cameraSource) {
+      secondarySources.set(g.cameraSource, (secondarySources.get(g.cameraSource) ?? 0) + g.files.length);
+    }
+  }
+  if (secondarySources.size > 0) {
+    const summary = [...secondarySources.entries()]
+      .map(([src, count]) => `${count} files from ${src}`)
+      .join('; ');
+    warnings.push(`pass0 multi-camera detected (W10.1): ${summary} treated as singletons`);
   }
 
   // 6. Insert composition_groups rows + collect their ids.
@@ -713,6 +751,12 @@ async function insertCompositionGroups(
         dropbox_preview_path: dropboxPreviewPath,
         preview_size_kb: previewSizeKb,
         exif_metadata: exifMetadata,
+        // Wave 10.1 (W10.1): camera_source + is_secondary_camera. Set by
+        // groupIntoBracketsPartitioned; null/false on rounds that bypass the
+        // partitioned path (none today, but defensive in case a caller
+        // re-invokes the legacy detector directly).
+        camera_source: group.cameraSource ?? null,
+        is_secondary_camera: group.isSecondaryCamera === true,
       })
       .select('id')
       .single();

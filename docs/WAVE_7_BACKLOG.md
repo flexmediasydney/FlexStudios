@@ -340,13 +340,29 @@ per disagreement. Permanent benchmark set.
 
 **Estimated effort.** 1-2 weeks engineering + 25 hours editor time.
 
-### P2-6 — Multi-camera shoot handling
+### P2-6 — Multi-camera shoot handling ✅ SHIPPED 2026-04-27 (W10.1 + W10.2)
 
 Spec section 25. Partition `composition_groups` by camera body. Skip
 bracket grouping for iPhone secondary. Surface "secondary camera detected"
 banner in swimlane.
 
-**Estimated effort.** 3-5 days.
+**Shipped:**
+- Migration 340 adds `composition_groups.camera_source TEXT` and
+  `is_secondary_camera BOOLEAN NOT NULL DEFAULT FALSE` (partial index on
+  camera_source IS NOT NULL).
+- Modal `photos-extract` reads `-SerialNumber` and `-BodySerialNumber` and
+  surfaces `bodySerial` on the per-file response.
+- `_shared/cameraPartitioner.ts` buckets files by `<model>:<serial>` slug;
+  primary = largest bucket, with iPhone < Canon, ties broken
+  deterministically.
+- `_shared/bracketDetector.ts` exports `groupIntoBracketsPartitioned` —
+  legacy `groupIntoBrackets` is unchanged.
+- `shortlisting-pass0` calls the partitioned variant; persists camera_source
+  + is_secondary_camera per group.
+- `ShortlistingSwimlane.jsx` shows a dismissible amber info banner when the
+  round contains secondary-camera files.
+
+**Estimated effort.** 3-5 days. **Actual:** half-day.
 
 ---
 
