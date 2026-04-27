@@ -20,6 +20,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { useActivePackages } from "@/hooks/useActivePackages";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -47,12 +48,14 @@ const TIME_RANGES = [
   { value: "all", label: "All time" },
 ];
 
-const PACKAGE_TYPES = [
-  { value: "all", label: "All packages" },
-  { value: "Gold", label: "Gold" },
-  { value: "Day to Dusk", label: "Day to Dusk" },
-  { value: "Premium", label: "Premium" },
-];
+// Wave 7 P1-11: package options now come from the live `packages` table via
+// useActivePackages() inside the page component. Previously hardcoded:
+//   const PACKAGE_TYPES = [
+//     { value: "all", label: "All packages" },
+//     { value: "Gold", label: "Gold" },
+//     { value: "Day to Dusk", label: "Day to Dusk" },
+//     { value: "Premium", label: "Premium" },
+//   ];
 
 const PROJECT_TIERS = [
   { value: "all", label: "All tiers" },
@@ -227,6 +230,18 @@ function RecalibrationSuggestions({ analytics }) {
 
 // ── Main page ───────────────────────────────────────────────────────────────
 export default function SettingsShortlistingOverrides() {
+  // Wave 7 P1-11: live list of active packages — replaces the hardcoded
+  // PACKAGE_TYPES array. Always includes the "All packages" sentinel up
+  // front so the filter UI keeps the same shape.
+  const { names: packageNames } = useActivePackages();
+  const packageTypes = useMemo(
+    () => [
+      { value: "all", label: "All packages" },
+      ...packageNames.map((n) => ({ value: n, label: n })),
+    ],
+    [packageNames],
+  );
+
   const [range, setRange] = useState("90");
   const [packageType, setPackageType] = useState("all");
   const [tier, setTier] = useState("all");
@@ -292,7 +307,7 @@ export default function SettingsShortlistingOverrides() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PACKAGE_TYPES.map((p) => (
+                {packageTypes.map((p) => (
                   <SelectItem key={p.value} value={p.value}>
                     {p.label}
                   </SelectItem>
