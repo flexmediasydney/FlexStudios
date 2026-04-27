@@ -49,6 +49,7 @@ import {
   serveWithAudit,
   getAdminClient,
 } from "../_shared/supabase.ts";
+import { tryAcquireMutex, releaseMutex } from "../_shared/dispatcherMutex.ts";
 
 const GENERATOR = "drone-job-dispatcher";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "https://rjzdznwkxnzfekgcdkei.supabase.co";
@@ -80,21 +81,21 @@ const MAX_ATTEMPTS = 3;
 // final response serialisation + advisory-unlock RPC.
 const DISPATCHER_DEADLINE_MS = 110 * 1000;
 
-// QC2-6 #12: single-flight enforcement at the function level. Cron schedule
-// `* * * * *` plus 145s wall-clock cap means two cron invocations can
-// overlap. SKIP LOCKED on claim_drone_jobs prevents row double-claim, but
-// MAX_SFM_PER_TICK=1 still lets BOTH overlapping invocations dispatch a
-// separate SfM to Modal back-to-back (doubles spend during the overlap).
-// Wrap the body in pg_try_advisory_lock(LOCK_KEY) → if a second tick
-// arrives while the first is still running, return cleanly with
-// `skipped:concurrent_dispatch`.
+// QC2-6 #12 + Wave 7 P1-11: single-flight enforcement at the function level.
+// Cron schedule `* * * * *` plus 145s wall-clock cap means two cron
+// invocations can overlap. SKIP LOCKED on claim_drone_jobs prevents row
+// double-claim, but MAX_SFM_PER_TICK=1 still lets BOTH overlapping
+// invocations dispatch a separate SfM to Modal back-to-back (doubles spend
+// during the overlap).
 //
-// Lock id derived from a fixed string; same hashing strategy as
-// hashtext('drone-job-dispatcher') — but we precompute on the JS side so
-// every dispatcher tick agrees on the value. Use a stable 53-bit hash
-// (Postgres bigint is signed 64-bit; we stay well inside the JS safe
-// integer range to avoid bignum gymnastics).
-const DISPATCHER_LOCK_KEY = stableHashBigInt("drone-job-dispatcher");
+// W7.5 replaced the previous pg_advisory_lock pattern with a row-based mutex
+// on the dispatcher_locks table (migration 336). Advisory locks are session-
+// scoped; PostgREST's connection pool routes the unlock RPC to a different
+// connection than the acquire RPC, so unlocks silently failed and stale
+// locks accumulated until pool eviction (~10min). The row-based mutex is
+// connection-pool agnostic — see _shared/dispatcherMutex.ts and the design
+// spec at docs/design-specs/W7-5-pg-advisory-lock-fix.md.
+const DISPATCHER_LOCK_NAME = "drone-job-dispatcher";
 
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
@@ -164,29 +165,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     DISPATCHER_DEADLINE_MS,
   );
 
-  // ── QC2-6 #12: Single-flight advisory lock ──────────────────────────────
+  // ── QC2-6 #12 + Wave 7 P1-11: Single-flight row-based mutex ─────────────
   // Try to acquire the dispatcher lock. If another invocation already holds
   // it, exit cleanly (200 OK) without touching the queue — the holder will
   // process pending jobs in the same minute. We deliberately return 200 so
   // pg_cron doesn't log it as a failed invocation; the explicit
   // `skipped:concurrent_dispatch` field makes overlap visible in logs.
+  //
+  // W7.5: the mutex sits on the dispatcher_locks table (mig 336) instead of
+  // pg_advisory_lock so it isn't sensitive to PostgREST's cross-connection
+  // pool routing.
+  const tickId = crypto.randomUUID();
   let lockAcquired = false;
   try {
-    const { data: lockResp, error: lockErr } = await admin.rpc(
-      "pg_try_advisory_lock",
-      { lock_id: DISPATCHER_LOCK_KEY },
-    );
-    if (lockErr) {
-      // RPC error (wrapper missing, role lacks EXECUTE, etc.) — fail loud
-      // so we notice during deploy. Don't silently degrade to no-lock mode
-      // because that's how QC2-6 #12 happened in the first place.
-      return errorResponse(
-        `pg_try_advisory_lock RPC failed: ${lockErr.message}`,
-        500,
-        req,
-      );
-    }
-    lockAcquired = lockResp === true;
+    lockAcquired = await tryAcquireMutex(admin, DISPATCHER_LOCK_NAME, tickId);
     if (!lockAcquired) {
       console.info(
         `[${GENERATOR}] concurrent dispatch detected — returning early`,
@@ -217,18 +209,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   } finally {
     clearTimeout(deadlineTimer);
     if (lockAcquired) {
-      const { error: relErr } = await admin.rpc("pg_advisory_unlock", {
-        lock_id: DISPATCHER_LOCK_KEY,
-      });
-      if (relErr) {
-        // Non-fatal — Postgres releases all session locks when the
-        // connection is recycled (PostgREST pool churn handles this in
-        // ~minutes). Worst case the next 1-2 ticks see lock-held and
-        // skip. Worth a warn so it's visible if it persists.
+      // Stale-lock pre-clear on the next tick covers the case where this
+      // release fails silently — log and keep moving so a release error
+      // can never wedge subsequent ticks.
+      await releaseMutex(admin, DISPATCHER_LOCK_NAME, tickId).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
         console.warn(
-          `[${GENERATOR}] pg_advisory_unlock failed (lock will release on session recycle): ${relErr.message}`,
+          `[${GENERATOR}] mutex release failed (will be cleaned up by stale-lock sweep): ${msg}`,
         );
-      }
+      });
     }
   }
 });
@@ -562,31 +551,6 @@ async function runDispatcherTick(
     200,
     req,
   );
-}
-
-/**
- * stableHashBigInt — deterministic 53-bit hash for an arbitrary string.
- *
- * Used to derive a stable BIGINT lock id for pg_try_advisory_lock without
- * round-tripping through the database for `hashtext('drone-job-dispatcher')`.
- * Matches Postgres's hashtext output well enough for namespacing purposes
- * (lock collisions across DIFFERENT lock keys would be catastrophic; lock
- * collisions across THE SAME key are the entire point — both dispatcher
- * ticks must agree on the same number).
- *
- * Algorithm: 32-bit FNV-1a × 2 with two seeds, packed into a 53-bit positive
- * integer (stays in JS Number safe range; Postgres BIGINT accepts it).
- */
-function stableHashBigInt(s: string): number {
-  let h1 = 0x811c9dc5; // FNV offset basis
-  let h2 = 0x01000193; // alternate seed
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    h1 ^= c; h1 = (h1 * 0x01000193) >>> 0;
-    h2 ^= c; h2 = (h2 * 0x811c9dc5) >>> 0;
-  }
-  // Combine to a 53-bit positive integer.
-  return (h1 * 0x200000 + (h2 & 0x1fffff)) % Number.MAX_SAFE_INTEGER;
 }
 
 // ──────────────────────────────────────────────────────────────────────
