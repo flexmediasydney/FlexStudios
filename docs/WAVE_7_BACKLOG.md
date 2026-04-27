@@ -659,7 +659,7 @@ keeps the state machine + audit JSON unified).
    `project_type.shortlisting_supported`; engine-mode UI strings adapt
 4. `689eb55` — per-row inline AI-shortlisting toggle in Settings → Project
    Types (matches existing "Set as default" pattern; toast confirms mode)
-5. `[Commit 5]` — frontend test (`ManualShortlistingSwimlane.test.jsx`,
+5. `ecc01ae` — frontend test (`ManualShortlistingSwimlane.test.jsx`,
    8 tests) + this doc + WAVE_PLAN + design-specs/README updates
 
 **Test count delta.** Backend 329 → 355 (+26: 21 manualModeResolver +
