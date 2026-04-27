@@ -90,7 +90,13 @@ export type FolderKind =
   | 'photos_raws_quarantine'
   | 'photos_editors_edited_post_production'
   | 'photos_editors_ai_proposed_enriched'
-  | 'photos_finals';
+  | 'photos_finals'
+  // Wave 7 P1-12 (W7.4): per-lock audit JSON mirror under the Photos tree.
+  // Distinct from the global `audit` kind (top-level _AUDIT/ for project-
+  // wide events) — `photos_audit` is the per-lock canonical "what did this
+  // round become" snapshot, written by shortlist-lock to
+  // <root>/Photos/_AUDIT/round_<N>_locked_<ISO>.json.
+  | 'photos_audit';
 
 /**
  * All folder kinds the system understands — includes both the legacy drone
@@ -129,6 +135,8 @@ export const ALL_FOLDER_KINDS: FolderKind[] = [
   'photos_editors_edited_post_production',
   'photos_editors_ai_proposed_enriched',
   'photos_finals',
+  // Wave 7 P1-12 (W7.4)
+  'photos_audit',
 ];
 
 /**
@@ -162,6 +170,10 @@ export const NEW_PROJECT_FOLDER_KINDS: FolderKind[] = [
   'photos_editors_edited_post_production',
   'photos_editors_ai_proposed_enriched',
   'photos_finals',
+  // Wave 7 P1-12 (W7.4): photos_audit holds per-lock JSON snapshots written
+  // by shortlist-lock. Existing projects: not backfilled — the audit JSON
+  // write itself creates the folder on first lock (W7.4 spec resolution).
+  'photos_audit',
 ];
 
 const FOLDER_RELATIVE_PATHS: Record<FolderKind, string> = {
@@ -197,6 +209,8 @@ const FOLDER_RELATIVE_PATHS: Record<FolderKind, string> = {
   photos_editors_edited_post_production: 'Photos/Editors/Edited Post Production',
   photos_editors_ai_proposed_enriched: 'Photos/Editors/AI Proposed Enriched',
   photos_finals: 'Photos/Finals',
+  // Wave 7 P1-12 (W7.4): per-lock audit JSON sink under the Photos tree.
+  photos_audit: 'Photos/_AUDIT',
 };
 
 // Intermediate parent folders that must exist before leaves can be created.
