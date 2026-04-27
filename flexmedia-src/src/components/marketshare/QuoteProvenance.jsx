@@ -42,6 +42,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/api/supabaseClient";
 import { cn } from "@/lib/utils";
+import { useActivePackages } from "@/hooks/useActivePackages";
 import {
   AlertTriangle,
   ExternalLink,
@@ -924,8 +925,11 @@ export function QuoteAmount({
 }
 
 /**
- * <PackageBadge listingId={uuid} name="Gold Package" />
- *   Shows a package badge wrapped in QuoteProvenance.
+ * <PackageBadge listingId={uuid} name={livePackageName} />
+ *   Shows a package badge wrapped in QuoteProvenance. The `name` value comes
+ *   from the engine substrate (which sources it from the live `packages`
+ *   catalog) — Wave 7 P1-11.b validates the name against useActivePackages()
+ *   and tags any drift with a legacy indicator so ops can spot stale data.
  */
 export function PackageBadge({
   listingId,
@@ -936,7 +940,17 @@ export function PackageBadge({
   align = "start",
   onOpenEntity,
 }) {
+  // Wave 7 P1-11.b: subscribe to the live `packages` table so the badge can
+  // surface drift between the engine substrate and the current catalog.
+  // Per Joseph's architectural correction (2026-04-27): packages must NEVER
+  // be hardcoded as the authoritative source of names in the frontend.
+  const { names: livePackageNames } = useActivePackages();
   const unclassifiable = name === "UNCLASSIFIABLE";
+  const isLegacy =
+    !!name &&
+    !unclassifiable &&
+    livePackageNames.length > 0 &&
+    !livePackageNames.includes(name);
   return (
     <QuoteProvenance
       listingId={listingId}
@@ -952,8 +966,10 @@ export function PackageBadge({
           unclassifiable
             ? "bg-amber-50 text-amber-700 border-amber-200"
             : "bg-blue-50 text-blue-700 border-blue-200",
+          isLegacy && "border-dashed",
           className
         )}
+        title={isLegacy ? `${name} (not in live packages — legacy/renamed)` : undefined}
       >
         {name || "—"}
       </Badge>
