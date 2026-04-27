@@ -36,37 +36,36 @@ design phase.
 
 ### Bursts (in execution order)
 
-| # | Item | Backlog ref | Ready? |
+| # | Item | Backlog ref | Status (2026-04-27) |
 |---|---|---|---|
-| W7.1 | `shortlist-lock` rewrite using `move_batch_v2` + `EdgeRuntime.waitUntil` + DB-persisted progress + frontend live progress UI | P0-1 | ✅ ready |
-| W7.2 | `SHORTLISTING_DISPATCHER_JWT` deployment runbook + startup self-check 503 | P0-2 | ✅ ready |
-| W7.3 | Modal Dropbox token refresh from edge function (eliminates 4hr expiry) | P0-3 | ✅ ready |
-| W7.4 | `shortlisting-confirm` copy-then-move semantics + audit JSON mirror | P1-12 | ⚠️ needs flow mapping (~half-day design) |
-| W7.5 | `pg_advisory_lock` cross-connection unlock fix (xact_lock vs row mutex) | P1-11 | ⚠️ needs decision doc (~half-day) |
-| W7.6 | Vision prompt refactor into composable `_shared/visionPrompts/` blocks | P1-10 | ⚠️ needs API contract design (~1 day) |
-| W7.7 | `package_shortlist_configs` sidecar + `tiers` first-class table + slot FK refactor | P1-6 | ⚠️ needs migration plan review (touches projects/packages) |
-| W7.8 | Product-driven slot eligibility (`product_category` + `eligible_when_product_categories`) — replaces flawed day/dusk flag | P1-8 | ⚠️ needs `product_category` enum design (~1 day, depends on W7.7) |
+| W7.1 | `shortlist-lock` rewrite using `move_batch_v2` + `EdgeRuntime.waitUntil` + DB-persisted progress + frontend live progress UI | P0-1 | ✅ **shipped** (commits 3b17526, 0a229b0, d01d96b) — 165-file lock 30 min → 15 s (120× speedup) |
+| W7.2 | `SHORTLISTING_DISPATCHER_JWT` deployment runbook + startup self-check 503 | P0-2 | ✅ **shipped** (commits 8b2ac89, 0948c00, df03a3d) — 109 unit tests + admin ops health page |
+| W7.3 | Modal Dropbox token refresh from edge function (eliminates 4hr expiry) | P0-3 | ✅ **shipped** (commit 7bcf566) — Path B real-file smoke test passed: 5 CR3s, 13 s wall, Modal logs `dropbox token source: caller` |
+| W7.4 | `shortlisting-confirm` audit JSON mirror | P1-12 | 🚧 **in flight** — design spec resolved (commit 397a381), executing in subagent worktree |
+| W7.5 | `pg_advisory_lock` cross-connection unlock fix (row-based mutex on `dispatcher_locks`) | P1-11 | 🚧 **in flight** — Option B chosen, migration 336 reserved, executing in subagent worktree |
+| W7.6 | Vision prompt refactor into composable `_shared/visionPrompts/` blocks | P1-10 | ⚠️ needs API contract design spec (~1 day; orchestrator authoring next) |
+| W7.7 | `package_shortlist_configs` sidecar + `tiers` first-class table + slot FK refactor | P1-6 | ⚠️ needs migration plan review with Joseph (touches projects/packages cross-engine impacts) |
+| W7.8 | Product-driven slot eligibility (`engine_role` enum) — replaces flawed day/dusk flag | P1-8 | 🚧 **in flight** — design spec resolved (commit 397a381), W7.7 verified non-blocking, migration 337 reserved, executing in subagent worktree |
 | W7.9 | Per-package `expected_file_count_range` (replaces hardcoded math) | P1-13 | ✅ ready after W7.7 |
-| W7.10 | Notification routing seed (9 spec types) | P1-9 | ✅ ready |
+| W7.10 | Notification routing seed (9 spec types) | P1-9 | ✅ ready (independent) |
 | W7.11 | Frontend: replace hardcoded `["Gold", "Day to Dusk", "Premium"]` arrays in slots/training/overrides admin pages | P1-6 sibling | ✅ ready after W7.7 |
+| W7.12 | P1-18: migrate 4 remaining edge fns off legacy `DROPBOX_API_TOKEN` (`listDropboxFiles`, `listDropboxFolders`, `getDropboxFilePreview`, `fetchDropboxShareLink`) | P1-18 | ✅ ready (chip spawned 2026-04-27) |
 
 ### Dependencies
 
 ```
-W7.1 ─── independent (start immediately)
-W7.2 ─── independent
-W7.3 ─── independent
-W7.4 ─── pairs with W7.1 (both touch lock fn)
-W7.5 ─── independent (architectural plumbing)
-W7.6 ─── independent (prep for W11)
-W7.7 ─── foundation for W7.8, W7.9, W7.11
-W7.8 ─── depends on W7.7
+W7.1 / W7.2 / W7.3 ── ✅ shipped 2026-04-27
+W7.4 / W7.5 / W7.8 ── 🚧 in flight as parallel subagent burst
+W7.6 ─── independent (prep for W11) — orchestrator authoring spec next
+W7.7 ─── foundation for W7.9, W7.11. W7.8 verified independent (uses
+         packages.products JSONB, doesn't need the sidecar)
 W7.9 ─── depends on W7.7
 W7.10 ── independent
 W7.11 ── depends on W7.7
+W7.12 ── independent (chip spawned, ready when picked up)
 ```
 
-**Estimated total Wave 7 effort:** 3-4 weeks. Largest single wave.
+**Estimated total Wave 7 effort remaining:** ~2 weeks after current burst lands.
 
 ---
 
@@ -306,17 +305,20 @@ Total elapsed if fully serialized: ~5-6 months.
 With parallelism + design-phase prep work in flight: ~3-4 months.
 ```
 
-## Orchestrator readiness map
+## Orchestrator readiness map (updated 2026-04-27)
 
-| Wave | Can I delegate to subagents today? |
+| Wave | Status |
 |---|---|
-| W7.1 / W7.2 / W7.3 | ✅ yes — well-specified, deploy + test pattern same as Wave 6 |
-| W7.4 / W7.5 / W7.6 | ⚠️ design-doc first (half-day to 1-day each), then yes |
-| W7.7 → W7.11 | ⚠️ migration plan review with Joseph first, then yes |
+| W7.1 / W7.2 / W7.3 | ✅ **shipped** + Path B validated end-to-end |
+| W7.4 / W7.5 / W7.8 | 🚧 **in flight** — three subagents executing in isolated worktrees right now |
+| W7.6 | ⚠️ orchestrator authoring spec next — needed before W11 design phase begins |
+| W7.7 | ⚠️ needs joint review with Joseph on cross-engine impacts (drone, billing); then dispatch |
+| W7.9 / W7.11 | ✅ ready after W7.7 |
+| W7.10 / W7.12 | ✅ ready (independent) |
 | W8 | ✅ yes after W7.7 |
 | W10 | ✅ yes |
-| **W11** | 🛑 **needs full design phase** (1 week with Joseph), then yes |
-| W12 | ⚠️ trigger threshold decisions first, then yes |
+| **W11** | 🛑 **design phase active** — full spec exists at `docs/design-specs/W11-universal-vision-response-schema.md`; needs Joseph's sign-off on the 22 measurement prompts before execution |
+| W12 | ⚠️ trigger threshold decisions captured in `docs/design-specs/W12-trigger-thresholds.md`; ready when W11 lands |
 | W13a / W13b / W13c | ✅ yes after dependencies |
 | W14 | ✅ yes after W12 |
 | W15 | 🛑 cannot start until W11 ships |
