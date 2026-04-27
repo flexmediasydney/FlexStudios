@@ -294,13 +294,45 @@ INSERT INTO shortlisting_training_examples (
 
 **Why use the final's score, not the RAW's?** Per Joseph's universal-vision-response design, finals scores measure what the editor actually delivered — a styled/retouched composition. RAW scores measure the as-shot frame. For training purposes, we want "what did the editor produce", not "what did the editor start from". The RAW score is preserved as `ai_proposed_score` so we can compute the delta (RAW → finals improvement) for separate analytics.
 
-### Section 7 — Cost cap + batch sizing
+### Section 7 — Cost cap + invocation model (manual-trigger only)
 
-Sonnet over a 1024px JPEG: ~$0.013 per call (per W11 spec cost model). A typical Gold project: ~165 RAWs + ~32 finals = 197 Pass 1 calls = **$2.56/project** (not $1.30 as Joseph's prompt cited; see Q3 below for reconciliation).
+**Joseph confirmed 2026-04-27**: this wave runs strictly on-demand, one project at a time. No batch runner, no overnight cron, no auto-scheduler. Joseph asks the orchestrator (or invokes the admin UI) when he wants to backfill a specific project; he picks which one. The runtime never decides on its own to process a queue.
 
-For 100 historical projects: ~$256. Within Joseph's "acceptable for one-shot backfill" envelope per the prompt.
+**Per-project cost** (Sonnet over 1024px JPEGs at $0.013/call, per W11 cost model):
 
-Batching: the backfill endpoint enqueues all jobs into the existing `shortlisting_jobs` queue with a low `priority` value so live rounds stay ahead. The dispatcher's natural concurrency limits keep the load on Anthropic's API sane. Estimated wall-clock for 100 projects at ~2 jobs/min average (pessimistic — dispatcher can chain faster): ~**8 hours** of background time. Run overnight Sat/Sun.
+A typical Gold project: ~165 RAWs + ~32 finals = 197 Pass 1 calls = **~$2.56/project**. AI Package projects are smaller (~$0.50). Premium video packages can run higher (~$5).
+
+**Edge function shape** (`shortlisting-historical-backfill`):
+
+```typescript
+interface BackfillRequest {
+  project_id: string;                  // explicit; Joseph specifies which project
+  raw_folder_path: string;             // Dropbox path to the RAW set
+  finals_folder_path: string;          // Dropbox path to the delivered finals
+  cost_cap_usd: number;                // required; pre-flight estimate must fit under this
+  dry_run?: boolean;                   // if true, return the cost estimate + slot-resolver
+                                       // preview without enqueueing any jobs
+}
+```
+
+The edge fn:
+1. Validates the project exists and the folders are reachable
+2. Lists files in both Dropbox folders → estimated cost = (raw_count + finals_count) × $0.013
+3. If estimate > cost_cap_usd → return 400 with detail; do NOT enqueue
+4. If `dry_run=true` → return `{estimate, raw_count, finals_count, slot_match_preview}`; do NOT enqueue
+5. Else: create the synthetic `shortlisting_rounds` row + enqueue Pass 1 jobs as before
+
+**No cross-project batch endpoint.** No "process the next 25 projects" mode. Joseph invokes the edge fn once per project, reviews the result, decides whether to invoke again for the next project. The system never processes more than one project per human invocation.
+
+**Admin UI** (lands as part of W13a execution): a `Settings → Engine → Historical Backfill` page where Joseph:
+- Picks a project from a dropdown (excluding projects already backfilled)
+- Pastes the RAW + finals folder paths (or uses a folder-picker that walks Dropbox)
+- Sets `cost_cap_usd`
+- Clicks "Estimate" → shows the dry-run preview (cost + slot-match preview)
+- Clicks "Run backfill" → fires the actual call
+- Recent runs table at the bottom: project, triggered_at, raw_count, finals_count, cost, status
+
+Joseph alone decides which project gets processed and when. The system never batches across projects.
 
 ### Section 8 — Idempotency
 
@@ -360,16 +392,12 @@ Reserve **next available** at integration time. Recommend `342_shortlisting_hist
 
 ## Open questions for sign-off
 
-**Q1.** How many historical projects to backfill in v1?
-**Recommendation:** 50-100 stratified across packages and tiers. Specifically:
-- 30 Gold-Standard projects, 15 Gold-Premium, 5 Silver-Standard, 10 Flex (A-tier), 10 Day Video, 5 Dusk Video.
-- Stratification matters more than raw count — we want every (package, tier) cell to have ≥5 examples to feed Wave 8 weight tuning.
+**Q1.** ~~How many historical projects to backfill in v1?~~ → resolved by Joseph 2026-04-27: **N/A — Joseph picks projects one at a time, on demand**. No batch policy. The system processes exactly the project Joseph names per invocation.
 
 **Q2.** For projects where the editor's choice was overruled by client edits (rare client revisions where the agent demanded a different shot post-delivery), do we exclude or include with a flag?
 **Recommendation:** include with a flag. Add `was_client_revised BOOLEAN` to the training row (defaults FALSE). Operator marks it TRUE on the backfill UI when they know the project went through revisions. Excluded by default from training prompts (`weight *= 0.5`); curator can promote later.
 
-**Q3.** Cost cap: at ~$2.56/project under W11 Sonnet pricing (not $1.30-1.50 as the prompt cites — the prompt may have been pre-W11 pricing or only counted finals), 100 historical projects ≈ **$256**. Acceptable?
-**Recommendation:** confirm $256 budget for 100 projects. Start with 25 projects ($64) as a v1 pilot to validate the slot-resolver accuracy + finals-extract pipeline before committing the rest. If pilot shows >85% slot match rate and the training rows look qualitatively useful, batch the rest.
+**Q3.** ~~Cost cap budget for 100 projects?~~ → resolved by Joseph 2026-04-27: **N/A — no upfront budget**. Joseph supplies a per-invocation `cost_cap_usd` for each project. The system never processes anything without an explicit human invocation + cost cap acceptance. Per-project cost is documented (~$2.56 for a typical Gold project) so Joseph can size the cap.
 
 **Q4.** When a final filename doesn't match any slot pattern, do we skip silently (log only) or fail the round?
 **Recommendation:** skip silently — emit `excluded=TRUE` row + a `shortlisting_events` warning. Failing the round on one bad filename would block 99% useful rounds for 1 file. The curator UI (Wave 13a follow-up) handles cleanup.

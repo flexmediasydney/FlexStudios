@@ -229,52 +229,69 @@ NOTIFY pgrst, 'reload schema';
 
 `description_hash` is computed as `sha256(normalise_whitespace(description))`. When pulse re-scrapes a listing and the description hasn't changed, re-extraction is a no-op (the unique index catches it). When the description changes (rare for archived listings; common for active ones), the new hash creates a new extraction row — the old row stays for audit.
 
-### Section 5 — Edge fn `pulse-description-batch-runner`
+### Section 5 — Edge fn `pulse-description-extract` (manual-trigger only)
 
-The orchestrator that selects N listings per night, calls the Modal worker, persists results.
+**Joseph confirmed 2026-04-27**: this wave runs strictly on-demand. No pg_cron, no nightly schedule, no autonomous batching. Joseph asks the orchestrator (or invokes the admin UI directly) when he wants to process N listings; he picks N. The runtime never decides to fire on its own.
+
+The edge function accepts a request shape that's explicit about scope:
 
 ```typescript
-// supabase/functions/pulse-description-batch-runner/index.ts (new)
+// supabase/functions/pulse-description-extract/index.ts (new)
+// Master_admin only. Service-role bearer required.
 
-interface BatchRunRequest {
-  batch_size?: number;                  // default 1000
-  trigger?: 'manual' | 'nightly_cron';
-  filter?: {
+interface ExtractRequest {
+  /** Explicit set of listings to process. Highest priority — if provided, the
+   *  filter+limit fields are ignored. Use this when Joseph specifies "extract
+   *  these specific listings". */
+  listing_ids?: string[];
+
+  /** When listing_ids is absent, run a query-based selection. */
+  selection?: {
+    /** Hard cap on rows processed in this invocation. Required when listing_ids
+     *  is absent — there is no default. Joseph specifies the count per call. */
+    limit: number;
+
+    /** Optional filters narrowing the candidate set. */
     listing_type?: 'sale' | 'rental' | 'sold';
     min_price?: number;
     max_price?: number;
     suburb?: string;
-    re_extract?: boolean;               // if true, re-process listings that have changed
+    re_extract?: boolean;             // if true, re-process listings that have changed
   };
-  cost_cap_usd?: number;                // hard limit; abort if exceeded
+
+  /** Required cost guard. Aborts the call before Modal invocation if estimated
+   *  cost exceeds this cap. No default — Joseph provides per call. */
+  cost_cap_usd: number;
 }
 
-// 1. SELECT pulse_listings rows where:
-//    - description IS NOT NULL AND length(description) > 100
-//    - NOT EXISTS (SELECT 1 FROM pulse_description_extractions e
-//                  WHERE e.listing_id = l.id AND e.description_hash = sha256(l.description))
-//    LIMIT batch_size
+// 1. Determine the candidate listing_id set:
+//    - If listing_ids provided → use as-is (filtered to extant pulse_listings rows)
+//    - Else SELECT pulse_listings rows matching selection.* filters where:
+//         description IS NOT NULL AND length(description) > 100
+//         AND NOT EXISTS (SELECT 1 FROM pulse_description_extractions e
+//                         WHERE e.listing_id = l.id AND e.description_hash = sha256(l.description))
+//      LIMIT selection.limit
 //
-// 2. POST to Modal pulse-description-extractor with the batch
-// 3. INSERT extraction rows on success
-// 4. Emit a `pulse_description_batch_completed` event with total cost,
-//    success count, opus_count, sonnet_count, elapsed_seconds
+// 2. Estimate cost: sonnet_count * $0.011 + opus_count * $0.057 (opus when listing.asking_price >= $10M).
+//    If estimate > cost_cap_usd → abort with 400 + estimate detail.
+//
+// 3. POST to Modal pulse-description-extractor with the batch.
+// 4. INSERT extraction rows on success.
+// 5. Return summary: { processed_count, succeeded, failed, opus_count, sonnet_count, total_cost_usd, elapsed_seconds }.
+//    Joseph reads the summary, decides whether to invoke again with the next chunk.
 ```
 
-Cron schedule: nightly via pg_cron (matches existing pulse cron infra). Default batch_size=4000 → ~7 nights to get through 28k. Concurrency-controlled by Modal's thread pool (8 workers per call); no need for client-side pacing.
+**No cron schedule.** No `pg_cron.schedule(...)` block. No `pulse_description_batch_completed` event firing on a timer. Every invocation is an explicit POST from a human (or the orchestrator on Joseph's instruction).
 
-```sql
--- Inside the W13b migration:
-SELECT cron.schedule(
-  'pulse-description-extractor-nightly',
-  '0 2 * * *',  -- 02:00 Sydney time, when API rates are cheapest + traffic lowest
-  $$ SELECT net.http_post(
-    url := 'https://...supabase.co/functions/v1/pulse-description-batch-runner',
-    headers := '{"Authorization":"Bearer <SUPABASE_SERVICE_ROLE>"}'::jsonb,
-    body := '{"trigger":"nightly_cron","batch_size":4000}'::jsonb
-  ); $$
-);
-```
+**Admin UI** (lands as part of W13b execution): a `Settings → Pulse Goldmine` page with:
+- Current pending count (`SELECT COUNT(*) FROM pulse_listings l WHERE l.description IS NOT NULL AND NOT EXISTS (...)` — the candidate count for re-extract=false)
+- Filter inputs (listing_type / price range / suburb)
+- Limit input (Joseph types the count for this run)
+- Cost cap input (Joseph types the cap)
+- Estimated cost preview before invocation
+- "Run extraction" button → POSTs to the edge fn → shows summary on completion
+
+Joseph alone decides when to fire and at what scale. The system never auto-extracts.
 
 ### Section 6 — Cosine similarity normalisation (W12.5 contract)
 
@@ -305,14 +322,16 @@ Per Opus (premium properties only, ~5% of corpus):
 - Output: 600 × $75/1M = $0.045
 - **Total: ~$0.057/Opus call**
 
+**Theoretical full-corpus cost** (NOT a budget commitment — Joseph triggers each run; the corpus is processed only as far as he wants to go):
+
 For 28k listings at 95% Sonnet / 5% Opus:
 - Sonnet: 26,600 × $0.011 = **$292**
 - Opus: 1,400 × $0.057 = **$80**
-- **Grand total: ~$372** (somewhat higher than the prompt's $280 estimate; reconcile via Q2)
+- **Theoretical total to fully process the corpus: ~$372**
 
-Spread over 7 nights at 4k/night, daily cost ~$53. Modest enough to monitor but worth the cost cap envelope per Q2.
+In practice Joseph processes whatever subset he chooses per invocation. A 100-listing pilot run costs ~$1.20. A 1,000-listing run costs ~$13. The system never burns cost without an explicit human invocation + cost cap acceptance.
 
-**Parallelism**: Modal's thread pool already concurrent (per `photos-extract` pattern). Anthropic's API rate limit (40k tokens/min on default tier) is the binding constraint — 4k Sonnet calls × 1500 tokens/call = 6M tokens / hour ≈ 100k/min, which exceeds default tier. Need to batch with backoff or upgrade to Tier 2 ($1k spend gate, automatic).
+**Parallelism per invocation**: Modal's thread pool is already concurrent (per `photos-extract` pattern). Anthropic's API rate limit (40k tokens/min on default tier) means a single invocation should cap at ~1,500-2,000 listings to stay within rate limits — the edge fn enforces this via a hard maximum on `selection.limit` (configurable via `engine_settings`, default 2000). Joseph can run multiple sequential invocations if he wants more throughput in a single sitting.
 
 ### Section 8 — Re-extraction policy
 
@@ -328,7 +347,9 @@ For deleted/withdrawn listings (`pulse_listings.listing_withdrawn_at IS NOT NULL
 
 Reserve **next available** at integration time. Recommend `343_pulse_description_extractions.sql` (chained after W7.7=339, W10.1=340, W10.3=341, W13a=342).
 
-(SQL drafted across §4, §5 — assemble into one migration. Includes table, indexes, comments, pg_cron schedule. Rollback comment block per existing pattern.)
+Migration scope: **table + indexes + comments only**. NO `pg_cron.schedule(...)` block — this wave is manual-trigger only per Joseph's 2026-04-27 confirmation. The edge function is invoked exclusively via the admin UI / explicit POST.
+
+Rollback comment block per existing pattern.
 
 ---
 
@@ -349,10 +370,16 @@ This wave is **mostly orthogonal** to the shortlisting engine. Pass 0/1/2/3 don'
 Minimal — this is a backend bootstrap wave.
 
 1. **`Settings → Engine → Pulse Description Extractor`** — admin page. Master_admin only.
-   - Status: total listings, listings extracted, listings remaining
-   - Cost summary: spent so far, projected total
-   - Run controls: "Pause nightly cron", "Run batch now (1000)", "Re-extract changed listings"
-   - Recent batch table: last 7 nights × {batch_size, sonnet_count, opus_count, cost_usd, elapsed_seconds}
+   - Status: total candidate listings (extant + matching filters), listings extracted, listings remaining
+   - Cost-to-date: cumulative spend across all manual invocations
+   - Run controls (manual-trigger only — there is NO cron):
+     - Limit input (Joseph types the count for THIS run)
+     - Filter inputs (listing_type / price range / suburb)
+     - Re-extract toggle (re-process listings whose description has changed)
+     - Cost cap input (Joseph types the cap for this invocation)
+     - Estimated cost preview (computed before the POST)
+     - "Run extraction" button (single explicit click; no auto-fire)
+   - Recent runs table: last N invocations × {triggered_at, listing_count_processed, sonnet_count, opus_count, cost_usd, elapsed_seconds, triggered_by}
 
 2. **`pulse_description_extractions` is read-only** to managers/employees via RLS (admins can update for manual rejection / re-trigger).
 
@@ -363,11 +390,9 @@ Minimal — this is a backend bootstrap wave.
 **Q1.** Memory note says "Opus for >$10M properties". Confirm the exact threshold value (or whether it's a different rule, e.g. by listing tier label like "Prestige" / "Premium").
 **Recommendation:** $10M AUD asking_price (or sold_price for sold listings) as a hard threshold. Rentals stay Sonnet (almost no rentals cross $10M cap-rate equivalent). Override available per-batch via `model_override` for one-off A/B testing.
 
-**Q2.** Total cost reconciliation: my estimate is ~$372 (95% Sonnet + 5% Opus mix); the original prompt cited ~$280. The delta is ~$92 from Opus runs at 5% of the corpus.
-**Recommendation:** budget $400 for the full run (covers $372 + 7% buffer for rate-limit retries / partial-failure re-runs). Confirm spend cap before kicking off the cron.
+**Q2.** ~~Total cost reconciliation~~ → resolved by Joseph 2026-04-27: theoretical full-corpus cost is documented (~$372) but it's NOT a budget commitment. Joseph triggers each run individually, sets the per-invocation `cost_cap_usd`, and decides when to stop. No upfront budget approval needed.
 
-**Q3.** Parallelism / batch cadence: 4000/night × 7 nights vs one big batch of 28k.
-**Recommendation:** 4000/night × 7 nights. Reasoning: (a) rate limits stay manageable on Tier 1 ($5/min Anthropic gate); (b) bug discovery is cheaper — a prompt issue at 4k/night caps blast radius vs nuking the whole 28k corpus; (c) cost spreads, easier to spot-check daily reports. Trade-off: 7 days vs 1 day calendar — acceptable, this is a one-shot bootstrap not a critical path.
+**Q3.** ~~Parallelism / batch cadence~~ → resolved by Joseph 2026-04-27: NO scheduled batches, NO nightly cron. Each run is an explicit human invocation. The edge function caps a single invocation at ~2,000 listings (rate-limit ceiling); Joseph runs sequential invocations if he wants more in one sitting.
 
 **Q4.** Re-extraction policy on edited descriptions for active listings: re-extract on every `description_hash` change, or freeze the snapshot at first extraction?
 **Recommendation:** re-extract on change. Each new hash inserts a new extraction row; old rows stay for audit. The market signal evolves as agents edit listings (e.g. "added air conditioning post-renovation"); we want the freshest snapshot in the registry while preserving the historical record.
@@ -390,7 +415,9 @@ Minimal — this is a backend bootstrap wave.
 
 - **R7 (price thresholds use asking_price for active, sold_price for sold).** Both columns exist on `pulse_listings`. `COALESCE(asking_price, sold_price)` is the default model-selection input; rentals fall through to Sonnet (almost never premium-tier).
 
-- **R8 (cost cap as hard abort, not soft warn).** The runner POSTs each batch with `cost_cap_usd`; if the running tally crosses that, the runner returns `ok=true, aborted=true, cost_so_far` and the cron stops scheduling new batches until admin clears the gate. Avoids runaway spend on a misconfigured prompt.
+- **R8 (cost cap as hard abort, not soft warn).** Each manual invocation supplies a required `cost_cap_usd`. The pre-flight estimate (sonnet × opus × token rates) must fit under the cap or the call returns `400` with the estimate detail BEFORE invoking Modal. During the run, if the running tally crosses the cap (rate-limit retries / unexpected token usage), the runner aborts and returns `ok=true, aborted=true, cost_so_far`. Joseph re-invokes with a higher cap or smaller `limit` if needed.
+
+- **R9 (no autonomous schedule, ever).** Joseph's 2026-04-27 directive: this wave runs strictly on human invocation. The migration omits any `pg_cron.schedule` block. There is no `pulse-description-scheduler` cron tick. There is no auto-resume after partial failures. Every batch starts with an explicit click on the admin page or an explicit POST. This applies to W13a as well (specced separately).
 
 ---
 
