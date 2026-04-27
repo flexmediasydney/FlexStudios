@@ -852,3 +852,12 @@ verify_jwt = false
 
 [functions.backfillProjectFolders]
 verify_jwt = false
+
+# Shortlisting module — Wave 7 P0-1 explicit registrations. Same ES256/JWT-
+# algo reason as drone module above; each function does its own auth via
+# getUserFromReq().
+[functions.shortlist-lock]
+verify_jwt = false
+
+[functions.shortlist-lock-status]
+verify_jwt = false

@@ -30,16 +30,48 @@
  *              UNION (groups removed by human override)
  *   Undecided = neither (left in place)
  *
+ * ─── Wave 7 P0-1 rewrite ──────────────────────────────────────────────────
+ * The previous implementation did per-file `/files/move_v2` calls in a 6-worker
+ * concurrent loop. Dropbox's per-namespace write rate limit (~5-15 req/s under
+ * sustained load) meant a 165-file Round 2 lock hit the 150s edge gateway
+ * timeout, the DB transitioned to status='locked' regardless, and recovery
+ * required ~30 minutes of manual revert/retry cycles.
+ *
+ * The new flow uses Dropbox's `/files/move_batch_v2` (async, up to 10,000
+ * entries per call):
+ *   1. Build the move list (same logic as before, now in `buildMoveSpecs`)
+ *   2. INSERT shortlisting_lock_progress(stage='submitting', total_moves, ...)
+ *   3. Submit ALL non-idempotent moves in one batch call
+ *   4. UPDATE progress(stage='polling', async_job_id=<dropbox id>)
+ *   5. EdgeRuntime.waitUntil(pollUntilComplete(progressId)) — fire-and-forget
+ *   6. Return immediately with status='in_progress' + progress_id + async_job_id
+ *
+ * Background polling:
+ *   - Poll /files/move_batch/check_v2 every 3s, up to 60 attempts (~3 min)
+ *   - On '.tag' === 'complete': iterate entries, count successes/failures,
+ *     stage→'finalizing'
+ *   - On finalizing: flip round.status='locked', invoke training extractor,
+ *     stage→'complete'
+ *   - On '.tag' === 'failed' OR poll exhausted: stage→'failed', error_message
+ *
  * Idempotent: a file whose Dropbox path already starts with the destination
  * folder is skipped without an API call. Re-running after a partial failure
  * picks up where it left off.
  *
- * POST { round_id }
+ * POST { round_id, resume?: boolean }
  *
  * Auth: master_admin / admin / manager OR service_role.
  *
- * Response:
- *   { ok, moved: { approved, rejected }, skipped, errors }
+ * Response (immediate, before background poll completes):
+ *   {
+ *     ok: true,
+ *     status: 'in_progress' | 'complete' (when no work / already locked),
+ *     round_id,
+ *     progress_id?: <uuid>,
+ *     async_job_id?: <dropbox id>,
+ *     total_moves: N,
+ *     moved: { approved, rejected }  // only on already_locked / no-work paths
+ *   }
  */
 
 import {
@@ -52,48 +84,36 @@ import {
   invokeFunction,
 } from '../_shared/supabase.ts';
 import { getShortlistingFolders } from '../_shared/shortlistingFolders.ts';
-import { moveFile } from '../_shared/dropbox.ts';
+import {
+  moveBatch,
+  checkMoveBatch,
+  type DropboxBatchEntryResult,
+  type DropboxMoveEntry,
+} from '../_shared/dropbox.ts';
+import {
+  buildMoveSpecs,
+  computeApprovedRejectedSets,
+  type CompositionGroupForLock,
+  type SlotEventForLock,
+  type OverrideForLock,
+  type ClassificationForLock,
+  type MoveSpec,
+} from '../_shared/shortlistLockMoves.ts';
 
 const GENERATOR = 'shortlist-lock';
 
-interface CompositionGroupRow {
-  id: string;
-  project_id: string;
-  files_in_group: string[] | null;
-  best_bracket_stem: string | null;
-  delivery_reference_stem: string | null;
-  // Audit defect #19: Pass 0 stores files_in_group as STEMS (no extension).
-  // We carry exif_metadata so we can derive the actual filename (e.g. IMG_5620.CR3)
-  // from exif_metadata[stem].fileName when constructing Dropbox source/dest paths.
-  // deno-lint-ignore no-explicit-any
-  exif_metadata: Record<string, any> | null;
-}
+// Background poll cadence + cap.
+const POLL_INTERVAL_MS = 3000;
+const POLL_MAX_ATTEMPTS = 60; // ~3 minutes total before we mark failed
+// Cap on the size of errors_sample we persist on the progress row. The full
+// failed_moves count is still tracked, but we only retain the first N for
+// operator inspection — keeps the row small (and JSONB usable in admin UIs).
+const ERRORS_SAMPLE_CAP = 20;
 
-interface ClassificationRow {
-  group_id: string;
-  is_near_duplicate_candidate: boolean | null;
-}
-
-interface SlotEventPayload {
-  rank?: number;
-  phase?: number;
-  kind?: string;
-  slot_id?: string;
-  stem?: string;
-}
-
-interface SlotEventRow {
-  group_id: string | null;
-  event_type: string;
-  payload: SlotEventPayload | null;
-}
-
-interface OverrideRow {
-  ai_proposed_group_id: string | null;
-  human_selected_group_id: string | null;
-  human_action: string;
-  created_at: string;
-  client_sequence: number | null; // Burst 4 J1: prefer over created_at for ordering
+interface LockBody {
+  round_id?: string;
+  resume?: boolean;
+  _health_check?: boolean;
 }
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -110,7 +130,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
-  let body: { round_id?: string; _health_check?: boolean } = {};
+  let body: LockBody = {};
   try {
     body = await req.json();
   } catch {
@@ -118,11 +138,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   if (body._health_check) {
-    return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
+    return jsonResponse({ _version: 'v2.0-batch', _fn: GENERATOR }, 200, req);
   }
 
   const roundId = body.round_id?.trim();
   if (!roundId) return errorResponse('round_id required', 400, req);
+  const resume = body.resume === true;
 
   const admin = getAdminClient();
 
@@ -138,14 +159,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Burst 5 K1: idempotent re-lock short-circuit ────────────────────────
   // If the round is already locked, return the prior result from the audit
   // event without re-running file moves OR re-invoking the training extractor.
-  // Without this guard, a retry (browser double-click, pg_net retry, edge
-  // gateway reissue) would:
-  //   - re-run all moves (most skipped via Dropbox `to/conflict`, but burns
-  //     API quota and adds 30s latency)
-  //   - overwrite locked_at with a new timestamp (audit trail corrupted)
-  //   - re-invoke training-extractor (duplicate audit event, wasted work)
-  // Returning the latest shortlist_locked event payload preserves the
-  // original lock metadata while giving the caller a successful response.
   if (round.status === 'locked') {
     const { data: priorEvent } = await admin
       .from('shortlisting_events')
@@ -159,6 +172,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return jsonResponse(
       {
         ok: true,
+        status: 'complete',
         round_id: roundId,
         already_locked: true,
         locked_at: round.locked_at,
@@ -171,6 +185,58 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       200,
       req,
     );
+  }
+
+  // ── Resume guard ────────────────────────────────────────────────────────
+  // If a prior progress row exists and is still in flight, refuse to start
+  // another. This prevents a browser double-click or pg_net retry from
+  // submitting a second batch in parallel — Dropbox would happily move the
+  // files twice (the first to dest, the second errors with to/conflict).
+  const { data: priorProgress } = await admin
+    .from('shortlisting_lock_progress')
+    .select('id, stage, async_job_id, started_at')
+    .eq('round_id', roundId)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (priorProgress && !resume) {
+    if (priorProgress.stage === 'submitting' || priorProgress.stage === 'polling' || priorProgress.stage === 'finalizing') {
+      return errorResponse(
+        `Lock already in flight for round ${roundId} (stage=${priorProgress.stage}, started_at=${priorProgress.started_at}). Wait for completion or call shortlist-lock-status.`,
+        409,
+        req,
+      );
+    }
+    if (priorProgress.stage === 'failed') {
+      return errorResponse(
+        `Lock previously failed for round ${roundId}. Call again with { round_id, resume: true } to retry.`,
+        409,
+        req,
+      );
+    }
+    // 'pending' is a transient state — we've never seen it persist in steady
+    // state. Safe to retry from scratch.
+  }
+
+  if (priorProgress && resume) {
+    if (priorProgress.stage === 'complete') {
+      // Already done — short-circuit caller.
+      return jsonResponse(
+        { ok: true, status: 'complete', round_id: roundId, progress_id: priorProgress.id },
+        200,
+        req,
+      );
+    }
+    if (priorProgress.stage !== 'failed') {
+      return errorResponse(
+        `Cannot resume — prior lock is ${priorProgress.stage}, not failed. Call shortlist-lock-status to check progress.`,
+        409,
+        req,
+      );
+    }
+    // Falls through to full rebuild below; we DELETE the failed row before
+    // INSERTING the new one (UNIQUE constraint is per-round).
   }
 
   // ── Resolve destination folder paths ────────────────────────────────────
@@ -190,8 +256,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const [groupsRes, classRes, eventsRes, overridesRes] = await Promise.all([
     admin
       .from('composition_groups')
-      // Audit defect #19: include exif_metadata so we can derive full filenames
-      // (with extension) from the stems in files_in_group.
       .select('id, project_id, files_in_group, best_bracket_stem, delivery_reference_stem, exif_metadata')
       .eq('round_id', roundId),
     admin
@@ -203,23 +267,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .select('group_id, event_type, payload')
       .eq('round_id', roundId)
       .in('event_type', ['pass2_slot_assigned', 'pass2_phase3_recommendation'])
-      // Burst 5 K2: deterministic event order. Without ORDER BY, two re-runs
-      // of this query can return rows in different orders, which causes the
-      // approvedSet's Set-insertion order to differ. The downstream
-      // confirmedShortlistGroupIds = Array.from(approvedSet) snapshot then
-      // changes between runs, breaking stable comparisons in the training
-      // extractor + benchmark runner. created_at ASC matches the order events
-      // were emitted by Pass 2.
+      // Burst 5 K2: deterministic event order. created_at ASC matches the order
+      // events were emitted by Pass 2.
       .order('created_at', { ascending: true }),
     admin
       .from('shortlisting_overrides')
       .select('ai_proposed_group_id, human_selected_group_id, human_action, created_at, client_sequence')
       .eq('round_id', roundId)
-      // Burst 4 J1: order by client_sequence when present (NULLS LAST puts
-      // legacy events at the end where created_at takes over). For events
-      // with the same null-ness, the secondary created_at sort gives stable
-      // ordering. This ensures fast-emitted drag events are processed in the
-      // order the user emitted them, not the order they happened to arrive.
+      // Burst 4 J1: prefer client_sequence over created_at when present (NULLS
+      // LAST puts legacy events at the end).
       .order('client_sequence', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: true }),
   ]);
@@ -229,75 +285,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (eventsRes.error) return errorResponse(`events query failed: ${eventsRes.error.message}`, 500, req);
   if (overridesRes.error) return errorResponse(`overrides query failed: ${overridesRes.error.message}`, 500, req);
 
-  const groups = (groupsRes.data || []) as CompositionGroupRow[];
-  const classifications = (classRes.data || []) as ClassificationRow[];
-  const slotEvents = (eventsRes.data || []) as SlotEventRow[];
-  const overrides = (overridesRes.data || []) as OverrideRow[];
+  const groups = (groupsRes.data || []) as CompositionGroupForLock[];
+  const classifications = (classRes.data || []) as ClassificationForLock[];
+  const slotEvents = (eventsRes.data || []) as SlotEventForLock[];
+  const overrides = (overridesRes.data || []) as OverrideForLock[];
 
-  // ── Compute initial AI shortlist set ────────────────────────────────────
-  // A group is in the AI shortlist if it has a pass2_slot_assigned rank=1
-  // event OR a pass2_phase3_recommendation event.
-  const aiShortlistSet = new Set<string>();
-  for (const ev of slotEvents) {
-    if (!ev.group_id) continue;
-    if (ev.event_type === 'pass2_phase3_recommendation') {
-      aiShortlistSet.add(ev.group_id);
-    } else if (ev.event_type === 'pass2_slot_assigned') {
-      // Pass 2 emits rank=1/2/3 winners + alternatives; only rank=1 is the slot's winner.
-      const rank = ev.payload?.rank;
-      if (rank === 1 || rank === undefined) aiShortlistSet.add(ev.group_id);
-    }
-  }
-
-  // Apply overrides in chronological order
-  const approvedSet = new Set(aiShortlistSet);
-  // Track groups that were explicitly removed (used to compute rejected set)
-  const explicitlyRemoved = new Set<string>();
-
-  for (const ov of overrides) {
-    const aiId = ov.ai_proposed_group_id;
-    const humanId = ov.human_selected_group_id;
-    switch (ov.human_action) {
-      case 'approved_as_proposed':
-        if (aiId) approvedSet.add(aiId);
-        break;
-      case 'added_from_rejects':
-        if (humanId) {
-          approvedSet.add(humanId);
-          explicitlyRemoved.delete(humanId);
-        }
-        break;
-      case 'removed':
-        if (aiId) {
-          approvedSet.delete(aiId);
-          explicitlyRemoved.add(aiId);
-        }
-        break;
-      case 'swapped':
-        if (aiId) {
-          approvedSet.delete(aiId);
-          explicitlyRemoved.add(aiId);
-        }
-        if (humanId) {
-          approvedSet.add(humanId);
-          explicitlyRemoved.delete(humanId);
-        }
-        break;
-    }
-  }
-
-  // ── Compute rejected set ────────────────────────────────────────────────
-  // Rejected = near-duplicate candidates UNION explicitly-removed groups.
-  // A group cannot be both approved and rejected; approval wins.
-  const rejectedSet = new Set<string>();
-  for (const c of classifications) {
-    if (c.is_near_duplicate_candidate && !approvedSet.has(c.group_id)) {
-      rejectedSet.add(c.group_id);
-    }
-  }
-  for (const gid of explicitlyRemoved) {
-    if (!approvedSet.has(gid)) rejectedSet.add(gid);
-  }
+  const { approvedSet, rejectedSet } = computeApprovedRejectedSets(slotEvents, overrides, classifications);
 
   // ── Per-disposition dest map ────────────────────────────────────────────
   const approvedDest = folders.rawFinalShortlist;
@@ -312,209 +305,394 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     );
   }
 
-  // Helper to move all files in a composition group to a destination folder.
-  // RAW files in files_in_group live under Photos/Raws/Shortlist Proposed/ —
-  // we move them to dest. We don't write back into composition_groups (their
-  // files_in_group is just a list of stems; the canonical RAW path is
-  // constructed from sourceDest + filename).
-  //
-  // Audit defect #19: Pass 0 writes files_in_group as STEMS (no extension —
-  // e.g. 'IMG_5620'). The actual Dropbox file is 'IMG_5620.CR3'. Pass 0 also
-  // stores per-stem exif_metadata where exif_metadata[stem].fileName is the
-  // full filename with extension. We resolve via that map; fall back to
-  // `${stem}.CR3` defensively if the map lookup fails (Canon RAW is the
-  // dominant path through this codebase).
-  // deno-lint-ignore no-explicit-any
-  function resolveFullFilename(stem: string, exifMetadata: Record<string, any> | null): string {
-    if (stem.includes('.')) return stem; // already has an extension — pass through
-    const meta = exifMetadata?.[stem];
-    const fname = meta?.fileName;
-    if (typeof fname === 'string' && fname.length > 0) return fname;
-    return `${stem}.CR3`;
-  }
+  // ── Build move specs ────────────────────────────────────────────────────
+  const allSpecs = buildMoveSpecs(groups, approvedSet, rejectedSet, sourceDest, approvedDest, rejectedDest);
+  const toMove = allSpecs.filter((s) => !s.already_at_destination);
+  const idempotentSkipped = allSpecs.length - toMove.length;
 
-  async function moveGroupFiles(
-    groupId: string,
-    files: string[],
-    // deno-lint-ignore no-explicit-any
-    exifMetadata: Record<string, any> | null,
-    dest: string,
-  ): Promise<{ moved: number; skipped: number; errors: Array<{ file: string; message: string }> }> {
-    const result = { moved: 0, skipped: 0, errors: [] as Array<{ file: string; message: string }> };
-    const sourcePrefix = sourceDest.replace(/\/+$/, '') + '/';
-    const destPrefix = dest.replace(/\/+$/, '') + '/';
-    for (const stem of files) {
-      if (!stem) continue;
-      // Defensive: if a caller ever passes a full path, honour it; otherwise
-      // resolve stem → full filename via exif_metadata (defect #19).
-      const looksLikePath = stem.startsWith('/');
-      const filename = looksLikePath ? stem : resolveFullFilename(stem, exifMetadata);
-      const sourcePath = looksLikePath ? stem : `${sourcePrefix}${filename}`;
-      const baseName = filename.split('/').pop() || filename;
-      const destPath = `${destPrefix}${baseName}`;
-
-      // Idempotent: if source already lives under dest, skip without an API call.
-      if (sourcePath.toLowerCase().startsWith(destPrefix.toLowerCase())) {
-        result.skipped++;
-        continue;
-      }
-
-      try {
-        await moveFile(sourcePath, destPath);
-        result.moved++;
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        // Dropbox `to/conflict` (file already exists at destination — likely
-        // a partial prior run) is non-fatal: treat as success.
-        if (msg.includes('to/conflict') || msg.includes('already exists')) {
-          result.skipped++;
-          continue;
-        }
-        // `from_lookup/not_found` means the file isn't where we expect — log
-        // but don't fail the whole batch (the round may have been partly
-        // re-shoot or the file was renamed).
-        if (msg.includes('not_found')) {
-          result.errors.push({ file: stem, message: `source not found: ${sourcePath}` });
-          continue;
-        }
-        result.errors.push({ file: stem, message: msg });
-      }
-    }
-    return result;
-  }
-
-  // ── Iterate groups and dispatch moves ───────────────────────────────────
-  let movedApproved = 0;
-  let movedRejected = 0;
-  let totalSkipped = 0;
-  const allErrors: Array<{ group_id: string; file: string; message: string }> = [];
-
-  // Bug F (post-Sprint-2): parallelize per-group moves to fit within the
-  // Supabase Edge Function 150s idle timeout. A round with 31 confirmed +
-  // rejected groups × 5 brackets = 155 sequential Dropbox file moves at
-  // ~1.5s/move = 232s — exceeds the timeout, function killed mid-loop, DB
-  // never updated, files stranded in mixed state. With CONCURRENCY=6 groups
-  // running in parallel, total drops to ~30-40s. Conservative cap stays under
-  // Dropbox's app-wide 30req/s rate limit (6 groups × 5 moves × ~1/1.5s ≈
-  // 20 req/s peak). JS single-threaded so the shared counters are safe.
-  const groupsToProcess: Array<{
-    g: typeof groups[number];
-    dest: string;
-    bucket: 'approved' | 'rejected';
-  }> = [];
-  for (const g of groups) {
-    const files = g.files_in_group || [];
-    if (files.length === 0) continue;
-    if (approvedSet.has(g.id)) {
-      groupsToProcess.push({ g, dest: approvedDest, bucket: 'approved' });
-    } else if (rejectedSet.has(g.id)) {
-      groupsToProcess.push({ g, dest: rejectedDest, bucket: 'rejected' });
-    }
-    // else: undecided → leave in place
-  }
-
-  const CONCURRENCY = 6;
-  let nextIdx = 0;
-  async function worker() {
-    while (true) {
-      const i = nextIdx++;
-      if (i >= groupsToProcess.length) return;
-      const { g, dest, bucket } = groupsToProcess[i];
-      const files = g.files_in_group || [];
-      const r = await moveGroupFiles(g.id, files, g.exif_metadata, dest);
-      if (bucket === 'approved') movedApproved += r.moved;
-      else movedRejected += r.moved;
-      totalSkipped += r.skipped;
-      for (const e of r.errors) allErrors.push({ group_id: g.id, ...e });
-    }
-  }
-  await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, groupsToProcess.length) }, () => worker()),
-  );
-
-  // ── Update round + project status (best-effort) ─────────────────────────
-  const lockedAt = new Date().toISOString();
   const lockedBy = isService ? null : (user?.id ?? null);
 
-  // Phase 8: capture the confirmed shortlist as a stable snapshot on the round
-  // row. The training extractor + the benchmark runner read this — both need
-  // a comparison target that doesn't drift if events are later edited.
-  //
+  // ── Capture confirmed shortlist snapshot (used in finalize stage) ───────
   // Burst 5 K2: sort the snapshot deterministically. Set iteration order
   // depends on insertion order, which depends on slotEvents row order from
-  // Postgres. Even with the ORDER BY created_at on the events query above,
-  // ties on created_at (events inserted in the same statement batch) can be
-  // resolved differently across re-runs. Sorting the final array by group_id
-  // gives a fully deterministic snapshot regardless of event-row arrival.
+  // Postgres. Sorting by group_id gives a fully deterministic snapshot.
   const confirmedShortlistGroupIds = Array.from(approvedSet).sort();
 
-  // Note: shortlisting_rounds.locked_by FKs auth.users(id), but app-level
-  // user.id may be the public.users.id. When the auth identity equals the
-  // public.users row id (common case), this works; otherwise we set NULL.
-  const { error: roundUpdErr } = await admin
-    .from('shortlisting_rounds')
-    .update({
-      status: 'locked',
-      locked_at: lockedAt,
-      locked_by: lockedBy,
-      updated_at: lockedAt,
-      confirmed_shortlist_group_ids: confirmedShortlistGroupIds,
-    })
-    .eq('id', roundId);
-  // Burst 5 K3: if the round update fails, the training extractor (invoked
-  // below) reads stale `confirmed_shortlist_group_ids` and produces wrong
-  // training rows. Demote to a hard failure so the operator sees the error
-  // and re-runs Lock — the file moves are already idempotent (K1 short-
-  // circuits on round.status='locked', and Dropbox `to/conflict` is
-  // tolerated), so re-running is safe.
-  if (roundUpdErr) {
-    console.error(`[${GENERATOR}] round update failed — aborting before training extractor: ${roundUpdErr.message}`);
-    return errorResponse(
-      `Round status update failed: ${roundUpdErr.message}. Files were moved but the round was not marked locked. Re-run Lock to retry.`,
-      500,
+  // ── Zero-work fast path ─────────────────────────────────────────────────
+  // No files to move (all already at destination, or empty round). Skip the
+  // batch submit + poll entirely; just flip the round to locked synchronously.
+  if (toMove.length === 0) {
+    const finalizeResult = await finalizeRound({
+      admin,
+      roundId,
+      projectId: round.project_id,
+      lockedBy,
+      isService,
+      movedApproved: 0,
+      movedRejected: 0,
+      idempotentSkipped,
+      confirmedShortlistGroupIds,
+      approvedCount: approvedSet.size,
+      rejectedCount: rejectedSet.size,
+      failedMovesCount: 0,
+    });
+    if (!finalizeResult.ok) {
+      return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
+    }
+    return jsonResponse(
+      {
+        ok: true,
+        status: 'complete',
+        round_id: roundId,
+        total_moves: 0,
+        moved: { approved: 0, rejected: 0 },
+        skipped: idempotentSkipped,
+      },
+      200,
       req,
     );
   }
 
-  const { error: projectUpdErr } = await admin
+  // ── Insert progress row ─────────────────────────────────────────────────
+  // On resume we DELETE the prior failed row first to honour the per-round
+  // UNIQUE constraint. The constraint is DEFERRABLE INITIALLY DEFERRED so the
+  // delete-then-insert in the same transaction is OK; we issue them as
+  // separate statements via supabase-js since it doesn't expose explicit
+  // BEGIN/COMMIT for two operations on different tables. The DELETE is safe
+  // here because we already validated stage='failed' above.
+  if (priorProgress && resume) {
+    await admin.from('shortlisting_lock_progress').delete().eq('id', priorProgress.id);
+  }
+
+  const { data: progressRow, error: progressInsErr } = await admin
+    .from('shortlisting_lock_progress')
+    .insert({
+      round_id: roundId,
+      stage: 'submitting',
+      total_moves: toMove.length,
+      approved_count: approvedSet.size,
+      rejected_count: rejectedSet.size,
+    })
+    .select('id')
+    .single();
+  if (progressInsErr || !progressRow) {
+    return errorResponse(
+      `Failed to create lock progress row: ${progressInsErr?.message || 'no row returned'}`,
+      500,
+      req,
+    );
+  }
+  const progressId = progressRow.id as string;
+
+  // ── Submit batch ────────────────────────────────────────────────────────
+  let submitResult;
+  try {
+    const entries: DropboxMoveEntry[] = toMove.map((s) => ({
+      from_path: s.from_path,
+      to_path: s.to_path,
+    }));
+    submitResult = await moveBatch(entries);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    await admin.from('shortlisting_lock_progress')
+      .update({
+        stage: 'failed',
+        error_message: `move_batch_v2 submit failed: ${msg}`,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', progressId);
+    return errorResponse(`Dropbox batch submit failed: ${msg}`, 502, req);
+  }
+
+  // ── Inline-complete fast path ───────────────────────────────────────────
+  // For very small batches Dropbox returns `.tag === 'complete'` synchronously.
+  // We still go through the finalize stage, but don't need to poll.
+  if (submitResult['.tag'] === 'complete') {
+    const counts = countBatchEntries(toMove, submitResult.entries || []);
+    await admin.from('shortlisting_lock_progress')
+      .update({
+        stage: 'finalizing',
+        succeeded_moves: counts.succeeded,
+        failed_moves: counts.failed,
+        errors_sample: counts.errors_sample,
+      })
+      .eq('id', progressId);
+
+    const finalizeResult = await finalizeRound({
+      admin,
+      roundId,
+      projectId: round.project_id,
+      lockedBy,
+      isService,
+      movedApproved: counts.movedApproved,
+      movedRejected: counts.movedRejected,
+      idempotentSkipped,
+      confirmedShortlistGroupIds,
+      approvedCount: approvedSet.size,
+      rejectedCount: rejectedSet.size,
+      failedMovesCount: counts.failed,
+    });
+    if (!finalizeResult.ok) {
+      await admin.from('shortlisting_lock_progress')
+        .update({
+          stage: 'failed',
+          error_message: finalizeResult.error,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', progressId);
+      return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
+    }
+
+    await admin.from('shortlisting_lock_progress')
+      .update({ stage: 'complete', completed_at: new Date().toISOString() })
+      .eq('id', progressId);
+
+    return jsonResponse(
+      {
+        ok: true,
+        status: 'complete',
+        round_id: roundId,
+        progress_id: progressId,
+        total_moves: toMove.length,
+        moved: { approved: counts.movedApproved, rejected: counts.movedRejected },
+        skipped: idempotentSkipped,
+      },
+      200,
+      req,
+    );
+  }
+
+  // ── Async path: persist async_job_id + fire background poll ─────────────
+  if (submitResult['.tag'] !== 'async_job_id' || !submitResult.async_job_id) {
+    await admin.from('shortlisting_lock_progress')
+      .update({
+        stage: 'failed',
+        error_message: `unexpected move_batch_v2 response tag: ${submitResult['.tag']}`,
+        completed_at: new Date().toISOString(),
+      })
+      .eq('id', progressId);
+    return errorResponse(`Unexpected Dropbox response tag: ${submitResult['.tag']}`, 502, req);
+  }
+  const asyncJobId = submitResult.async_job_id;
+  await admin.from('shortlisting_lock_progress')
+    .update({ stage: 'polling', async_job_id: asyncJobId })
+    .eq('id', progressId);
+
+  // Background poll runs after the response is sent.
+  const bgWork = pollUntilComplete({
+    progressId,
+    asyncJobId,
+    toMove,
+    roundId,
+    projectId: round.project_id,
+    lockedBy,
+    isService,
+    idempotentSkipped,
+    confirmedShortlistGroupIds,
+    approvedCount: approvedSet.size,
+    rejectedCount: rejectedSet.size,
+  }).catch((err) => {
+    console.error(`[${GENERATOR}] background poll failed:`, err?.message || err);
+  });
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).EdgeRuntime?.waitUntil?.(bgWork);
+
+  return jsonResponse(
+    {
+      ok: true,
+      status: 'in_progress',
+      round_id: roundId,
+      progress_id: progressId,
+      async_job_id: asyncJobId,
+      total_moves: toMove.length,
+      moved: { approved: 0, rejected: 0 }, // counts populate during background poll
+      skipped: idempotentSkipped,
+    },
+    202,
+    req,
+  );
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Count succeeded + failed moves from a batch result. Failures are tagged
+ * with their from_path so the operator can see which files didn't make it.
+ *
+ * `to/conflict` is treated as success — that means the file is already at
+ * destination (a prior partial run already moved it). This matches the
+ * idempotent semantics of the old per-file path.
+ */
+function countBatchEntries(
+  toMove: MoveSpec[],
+  entries: DropboxBatchEntryResult[],
+): {
+  succeeded: number;
+  failed: number;
+  movedApproved: number;
+  movedRejected: number;
+  errors_sample: Array<{ from_path: string; group_id: string; failure_tag: string; detail?: string }>;
+} {
+  let succeeded = 0;
+  let failed = 0;
+  let movedApproved = 0;
+  let movedRejected = 0;
+  const errors: Array<{ from_path: string; group_id: string; failure_tag: string; detail?: string }> = [];
+
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    const spec = toMove[i];
+    if (!spec) continue; // out-of-bounds defensive
+
+    if (e['.tag'] === 'success') {
+      succeeded++;
+      if (spec.bucket === 'approved') movedApproved++;
+      else movedRejected++;
+      continue;
+    }
+
+    // Failure path. Dropbox wraps batch failures as a TWO-level tagged union:
+    //   { '.tag': 'relocation_error', relocation_error: { '.tag': 'from_lookup', from_lookup: { '.tag': 'not_found' } } }
+    //   { '.tag': 'relocation_error', relocation_error: { '.tag': 'to', to: { '.tag': 'conflict' } } }
+    // The outer .tag is usually 'relocation_error' (sometimes 'too_many_write_operations',
+    // 'internal_error', etc). The actionable detail lives at
+    // failure[outerTag][innerTag] for relocation_error variants.
+    //
+    // Both 'to/conflict' (file already at destination from a prior run) and
+    // 'from_lookup/not_found' (source file already moved out, also from a prior
+    // run) are silent-success cases: the file ended up where the operator
+    // wants it, just not via THIS lock attempt. The old per-file path treated
+    // both as success (see /Users/.../shortlist-lock/index.ts pre-Wave-7
+    // line 369-378). We do the same here so re-running a partially-applied
+    // lock cleanly converges.
+    const outerTag = e.failure?.['.tag'] || 'unknown';
+    // deno-lint-ignore no-explicit-any
+    const inner = (e.failure as any)?.[outerTag] as { '.tag'?: string } | undefined;
+    const innerTag = inner?.['.tag'];
+    const innerDeeper = innerTag
+      // deno-lint-ignore no-explicit-any
+      ? ((inner as any)?.[innerTag] as { '.tag'?: string } | undefined)
+      : undefined;
+    const innerDeeperTag = innerDeeper?.['.tag'];
+
+    // Compose a human-readable failure tag for telemetry. Examples:
+    //   'relocation_error/from_lookup/not_found'
+    //   'relocation_error/to/conflict'
+    //   'relocation_error/from_write/insufficient_space'
+    const composedTag = [outerTag, innerTag, innerDeeperTag].filter(Boolean).join('/');
+
+    const isConflictSoft = innerTag === 'to' && innerDeeperTag === 'conflict';
+    const isAlreadyMoved = innerTag === 'from_lookup' && innerDeeperTag === 'not_found';
+
+    if (isConflictSoft || isAlreadyMoved) {
+      // Already at destination (silent-success). Count as succeeded so the UI
+      // shows 100% complete; not as moved (we didn't actually move them).
+      succeeded++;
+      continue;
+    }
+
+    failed++;
+    if (errors.length < ERRORS_SAMPLE_CAP) {
+      errors.push({
+        from_path: spec.from_path,
+        group_id: spec.group_id,
+        failure_tag: composedTag || outerTag,
+        detail: JSON.stringify(e.failure || {}).slice(0, 500),
+      });
+    }
+  }
+
+  return {
+    succeeded,
+    failed,
+    movedApproved,
+    movedRejected,
+    errors_sample: errors,
+  };
+}
+
+interface FinalizeArgs {
+  // deno-lint-ignore no-explicit-any
+  admin: any;
+  roundId: string;
+  projectId: string;
+  lockedBy: string | null;
+  isService: boolean;
+  movedApproved: number;
+  movedRejected: number;
+  idempotentSkipped: number;
+  confirmedShortlistGroupIds: string[];
+  approvedCount: number;
+  rejectedCount: number;
+  failedMovesCount: number;
+}
+
+/**
+ * Apply the round-status update + audit event + training extractor invoke
+ * after Dropbox moves complete. Used both by the inline-complete fast path
+ * and the background async-poll path.
+ *
+ * Returns { ok: false, error } if the round update fails — in that case
+ * the caller MUST surface the failure (do NOT silently mark progress as
+ * complete) so the operator sees the error and can re-run Lock. The file
+ * moves are already idempotent (K1 + Dropbox to/conflict), so re-running
+ * is safe.
+ */
+async function finalizeRound(args: FinalizeArgs): Promise<{ ok: boolean; error?: string }> {
+  const lockedAt = new Date().toISOString();
+  const { error: roundUpdErr } = await args.admin
+    .from('shortlisting_rounds')
+    .update({
+      status: 'locked',
+      locked_at: lockedAt,
+      locked_by: args.lockedBy,
+      updated_at: lockedAt,
+      confirmed_shortlist_group_ids: args.confirmedShortlistGroupIds,
+    })
+    .eq('id', args.roundId);
+  // Burst 5 K3: hard-fail on round update failure so the training extractor
+  // doesn't read stale confirmed_shortlist_group_ids.
+  if (roundUpdErr) {
+    console.error(`[${GENERATOR}] round update failed — aborting before training extractor: ${roundUpdErr.message}`);
+    return {
+      ok: false,
+      error: `Round status update failed: ${roundUpdErr.message}. Files were moved but the round was not marked locked. Re-run Lock to retry.`,
+    };
+  }
+
+  const { error: projectUpdErr } = await args.admin
     .from('projects')
     .update({ shortlist_status: 'locked' })
-    .eq('id', round.project_id);
+    .eq('id', args.projectId);
   if (projectUpdErr) {
-    // Project status is best-effort — shortlist_status is a denormalised cache
-    // for the project list. The round itself is marked locked above, so the
-    // training extractor can safely run regardless.
+    // Best-effort: shortlist_status is a denormalised cache.
     console.warn(`[${GENERATOR}] project update failed: ${projectUpdErr.message}`);
   }
 
-  // ── Audit event ─────────────────────────────────────────────────────────
-  await admin.from('shortlisting_events').insert({
-    project_id: round.project_id,
-    round_id: round.id,
+  // Audit event
+  await args.admin.from('shortlisting_events').insert({
+    project_id: args.projectId,
+    round_id: args.roundId,
     event_type: 'shortlist_locked',
-    actor_type: isService ? 'system' : 'user',
-    actor_id: isService ? null : (user?.id ?? null),
+    actor_type: args.isService ? 'system' : 'user',
+    actor_id: args.isService ? null : args.lockedBy,
     payload: {
-      moved_approved: movedApproved,
-      moved_rejected: movedRejected,
-      skipped: totalSkipped,
-      errors_count: allErrors.length,
-      approved_count: approvedSet.size,
-      rejected_count: rejectedSet.size,
+      moved_approved: args.movedApproved,
+      moved_rejected: args.movedRejected,
+      skipped: args.idempotentSkipped,
+      errors_count: args.failedMovesCount,
+      approved_count: args.approvedCount,
+      rejected_count: args.rejectedCount,
     },
   });
 
-  // ── Phase 8: kick the training extractor (fire-and-forget) ─────────────
-  // The extractor reads confirmed_shortlist_group_ids set above and writes one
-  // shortlisting_training_examples row per confirmed group. It runs async so
-  // the lock response stays fast; failures are logged inside the extractor and
-  // visible via shortlisting_events.event_type='training_examples_extracted'.
-  if (confirmedShortlistGroupIds.length > 0) {
+  // Phase 8: kick the training extractor (fire-and-forget).
+  if (args.confirmedShortlistGroupIds.length > 0) {
     const extractorWork = invokeFunction(
       'shortlisting-training-extractor',
-      { round_id: roundId },
+      { round_id: args.roundId },
       GENERATOR,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[${GENERATOR}] training extractor invoke failed: ${msg}`);
     });
@@ -522,25 +700,131 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     (globalThis as any).EdgeRuntime?.waitUntil?.(extractorWork);
   }
 
-  // Audit defect #20: surface partial successes as ok:true with partial:true,
-  // not ok:false. The swimlane UI was treating any 207 as a fatal red toast,
-  // hiding the fact that most files moved. Now:
-  //   - all moves succeeded         → ok:true, partial:undefined,  status 200
-  //   - some moves failed (partial) → ok:true, partial:true,       status 207
-  //   - everything failed           → ok:false, partial:undefined, status 207
-  const totalMoved = (movedApproved || 0) + (movedRejected || 0);
-  const isFullSuccess = allErrors.length === 0;
-  const isPartialSuccess = !isFullSuccess && totalMoved > 0;
-  return jsonResponse(
-    {
-      ok: isFullSuccess || isPartialSuccess,
-      partial: isPartialSuccess || undefined,
-      round_id: roundId,
-      moved: { approved: movedApproved, rejected: movedRejected },
-      skipped: totalSkipped,
-      errors: allErrors.length > 0 ? allErrors : undefined,
-    },
-    isFullSuccess ? 200 : 207,
-    req,
-  );
-});
+  return { ok: true };
+}
+
+interface PollArgs {
+  progressId: string;
+  asyncJobId: string;
+  toMove: MoveSpec[];
+  roundId: string;
+  projectId: string;
+  lockedBy: string | null;
+  isService: boolean;
+  idempotentSkipped: number;
+  confirmedShortlistGroupIds: string[];
+  approvedCount: number;
+  rejectedCount: number;
+}
+
+/**
+ * Background poll loop. Polls /files/move_batch/check_v2 until complete or
+ * the cap (~3 min) is hit. Updates shortlisting_lock_progress on every poll
+ * so the frontend's polling status endpoint sees live progress.
+ */
+async function pollUntilComplete(args: PollArgs): Promise<void> {
+  const admin = getAdminClient();
+  let attempts = 0;
+
+  while (attempts < POLL_MAX_ATTEMPTS) {
+    attempts++;
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+
+    let check;
+    try {
+      check = await checkMoveBatch(args.asyncJobId);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Transient: log + retry the loop. We've seen Dropbox 5xx briefly during
+      // sustained batch ops; the retry budget on dropboxApi already handles
+      // 429/5xx, so a thrown error here is genuinely terminal.
+      console.warn(`[${GENERATOR}] check_v2 attempt ${attempts} failed: ${msg}`);
+      await admin.from('shortlisting_lock_progress')
+        .update({
+          last_polled_at: new Date().toISOString(),
+          poll_attempt_count: attempts,
+          error_message: `poll attempt ${attempts}: ${msg}`,
+        })
+        .eq('id', args.progressId);
+      // Continue — the next attempt may succeed. The cap will eventually fail.
+      continue;
+    }
+
+    await admin.from('shortlisting_lock_progress')
+      .update({
+        last_polled_at: new Date().toISOString(),
+        poll_attempt_count: attempts,
+      })
+      .eq('id', args.progressId);
+
+    if (check['.tag'] === 'in_progress') {
+      // Keep waiting.
+      continue;
+    }
+
+    if (check['.tag'] === 'complete') {
+      const counts = countBatchEntries(args.toMove, check.entries || []);
+      await admin.from('shortlisting_lock_progress')
+        .update({
+          stage: 'finalizing',
+          succeeded_moves: counts.succeeded,
+          failed_moves: counts.failed,
+          errors_sample: counts.errors_sample,
+        })
+        .eq('id', args.progressId);
+
+      const finalizeResult = await finalizeRound({
+        admin,
+        roundId: args.roundId,
+        projectId: args.projectId,
+        lockedBy: args.lockedBy,
+        isService: args.isService,
+        movedApproved: counts.movedApproved,
+        movedRejected: counts.movedRejected,
+        idempotentSkipped: args.idempotentSkipped,
+        confirmedShortlistGroupIds: args.confirmedShortlistGroupIds,
+        approvedCount: args.approvedCount,
+        rejectedCount: args.rejectedCount,
+        failedMovesCount: counts.failed,
+      });
+      if (!finalizeResult.ok) {
+        await admin.from('shortlisting_lock_progress')
+          .update({
+            stage: 'failed',
+            error_message: finalizeResult.error,
+            completed_at: new Date().toISOString(),
+          })
+          .eq('id', args.progressId);
+        return;
+      }
+      await admin.from('shortlisting_lock_progress')
+        .update({ stage: 'complete', completed_at: new Date().toISOString() })
+        .eq('id', args.progressId);
+      return;
+    }
+
+    if (check['.tag'] === 'failed') {
+      const failureTxt = JSON.stringify(check.failure || {}).slice(0, 500);
+      await admin.from('shortlisting_lock_progress')
+        .update({
+          stage: 'failed',
+          error_message: `Dropbox batch reported failed: ${failureTxt}`,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', args.progressId);
+      return;
+    }
+
+    // 'other' or unknown tag — treat as transient, log + continue.
+    console.warn(`[${GENERATOR}] unexpected check_v2 tag: ${check['.tag']}`);
+  }
+
+  // Cap reached without complete — mark failed so the operator can resume.
+  await admin.from('shortlisting_lock_progress')
+    .update({
+      stage: 'failed',
+      error_message: `Poll cap reached (${POLL_MAX_ATTEMPTS} attempts, ~${(POLL_INTERVAL_MS * POLL_MAX_ATTEMPTS) / 1000}s) without batch completing. Resume to retry.`,
+      completed_at: new Date().toISOString(),
+    })
+    .eq('id', args.progressId);
+}
