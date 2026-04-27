@@ -35,14 +35,13 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Slider } from "@/components/ui/slider";
 import {
-  Camera, FileImage, Video, Plane, DollarSign, CheckCircle2, XCircle,
+  Camera, FileImage, Video, Plane, CheckCircle2, XCircle,
   AlertTriangle, ExternalLink, Info, ChevronDown, ChevronRight,
-  Receipt, Layers, Zap, Beaker, Sparkles, Building2, MapPin, Home,
+  Receipt, Layers, Beaker, Sparkles, Building2, MapPin, Home,
   Clock, ArrowRight, Cpu, Award,
 } from "lucide-react";
 import { cn } from "@/lib/utils";

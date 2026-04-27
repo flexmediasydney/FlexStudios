@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   TrendingUp, DollarSign, Target, Package as PkgIcon, Award,
-  BookOpen, Info, RefreshCw, Search, ArrowUpRight, ExternalLink,
+  BookOpen, RefreshCw, Search, ArrowUpRight, ExternalLink,
   AlertTriangle, CheckCircle2, Clock, Database, Archive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
