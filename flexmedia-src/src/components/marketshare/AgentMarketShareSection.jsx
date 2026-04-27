@@ -35,6 +35,7 @@ import {
   LineChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import QuoteProvenance from "@/components/marketshare/QuoteProvenance";
+import { useActivePackages } from "@/hooks/useActivePackages";
 
 // ── Time window helpers (matches PulseMarketShare.jsx) ──────────────────────
 
@@ -105,19 +106,54 @@ function RetentionBadge({ pct }) {
   return <Badge className="text-[10px] h-5 px-1.5 bg-red-100 text-red-800 border-red-200">{p.toFixed(1)}%</Badge>;
 }
 
+// Wave 7 P1-11.b: package badge colors. The set of valid package names comes
+// from the live `packages` table via useActivePackages — packages must NEVER
+// be hardcoded as an authoritative enum in the frontend (Joseph's
+// architectural correction, 2026-04-27). PACKAGE_COLOR_OVERRIDES retains the
+// deliberate color choices for the launch packages (Gold→amber, Silver→slate
+// etc.); any package present in the live DB but not listed here gets a
+// deterministic palette color via name hash so it renders consistently across
+// renders + sessions.
+const PACKAGE_COLOR_OVERRIDES = {
+  "Flex Package":        "bg-purple-100 text-purple-800 border-purple-200",
+  "Dusk Video Package":  "bg-indigo-100 text-indigo-800 border-indigo-200",
+  "Day Video Package":   "bg-blue-100 text-blue-800 border-blue-200",
+  "AI Package":          "bg-cyan-100 text-cyan-800 border-cyan-200",
+  "Gold Package":        "bg-amber-100 text-amber-800 border-amber-200",
+  "Silver Package":      "bg-slate-100 text-slate-700 border-slate-200",
+};
+const PACKAGE_PALETTE_FALLBACK = [
+  "bg-rose-100 text-rose-800 border-rose-200",
+  "bg-emerald-100 text-emerald-800 border-emerald-200",
+  "bg-fuchsia-100 text-fuchsia-800 border-fuchsia-200",
+  "bg-teal-100 text-teal-800 border-teal-200",
+];
+const UNCLASSIFIABLE_BADGE_CLASS = "bg-gray-100 text-gray-600 border-gray-200";
+
+function packageBadgeClass(name) {
+  if (PACKAGE_COLOR_OVERRIDES[name]) return PACKAGE_COLOR_OVERRIDES[name];
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  return PACKAGE_PALETTE_FALLBACK[Math.abs(h) % PACKAGE_PALETTE_FALLBACK.length];
+}
+
 function PackageBadge({ name }) {
+  // Wave 7 P1-11.b: subscribe to live packages so the badge participates in
+  // the dynamic-packages architecture — when a name is unknown to the live
+  // catalog (legacy/renamed package surfaced from the engine substrate) we
+  // tag it visually so ops can spot drift.
+  const { names: livePackageNames } = useActivePackages();
   if (!name) return <span className="text-muted-foreground">—</span>;
-  const colorMap = {
-    "Flex Package":        "bg-purple-100 text-purple-800 border-purple-200",
-    "Dusk Video Package":  "bg-indigo-100 text-indigo-800 border-indigo-200",
-    "Day Video Package":   "bg-blue-100 text-blue-800 border-blue-200",
-    "AI Package":          "bg-cyan-100 text-cyan-800 border-cyan-200",
-    "Gold Package":        "bg-amber-100 text-amber-800 border-amber-200",
-    "Silver Package":      "bg-slate-100 text-slate-700 border-slate-200",
-    "UNCLASSIFIABLE":      "bg-gray-100 text-gray-600 border-gray-200",
-  };
+  if (name === "UNCLASSIFIABLE") {
+    return <Badge variant="outline" className={cn("text-[10px] h-4 px-1", UNCLASSIFIABLE_BADGE_CLASS)}>{name}</Badge>;
+  }
+  const isLegacy = livePackageNames.length > 0 && !livePackageNames.includes(name);
   return (
-    <Badge variant="outline" className={cn("text-[10px] h-4 px-1", colorMap[name] || "")}>
+    <Badge
+      variant="outline"
+      className={cn("text-[10px] h-4 px-1", packageBadgeClass(name), isLegacy && "border-dashed")}
+      title={isLegacy ? `${name} (not in live packages — legacy/renamed)` : undefined}
+    >
       {name.replace(" Package", "")}
     </Badge>
   );
