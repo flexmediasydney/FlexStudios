@@ -94,6 +94,10 @@ import {
   ALFRESCO_EXTERIOR_REAR_BLOCK_VERSION,
   alfrescoExteriorRearBlock,
 } from './visionPrompts/blocks/alfrescoExteriorRear.ts';
+import {
+  TIER_WEIGHTING_CONTEXT_BLOCK_VERSION,
+  tierWeightingContextBlock,
+} from './visionPrompts/blocks/tierWeightingContext.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -167,6 +171,24 @@ export interface Pass2PromptOptions {
   streamBAnchors: StreamBAnchors;
   /** All Pass 1 classifications for the round (one per composition). */
   classifications: Pass2ClassificationRow[];
+  /**
+   * Wave 8 (W8.2): optional tier-weighting context block. When present, the
+   * block is injected into the prompt to inform Pass 2's tie-breaking
+   * reasoning when scores are close to the Tier anchor. When omitted, the
+   * block is dropped entirely from the prompt (and from blockVersions) —
+   * caller controls visibility via engine_settings.pass2_tier_weighting_context_enabled.
+   */
+  tierWeightingContext?: {
+    tierCode: string;
+    tierConfigVersion: number;
+    scoreAnchor: number;
+    dimensionWeights: {
+      technical: number;
+      lighting: number;
+      composition: number;
+      aesthetic: number;
+    };
+  } | null;
 }
 
 /**
@@ -192,7 +214,74 @@ export function buildPass2Prompt(opts: Pass2PromptOptions): AssembledPrompt {
     slotDefinitions,
     streamBAnchors,
     classifications,
+    tierWeightingContext,
   } = opts;
+
+  // Wave 8 (W8.2): assemble the user-block list with tierWeightingContext
+  // appended right after streamBAnchors (it shares the scoring-scaffold role
+  // — anchors set the score scale, weights set the per-dim priorities). The
+  // block is opt-in: caller passes null/undefined to drop it from the
+  // prompt.
+  const userBlocks = [
+    {
+      name: 'slotEnumeration',
+      version: SLOT_ENUMERATION_BLOCK_VERSION,
+      text: slotEnumerationBlock({
+        propertyAddress,
+        packageType,
+        packageDisplayName,
+        packageCeiling,
+        pricingTier,
+        engineRoles,
+        totalCompositions: classifications.length,
+        slotDefinitions,
+      }),
+    },
+    {
+      name: 'nearDuplicateCulling',
+      version: NEAR_DUPLICATE_CULLING_BLOCK_VERSION,
+      text: nearDuplicateCullingBlock(),
+    },
+    {
+      name: 'bedroomSplit',
+      version: BEDROOM_SPLIT_BLOCK_VERSION,
+      text: bedroomSplitBlock(),
+    },
+    {
+      name: 'ensuiteSecondAngle',
+      version: ENSUITE_SECOND_ANGLE_BLOCK_VERSION,
+      text: ensuiteSecondAngleBlock(),
+    },
+    {
+      name: 'alfrescoExteriorRear',
+      version: ALFRESCO_EXTERIOR_REAR_BLOCK_VERSION,
+      text: alfrescoExteriorRearBlock(),
+    },
+    {
+      name: 'streamBAnchors',
+      version: STREAM_B_ANCHORS_BLOCK_VERSION,
+      text: streamBAnchorsBlock({ anchors: streamBAnchors }),
+    },
+  ];
+
+  if (tierWeightingContext) {
+    userBlocks.push({
+      name: 'tierWeightingContext',
+      version: TIER_WEIGHTING_CONTEXT_BLOCK_VERSION,
+      text: tierWeightingContextBlock(tierWeightingContext),
+    });
+  }
+
+  userBlocks.push({
+    name: 'classificationsTable',
+    version: CLASSIFICATIONS_TABLE_BLOCK_VERSION,
+    text: classificationsTableBlock({ classifications }),
+  });
+  userBlocks.push({
+    name: 'pass2OutputSchema',
+    version: PASS2_OUTPUT_SCHEMA_BLOCK_VERSION,
+    text: pass2OutputSchemaBlock(),
+  });
 
   return assemble({
     systemBlocks: [
@@ -207,56 +296,6 @@ export function buildPass2Prompt(opts: Pass2PromptOptions): AssembledPrompt {
         text: pass2PhasesBlock(),
       },
     ],
-    userBlocks: [
-      {
-        name: 'slotEnumeration',
-        version: SLOT_ENUMERATION_BLOCK_VERSION,
-        text: slotEnumerationBlock({
-          propertyAddress,
-          packageType,
-          packageDisplayName,
-          packageCeiling,
-          pricingTier,
-          engineRoles,
-          totalCompositions: classifications.length,
-          slotDefinitions,
-        }),
-      },
-      {
-        name: 'nearDuplicateCulling',
-        version: NEAR_DUPLICATE_CULLING_BLOCK_VERSION,
-        text: nearDuplicateCullingBlock(),
-      },
-      {
-        name: 'bedroomSplit',
-        version: BEDROOM_SPLIT_BLOCK_VERSION,
-        text: bedroomSplitBlock(),
-      },
-      {
-        name: 'ensuiteSecondAngle',
-        version: ENSUITE_SECOND_ANGLE_BLOCK_VERSION,
-        text: ensuiteSecondAngleBlock(),
-      },
-      {
-        name: 'alfrescoExteriorRear',
-        version: ALFRESCO_EXTERIOR_REAR_BLOCK_VERSION,
-        text: alfrescoExteriorRearBlock(),
-      },
-      {
-        name: 'streamBAnchors',
-        version: STREAM_B_ANCHORS_BLOCK_VERSION,
-        text: streamBAnchorsBlock({ anchors: streamBAnchors }),
-      },
-      {
-        name: 'classificationsTable',
-        version: CLASSIFICATIONS_TABLE_BLOCK_VERSION,
-        text: classificationsTableBlock({ classifications }),
-      },
-      {
-        name: 'pass2OutputSchema',
-        version: PASS2_OUTPUT_SCHEMA_BLOCK_VERSION,
-        text: pass2OutputSchemaBlock(),
-      },
-    ],
+    userBlocks,
   });
 }

@@ -61,6 +61,8 @@ import {
   type ShortlistingTierRow,
 } from '../_shared/engineTierResolver.ts';
 import { resolveManualModeReason } from '../_shared/manualModeResolver.ts';
+import { ENGINE_VERSION } from '../_shared/engineVersion.ts';
+import { getActiveTierConfig } from '../_shared/tierConfig.ts';
 
 const GENERATOR = 'shortlisting-ingest';
 const CHUNK_SIZE = 50;
@@ -287,6 +289,22 @@ async function ingest(
     ? (existingRounds[0].round_number || 0)
     : 0) + 1;
 
+  // 10b. Wave 8 (W8.4): resolve the active tier_config version for the
+  // round's engine tier. Pinned at ingest so historical replay reads the
+  // version that was active when Pass 1 wrote the scores. NULL fallback
+  // when no active config exists (data corruption / pre-seed migration);
+  // Pass 1 emits a warning and uses DEFAULT_DIMENSION_WEIGHTS.
+  let tierConfigVersion: number | null = null;
+  if (engineTierId) {
+    const activeConfig = await getActiveTierConfig(engineTierId);
+    tierConfigVersion = activeConfig?.version ?? null;
+    if (!activeConfig) {
+      warnings.push(
+        `ingest tier_config: no active row for engine_tier_id=${engineTierId} — round.tier_config_version=NULL (Pass 1 will fall back to DEFAULT_DIMENSION_WEIGHTS)`,
+      );
+    }
+  }
+
   // 11. Insert the round.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
@@ -305,6 +323,9 @@ async function ingest(
       total_compositions: null,
       trigger_source: triggerSource,
       started_at: new Date().toISOString(),
+      // Wave 8 (W8.4): provenance pins for reproducible replay.
+      engine_version: ENGINE_VERSION,
+      tier_config_version: tierConfigVersion,
     })
     .select('id, round_number')
     .single();
@@ -446,6 +467,17 @@ async function createManualRound(opts: CreateManualRoundOpts): Promise<IngestRes
     ? (existingRounds[0].round_number || 0)
     : 0) + 1;
 
+  // Wave 8 (W8.4): manual rounds also stamp engine_version + tier_config_version
+  // so analytics can join across engine + manual round histories. The
+  // tier_config doesn't drive any decision in manual mode (no Pass 1/2),
+  // but the version pin is still useful for "what was the tier config
+  // active at the time of the manual lock?" diagnostics.
+  let manualTierConfigVersion: number | null = null;
+  if (engineTierId) {
+    const activeConfig = await getActiveTierConfig(engineTierId);
+    manualTierConfigVersion = activeConfig?.version ?? null;
+  }
+
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
     .insert({
@@ -462,6 +494,9 @@ async function createManualRound(opts: CreateManualRoundOpts): Promise<IngestRes
       trigger_source: triggerSource,
       started_at: new Date().toISOString(),
       manual_mode_reason: manualReason,
+      // Wave 8 (W8.4): stamp engine_version even in manual mode.
+      engine_version: ENGINE_VERSION,
+      tier_config_version: manualTierConfigVersion,
     })
     .select('id, round_number')
     .single();

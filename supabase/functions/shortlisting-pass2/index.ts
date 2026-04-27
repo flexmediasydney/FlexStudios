@@ -85,6 +85,8 @@ import {
   type EngineRole,
 } from '../_shared/slotEligibility.ts';
 import { resolveProjectEngineRoles as resolveProjectEngineRolesPure } from '../_shared/projectEngineRoles.ts';
+import { getActiveTierConfig } from '../_shared/tierConfig.ts';
+import { DEFAULT_DIMENSION_WEIGHTS } from '../_shared/scoreRollup.ts';
 
 const GENERATOR = 'shortlisting-pass2';
 
@@ -324,6 +326,69 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
   // 5. Stream B anchors (consistent with Pass 1).
   const anchors = await getActiveStreamBAnchors();
 
+  // 5b. Wave 8 (W8.2): resolve tier_config for the round's engine tier so we
+  // can inject the tier-weighting context block into the Pass 2 prompt
+  // (gated by engine_settings.pass2_tier_weighting_context_enabled). Tier
+  // info also surfaces in the tier-anchor lookup for the prompt context.
+  const engineTierId = (round as { engine_tier_id: string | null }).engine_tier_id;
+  const tierConfig = engineTierId ? await getActiveTierConfig(engineTierId) : null;
+  let tierCode: string | null = null;
+  let scoreAnchor: number | null = null;
+  if (engineTierId) {
+    const { data: tierRow } = await admin
+      .from('shortlisting_tiers')
+      .select('tier_code, score_anchor')
+      .eq('id', engineTierId)
+      .maybeSingle();
+    tierCode = tierRow?.tier_code ?? null;
+    scoreAnchor = typeof tierRow?.score_anchor === 'number'
+      ? tierRow.score_anchor
+      : (tierRow?.score_anchor != null ? Number(tierRow.score_anchor) : null);
+  }
+  // engine_settings.pass2_tier_weighting_context_enabled (default TRUE per
+  // spec R10) — the row is seeded by the orchestrator if absent. We default
+  // to TRUE when the row is missing entirely so the new block appears on
+  // first deploy without requiring a separate migration.
+  let tierWeightingEnabled = true;
+  try {
+    const { data: settingRow } = await admin
+      .from('engine_settings')
+      .select('value')
+      .eq('key', 'pass2_tier_weighting_context_enabled')
+      .maybeSingle();
+    if (settingRow?.value === false || settingRow?.value === 'false') {
+      tierWeightingEnabled = false;
+    } else if (typeof settingRow?.value === 'object' && settingRow.value !== null) {
+      // Legacy shape: { enabled: bool } — accept for forward-compat.
+      const enabled = (settingRow.value as Record<string, unknown>).enabled;
+      if (enabled === false) tierWeightingEnabled = false;
+    }
+  } catch (err) {
+    // Best-effort: missing setting → default ON.
+    const msg = err instanceof Error ? err.message : String(err);
+    warnings.push(`pass2 engine_settings.pass2_tier_weighting_context_enabled lookup failed: ${msg} — defaulting to TRUE`);
+  }
+
+  // Build the tierWeightingContext input only when we have all the data
+  // and the flag is on. When tierConfig is missing (legacy round / unseeded
+  // config), we omit the block — the model still has Stream B anchors for
+  // scale anchoring; the weighted-rollup is the more important signal and
+  // it's enforced at Pass 1 time.
+  const tierWeightingContextInput =
+    tierWeightingEnabled && tierConfig && tierCode != null && scoreAnchor != null
+      ? {
+          tierCode,
+          tierConfigVersion: tierConfig.version,
+          scoreAnchor,
+          dimensionWeights: {
+            technical: Number(tierConfig.dimension_weights?.technical ?? DEFAULT_DIMENSION_WEIGHTS.technical),
+            lighting: Number(tierConfig.dimension_weights?.lighting ?? DEFAULT_DIMENSION_WEIGHTS.lighting),
+            composition: Number(tierConfig.dimension_weights?.composition ?? DEFAULT_DIMENSION_WEIGHTS.composition),
+            aesthetic: Number(tierConfig.dimension_weights?.aesthetic ?? DEFAULT_DIMENSION_WEIGHTS.aesthetic),
+          },
+        }
+      : null;
+
   // 6. Build prompt. P8 follow-up: master_admin can override the system
   // message via SettingsShortlistingPrompts (mig 296 / promptLoader.ts).
   const builtPrompt = buildPass2Prompt({
@@ -336,6 +401,7 @@ async function runPass2(roundId: string): Promise<Pass2RoundResult> {
     slotDefinitions,
     streamBAnchors: anchors,
     classifications,
+    tierWeightingContext: tierWeightingContextInput,
   });
   const dbSystem = await getActivePrompt('pass2_system');
   const prompt = dbSystem

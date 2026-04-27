@@ -55,6 +55,12 @@ import { getDropboxTempLink } from '../_shared/shortlistingFolders.ts';
 import { getActiveStreamBAnchors } from '../_shared/streamBInjector.ts';
 import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
 import { getActivePrompt } from '../_shared/promptLoader.ts';
+import { getActiveTierConfig } from '../_shared/tierConfig.ts';
+import {
+  computeWeightedScore,
+  DEFAULT_DIMENSION_WEIGHTS,
+  type DimensionWeights,
+} from '../_shared/scoreRollup.ts';
 
 const GENERATOR = 'shortlisting-pass1';
 
@@ -230,9 +236,11 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
   const warnings: string[] = [];
 
   // 1. Round + project lookup, status guard.
+  // Wave 8 (W8.2): also pull engine_tier_id so we can fetch the active
+  // tier_config and use its dimension_weights for the combined-score rollup.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
-    .select('id, project_id, status')
+    .select('id, project_id, status, engine_tier_id')
     .eq('id', roundId)
     .maybeSingle();
   if (roundErr) throw new Error(`round lookup failed: ${roundErr.message}`);
@@ -243,6 +251,46 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
     );
   }
   const projectId: string = round.project_id;
+
+  // Wave 8 (W8.2): resolve the active tier_config for this round's engine
+  // tier. If the column is null (legacy round) or no active config exists
+  // (data corruption / pre-seed migration), fall back to
+  // DEFAULT_DIMENSION_WEIGHTS (the v1 seed values) and emit a warning event
+  // so admin notices. The engine MUST not crash for missing config — Pass 1
+  // is the per-round hot path and should be defensively robust.
+  const engineTierId = (round as { engine_tier_id: string | null }).engine_tier_id;
+  const tierConfig = engineTierId ? await getActiveTierConfig(engineTierId) : null;
+  const dimensionWeights: DimensionWeights = (tierConfig?.dimension_weights
+    && typeof tierConfig.dimension_weights === 'object')
+    ? {
+        technical: Number(tierConfig.dimension_weights.technical ?? DEFAULT_DIMENSION_WEIGHTS.technical),
+        lighting: Number(tierConfig.dimension_weights.lighting ?? DEFAULT_DIMENSION_WEIGHTS.lighting),
+        composition: Number(tierConfig.dimension_weights.composition ?? DEFAULT_DIMENSION_WEIGHTS.composition),
+        aesthetic: Number(tierConfig.dimension_weights.aesthetic ?? DEFAULT_DIMENSION_WEIGHTS.aesthetic),
+      }
+    : DEFAULT_DIMENSION_WEIGHTS;
+  if (!tierConfig) {
+    const reason = !engineTierId
+      ? 'engine_tier_id is null (legacy round)'
+      : 'no active tier_config row for engine_tier_id';
+    warnings.push(`pass1 tier_config fallback: ${reason} — using DEFAULT_DIMENSION_WEIGHTS`);
+    const { error: warnEvtErr } = await admin
+      .from('shortlisting_events')
+      .insert({
+        project_id: projectId,
+        round_id: roundId,
+        event_type: 'pass1_tier_config_fallback',
+        actor_type: 'system',
+        payload: {
+          engine_tier_id: engineTierId,
+          reason,
+          fallback_weights: DEFAULT_DIMENSION_WEIGHTS,
+        },
+      });
+    if (warnEvtErr) {
+      warnings.push(`tier_config fallback warning event insert failed: ${warnEvtErr.message}`);
+    }
+  }
 
   // 2. Enumerate compositions ready for Pass 1.
   const { data: ready, error: readyErr } = await admin
@@ -332,7 +380,21 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
     }
 
     const c = r.classification;
-    const combined = (c.technical_score + c.lighting_score + c.composition_score + c.aesthetic_score) / 4;
+    // Wave 8 (W8.2): weighted rollup driven by the active tier_config's
+    // dimension_weights (or DEFAULT_DIMENSION_WEIGHTS when no config is
+    // active). v1 seed weights = 0.25/0.30/0.25/0.20 (lighting-biased per
+    // L9 lesson). Pre-W8 formula was a uniform mean; the tests in
+    // _shared/scoreRollup.test.ts cover the regression-equivalence under
+    // 0.25/0.25/0.25/0.25 to make sure no surprise drift.
+    const combined = computeWeightedScore(
+      {
+        technical: c.technical_score,
+        lighting: c.lighting_score,
+        composition: c.composition_score,
+        aesthetic: c.aesthetic_score,
+      },
+      dimensionWeights,
+    );
     const eligibleExtRear =
       c.room_type === 'alfresco' && c.vantage_point === 'exterior_looking_in';
 
@@ -373,7 +435,8 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
         lighting_score: c.lighting_score,
         composition_score: c.composition_score,
         aesthetic_score: c.aesthetic_score,
-        combined_score: Math.round(combined * 100) / 100,
+        // Wave 8 (W8.2): combined is already 2dp-rounded by computeWeightedScore.
+        combined_score: combined,
         eligible_for_exterior_rear: eligibleExtRear,
         is_near_duplicate_candidate: false, // Pass 2 sets this
         model_version: SONNET_MODEL,
@@ -424,12 +487,25 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
   }
 
   // 8. pass1_complete event.
+  // Wave 8 (W8.2): averageCombined uses the same weighted rollup as the
+  // per-composition combined_score for symmetry with the persisted column.
   const avgCombined = inserted > 0
     ? results
         .filter((r) => r.classification)
         .reduce((sum, r) => {
           const c = r.classification!;
-          return sum + (c.technical_score + c.lighting_score + c.composition_score + c.aesthetic_score) / 4;
+          return (
+            sum
+            + computeWeightedScore(
+              {
+                technical: c.technical_score,
+                lighting: c.lighting_score,
+                composition: c.composition_score,
+                aesthetic: c.aesthetic_score,
+              },
+              dimensionWeights,
+            )
+          );
         }, 0) / inserted
     : null;
 
@@ -451,6 +527,10 @@ async function runPass1(roundId: string, concurrency: number): Promise<Pass1Roun
         average_combined_score: avgCombined != null ? Math.round(avgCombined * 100) / 100 : null,
         concurrency,
         pass1_run_id: pass1RunId,
+        // Wave 8 (W8.2): provenance of the rollup weights for this run.
+        tier_config_id: tierConfig?.id ?? null,
+        tier_config_version: tierConfig?.version ?? null,
+        dimension_weights: dimensionWeights,
       },
     });
   if (evtErr) warnings.push(`pass1_complete event insert failed: ${evtErr.message}`);
