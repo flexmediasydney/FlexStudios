@@ -43,16 +43,57 @@
  *   8. STREAM B INJECTION (spec L8). Same anchors as Pass 1 — the shortlisting
  *      decision references Tier S/P/A names so the model has consistent scale.
  *
- * Single export: buildPass2Prompt(opts) → { system, userPrefix }.
- *   The caller does NOT pass an image — Pass 2 is text-only with summarised
- *   classifications. Caller dispatches via callClaudeVision with model=
- *   claude-sonnet-4-6, max_tokens=4000, temperature=0.
+ * Wave 7 P1-10 (W7.6): the prompt is now assembled from named, versioned
+ * blocks under `visionPrompts/blocks/`. The text content is byte-stable with
+ * the previous monolith — see `visionPrompts/__snapshots__/pass2Prompt.snap.txt`
+ * for the regression gate.
+ *
+ * Single export: `buildPass2Prompt(opts)` → `AssembledPrompt` (system,
+ * userPrefix, blockVersions). The caller does NOT pass an image — Pass 2 is
+ * text-only with summarised classifications. Caller dispatches via
+ * `callClaudeVision` with model=claude-sonnet-4-6, max_tokens=4000,
+ * temperature=0.
  */
 
+import type { StreamBAnchors } from './streamBInjector.ts';
+import { type AssembledPrompt, assemble } from './visionPrompts/assemble.ts';
+import { HEADER_BLOCK_VERSION, headerBlock } from './visionPrompts/blocks/header.ts';
 import {
-  buildScoringReferenceBlock,
-  type StreamBAnchors,
-} from './streamBInjector.ts';
+  PASS2_PHASES_BLOCK_VERSION,
+  pass2PhasesBlock,
+} from './visionPrompts/blocks/pass2Phases.ts';
+import {
+  STREAM_B_ANCHORS_BLOCK_VERSION,
+  streamBAnchorsBlock,
+} from './visionPrompts/blocks/streamBAnchors.ts';
+import {
+  PASS2_OUTPUT_SCHEMA_BLOCK_VERSION,
+  pass2OutputSchemaBlock,
+} from './visionPrompts/blocks/pass2OutputSchema.ts';
+import {
+  SLOT_ENUMERATION_BLOCK_VERSION,
+  slotEnumerationBlock,
+} from './visionPrompts/blocks/slotEnumeration.ts';
+import {
+  CLASSIFICATIONS_TABLE_BLOCK_VERSION,
+  classificationsTableBlock,
+} from './visionPrompts/blocks/classificationsTable.ts';
+import {
+  NEAR_DUPLICATE_CULLING_BLOCK_VERSION,
+  nearDuplicateCullingBlock,
+} from './visionPrompts/blocks/nearDuplicateCulling.ts';
+import {
+  BEDROOM_SPLIT_BLOCK_VERSION,
+  bedroomSplitBlock,
+} from './visionPrompts/blocks/bedroomSplit.ts';
+import {
+  ENSUITE_SECOND_ANGLE_BLOCK_VERSION,
+  ensuiteSecondAngleBlock,
+} from './visionPrompts/blocks/ensuiteSecondAngle.ts';
+import {
+  ALFRESCO_EXTERIOR_REAR_BLOCK_VERSION,
+  alfrescoExteriorRearBlock,
+} from './visionPrompts/blocks/alfrescoExteriorRear.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -113,130 +154,19 @@ export interface Pass2PromptOptions {
   classifications: Pass2ClassificationRow[];
 }
 
-export interface Pass2Prompt {
-  /** System message — sets the editor-grade-shortlister role. */
-  system: string;
-  /** User-message text (no image part) — full universe of classifications. */
-  userPrefix: string;
-}
-
-// ─── System prompt ───────────────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `You are the shortlisting decision engine for a professional Sydney-based real estate media company. You receive the full set of classifications for an entire 60-image shoot and you produce the proposed shortlist in a single response.
-
-You are NOT classifying individual images — that work is already done. You are making relative selection decisions with full knowledge of the entire shoot universe. This is exactly how a human editor works: view all the shots first, then select.
-
-Your output is a coverage-checked, three-phase shortlist with top-3 alternatives per slot, near-duplicate culling within room clusters only, and a coverage notes paragraph. The Stream B scoring anchors define the score scale you are interpreting; do not re-score, just use the existing scores to make selection decisions.
-
-You do not hallucinate slot fills. If no candidate exists for a mandatory slot, you mark it unfilled — never substitute an unrelated image.`;
-
-// ─── Helper — compact one-line classification format (spec §6) ───────────────
-
 /**
- * Format one classification as a single line per spec §6. Format:
- *
- *   [stem] | [room_type] | [comp_type] | [vantage_point] | C=N L=N T=N A=N avg=N | styled=B io=B | [analysis excerpt 80 chars]
- *
- * - Numbers rounded to one decimal, fall back to "?" when null.
- * - Booleans rendered T/F to keep lines short.
- * - Analysis excerpt is the first 80 chars; trailing whitespace collapsed.
+ * Legacy alias retained for any existing callers that import `Pass2Prompt`.
+ * New callers should use `AssembledPrompt` directly.
  */
-export function formatClassificationLine(c: Pass2ClassificationRow): string {
-  const num = (v: number | null): string =>
-    v == null ? '?' : (Math.round(v * 10) / 10).toString();
-  const bool = (v: boolean | null): string => (v === true ? 'T' : v === false ? 'F' : '?');
+export type Pass2Prompt = AssembledPrompt;
 
-  const stem = c.stem || `group_${c.group_index}`;
-  const room = c.room_type || 'unknown';
-  const comp = c.composition_type || 'unknown';
-  const vp = c.vantage_point || 'neutral';
-  const t = num(c.technical_score);
-  const l = num(c.lighting_score);
-  const cs = num(c.composition_score);
-  const a = num(c.aesthetic_score);
-  const avg = num(c.combined_score);
-
-  // Trim + collapse whitespace + cap at 80 chars
-  const analysis = (c.analysis || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80);
-
-  // Eligibility badges that materially affect routing — keep ultra-compact
-  const badges: string[] = [];
-  if (c.eligible_for_exterior_rear) badges.push('eligXR');
-  if (c.flag_for_retouching) badges.push('retouch');
-  if (c.clutter_severity && c.clutter_severity !== 'none') badges.push(`clutter=${c.clutter_severity}`);
-  if (c.is_drone) badges.push('drone');
-  const badgeStr = badges.length > 0 ? ` | ${badges.join(' ')}` : '';
-
-  return (
-    `${stem} | ${room} | ${comp} | ${vp} | C=${cs} L=${l} T=${t} A=${a} avg=${avg} | ` +
-    `styled=${bool(c.is_styled)} io=${bool(c.indoor_outdoor_visible)}${badgeStr} | ${analysis}`
-  );
-}
-
-// ─── Helper — render slot requirements section ───────────────────────────────
-
-function renderSlotRequirements(
-  slotDefs: Pass2SlotDefinition[],
-  packageCeiling: number,
-): string {
-  const phase1 = slotDefs.filter((s) => s.phase === 1);
-  const phase2 = slotDefs.filter((s) => s.phase === 2);
-
-  const renderSlot = (s: Pass2SlotDefinition): string => {
-    const minMax =
-      s.min_images === s.max_images
-        ? `exactly ${s.max_images}`
-        : `${s.min_images}-${s.max_images}`;
-    const eligible = s.eligible_room_types.join(' | ');
-    const notes = s.notes ? ` — ${s.notes}` : '';
-    return `  - ${s.slot_id} (${s.display_name}): ${minMax} image(s); eligible room_type(s): ${eligible}${notes}`;
-  };
-
-  const lines: string[] = [];
-
-  lines.push('PHASE 1 — MANDATORY SLOTS (always filled; flag as unfilled_mandatory if no candidate exists):');
-  if (phase1.length === 0) {
-    lines.push('  (none defined — escalate to ops, this is unexpected)');
-  } else {
-    for (const s of phase1) lines.push(renderSlot(s));
-  }
-  lines.push('');
-
-  lines.push('PHASE 2 — CONDITIONAL SLOTS (filled only if at least one matching room_type appears in classifications below):');
-  if (phase2.length === 0) {
-    lines.push('  (none defined)');
-  } else {
-    for (const s of phase2) lines.push(renderSlot(s));
-  }
-  lines.push('');
-
-  // Phase 3 has no predefined slot_ids — engine free recommendations bounded
-  // only by the package ceiling minus what was filled in phases 1 + 2.
-  lines.push('PHASE 3 — FREE RECOMMENDATIONS (no predefined slot_ids):');
-  lines.push('  After filling all eligible Phase 1 + Phase 2 slots, review every remaining unselected composition.');
-  lines.push('  For each one, ask: does this image show something of genuine buyer value that is not already represented in the proposed shortlist?');
-  lines.push('  Recommend additional images in ranked priority order (rank 1 = best). For each, provide a one-sentence justification stating what unique value it adds.');
-  lines.push(
-    `  Cap: total shortlist size (Phase 1 + Phase 2 + Phase 3) MUST NOT EXCEED ${packageCeiling} images (${describeCeiling(packageCeiling)}).`,
-  );
-  lines.push('  Do not recommend near-duplicates of already-selected images.');
-
-  return lines.join('\n');
-}
-
-function describeCeiling(ceiling: number): string {
-  if (ceiling <= 24) return 'Gold maximum';
-  if (ceiling <= 31) return 'Day to Dusk maximum';
-  if (ceiling <= 38) return 'Premium maximum';
-  return 'package maximum';
-}
+// Re-export the canonical line formatter so existing benchmark/diagnostics
+// callers (if any) can continue to import it from this module path.
+export { formatClassificationLine } from './visionPrompts/blocks/classificationsTable.ts';
 
 // ─── Builder ─────────────────────────────────────────────────────────────────
 
-export function buildPass2Prompt(opts: Pass2PromptOptions): Pass2Prompt {
+export function buildPass2Prompt(opts: Pass2PromptOptions): AssembledPrompt {
   const {
     propertyAddress,
     packageType,
@@ -247,96 +177,67 @@ export function buildPass2Prompt(opts: Pass2PromptOptions): Pass2Prompt {
     classifications,
   } = opts;
 
-  const scoringReference = buildScoringReferenceBlock(streamBAnchors);
-  const slotRequirements = renderSlotRequirements(slotDefinitions, packageCeiling);
-
-  // ─── Build the all-classifications block (one line per composition) ──────
-  // Sort by group_index so the model sees them in capture order — this is the
-  // same order an editor scrolls through. Stable order also makes diffs across
-  // re-runs human-readable.
-  const sortedClass = [...classifications].sort((a, b) => a.group_index - b.group_index);
-  const classBlockLines = sortedClass.map((c) => formatClassificationLine(c));
-
-  const userPrefix = [
-    // ─── SHORTLISTING CONTEXT ────────────────────────────────────────────────
-    'SHORTLISTING CONTEXT:',
-    `Property: ${propertyAddress || 'Unknown property'}`,
-    `Package: ${packageType}`,
-    `Tier: ${tier}`,
-    `Total compositions available: ${classifications.length}`,
-    `Package ceiling: ${packageCeiling} images (${describeCeiling(packageCeiling)})`,
-    '',
-    // ─── SLOT REQUIREMENTS ───────────────────────────────────────────────────
-    'SLOT REQUIREMENTS:',
-    slotRequirements,
-    '',
-    // ─── NEAR-DUPLICATE CULLING RULES (spec L7) ──────────────────────────────
-    'NEAR-DUPLICATE CULLING RULES (within-room only — spec L7):',
-    'Two compositions are near-duplicates ONLY IF ALL THREE are true:',
-    '  1. Same physical room (same room_type label).',
-    '  2. Same approximate camera position (angle delta < 15°).',
-    '  3. Key element overlap > 80%.',
-    'Different rooms with the same label are NOT duplicates. In particular:',
-    '  - living_room (ground floor) and living_secondary (upstairs lounge) are DIFFERENT rooms — never cull as duplicates.',
-    '  - ensuite_primary shower-side and ensuite_primary vanity-side are DIFFERENT angles when delta > 30° — keep both.',
-    '  - Two exterior_front shots from substantially different positions are not duplicates.',
-    '',
-    // ─── BEDROOM SELECTION RULES (spec §6) ───────────────────────────────────
-    'BEDROOM SELECTION RULES:',
-    '  master_bedroom_hero: pick the bedroom with the HIGHEST COMBINED score (avg of T+L+C+A).',
-    '  bedroom_secondary:   pick by HIGHEST AESTHETIC score — NOT combined, NOT size — aesthetic only.',
-    '  All else equal, styled (is_styled=T) beats unstyled (is_styled=F).',
-    '',
-    // ─── BATHROOM/ENSUITE RULES (spec L19) ───────────────────────────────────
-    'BATHROOM / ENSUITE RULES:',
-    '  ensuite_hero may include up to 2 images IF the two compositions show genuinely distinct angles (vantage difference, primary feature difference, or angle delta > 30°). A shower-side angle and a vanity-side angle communicate different features of the same room and are complementary — both count.',
-    '  bathroom_main is a separate slot for a bathroom distinct from any ensuite.',
-    '',
-    // ─── ALFRESCO + EXTERIOR_RAR ELIGIBILITY (spec L6) ───────────────────────
-    'ALFRESCO + EXTERIOR_REAR ELIGIBILITY (spec L6):',
-    '  When room_type=alfresco AND vantage_point=exterior_looking_in (camera outside the structure looking back at the building), the composition is eligible for the exterior_rear slot, NOT just alfresco_hero. The classification line shows "eligXR" for these. Use them for exterior_rear when no purpose-shot exterior_rear candidate exists.',
-    '',
-    // ─── Stream B anchors (spec L8) ──────────────────────────────────────────
-    scoringReference,
-    // ─── ALL CLASSIFICATIONS (full shoot, one line each) ─────────────────────
-    `ALL CLASSIFICATIONS — FULL SHOOT (${sortedClass.length} compositions, in capture order):`,
-    'Format: [stem] | [room_type] | [comp_type] | [vantage_point] | C=composition L=lighting T=technical A=aesthetic avg=combined | styled=T/F io=indoor_outdoor | [optional badges] | [analysis excerpt]',
-    '',
-    ...classBlockLines,
-    '',
-    // ─── INSTRUCTIONS ────────────────────────────────────────────────────────
-    'INSTRUCTIONS:',
-    '1. Fill every Phase 1 mandatory slot first. If no candidate exists for a mandatory slot, list it in unfilled_slots — DO NOT pick an unrelated image.',
-    '2. Fill Phase 2 conditional slots ONLY for room types confirmed in the classifications above.',
-    '3. Fill Phase 3 free recommendations up to the ceiling, ranked by genuine value-add. Each recommendation needs a one-sentence justification of what unique value it adds.',
-    '4. For every slot you fill, identify the top 3 candidates (winner = slot_assignments, ranks 2 + 3 = slot_alternatives). The winner must NOT also appear in slot_alternatives for the same slot.',
-    '5. Identify near-duplicates (per the within-room rules above) and list their stems in rejected_near_duplicates. A stem CANNOT appear in both shortlist and rejected_near_duplicates — shortlist takes precedence.',
-    '6. Write a coverage_notes paragraph (3-6 sentences) summarising shoot quality, any gaps, and notable strengths/weaknesses. This appears in the human review UI.',
-    '',
-    // ─── JSON output schema ──────────────────────────────────────────────────
-    'Return ONLY valid JSON, no Markdown fences, no commentary, no prose before or after:',
-    '{',
-    '  "shortlist": ["stem1", "stem2", ...],   // every stem chosen across all 3 phases',
-    '  "slot_assignments": {',
-    '    "<slot_id>": "stem"                    // single-image slot',
-    '    "<slot_id>": ["stem", "stem"]          // multi-image slot (e.g. ensuite_hero with 2 angles)',
-    '  },',
-    '  "slot_alternatives": {',
-    '    "<slot_id>": ["rank2_stem", "rank3_stem"]   // next 2 best candidates per slot',
-    '  },',
-    '  "phase3_recommendations": [',
-    '    { "file": "stem", "rank": 1, "justification": "what unique value this adds" }',
-    '  ],',
-    '  "unfilled_slots": ["<slot_id>", ...],          // slots with no suitable candidate',
-    '  "rejected_near_duplicates": ["stem", ...],      // culled per within-room rules above',
-    '  "coverage_notes": "Full paragraph summarising shoot quality and gaps."',
-    '}',
-    '',
-    'Output requirement: respond with the JSON object only. Use the exact stems shown in the classification lines above — do not invent filenames. Stems are case-sensitive.',
-  ].join('\n');
-
-  return {
-    system: SYSTEM_PROMPT,
-    userPrefix,
-  };
+  return assemble({
+    systemBlocks: [
+      {
+        name: 'header',
+        version: HEADER_BLOCK_VERSION,
+        text: headerBlock({ pass: 2, source: 'raw' }),
+      },
+      {
+        name: 'pass2Phases',
+        version: PASS2_PHASES_BLOCK_VERSION,
+        text: pass2PhasesBlock(),
+      },
+    ],
+    userBlocks: [
+      {
+        name: 'slotEnumeration',
+        version: SLOT_ENUMERATION_BLOCK_VERSION,
+        text: slotEnumerationBlock({
+          propertyAddress,
+          packageType,
+          packageCeiling,
+          tier,
+          totalCompositions: classifications.length,
+          slotDefinitions,
+        }),
+      },
+      {
+        name: 'nearDuplicateCulling',
+        version: NEAR_DUPLICATE_CULLING_BLOCK_VERSION,
+        text: nearDuplicateCullingBlock(),
+      },
+      {
+        name: 'bedroomSplit',
+        version: BEDROOM_SPLIT_BLOCK_VERSION,
+        text: bedroomSplitBlock(),
+      },
+      {
+        name: 'ensuiteSecondAngle',
+        version: ENSUITE_SECOND_ANGLE_BLOCK_VERSION,
+        text: ensuiteSecondAngleBlock(),
+      },
+      {
+        name: 'alfrescoExteriorRear',
+        version: ALFRESCO_EXTERIOR_REAR_BLOCK_VERSION,
+        text: alfrescoExteriorRearBlock(),
+      },
+      {
+        name: 'streamBAnchors',
+        version: STREAM_B_ANCHORS_BLOCK_VERSION,
+        text: streamBAnchorsBlock({ anchors: streamBAnchors }),
+      },
+      {
+        name: 'classificationsTable',
+        version: CLASSIFICATIONS_TABLE_BLOCK_VERSION,
+        text: classificationsTableBlock({ classifications }),
+      },
+      {
+        name: 'pass2OutputSchema',
+        version: PASS2_OUTPUT_SCHEMA_BLOCK_VERSION,
+        text: pass2OutputSchemaBlock(),
+      },
+    ],
+  });
 }
