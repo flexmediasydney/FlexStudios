@@ -172,10 +172,87 @@ export default function ShortlistingSwimlane({
   // component instance (no key change) across rounds, the timer would otherwise
   // measure cumulative dwell time across rounds, which corrupts the override
   // telemetry that Phase 8's learning loop will consume.
+  //
+  // Wave 10.3 P1-16: this page-level ref now serves as the FALLBACK for the
+  // per-card IntersectionObserver timer below. When a card never enters the
+  // viewport (rare — e.g. user drags from a search-filtered list, or when the
+  // browser lacks IntersectionObserver), we fall back to the page-level
+  // timestamp. The primary signal is the per-row dwell time.
   const reviewStartRef = useRef(Date.now());
   useEffect(() => {
     reviewStartRef.current = Date.now();
   }, [roundId]);
+
+  // Wave 10.3 P1-16 — per-card review timer. Map keyed by composition_group
+  // id; the IntersectionObserver below records the timestamp of first
+  // viewport entry, and onDragEnd / handleSwapAlternative subtract that to
+  // get the actual time-on-row. Reset on round switch so the timer doesn't
+  // carry stale entries across rounds.
+  const reviewStartByGroupIdRef = useRef(new Map());
+  useEffect(() => {
+    reviewStartByGroupIdRef.current = new Map();
+  }, [roundId]);
+
+  // Single shared IntersectionObserver — ~150 cards is well within the
+  // observer's perf budget. Each ShortlistingCard registers/unregisters its
+  // outer ref via the registerCardObserver callback. When a card crosses
+  // the 50% visibility threshold and we don't yet have a start time, we
+  // record `now` for that group_id. The first crossing wins; subsequent
+  // crossings are no-ops (the editor's review session for the row started
+  // when the card first appeared, not on each rescroll).
+  const cardObserverRef = useRef(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    if (!("IntersectionObserver" in window)) return undefined;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const groupId = entry.target.getAttribute("data-group-id");
+          if (!groupId) continue;
+          const map = reviewStartByGroupIdRef.current;
+          if (!map.has(groupId)) map.set(groupId, Date.now());
+        }
+      },
+      { threshold: 0.5, rootMargin: "0px" },
+    );
+    cardObserverRef.current = observer;
+    return () => {
+      observer.disconnect();
+      cardObserverRef.current = null;
+    };
+  }, [roundId]);
+
+  // Stable callback the cards call to register themselves with the observer.
+  // Returns a teardown function (unobserve) that the card uses on unmount.
+  const registerCardObserver = useCallback((node) => {
+    const observer = cardObserverRef.current;
+    if (!observer || !node) return () => {};
+    observer.observe(node);
+    return () => {
+      try {
+        observer.unobserve(node);
+      } catch {
+        // Observer may have already disconnected on round switch — ignore.
+      }
+    };
+  }, []);
+
+  // Compute per-row review duration. Falls back to the page-level timer if
+  // the card never entered the viewport (e.g. dragged from off-screen via
+  // a hotkey, or browser lacks IntersectionObserver).
+  const computeReviewDurationSeconds = useCallback((groupId) => {
+    if (groupId) {
+      const startMs = reviewStartByGroupIdRef.current.get(groupId);
+      if (typeof startMs === "number") {
+        return Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+      }
+    }
+    return Math.max(
+      0,
+      Math.floor((Date.now() - reviewStartRef.current) / 1000),
+    );
+  }, []);
 
   // ── Data fetches ────────────────────────────────────────────────────────
   const groupsQuery = useQuery({
@@ -534,9 +611,10 @@ export default function ShortlistingSwimlane({
       const cls = classByGroupId.get(groupId);
       const slot = slotByGroupId.get(groupId);
 
-      const reviewSecs = Math.floor(
-        (Date.now() - reviewStartRef.current) / 1000,
-      );
+      // Wave 10.3 P1-16: per-card timer (IntersectionObserver) replaces the
+      // page-level cumulative timer for this row. Fallback to page-level if
+      // the card never entered viewport (rare).
+      const reviewSecs = computeReviewDurationSeconds(groupId);
 
       // Build payload — distinguish approved-from-rejects (humanId) vs
       // approved-as-proposed (aiId).
@@ -598,6 +676,7 @@ export default function ShortlistingSwimlane({
       projectId,
       roundId,
       sendOverride,
+      computeReviewDurationSeconds,
     ],
   );
 
@@ -605,9 +684,9 @@ export default function ShortlistingSwimlane({
   const handleSwapAlternative = useCallback(
     async (winnerGroupId, altGroupId) => {
       const winnerSlot = slotByGroupId.get(winnerGroupId);
-      const reviewSecs = Math.floor(
-        (Date.now() - reviewStartRef.current) / 1000,
-      );
+      // Wave 10.3 P1-16: per-card timer for the winner row (the row whose
+      // drawer the editor opened to pick the alt).
+      const reviewSecs = computeReviewDurationSeconds(winnerGroupId);
       const winnerCls = classByGroupId.get(winnerGroupId);
       const event = {
         project_id: projectId,
@@ -647,7 +726,14 @@ export default function ShortlistingSwimlane({
       // record is registered, not the move.
       if (ok) toast.success("Swap recorded — files will move on Lock");
     },
-    [classByGroupId, slotByGroupId, projectId, roundId, sendOverride],
+    [
+      classByGroupId,
+      slotByGroupId,
+      projectId,
+      roundId,
+      sendOverride,
+      computeReviewDurationSeconds,
+    ],
   );
 
   // ── Lock & Reorganize ───────────────────────────────────────────────────
@@ -925,6 +1011,7 @@ export default function ShortlistingSwimlane({
                 onSwapAlternative={handleSwapAlternative}
                 altsBySlotId={altsBySlotId}
                 classByGroupId={classByGroupId}
+                registerCardObserver={registerCardObserver}
               />
             );
           })}
@@ -983,6 +1070,7 @@ function SwimlaneColumn({
   onSwapAlternative,
   altsBySlotId,
   classByGroupId,
+  registerCardObserver,
 }) {
   return (
     <Droppable droppableId={column.key} isDropDisabled={isLocked}>
@@ -1051,6 +1139,7 @@ function SwimlaneColumn({
                                   onSwapAlternative(item.id, altGroupId)
                               : null
                           }
+                          registerCardObserver={registerCardObserver}
                         />
                       </div>
                     )}

@@ -16,7 +16,7 @@
  * Drag handle is the whole card. The parent swimlane wires DragDropContext +
  * Draggable from @hello-pangea/dnd.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
@@ -84,6 +84,14 @@ function shortFilename(s, max = 32) {
  *                                    { group_id, stem, combined_score, room_type, analysis }
  * @param {boolean} props.isDragging  true while @hello-pangea drag is active
  * @param {function} props.onSwapAlternative  invoked with (altGroupId) when an alt is tapped
+ * @param {function} [props.registerCardObserver]  Wave 10.3: parent-supplied
+ *   IntersectionObserver registration. Receives the outer card DOM node and
+ *   returns a teardown fn. Optional — when absent (e.g. tests, manual mode)
+ *   the card renders normally without per-row review timing.
+ * @param {function} [props.onAltsDrawerOpen]  Wave 10.3: invoked the first
+ *   time the editor expands the alternatives drawer for this card. Wired to
+ *   the swimlane's seenAltsBySlotId tracking so analytics can distinguish
+ *   "drawer rendered" from "drawer actively viewed".
  */
 export default function ShortlistingCard({
   composition,
@@ -91,6 +99,8 @@ export default function ShortlistingCard({
   alternatives = [],
   isDragging = false,
   onSwapAlternative,
+  registerCardObserver,
+  onAltsDrawerOpen,
 }) {
   const [analysisExpanded, setAnalysisExpanded] = useState(false);
   const [altsExpanded, setAltsExpanded] = useState(false);
@@ -98,6 +108,18 @@ export default function ShortlistingCard({
   const c = composition || {};
   const cls = c.classification || {};
   const slot = c.slot || null; // { slot_id, phase, rank } when shortlisted
+
+  // Wave 10.3 P1-16: register the outer card div with the swimlane's shared
+  // IntersectionObserver. The observer records the timestamp of the first
+  // viewport entry per group_id; the swimlane's drag handler subtracts that
+  // to compute review_duration_seconds. Re-register if the parent rotates
+  // its registerCardObserver callback (rare; covers HMR + round-switch).
+  const cardRef = useRef(null);
+  useEffect(() => {
+    if (!registerCardObserver || !cardRef.current) return undefined;
+    const teardown = registerCardObserver(cardRef.current);
+    return typeof teardown === "function" ? teardown : undefined;
+  }, [registerCardObserver, c.id]);
 
   const filename = c.delivery_reference_stem || c.best_bracket_stem || "—";
   const roomType = humanRoomType(cls.room_type);
@@ -116,6 +138,8 @@ export default function ShortlistingCard({
 
   return (
     <Card
+      ref={cardRef}
+      data-group-id={c.id}
       className={cn(
         "rounded-md border bg-card overflow-hidden transition-shadow",
         isDragging && "ring-2 ring-primary/60 shadow-lg",
