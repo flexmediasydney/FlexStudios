@@ -204,16 +204,24 @@ export async function resolveProjectTypeFromFlowType(
   entities: any,
   flowType: string | null
 ): Promise<{ projectTypeId: string | null; projectTypeName: string | null; isUnmapped: boolean }> {
-  if (!flowType) return { projectTypeId: null, projectTypeName: null, isUnmapped: false };
+  // Note: a null flowType used to short-circuit and return null, which meant
+  // any Tonomo webhook missing `bookingFlow.type` left project_type_id unset
+  // and downstream project-type task templates never generated (e.g. the
+  // "Invoice Generated" / "Tonomo Syncd" tasks). Discovered 2026-04-28 on
+  // 6 Saladine Ave. The whole point of an `is_default` mapping row is to
+  // cover this case, so we now fall through to the default-mapping check
+  // even when flowType is null.
 
   try {
     const mappings = await entities.TonomoProjectTypeMapping
       .list('-created_date', 50)
       .catch(() => []);
 
-    const exactMatch = mappings.find((m: any) =>
-      m.tonomo_flow_type?.toLowerCase() === flowType.toLowerCase()
-    );
+    const exactMatch = flowType
+      ? mappings.find((m: any) =>
+          m.tonomo_flow_type?.toLowerCase() === flowType.toLowerCase()
+        )
+      : null;
     if (exactMatch?.project_type_id) {
       entities.TonomoProjectTypeMapping.update(exactMatch.id, {
         last_seen_at: new Date().toISOString(),
@@ -233,6 +241,13 @@ export async function resolveProjectTypeFromFlowType(
         projectTypeName: defaultMapping.project_type_name || null,
         isUnmapped: false,
       };
+    }
+
+    // No exact match and no default — only an unresolved flowType warrants a
+    // mapping-table breadcrumb. A null flowType is just "Tonomo didn't tell
+    // us" and isn't a row worth tracking.
+    if (!flowType) {
+      return { projectTypeId: null, projectTypeName: null, isUnmapped: false };
     }
 
     const existingUnmapped = mappings.find((m: any) =>
