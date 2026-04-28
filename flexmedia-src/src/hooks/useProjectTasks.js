@@ -1,8 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/supabaseClient';
 
 const STALE_MS = 60 * 1000;
+
+/**
+ * Stable queryKey for project-scoped task data. Exposed so callers can pass it
+ * to setQueryData / invalidateQueries without recomputing.
+ */
+export function projectTasksQueryKey(projectId, sort = 'order') {
+  return ['project-tasks-scoped', projectId, sort];
+}
 
 /**
  * Project-scoped task fetcher.
@@ -18,7 +26,7 @@ const STALE_MS = 60 * 1000;
  */
 export function useProjectTasks(projectId, { sort = 'order' } = {}) {
   const queryClient = useQueryClient();
-  const queryKey = ['project-tasks-scoped', projectId, sort];
+  const queryKey = projectTasksQueryKey(projectId, sort);
 
   const query = useQuery({
     queryKey,
@@ -34,19 +42,71 @@ export function useProjectTasks(projectId, { sort = 'order' } = {}) {
     },
   });
 
+  // Realtime keeps the cache live when the channel is healthy. When realtime
+  // is down (auth glitches, network, 401 storms), the patch on a successful
+  // write — see `patchTaskInCache` below — keeps the UI correct even without
+  // a realtime confirmation.
   useEffect(() => {
     if (!projectId) return;
     const unsubscribe = api.entities.ProjectTask.subscribe((event) => {
-      if (event?.data?.project_id !== projectId && event?.type !== 'delete') return;
-      queryClient.invalidateQueries({ queryKey });
+      const isForThisProject = event?.data?.project_id === projectId;
+      if (!isForThisProject && event?.type !== 'delete') return;
+      // Patch in-place rather than invalidate — invalidation kicks off a full
+      // refetch that can race with optimistic state. Patching keeps the UI
+      // consistent. Realtime events for a task can also arrive OUT OF ORDER
+      // (e.g., a takeover-only update carrying is_completed=false delivered
+      // *after* the toggle update carrying is_completed=true) — compare
+      // updated_at and ignore stale events to prevent the cache regressing.
+      queryClient.setQueryData(queryKey, (prev = []) => {
+        if (!Array.isArray(prev)) return prev;
+        if (event.type === 'delete') {
+          return prev.filter(t => t.id !== event.id);
+        }
+        if (!event.data) return prev;
+        const idx = prev.findIndex(t => t.id === event.id);
+        if (idx === -1) {
+          return event.type === 'create' ? [...prev, event.data] : prev;
+        }
+        const existing = prev[idx];
+        const existingTs = existing?.updated_at ? new Date(existing.updated_at).getTime() : 0;
+        const incomingTs = event.data?.updated_at ? new Date(event.data.updated_at).getTime() : 0;
+        if (incomingTs && existingTs && incomingTs < existingTs) {
+          // Stale event — ignore.
+          return prev;
+        }
+        const next = prev.slice();
+        next[idx] = event.data;
+        return next;
+      });
     });
     return typeof unsubscribe === 'function' ? () => unsubscribe() : undefined;
+    // queryKey is derived from [projectId, sort]
   }, [projectId, sort, queryClient]);
+
+  /**
+   * Patch a single task in the cache after a successful local write.
+   * Use this from mutation onSuccess to make the UI reflect the truth
+   * without relying on realtime — protects against tick→untick when
+   * the realtime channel is unavailable.
+   */
+  const patchTaskInCache = useCallback((taskId, updates) => {
+    if (!taskId || !updates) return;
+    queryClient.setQueryData(queryKey, (prev = []) => {
+      if (!Array.isArray(prev)) return prev;
+      const idx = prev.findIndex(t => t.id === taskId);
+      if (idx === -1) return prev;
+      const next = prev.slice();
+      next[idx] = { ...prev[idx], ...updates };
+      return next;
+    });
+    // queryKey is derived from [projectId, sort]
+  }, [queryClient, projectId, sort]); // eslint-disable-line
 
   return {
     tasks: query.data || [],
     loading: query.isLoading,
     error: query.error,
     refetch: query.refetch,
+    patchTaskInCache,
   };
 }

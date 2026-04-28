@@ -12,6 +12,8 @@ export function invalidateProjectCaches(queryClient, { timeLogs = false, tasks =
   if (all || tasks) {
     refetchEntityList("ProjectTask");
     queryClient?.invalidateQueries({ queryKey: ['project-tasks'] });
+    // ProjectDetails + TaskManagement now use a project-scoped query.
+    queryClient?.invalidateQueries({ queryKey: ['project-tasks-scoped'] });
   }
   if (all || project) {
     refetchEntityList("Project");

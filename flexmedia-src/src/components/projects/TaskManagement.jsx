@@ -199,8 +199,10 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   // Server-scoped fetch (~17 rows for one project) instead of pulling the
   // global 5,000-row ProjectTask cache and filtering client-side. Shared
   // queryKey with the parent's `useProjectTasks` so both consumers dedupe
-  // through one network request.
-  const { tasks: rawScopedTasks, loading: isLoading } = useProjectTasks(projectId);
+  // through one network request. patchTaskInCache lets us update the cache
+  // directly after a successful write so the UI doesn't depend on realtime
+  // (which can be unhealthy under JWT-refresh races).
+  const { tasks: rawScopedTasks, loading: isLoading, patchTaskInCache } = useProjectTasks(projectId);
   const allTasksRaw = React.useMemo(
     () => (rawScopedTasks || []).filter(t => !t.is_deleted),
     [rawScopedTasks]
@@ -583,9 +585,18 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     setOptimisticCompletions(prev => ({ ...prev, [task.id]: { is_completed: newCompleted, completed_at: newCompletedAt } }));
 
     try {
+      const completedAtForWrite = wasCompleted ? null : new Date().toISOString();
       await api.entities.ProjectTask.update(task.id, {
         is_completed: !wasCompleted,
-        ...(wasCompleted ? { completed_at: null } : { completed_at: new Date().toISOString() }),
+        completed_at: completedAtForWrite,
+      });
+      // Patch the project-scoped query cache directly so the UI reflects the
+      // canonical value even when realtime is down. The optimistic auto-prune
+      // effect now sees raw === optimistic and clears the override cleanly,
+      // with no flicker.
+      patchTaskInCache(task.id, {
+        is_completed: !wasCompleted,
+        completed_at: completedAtForWrite,
       });
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       logActivity(
@@ -769,6 +780,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                   const results = await Promise.allSettled(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: now })));
                   const succeeded = results.filter(r => r.status === 'fulfilled').length;
                   const failed = results.filter(r => r.status === 'rejected').length;
+                  // Patch the project-scoped query cache for every successful write.
+                  results.forEach((r, i) => {
+                    if (r.status === 'fulfilled') {
+                      patchTaskInCache(incomplete[i].id, { is_completed: true, completed_at: now });
+                    }
+                  });
 
                   // Auto-log effort for tasks with estimates but no manual time logs
                   for (const task of incomplete) {
