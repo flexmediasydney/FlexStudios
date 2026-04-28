@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
-import { useEntityList } from "@/components/hooks/useEntityData";
 import { useQuery } from "@tanstack/react-query";
+import { useProjectTasks } from "@/hooks/useProjectTasks";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -45,7 +45,7 @@ export default function EffortLoggingTab({ projectId, project }) {
   const isClosed = ['delivered', 'cancelled'].includes(project?.status);
 
   const { timeLogs: rawTimeLogs, groupedLogs } = useEffortLogs(projectId);
-  const { data: tasks = [] } = useEntityList("ProjectTask", null, 200, (t) => t.project_id === projectId);
+  const { tasks = [] } = useProjectTasks(projectId);
 
   // Exclude effort logs belonging to deleted tasks
   const deletedTaskIds = new Set(tasks.filter(t => t.is_deleted).map(t => t.id));

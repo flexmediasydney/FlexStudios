@@ -178,18 +178,13 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
     return () => { mounted = false; unsub(); };
   }, [project.id]);
 
-  // Fix orphaned timers (open timers for non-current stages) outside render path
-  useEffect(() => {
-    if (!stageTimers.length) return;
-    const currentStageValue = project.status;
-    stageTimers.forEach(t => {
-      if (!t.exit_time && t.stage !== currentStageValue) {
-        api.entities.ProjectStageTimer.update(t.id, {
-          exit_time: t.updated_date || new Date().toISOString(),
-        }).catch(() => {});
-      }
-    });
-  }, [stageTimers, project.status]);
+  // Orphan-closer removed (2026-04-28): the DB trigger
+  // `project_stage_timer_sync` is now the sole writer for stage-timer rows
+  // (see migration 349). Closing timers from the front-end raced with the
+  // trigger because realtime events for new-stage timers can land before
+  // `project.status` has propagated, causing the closer to treat the
+  // legitimate new-stage timer as an "orphan" and close it. Result: no
+  // open timer for the current stage and a frozen UI counter.
 
   // ── Optimistic session state ──────────────────────────────────────────────
   const sessionRef = useRef({
@@ -303,19 +298,7 @@ export default function StagePipeline({ project, onStatusChange, canEdit, allTas
   const isArchived = project?.is_archived === true;
   const isCancelled = project?.outcome === 'lost';
 
-  // Close orphaned timers once via useEffect (not during render) to avoid
-  // spamming the API on every re-render. Track which IDs we've already patched.
-  const closedOrphanIdsRef = useRef(new Set());
-  useEffect(() => {
-    stageTimers.forEach(t => {
-      if (!t.exit_time && t.stage !== s.status && !closedOrphanIdsRef.current.has(t.id)) {
-        closedOrphanIdsRef.current.add(t.id);
-        api.entities.ProjectStageTimer.update(t.id, {
-          exit_time: t.updated_date || new Date().toISOString(),
-        }).catch(() => toast.error('Failed to close a previous stage timer. Stage time tracking may be inaccurate.'));
-      }
-    });
-  }, [stageTimers, s.status]);
+  // (second orphan-closer also removed — see note above)
 
   function getStageTimeInfo(stage, index) {
     const isCurrent = index === currentIndex;

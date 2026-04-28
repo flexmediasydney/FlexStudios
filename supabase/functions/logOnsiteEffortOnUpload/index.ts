@@ -95,6 +95,7 @@ serveWithAudit('logOnsiteEffortOnUpload', async (req) => {
         if (!task.is_completed) {
           await entities.ProjectTask.update(task.id, {
             is_completed: true,
+            completed_at: new Date().toISOString(),
             is_locked: true,
             shoot_date_missing: true,
           });
@@ -211,9 +212,13 @@ serveWithAudit('logOnsiteEffortOnUpload', async (req) => {
         }
       }
 
-      // Mark task as completed + locked AFTER time log is created
+      // Mark task as completed + locked AFTER time log is created.
+      // completed_at must be set in the same patch — the CompletionTimer
+      // and downstream audits both rely on it being non-null whenever
+      // is_completed is true.
       await entities.ProjectTask.update(task.id, {
         is_completed: true,
+        completed_at: new Date().toISOString(),
         is_locked: true,
         total_effort_logged: taskSeconds,
       });

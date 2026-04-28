@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +14,7 @@ import { scheduleDeadlineSync } from "./taskDeadlineSync";
 import { differenceInSeconds } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
 import { useEntityList } from "@/components/hooks/useEntityData";
+import { useProjectTasks } from "@/hooks/useProjectTasks";
 import TaskListView from "./TaskListView";
 import { toast } from "sonner";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
@@ -196,11 +196,14 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     red_threshold: 6
   };
 
-  const { data: allTasksRaw = [], loading: isLoading } = useEntityList(
-    projectId ? "ProjectTask" : null,
-    "order",
-    500,
-    projectId ? (t) => t.project_id === projectId && !t.is_deleted : null
+  // Server-scoped fetch (~17 rows for one project) instead of pulling the
+  // global 5,000-row ProjectTask cache and filtering client-side. Shared
+  // queryKey with the parent's `useProjectTasks` so both consumers dedupe
+  // through one network request.
+  const { tasks: rawScopedTasks, loading: isLoading } = useProjectTasks(projectId);
+  const allTasksRaw = React.useMemo(
+    () => (rawScopedTasks || []).filter(t => !t.is_deleted),
+    [rawScopedTasks]
   );
   // Apply optimistic completion overrides so the UI updates instantly on toggle
   const tasks = React.useMemo(() => {
@@ -208,6 +211,29 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     return allTasksRaw.map(t => {
       const opt = optimisticCompletions[t.id];
       return opt ? { ...t, is_completed: opt.is_completed, completed_at: opt.completed_at } : t;
+    });
+  }, [allTasksRaw, optimisticCompletions]);
+
+  // Auto-prune optimistic overrides once the canonical (realtime-synced) value
+  // matches what we wrote. This is what stops the "tick → untick → tick"
+  // flicker: previously we cleared the optimistic state in the toggle's
+  // `finally` block, which fires synchronously after the API await but before
+  // the realtime cache patch lands. During that ~50-200ms gap the UI would
+  // briefly show the stale value. By pruning *based on the data* rather than
+  // *based on time*, the override stays in place until it's no longer needed.
+  React.useEffect(() => {
+    if (Object.keys(optimisticCompletions).length === 0) return;
+    setOptimisticCompletions(prev => {
+      let changed = false;
+      const next = { ...prev };
+      for (const t of allTasksRaw) {
+        const opt = next[t.id];
+        if (opt && t.is_completed === opt.is_completed) {
+          delete next[t.id];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
     });
   }, [allTasksRaw, optimisticCompletions]);
 
@@ -222,18 +248,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   const { data: teams = [] } = useEntityList("InternalTeam", null, 200, { is_active: true });
 
 
-  // Real-time task subscription: ensures external task updates (e.g. timer completion,
-  // stage-change auto-completion) trigger a re-render without waiting for polling.
-  useEffect(() => {
-    if (!projectId) return;
-    const unsubscribe = api.entities.ProjectTask.subscribe((event) => {
-      if (event?.data?.project_id === projectId) {
-        refetchEntityList("ProjectTask");
-      }
-    });
-    return typeof unsubscribe === 'function' ? () => unsubscribe() : undefined;
-  }, [projectId]);
-
+  // Realtime updates are handled by the shared `useEntityData` subscription
+  // (one channel per entity, cache patched in-place, all mounted listeners
+  // re-render). The duplicate subscription that used to live here triggered a
+  // full `refetchEntityList("ProjectTask")` on every event — invalidating the
+  // global cache and racing with the in-place patch the entity layer had just
+  // done. Drop it.
 
   // Sync task assignee denormalized fields when users/teams change.
   // BUG FIX: `tasks` is a new array reference on every render from useEntityList,
@@ -305,7 +325,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     onSuccess: (created, variables) => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      refetchEntityList("ProjectTask");
+      // Realtime patches the entity-list cache; no manual refetch needed.
       setShowAddDialog(false);
       setNewTask({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
       logActivity('task_added', `Task added: "${variables.title}"`);
@@ -388,7 +408,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     onSuccess: async (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      refetchEntityList("ProjectTask");
+      // Realtime patches the entity-list cache; no manual refetch needed.
       scheduleDeadlineSync(projectId, 'task_update');
       setEditingTask(null);
       toast.success("Task saved");
@@ -442,7 +462,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     onSuccess: async (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      refetchEntityList("ProjectTask");
+      // Realtime patches the entity-list cache; no manual refetch needed.
       logActivity('task_deleted', `Task deleted: "${deleteConfirm?.title || ''}"`);
 
       // Clean up dependency references: remove deleted task ID from all dependents
@@ -643,9 +663,10 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         }
       }
 
-      // Bug fix: refresh task list so dependent tasks' is_blocked state updates in the UI.
-      // Without this, the entity cache retains stale data until the next subscription push.
-      refetchEntityList("ProjectTask");
+      // No manual refetch: realtime patches the cache and notifies listeners.
+      // The optimistic override is held until the canonical value catches up
+      // (auto-prune effect above), preventing the brief flicker we used to
+      // get when finally{} cleared optimistic before realtime arrived.
       invalidateProjectCaches(queryClient, { tasks: true, effort: true });
       scheduleDeadlineSync(projectId, 'task_completed');
 
@@ -671,14 +692,14 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     } catch (err) {
       console.error("Task update error:", err);
       toast.error(err.message || "Failed to update task");
-    } finally {
-      // Clear optimistic state -- real data from refetch takes over on success;
-      // on error this reverts the UI to the server-true state
+      // Only clear optimistic on error so the UI snaps back to server truth.
+      // On success the auto-prune effect handles it once realtime catches up.
       setOptimisticCompletions(prev => {
         const next = { ...prev };
         delete next[task.id];
         return next;
       });
+    } finally {
       togglingRef.current.delete(task.id);
     }
   };
@@ -796,14 +817,10 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                     }).catch(() => {});
                   }
 
-                  // Clear optimistic state now that real data is arriving
-                  setOptimisticCompletions(prev => {
-                    const next = { ...prev };
-                    incomplete.forEach(t => { delete next[t.id]; });
-                    return next;
-                  });
+                  // Optimistic state is auto-pruned by the effect above as
+                  // each realtime update lands. No manual refetch needed —
+                  // the shared subscription patches the cache.
                   queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
-                  refetchEntityList("ProjectTask");
                   invalidateProjectCaches(queryClient, { tasks: true, effort: true });
                   toast.dismiss(progressToastId);
                   if (failed > 0) {

@@ -1,8 +1,6 @@
 import { getAdminClient, getUserFromReq, createEntities, handleCors, jsonResponse, errorResponse, invokeFunction, serveWithAudit } from '../_shared/supabase.ts';
 import { MAX_USERS_FETCH } from '../_shared/constants.ts';
 
-const MAX_STAGE_DURATION_SECONDS = 90 * 24 * 3600; // 90 days hard cap
-
 const STAGE_LABELS: Record<string, string> = {
   'pending_review': 'Pending Review',
   'to_be_scheduled': 'To Be Scheduled',
@@ -14,31 +12,6 @@ const STAGE_LABELS: Record<string, string> = {
   'ready_for_partial': 'Partially Delivered',
   'in_revision': 'In Revision',
   'delivered': 'Delivered',
-};
-
-function clampDuration(entryTime: string, exitTime: string): number {
-  const entry = new Date(entryTime).getTime();
-  const exit = new Date(exitTime).getTime();
-  if (isNaN(entry) || isNaN(exit)) return 0;
-  const diff = Math.floor((exit - entry) / 1000);
-  if (diff < 0) return 0;
-  return Math.min(diff, MAX_STAGE_DURATION_SECONDS);
-}
-
-const retryWithBackoff = async <T>(fn: () => Promise<T>, maxRetries = 2): Promise<T> => {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err: any) {
-      if (err?.status === 429 && attempt < maxRetries) {
-        const delay = Math.pow(2, attempt) * 50;
-        await new Promise(resolve => setTimeout(resolve, delay));
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error('Retry exhausted');
 };
 
 serveWithAudit('trackProjectStageChange', async (req) => {
@@ -67,7 +40,6 @@ serveWithAudit('trackProjectStageChange', async (req) => {
       return errorResponse('Project not found or missing id', 404);
     }
 
-    const now = new Date().toISOString();
     const oldStatus = payload.old_data?.status;
     const newStatus = project.status;
     const actorId = payload.actor_id || null;
@@ -98,36 +70,11 @@ serveWithAudit('trackProjectStageChange', async (req) => {
       }
     }
 
-    const allTimers = await retryWithBackoff(() =>
-      entities.ProjectStageTimer.filter({ project_id: project.id }, null, 1000)
-    );
-
-    const allOpenTimers = allTimers.filter((t: any) => !t.exit_time);
-
-    const batchSize = 5;
-    for (let i = 0; i < allOpenTimers.length; i += batchSize) {
-      const batch = allOpenTimers.slice(i, i + batchSize);
-      await Promise.all(batch.map((openTimer: any) =>
-        retryWithBackoff(() =>
-          entities.ProjectStageTimer.update(openTimer.id, {
-            exit_time: now,
-            duration_seconds: clampDuration(openTimer.entry_time, now),
-            is_current: false,
-          })
-        )
-      ));
-    }
-
-    const freshTimers = await retryWithBackoff(() =>
-      entities.ProjectStageTimer.filter({ project_id: project.id }, null, 1000)
-    );
-
-    const alreadyOpenForNew = freshTimers.find((t: any) => t.stage === newStatus && !t.exit_time);
-    if (alreadyOpenForNew) {
-      console.log(`Open timer for ${newStatus} already exists (id=${alreadyOpenForNew.id}), skipping creation`);
-      return jsonResponse({ message: `Open timer for ${newStatus} already exists, skipping creation`, idempotent: true });
-    }
-
+    // Timer rows are managed by the `project_stage_timer_sync` AFTER UPDATE
+    // trigger on `projects` (migration source-of-truth). Doing it here too
+    // raced with the trigger — the edge fn would close the trigger's freshly
+    // opened timer, leading to projects with NO open timer for the current
+    // stage and a frozen UI counter. This function now only fires side-effects.
     const validStages = [
       'pending_review', 'to_be_scheduled', 'scheduled', 'onsite', 'uploaded',
       'submitted', 'in_progress', 'ready_for_partial', 'in_revision', 'delivered',
@@ -159,21 +106,6 @@ serveWithAudit('trackProjectStageChange', async (req) => {
         console.error('Calendar event check failed (allowing transition):', calErr?.message);
       }
     }
-
-    const existingVisitsForNew = freshTimers.filter((t: any) => t.stage === newStatus);
-    const visitNumber = existingVisitsForNew.length + 1;
-
-    const created = await entities.ProjectStageTimer.create({
-      project_id: project.id,
-      stage: newStatus,
-      entry_time: now,
-      exit_time: null,
-      duration_seconds: 0,
-      visit_number: visitNumber,
-      is_current: true,
-    });
-
-    console.log(`Created timer for stage=${newStatus}, visit #${visitNumber}, id=${created.id}`);
 
     // TeamActivityFeed entry
     try {
@@ -541,8 +473,6 @@ serveWithAudit('trackProjectStageChange', async (req) => {
     return jsonResponse({
       success: true,
       message: `Tracked stage change from ${oldStatus} to ${newStatus}`,
-      visitNumber,
-      timerId: created.id,
     });
   } catch (error: any) {
     console.error('Error tracking project stage change:', error);

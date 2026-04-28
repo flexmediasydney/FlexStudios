@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
@@ -55,6 +55,7 @@ import { scheduleDeadlineSync } from "@/components/projects/taskDeadlineSync";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useProjectHasDroneWork } from "@/hooks/useProjectHasDroneWork";
+import { useProjectTasks } from "@/hooks/useProjectTasks";
 import TonomoTab from "@/components/tonomo/TonomoTab";
 import ProjectShortlistingTab from "@/components/projects/ProjectShortlistingTab";
 import { createNotification, createNotificationsForUsers, writeFeedEvent } from "@/components/notifications/createNotification";
@@ -345,15 +346,10 @@ export default function ProjectDetails() {
    // and no existing drone shoots. See useProjectHasDroneWork for signal.
    const { hasDroneWork, isLoading: hasDroneWorkLoading } = useProjectHasDroneWork(projectId, project);
 
-   const filterProjectTasks = useCallback((t) => t.project_id === projectId, [projectId]);
-   const filterProjectActivities = useCallback((a) => !!(projectId && a.project_id === projectId), [projectId]);
-
-   const { data: projectTasks = [] } = useSmartEntityList(
-      "ProjectTask",
-      null,
-      null,
-      filterProjectTasks
-    );
+   // Server-side scoped fetch — pulls only this project's tasks (~17 rows
+   // typical) instead of pulling the global ProjectTask list (~5,000 rows)
+   // and filtering client-side. Realtime keeps it in sync.
+   const { tasks: projectTasks } = useProjectTasks(projectId);
 
    const allTasksDone = useMemo(() => {
      if (!projectTasks || projectTasks.length === 0) return false;
@@ -362,25 +358,14 @@ export default function ProjectDetails() {
      return activeTasks.every(t => t.is_completed);
    }, [projectTasks]);
 
-   const isDeliverable = useMemo(() => 
+   const isDeliverable = useMemo(() =>
      allTasksDone && project && !['delivered', 'cancelled', 'pending_review'].includes(project.status),
      [allTasksDone, project]
    );
 
-   const { data: allProjectActivities = [] } = useSmartEntityList(
-     "ProjectActivity",
-     "-created_date",
-     50,
-     filterProjectActivities
-   );
-
-   const projectActivities = useMemo(
-    () => {
-      if (!Array.isArray(allProjectActivities)) return [];
-      return allProjectActivities.filter(a => a.action === "status_change");
-    },
-    [allProjectActivities]
-   );
+   // ProjectActivity is fetched server-scoped by ProjectActivityHub.
+   // The previous parent-level fetch was used only to derive activities for a
+   // child component that didn't actually consume them — pure waste.
 
   // One-time sync of blocking state — only fires once per project load, with longer debounce.
   // Reset syncedRef when projectId changes so navigating to a different project re-syncs.
@@ -513,7 +498,7 @@ export default function ProjectDetails() {
        project_id: projectId,
        trigger_event: `status_${newStatus}`,
      }).then(() => {
-       refetchEntityList('ProjectTask');
+       queryClient.invalidateQueries({ queryKey: ['project-tasks-scoped', projectId] });
      }).catch(err => console.warn('Task deadline recalc failed:', err?.message));
 
      logActivity('status_change',
@@ -667,10 +652,10 @@ export default function ProjectDetails() {
      return result;
    },
    onSuccess: (_, newStatus) => {
-     refetchEntityList("Project");
-     refetchEntityList("ProjectActivity");
-     refetchEntityList("ProjectTask");
+     // Realtime patches the shared entity caches in place. Only invalidate
+     // the project-scoped queries that don't have a realtime channel.
      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+     queryClient.invalidateQueries({ queryKey: ['project-tasks-scoped', projectId] });
      toast.success(`Status updated to ${stageLabel(newStatus) || newStatus}`);
    },
    onError: (err) => {
@@ -1750,7 +1735,7 @@ export default function ProjectDetails() {
                 </div>
                 <div>
                   <p className="text-xs font-mono font-bold">
-                    {project && <ErrorBoundary><ProjectDurationTimer project={project} activities={projectActivities} /></ErrorBoundary>}
+                    {project && <ErrorBoundary><ProjectDurationTimer project={project} /></ErrorBoundary>}
                   </p>
                 </div>
               </div>
