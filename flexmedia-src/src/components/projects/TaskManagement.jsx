@@ -659,6 +659,25 @@ export default function TaskManagement({ projectId, project, canEdit }) {
             console.warn('Auto effort log failed (non-fatal):', err?.message);
           }
         }
+      } else {
+        // Un-ticking the task. Remove any auto-completion log so the
+        // recorded effort doesn't include phantom time for work that
+        // hasn't actually happened. Manual entries and auto-onsite logs
+        // (which represent real shoot time, independent of this task's
+        // tick state) are preserved. Re-ticking the task will re-create
+        // a fresh auto-log.
+        try {
+          const autoLogs = await api.entities.TaskTimeLog.filter(
+            { task_id: task.id, log_source: 'auto_completion', is_manual: false },
+            null,
+            50
+          );
+          for (const log of autoLogs) {
+            await api.entities.TaskTimeLog.delete(log.id).catch(() => {});
+          }
+        } catch (err) {
+          console.warn('Auto-effort cleanup on un-tick failed (non-fatal):', err?.message);
+        }
 
         // task is now being marked complete (was false, now true)
         writeFeedEvent({
