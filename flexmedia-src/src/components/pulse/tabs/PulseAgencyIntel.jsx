@@ -6,7 +6,7 @@ import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { createPageUrl } from "@/utils";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -1023,42 +1023,37 @@ export function AgencySlideout({
     );
   }, [agency, pulseMappings]);
 
-  /* Add agency to CRM handler */
+  /* Add agency to CRM handler — atomic via pulse_add_agency_to_crm RPC
+     (migration 349). Single Postgres transaction wraps: agency insert →
+     mapping insert → flip is_in_crm + linked_agency_id. */
   async function handleAddAgencyToCrm() {
     if (!agency) return;
     setAddingToCrm(true);
     try {
-      const newAgency = await api.entities.Agency.create({
-        name: agency.name,
-        phone: agency.phone || null,
-        email: agency.email || null,
-        website: agency.website || null,
-        rea_agency_id: agency.rea_agency_id || null,
-        source: "pulse",
-        relationship_state: "Prospecting",
+      const { error } = await supabase.rpc("pulse_add_agency_to_crm", {
+        p_pulse_agency_id: agency.id,
+        p_agency_payload: {
+          name: agency.name,
+          phone: agency.phone || null,
+          email: agency.email || null,
+          website: agency.website || null,
+          rea_agency_id: agency.rea_agency_id || null,
+          source: "pulse",
+          relationship_state: "Prospecting",
+        },
       });
+      if (error) throw error;
 
-      // Create mapping
-      await api.entities.PulseCrmMapping.create({
-        entity_type: "agency",
-        pulse_entity_id: agency.id,
-        crm_entity_id: newAgency.id,
-        rea_id: agency.rea_agency_id,
-        match_type: "manual",
-        confidence: "confirmed",
-      });
-
-      // Mark pulse agency as in_crm
-      await api.entities.PulseAgency.update(agency.id, { is_in_crm: true });
-
-      await refetchEntityList("PulseAgency");
-      await refetchEntityList("Agency");
-      await refetchEntityList("PulseCrmMapping");
+      await Promise.all([
+        refetchEntityList("PulseAgency"),
+        refetchEntityList("Agency"),
+        refetchEntityList("PulseCrmMapping"),
+      ]);
 
       toast.success(`${agency.name} added to CRM`);
       onClose();
     } catch (err) {
-      console.error("Add agency to CRM failed:", err);
+      console.error("pulse_add_agency_to_crm failed:", err);
       toast.error("Failed to add agency to CRM. Please try again.");
     } finally {
       setAddingToCrm(false);

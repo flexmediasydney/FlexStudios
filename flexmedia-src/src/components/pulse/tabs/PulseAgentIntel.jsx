@@ -13,7 +13,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { createPageUrl } from "@/utils";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card } from "@/components/ui/card";
@@ -684,49 +684,46 @@ function AddToCrmDialog({ agent, crmAgents, crmAgencies, pulseMappings, onClose,
   async function handleConfirm() {
     setSaving(true);
     try {
-      // 1. Create or find agency
-      let agencyId = existingAgency?.id;
-      if (!agencyId && agent.agency_name) {
-        const newAgency = await api.entities.Agency.create({
-          name: agent.agency_name,
-          rea_agency_id: agent.agency_rea_id,
-        });
-        agencyId = newAgency.id;
-        await refetchEntityList("Agency");
-      }
-
-      // 2. Create CRM agent
-      const newAgent = await api.entities.Agent.create({
-        name: agent.full_name,
-        phone: agent.mobile || agent.business_phone,
-        email: agent.email,
-        current_agency_id: agencyId,
-        rea_agent_id: agent.rea_agent_id,
-        title: agent.job_title,
-        relationship_state: "prospect",
-        source: "pulse",
+      // Atomic promotion via pulse_add_agent_to_crm RPC (migration 349).
+      // Single Postgres transaction wraps: optional agency insert → agent
+      // insert → mapping insert → flip is_in_crm + linked_agent_id.
+      // Either all four land or none — no more partial state when one of
+      // the writes fails midway.
+      const { data, error } = await supabase.rpc("pulse_add_agent_to_crm", {
+        p_pulse_agent_id: agent.id,
+        p_agent_payload: {
+          name: agent.full_name,
+          phone: agent.mobile || agent.business_phone || null,
+          email: agent.email || null,
+          rea_agent_id: agent.rea_agent_id || null,
+          title: agent.job_title || null,
+          relationship_state: "prospect",
+          source: "pulse",
+        },
+        p_existing_agency_id: existingAgency?.id || null,
+        p_new_agency_payload:
+          !existingAgency?.id && agent.agency_name
+            ? {
+                name: agent.agency_name,
+                rea_agency_id: agent.agency_rea_id || null,
+              }
+            : null,
       });
+      if (error) throw error;
 
-      // 3. Create mapping
-      await api.entities.PulseCrmMapping.create({
-        entity_type: "agent",
-        pulse_entity_id: agent.id,
-        crm_entity_id: newAgent.id,
-        rea_id: agent.rea_agent_id,
-        match_type: "manual",
-        confidence: "confirmed",
-      });
-
-      // 4. Mark pulse agent as in_crm
-      await api.entities.PulseAgent.update(agent.id, { is_in_crm: true });
-
-      await refetchEntityList("PulseAgent");
-      await refetchEntityList("PulseCrmMapping");
+      // Refetch lists that downstream views read — including the new agency
+      // when one was just created in the same transaction.
+      await Promise.all([
+        refetchEntityList("Agency"),
+        refetchEntityList("Agent"),
+        refetchEntityList("PulseAgent"),
+        refetchEntityList("PulseCrmMapping"),
+      ]);
 
       toast.success(`${agent.full_name} added to CRM`);
       onSuccess();
     } catch (err) {
-      console.error("Add to CRM failed:", err);
+      console.error("pulse_add_agent_to_crm failed:", err);
       toast.error("Failed to add agent to CRM. Please try again.");
     } finally {
       setSaving(false);
