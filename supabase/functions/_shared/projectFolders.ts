@@ -45,6 +45,7 @@
 
 import {
   createFolder,
+  getMetadata,
   listFolder,
   moveFile as dbxMoveFile,
   getOrCreateSharedLink,
@@ -344,6 +345,90 @@ export async function createProjectFolders(
   // _AUDIT/events/ exists for the per-event mirror (Dropbox uploads do not
   // auto-create parent dirs).
   await createFolder(`${rootPath}/_AUDIT/events`);
+
+  // 1.5. Verify Dropbox actually has every leaf folder before we touch the DB.
+  //
+  // Discovered 2026-04-28: a Wave 6 P1 backfill inserted 612 phantom
+  // photos_* rows across 68 projects pointing at folders that never got
+  // created in Dropbox — every createFolder call had returned success to the
+  // caller (no thrown error), but a recursive list of the project root showed
+  // the Photos/ tree missing entirely. Without a post-create existence check,
+  // the bug was undetectable from the function's own return value: step 3
+  // happily wrote DB rows for folders Dropbox didn't have.
+  //
+  // Two-tier strategy:
+  //   FAST: one recursive list of the project root (~25 entries for a fresh
+  //         project). One API call, done. Works for the typical case.
+  //   SLOW: per-leaf getMetadata fallback when the fast path's recursive
+  //         listing truncates (i.e., the project has accumulated >5000
+  //         entries — real-world: 8/2 Everton blew through 1K of drone shots
+  //         which torpedoed the original 1000-cap recursive verify). The
+  //         slow path scales independently of file count: one getMetadata
+  //         per expected leaf, ~23 calls per project.
+  const expectedLeafPaths = NEW_PROJECT_FOLDER_KINDS.map(
+    (kind) => `${rootPath}/${FOLDER_RELATIVE_PATHS[kind]}`,
+  );
+
+  let missingDropboxPaths: string[] = [];
+  let usedSlowPath = false;
+  try {
+    const { entries: rootEntries, truncated: rootTruncated } = await listFolder(rootPath, {
+      recursive: true,
+      maxEntries: 5000,
+    });
+    if (rootTruncated) {
+      usedSlowPath = true;
+    } else {
+      const presentLowerPaths = new Set(
+        rootEntries
+          .filter((e) => e['.tag'] === 'folder')
+          .map((e) => (e.path_lower || (e.path_display || '').toLowerCase())),
+      );
+      missingDropboxPaths = expectedLeafPaths.filter(
+        (p) => !presentLowerPaths.has(p.toLowerCase()),
+      );
+    }
+  } catch (err) {
+    // Recursive listing itself errored (root not found, etc) — fall through
+    // to per-leaf so the per-path errors are attributable.
+    usedSlowPath = true;
+    console.warn(
+      `[projectFolders] verify fast-path failed for ${projectId}, falling back to per-leaf: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (usedSlowPath) {
+    // Per-leaf existence check. Sequential (not Promise.all) to be polite to
+    // Dropbox rate limits — the dropbox.ts wrapper retries on 429 but firing
+    // 23 parallel calls per project across a 70-project backfill is enough
+    // to soft-throttle.
+    const missing: string[] = [];
+    for (const path of expectedLeafPaths) {
+      try {
+        const meta = await getMetadata(path);
+        if (meta['.tag'] !== 'folder') missing.push(path);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes('not_found')) {
+          missing.push(path);
+        } else {
+          throw err; // auth / rate-limit-after-retries / other → propagate
+        }
+      }
+    }
+    missingDropboxPaths = missing;
+  }
+
+  if (missingDropboxPaths.length > 0) {
+    const sample = missingDropboxPaths.slice(0, 5).join('; ');
+    const more = missingDropboxPaths.length > 5 ? ` (+${missingDropboxPaths.length - 5} more)` : '';
+    throw new Error(
+      `Dropbox folder verification failed for project ${projectId}: ` +
+        `${missingDropboxPaths.length}/${NEW_PROJECT_FOLDER_KINDS.length} expected folders ` +
+        `not present after createFolder calls returned success. Missing: ${sample}${more}`,
+    );
+  }
 
   // 2. Persist root path on project (only if not already set).
   if (!proj.dropbox_root_path) {
