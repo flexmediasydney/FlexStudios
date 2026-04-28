@@ -4,6 +4,7 @@
  */
 import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
+import { queryClientInstance } from "@/components/lib/query-client";
 
 const pendingTimers = new Map(); // project_id -> timeout handle
 
@@ -29,8 +30,12 @@ export function scheduleDeadlineSync(projectId, triggerEvent = "manual", delayMs
         project_id: projectId,
         trigger_event: triggerEvent,
       });
-      // Refetch tasks so is_blocked changes show in the UI immediately
+      // Refresh both caches so is_blocked / due_date changes appear:
+      //   - global ProjectTask cache (used by dashboards, Tasks page, etc.)
+      //   - project-scoped TanStack query (used by ProjectDetails / TaskManagement)
       refetchEntityList("ProjectTask");
+      // Prefix match — covers any sort order this project's hook is using.
+      queryClientInstance.invalidateQueries({ queryKey: ['project-tasks-scoped', projectId] });
     } catch (err) {
       console.warn(`[deadlineSync] Skipped (${projectId}):`, err?.message || err);
     }

@@ -13,7 +13,7 @@ import { Plus, CalendarIcon, CheckCheck } from "lucide-react";
 import { scheduleDeadlineSync } from "./taskDeadlineSync";
 import { differenceInSeconds } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useProjectTasks } from "@/hooks/useProjectTasks";
 import TaskListView from "./TaskListView";
 import { toast } from "sonner";
@@ -201,8 +201,11 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   // queryKey with the parent's `useProjectTasks` so both consumers dedupe
   // through one network request. patchTaskInCache lets us update the cache
   // directly after a successful write so the UI doesn't depend on realtime
-  // (which can be unhealthy under JWT-refresh races).
-  const { tasks: rawScopedTasks, loading: isLoading, patchTaskInCache } = useProjectTasks(projectId);
+  // (which can be unhealthy under JWT-refresh races). refetch is used after
+  // a write to pick up CASCADED server-side changes — e.g. task B becoming
+  // unblocked because task A was completed (server trigger), or a new
+  // TaskTimeLog row created for the auto-effort entry.
+  const { tasks: rawScopedTasks, loading: isLoading, patchTaskInCache, refetch: refetchProjectTasks } = useProjectTasks(projectId);
   const allTasksRaw = React.useMemo(
     () => (rawScopedTasks || []).filter(t => !t.is_deleted),
     [rawScopedTasks]
@@ -692,13 +695,24 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         }
       }
 
-      // patchTaskInCache already updated the project-scoped task cache with
-      // the authoritative row from the API response. No need to invalidate
-      // and refetch — that just kicks off a redundant network round-trip
-      // that can race with our patch and overwrite the truth with stale
-      // data if the read lags the write. Keep effort cache invalidation
-      // because the new TaskTimeLog row that this completion creates lives
-      // in a separate query.
+      // patchTaskInCache already updated the toggled task. But the trigger
+      // also cascades: trg_propagate_task_unblock recomputes is_blocked on
+      // OTHER tasks in the project (the ones that depended on this one).
+      // Without realtime (which is sometimes 401-storming under JWT refresh
+      // glitches), those cascaded updates never reach the cache. Same story
+      // for the auto-effort TaskTimeLog row created below — the EffortLog
+      // tab needs a fresh read to see it. Refetch both explicitly:
+      //
+      //   - refetchProjectTasks: re-reads this project's tasks, picking up
+      //     any is_blocked / due_date changes the trigger applied. The
+      //     auto-prune effect handles the optimistic-state hand-off cleanly.
+      //   - refetchEntityList("TaskTimeLog"): invalidates + refetches the
+      //     global TaskTimeLog cache so the auto-effort entry shows.
+      //
+      // Both are short-circuited by realtime when it's healthy (the cache
+      // is already current, refetch returns the same data).
+      refetchProjectTasks();
+      refetchEntityList("TaskTimeLog");
       invalidateProjectCaches(queryClient, { effort: true });
       scheduleDeadlineSync(projectId, 'task_completed');
 
