@@ -290,14 +290,26 @@ export function assignStaffToProjectFields(
   );
   const needsVideographer = !!bookingTypes.isVideoBooking;
 
-  // A slot is fillable if it's empty or currently held by a team fallback.
+  // A slot is fillable if it's empty, currently held by a team fallback, OR
+  // currently held by a real user who is NO LONGER in the resolved Tonomo
+  // team. The last clause is what makes "team-only" change webhooks (e.g.
+  // Janet → Dom swap) actually take effect: without it, an earlier Tonomo
+  // webhook's user assignment is treated as a permanent manual placement and
+  // a subsequent team swap never moves them out of the slot.
   // For new projects (no existingProject), both slots are fillable.
+  const newTeamUserIds = new Set(resolvedPhotographers.map((p) => p.userId).filter(Boolean));
+  const photographerStale = !!existingProject?.photographer_id
+    && !newTeamUserIds.has(existingProject.photographer_id);
+  const videographerStale = !!existingProject?.videographer_id
+    && !newTeamUserIds.has(existingProject.videographer_id);
   const photographerSlotFillable = !existingProject
     || !existingProject.photographer_id
-    || existingProject.photographer_type === 'team';
+    || existingProject.photographer_type === 'team'
+    || photographerStale;
   const videographerSlotFillable = !existingProject
     || !existingProject.videographer_id
-    || existingProject.videographer_type === 'team';
+    || existingProject.videographer_type === 'team'
+    || videographerStale;
 
   const roleToSlot: Record<string, 'photographer_id' | 'videographer_id'> = {
     photographer:   'photographer_id',
