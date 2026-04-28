@@ -180,6 +180,13 @@ export async function handleScheduled(entities: any, orderId: string, p: any, or
     tonomo_video_project: p.order?.videoProject ?? p.videoProject ?? null,
     tonomo_invoice_amount: p.order?.invoice_amount ?? p.invoice_amount ?? null,
     tonomo_payment_status: p.order?.paymentStatus || p.paymentStatus || null,
+    payment_status: ((): 'paid' | 'unpaid' | 'partial' | null => {
+      const raw = (p.order?.paymentStatus || p.paymentStatus || '').toLowerCase().trim();
+      if (raw === 'paid') return 'paid';
+      if (raw === 'unpaid' || raw === 'pending') return 'unpaid';
+      if (raw === 'partial') return 'partial';
+      return null;
+    })(),
     tonomo_photographer_ids: JSON.stringify(photographers),
     tonomo_booking_flow: p.order?.bookingFlow?.name || p.bookingFlow?.name || null,
     tonomo_booking_flow_id: bookingFlowObj?.id || null,
