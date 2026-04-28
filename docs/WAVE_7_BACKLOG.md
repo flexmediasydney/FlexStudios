@@ -758,6 +758,169 @@ needed beyond the P1-1 / P1-2 prompt iterations:
 
 ---
 
+## P1 — Items added 2026-04-27 (13 Saladine review feedback)
+
+Joseph's review of round `3ed54b53` on project `1be81086` (13 Saladine Ave,
+Punchbowl NSW 2196 — Tier S, status='proposed', 42 classifications) surfaced
+3 engine-quality issues. Each is independently shippable.
+
+### P1-20 — Surface per-file reasoning on swimlane cards (Pass 1 + Pass 2)
+
+**Origin.** Joseph 2026-04-27. Operators reviewing AI-proposed and rejected
+files can't see WHY the engine concluded each decision. The reasoning data
+already exists in the DB; the swimlane just doesn't render it.
+
+**Available data not surfaced.**
+
+- `composition_classifications.analysis` (mig 283) — Pass 1 emits a
+  3+ sentence reasoning paragraph per composition under the v2 reasoning-first
+  prompt contract (W7.6 `headerBlock` + `stepOrderingBlock`). Already
+  persisted; just needs a UI field on each card.
+- Pass 2 outputs `coverage_notes` (round-level) in `shortlisting_rounds`
+  AND per-decision context inside `slot_assignments[]` and
+  `rejected_near_duplicates[]` shapes (currently captured in the round's
+  raw Pass 2 JSON output but not surfaced per-card).
+- `shortlisting_quarantine.reason_detail` (mig 283) holds Pass 0's hard-reject
+  rationale — also not surfaced.
+
+**Fix.**
+
+1. Frontend: extend `ShortlistingCard.jsx` with a "Why?" expandable section
+   that renders:
+   - Pass 1 analysis (3 sentences, render verbatim)
+   - Pass 2 rationale for the slot decision (when the card is shortlisted,
+     show why this composition won the slot vs the alternatives)
+   - Rejection rationale (when rejected: which alternative beat it, or which
+     near-duplicate it lost to, with score deltas)
+2. Backend: extend `pass2OutputSchema` block (W7.6 prompt block) to require
+   per-slot `decision_rationale: string` + per-rejected `rejection_reason:
+   string` fields the model emits explicitly. Today's prompt asks for
+   reasoning implicitly via the analysis-first contract; making it an explicit
+   field forces the model to surface it cleanly.
+3. Persist Pass 2's per-decision rationale in a new column or sidecar table.
+   Recommendation: new `shortlisting_pass2_rationales` sidecar table keyed by
+   `(round_id, group_id)` with `decision`, `rationale`, `score_at_decision`.
+   Avoids bloating composition_classifications.
+
+**Estimated effort.** ~2-3 days (prompt block iteration + sidecar table +
+frontend rendering + tests).
+
+**Migration.** Reserve next-available number (likely 347 after Wave 8's 344
++ W12=345 + W14=346).
+
+---
+
+### P1-21 — Aspect ratio fidelity (3:2 native, not 4:3 / 16:9 cropped)
+
+**Origin.** Joseph 2026-04-27. Saladine swimlane previews appear cropped /
+not reflecting actual composition framing. Investigation findings:
+
+**Vision API path: ✅ correct** — Modal worker `photos-extract/main.py:362-368`
+preserves aspect ratio (resize to 1024px width, height = `width × original
+ratio`). Pass 1 receives a proportional image, so AI judgement is on true
+framing. **Vision API is NOT the problem.**
+
+**Frontend swimlane path: ❌ wrong aspect everywhere.**
+
+| File | Line | Container aspect | Image fit |
+|---|---|---|---|
+| `ShortlistingCard.jsx` | 156 | `aspect-[4/3]` (1.33:1) | (default cover) |
+| `ShortlistingCoverageMap.jsx` | 287, 291 | `aspect-[4/3]` (1.33:1) | (default cover) |
+| `ManualShortlistingSwimlane.jsx` | 119, 124 | `aspect-video` (16:9 = 1.78:1) | `object-cover` (CROPS) |
+| `ShortlistingQuarantine.jsx` | 237 | `aspect-[4/3]` (1.33:1) | (default cover) |
+| `ShortlistingRetouchFlags.jsx` | 184 | `aspect-[4/3]` (1.33:1) | (default cover) |
+
+**Canon R5 native aspect is 3:2 (1.5:1).** The 4:3 container squeezes the
+image (aspect mismatch ~13%); the 16:9 container with `object-cover` crops
+~15% off the top + bottom in manual mode. Operators see something the
+photographer didn't shoot.
+
+**Fix.**
+
+1. Standardise the swimlane thumbnail aspect to `aspect-[3/2]` across all 5
+   listed components. Remove `object-cover` in manual swimlane (or replace
+   with `object-contain` if the container ratio differs from the image).
+2. Add a runtime guard: if the image's actual `naturalWidth / naturalHeight`
+   ratio is far from 3:2 (e.g. drone widescreen 16:9, iPhone 4:3), render
+   the container with `aspect-auto` so the image dictates aspect rather than
+   being cropped to the swimlane's expectation.
+3. Pass 1 / Pass 2 prompts could optionally surface a hint about the source
+   aspect — but only valuable if the AI is making aspect-conditional
+   judgements (e.g. "this is a Sony 16:9 drone shot, score the framing
+   accordingly"). Defer to W11 (where source-type metadata lands as a
+   first-class field).
+
+**Estimated effort.** ~½ day frontend (5 files, mechanical CSS swap, 2-3
+visual regression tests).
+
+**No migration needed.** Pure UI fix.
+
+**Confirmed not propagating into engine.** Modal preview generation is
+correct; vision API gets the full proportional frame.
+
+---
+
+### P1-22 — Score range compression: scores anchor near tier ceiling, not floor
+
+**Origin.** Joseph 2026-04-27. 13 Saladine round (Tier S, 42 classifications)
+shows score distribution:
+```
+min: 4.35  max: 7.00  avg: 6.04  stddev: 0.56
+```
+
+The model is treating the Stream B Tier S anchor (5.0) as a **ceiling** rather
+than a **floor**. The current prompt language (`streamBAnchors.ts:42`) says
+"5 is the FLOOR for competent professional real estate" — but Sonnet appears
+to anchor scores tightly within the local tier band (4-7 for Tier S) instead
+of allowing exceptional Tier S images to cross 8 or 9.
+
+**The fix is NOT score clamping in code** — `scoreRollup.computeWeightedScore`
+does no clamping (verified). The fix is **prompt-side**.
+
+**Hypothesis.** Sonnet reads "Tier S = anchor 5 / Tier P = anchor 8 / Tier A
+= anchor 9.5" and treats the anchors as bin centers rather than tier-floors.
+A Tier S round mostly produces scores between 4-7, never crossing 8 even
+when an exceptional shot warrants it. This compresses learning signal: the
+top of the Tier S distribution can't differentiate "good Tier S" from "Tier
+S that should have been Tier P".
+
+**Fix options.**
+
+1. **Prompt rewrite (cheapest).** Restate Stream B anchors as cumulative
+   floors:
+   - "5 = MINIMUM acceptable score for the lowest tier (Tier S)"
+   - "8 = MINIMUM threshold to reach Tier P. A Tier S shot that crosses 8
+     is exceptional — score it accurately."
+   - "9.5 = MINIMUM threshold to reach Tier A."
+   - Add explicit anti-clustering instruction: "Use the full 0-10 range.
+     A Tier S shoot can produce a 9.0; a Tier A shoot can produce a 5.0.
+     The tier sets the customer's expectation, NOT the score's range."
+2. **Calibration data.** W14 (50-project structured calibration) will
+   reveal whether prompt alone fixes the compression, or whether the model
+   needs few-shot examples of "score 8.5 on a Tier S round."
+3. **Audit the existing 42 Saladine scores.** Do high-stddev rounds exist
+   in the historical data? If pre-W7.7 rounds also show stddev <1.0, the
+   compression is a long-standing prompt issue.
+
+**Estimated effort.** ~½ day for prompt iteration + W7.6 block-version bump
++ A/B regression test against existing rounds. Wave 14 calibration provides
+the long-term tuning loop.
+
+**No migration needed.** Pure prompt + block-version bump.
+
+**Block versioning impact.** Updating `streamBAnchors.ts` text bumps
+`STREAM_B_ANCHORS_BLOCK_VERSION` from 'v1.0' → 'v1.1' per the W7.6 contract.
+`composition_classifications.prompt_block_versions` will track which version
+ran each round, so post-fix benchmarking can isolate the impact.
+
+**Cross-references.** Symptomatic of the same anchor-compression issue Joseph
+observed at the round-level on Saladine. Wave 11 (universal vision response
+schema) is the deeper architectural fix — per-signal scoring lets each of
+the 22 signals find its natural range without anchoring to tier ceilings.
+P1-22 is a prompt-only mitigation that ships in days, not weeks.
+
+---
+
 ## Notes for the orchestrator
 
 When starting Wave 7:
