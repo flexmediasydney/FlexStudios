@@ -354,18 +354,42 @@ export async function createProjectFolders(
     if (updErr) throw updErr;
   }
 
-  // 3. Upsert project_folders rows.
+  // 3. Insert any missing project_folders rows.
+  //
+  // Was previously a `.upsert(rows, { onConflict: 'project_id,folder_kind',
+  // ignoreDuplicates: true })` call, but that supabase-js path empirically
+  // NO-OPs new rows on this Supabase deployment — it touches existing rows'
+  // last_synced_at but never inserts the missing kinds. Discovered 2026-04-28
+  // while backfilling 14 projects to add the Photos/ tree (Wave 6 P1):
+  // every backfill iteration reported processed=N, errors=0, but the
+  // project_folders count never went up.
+  //
+  // Doing an explicit "read existing kinds, insert delta" sidesteps the
+  // bug entirely and is unambiguous about what gets written. Idempotent —
+  // a concurrent caller racing to insert the same kinds will hit the
+  // (project_id, folder_kind) unique constraint, which propagates as an
+  // error to the caller for retry.
   const now = new Date().toISOString();
-  const rows = NEW_PROJECT_FOLDER_KINDS.map((kind) => ({
-    project_id: projectId,
-    folder_kind: kind,
-    dropbox_path: `${rootPath}/${FOLDER_RELATIVE_PATHS[kind]}`,
-    last_synced_at: now,
-  }));
-  const { error: upErr } = await admin
+  const { data: existingFolders, error: readKindsErr } = await admin
     .from('project_folders')
-    .upsert(rows, { onConflict: 'project_id,folder_kind', ignoreDuplicates: true });
-  if (upErr) throw upErr;
+    .select('folder_kind')
+    .eq('project_id', projectId);
+  if (readKindsErr) throw readKindsErr;
+  const existingKinds = new Set(
+    (existingFolders || []).map((r: { folder_kind: string }) => r.folder_kind),
+  );
+  const missingRows = NEW_PROJECT_FOLDER_KINDS
+    .filter((kind) => !existingKinds.has(kind))
+    .map((kind) => ({
+      project_id: projectId,
+      folder_kind: kind,
+      dropbox_path: `${rootPath}/${FOLDER_RELATIVE_PATHS[kind]}`,
+      last_synced_at: now,
+    }));
+  if (missingRows.length > 0) {
+    const { error: insErr } = await admin.from('project_folders').insert(missingRows);
+    if (insErr) throw insErr;
+  }
 
   // 4. Read back the canonical rows.
   const { data: folders, error: readErr } = await admin

@@ -44,6 +44,37 @@ const GENERATOR = 'backfillProjectFolders';
 const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_MAX_RUNTIME_MS = 90_000;
 
+/**
+ * Count project_folders rows per project_id, paginating through PostgREST's
+ * default 1000-row response cap. Without pagination, projects whose rows
+ * fall past row 1000 of the response appear to have count=0 — which marks
+ * fully-provisioned projects as "missing kinds" and re-processes them
+ * indefinitely. Discovered 2026-04-28 when the loop kept reporting
+ * remaining=16 after every project was actually complete.
+ */
+async function fetchFolderCounts(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  projectIds: string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  const PAGE = 1000;
+  for (let offset = 0; ; offset += PAGE) {
+    const { data, error } = await admin
+      .from('project_folders')
+      .select('project_id')
+      .in('project_id', projectIds)
+      .range(offset, offset + PAGE - 1);
+    if (error) throw error;
+    const rows = (data || []) as Array<{ project_id: string }>;
+    for (const row of rows) {
+      counts.set(row.project_id, (counts.get(row.project_id) || 0) + 1);
+    }
+    if (rows.length < PAGE) break;
+  }
+  return counts;
+}
+
 serveWithAudit(GENERATOR, async (req: Request) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -112,15 +143,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
     const projIds = (provisioned || []).map((p) => p.id);
     if (projIds.length > 0) {
-      const { data: folderCounts, error: cntErr } = await admin
-        .from('project_folders')
-        .select('project_id')
-        .in('project_id', projIds);
-      if (cntErr) return errorResponse(`Folder count fetch failed: ${cntErr.message}`, 500, req);
-      const counts = new Map<string, number>();
-      for (const row of folderCounts || []) {
-        counts.set(row.project_id as string, (counts.get(row.project_id as string) || 0) + 1);
-      }
+      const counts = await fetchFolderCounts(admin, projIds);
       candidates = ((provisioned || []) as Candidate[])
         .filter((p) => (counts.get(p.id) || 0) < expectedCount)
         .slice(0, batchSize);
@@ -163,14 +186,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .limit(2000);
     const projIds = (provisioned || []).map((p) => p.id);
     if (projIds.length > 0) {
-      const { data: folderCounts } = await admin
-        .from('project_folders')
-        .select('project_id')
-        .in('project_id', projIds);
-      const counts = new Map<string, number>();
-      for (const row of folderCounts || []) {
-        counts.set(row.project_id as string, (counts.get(row.project_id as string) || 0) + 1);
-      }
+      const counts = await fetchFolderCounts(admin, projIds);
       remaining = projIds.filter((id) => (counts.get(id) || 0) < expectedCount).length;
     }
   }
