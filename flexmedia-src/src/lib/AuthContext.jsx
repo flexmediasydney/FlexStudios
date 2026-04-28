@@ -197,11 +197,15 @@ export const AuthProvider = ({ children }) => {
         if (cancelled) return;
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (session?.user) {
+            // Push the fresh JWT to the realtime client so existing channels
+            // don't keep reconnecting with the expired token (causes 401 storm).
+            supabase.realtime.setAuth(session.access_token);
             await fetchAppUser(session.user, session.access_token);
           }
         } else if (event === 'PASSWORD_RECOVERY') {
           window.location.href = '/auth/reset-password';
         } else if (event === 'SIGNED_OUT') {
+          supabase.realtime.setAuth(null);
           setUser(null);
           setIsAuthenticated(false);
           setIsLoadingAuth(false);
