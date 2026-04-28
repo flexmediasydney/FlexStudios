@@ -29,15 +29,31 @@
  *
  * Trigger: pg_cron every minute (migration 292).
  *
- * Per-invocation: pulls up to 10 pending jobs ordered by scheduled_for. For
- * each: marks status='running' (via claim_shortlisting_jobs), dispatches via
- * fetch, then updates to 'succeeded' or 'failed' based on response. Failed
- * jobs back off exponentially (attempt 1: now+60s, 2: +300s, 3: +1800s).
- * After 3 failed attempts a job is marked 'dead_letter'.
+ * Per-invocation (claim-one-at-a-time, budget-bounded loop): claims a SINGLE
+ * pending job ordered by scheduled_for, dispatches it via fetch, marks
+ * succeeded/failed, then loops to claim the next one — until either no jobs
+ * remain OR the wall-clock budget would be exceeded by another iteration.
  *
- * Stale-claim recovery: any job stuck in 'running' for >20 minutes is reset
- * to 'pending' with attempt_count refunded. Mirrors the drone dispatcher
- * fix for Edge-Function timeouts that would otherwise burn the retry budget.
+ * The previous design pre-claimed up to MAX_JOBS_PER_RUN=10 jobs upfront and
+ * processed them serially. That ran fine for short pass jobs but broke for
+ * extract chunks (~85s each on Modal): a 5-chunk round claimed all 5 as
+ * 'running' on the first tick, processed only 3 before the Edge Function
+ * wall-clock killed the invocation, then stranded chunks 4-5 in 'running'
+ * until the 20-minute stale-claim sweep released them. Real-world hit on
+ * 2026-04-28 (13 Saladine round 3ed54b53). Claim-one-at-a-time means at most
+ * the currently-dispatching job is at risk if the invocation dies; siblings
+ * stay 'pending' and the next cron tick picks one up immediately.
+ *
+ * Failed jobs back off exponentially (attempt 1: now+60s, 2: +300s, 3:
+ * +1800s). After 3 failed attempts a job is marked 'dead_letter'.
+ *
+ * Stale-claim recovery: any job stuck in 'running' for >5 minutes is reset
+ * to 'pending' with attempt_count refunded. (Was 20min — tightened
+ * 2026-04-28 alongside the claim-one-at-a-time refactor: with at most one
+ * in-flight job per tick, anything older than the slowest pass + buffer is
+ * unambiguously stuck rather than legitimately running.) Mirrors the drone
+ * dispatcher fix for Edge-Function timeouts that would otherwise burn the
+ * retry budget.
  *
  * Auth: __service_role__ (cron) OR master_admin (manual trigger).
  * Deployed verify_jwt=false; auth via getUserFromReq.
@@ -57,8 +73,20 @@ import { tryAcquireMutex, releaseMutex } from "../_shared/dispatcherMutex.ts";
 const GENERATOR = "shortlisting-job-dispatcher";
 const SUPABASE_URL =
   Deno.env.get("SUPABASE_URL") || "https://rjzdznwkxnzfekgcdkei.supabase.co";
-const MAX_JOBS_PER_RUN = 10;
 const MAX_ATTEMPTS = 3;
+
+// Per-tick wall-clock budget. Supabase Pro Edge Functions have a ~400s wall
+// timeout; we cap our processing window at 240s so the invocation has plenty
+// of headroom to release the mutex and emit a clean response. The dispatcher
+// loops claim→dispatch→loop and exits as soon as the next iteration would
+// risk overshooting.
+const TICK_BUDGET_MS = 240_000;
+// Pessimistic ceiling on a single iteration. dispatchOne's fetch timeout is
+// 120s (Pass 2 worst case). We add headroom for the post-call DB updates +
+// chain logic + claim of the next job. If `TICK_BUDGET_MS - elapsed` is less
+// than this, we exit gracefully so the mutex is released and the Edge
+// Function gets to write its response before the gateway closes.
+const TICK_LOOP_SAFETY_MS = 130_000;
 
 // Audit defect #13 + Wave 7 P0-2: warn loudly at cold-start if the dispatcher
 // JWT secret is missing OR present-but-malformed. Catches misconfiguration
@@ -96,8 +124,13 @@ const DISPATCHER_LOCK_NAME = "shortlisting-job-dispatcher";
 // Backoff seconds: attempt 1 fail → +60s, attempt 2 → +300s, attempt 3 → +1800s
 const BACKOFF_SECONDS = [60, 300, 1800];
 
-// Stale-claim sweep — any job stuck in 'running' for >20 minutes is reset.
-const STALE_CLAIM_MIN = 20;
+// Stale-claim sweep — any job stuck in 'running' for >5 minutes is reset.
+// Tightened 2026-04-28 from 20min after switching to claim-one-at-a-time:
+// the previous batch-claim could legitimately leave 9 sibling jobs in
+// 'running' waiting their turn for ~5min each, so 20min was the safe floor.
+// Now there's only ever one in-flight job, and dispatchOne's fetch timeout
+// is 120s — anything still 'running' past 5min is truly stranded.
+const STALE_CLAIM_MIN = 5;
 
 type ShortlistingJob = {
   id: string;
@@ -253,41 +286,54 @@ async function runDispatcherTick(
     }
   }
 
-  // ── Atomically claim up to N pending jobs ─────────────────────────────────
-  // claim_shortlisting_jobs (mig 288) does the FOR UPDATE SKIP LOCKED dance
-  // and returns project_id/round_id/group_id alongside id/kind/payload so we
-  // don't need per-claim follow-up lookups in the chain logic.
-  const { data: claimed, error: claimErr } = await admin.rpc(
-    "claim_shortlisting_jobs",
-    { p_limit: MAX_JOBS_PER_RUN },
-  );
-
-  if (claimErr) {
-    return errorResponse(`claim_shortlisting_jobs failed: ${claimErr.message}`, 500, req);
-  }
-
-  const jobs: ShortlistingJob[] = claimed || [];
-  if (jobs.length === 0) {
-    return jsonResponse(
-      {
-        success: true,
-        claimed: 0,
-        dispatched: 0,
-        failed: 0,
-        elapsed_ms: Date.now() - startedAt,
-      },
-      200,
-      req,
-    );
-  }
-
+  // ── Claim-one-at-a-time, budget-bounded loop ──────────────────────────────
+  // Each iteration atomically claims a single pending job (FOR UPDATE SKIP
+  // LOCKED via mig 288), dispatches it, marks succeeded/failed, then loops.
+  // Exits when:
+  //   (a) claim_shortlisting_jobs returns no rows (queue drained), OR
+  //   (b) remaining wall-clock budget is too small for another iteration to
+  //       finish + emit a response cleanly.
+  //
+  // Why one-at-a-time: pre-claiming a batch of N marks all N as 'running' on
+  // the first iteration. If the Edge Function wall-clock kills the invocation
+  // before all N are processed, the unprocessed siblings sit in 'running'
+  // until the stale-claim sweep (5min). With one-at-a-time, only the
+  // currently-dispatching job is at risk; the rest stay 'pending' and the
+  // next cron tick (≤60s away) picks the next one up.
+  let claimedTotal = 0;
   let dispatched = 0;
   let failed = 0;
+  let exitReason: "drained" | "budget_exhausted" = "drained";
   const results: Array<
     { id: string; kind: string; ok: boolean; error?: string }
   > = [];
 
-  for (const job of jobs) {
+  while (true) {
+    if (Date.now() - startedAt + TICK_LOOP_SAFETY_MS >= TICK_BUDGET_MS) {
+      exitReason = "budget_exhausted";
+      console.info(
+        `[${GENERATOR}] tick budget exhausted after ${claimedTotal} job(s); ` +
+          `next cron tick will pick up remaining work`,
+      );
+      break;
+    }
+
+    const { data: claimed, error: claimErr } = await admin.rpc(
+      "claim_shortlisting_jobs",
+      { p_limit: 1 },
+    );
+    if (claimErr) {
+      return errorResponse(
+        `claim_shortlisting_jobs failed: ${claimErr.message}`,
+        500,
+        req,
+      );
+    }
+    const jobs: ShortlistingJob[] = claimed || [];
+    if (jobs.length === 0) break;
+    const job = jobs[0];
+    claimedTotal++;
+
     try {
       const ok = await dispatchOne(job);
       if (ok.ok) {
@@ -345,9 +391,10 @@ async function runDispatcherTick(
   return jsonResponse(
     {
       success: true,
-      claimed: jobs.length,
+      claimed: claimedTotal,
       dispatched,
       failed,
+      exit_reason: exitReason,
       elapsed_ms: Date.now() - startedAt,
       results,
     },
@@ -593,12 +640,11 @@ async function callEdgeFunction(
   }
   try {
     // Burst 17 GG1: bound the per-call wait so a hanging downstream function
-    // doesn't burn the dispatcher's entire 150s gateway budget. The
-    // dispatcher claims up to MAX_JOBS_PER_RUN (10) jobs per tick — one slow
-    // call shouldn't strand the other 9 in 'running' until stale-claim
-    // recovery (20 min). 120s gives Pass 2 (the slowest, with 8192-token
-    // output + Stream B universe) headroom while leaving the dispatcher
-    // ~30s to cleanly mark the timed-out job and exit.
+    // doesn't burn the dispatcher's entire wall budget. 120s gives Pass 2
+    // (the slowest, with 8192-token output + Stream B universe) headroom
+    // while leaving the dispatcher ~30s to cleanly mark the timed-out job
+    // and exit. Pairs with TICK_LOOP_SAFETY_MS (130s) so the loop can always
+    // close the in-flight call before the per-tick wall budget closes.
     const resp = await fetch(url, {
       method: "POST",
       headers: {
