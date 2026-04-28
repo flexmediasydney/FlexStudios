@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
@@ -364,8 +364,20 @@ export default function ProjectDetails() {
    );
 
    // ProjectActivity is fetched server-scoped by ProjectActivityHub.
-   // The previous parent-level fetch was used only to derive activities for a
-   // child component that didn't actually consume them — pure waste.
+   // The page-level fetch is now narrowed to just the rows the review-state
+   // banner needs (manual_approval / flagged) — read once per project, no
+   // realtime subscription, refetch on stage change via the same queryKey
+   // invalidation as projectTasks.
+   const { data: allProjectActivities = [] } = useQuery({
+     queryKey: ['project-activities-banner', projectId],
+     enabled: Boolean(projectId),
+     staleTime: 60 * 1000,
+     queryFn: () => api.entities.ProjectActivity.filter(
+       { project_id: projectId },
+       '-created_at',
+       50
+     ).then(rows => rows || []),
+   });
 
   // One-time sync of blocking state — only fires once per project load, with longer debounce.
   // Reset syncedRef when projectId changes so navigating to a different project re-syncs.
