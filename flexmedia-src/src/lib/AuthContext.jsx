@@ -169,8 +169,16 @@ export const AuthProvider = ({ children }) => {
 
       if (cancelled) return;
 
-      // Step 2: If getSession worked and has a session, use it
+      // Step 2: If getSession worked and has a session, use it.
+      // CRITICAL: push the JWT to the realtime client BEFORE any subscriptions
+      // mount. On page reload Supabase fires neither SIGNED_IN nor
+      // TOKEN_REFRESHED — the session is just rehydrated from storage — so
+      // the onAuthStateChange handler below never gets a chance to call
+      // setAuth, and the realtime websocket would otherwise connect with no
+      // user JWT and get a 401 on every channel join until the next refresh
+      // (~4-min) tick. This was the residual realtime 401 the user reported.
       if (session?.user?.email) {
+        if (session.access_token) supabase.realtime.setAuth(session.access_token);
         await fetchAppUser(session.user, session.access_token);
         return;
       }
@@ -178,6 +186,7 @@ export const AuthProvider = ({ children }) => {
       // Step 3: No session from client — try localStorage
       const stored = getSessionFromStorage();
       if (stored?.user?.email) {
+        if (stored.access_token) supabase.realtime.setAuth(stored.access_token);
         await fetchAppUser(stored.user, stored.access_token);
         return;
       }
