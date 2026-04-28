@@ -586,15 +586,14 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
     try {
       const completedAtForWrite = wasCompleted ? null : new Date().toISOString();
-      await api.entities.ProjectTask.update(task.id, {
+      // Capture the FULL returned row — it carries the authoritative updated_at
+      // that the realtime stale-event filter needs to ignore any earlier
+      // out-of-order events (e.g. a takeover-only update for the same task).
+      const updatedRow = await api.entities.ProjectTask.update(task.id, {
         is_completed: !wasCompleted,
         completed_at: completedAtForWrite,
       });
-      // Patch the project-scoped query cache directly so the UI reflects the
-      // canonical value even when realtime is down. The optimistic auto-prune
-      // effect now sees raw === optimistic and clears the override cleanly,
-      // with no flicker.
-      patchTaskInCache(task.id, {
+      patchTaskInCache(task.id, updatedRow || {
         is_completed: !wasCompleted,
         completed_at: completedAtForWrite,
       });
@@ -674,11 +673,14 @@ export default function TaskManagement({ projectId, project, canEdit }) {
         }
       }
 
-      // No manual refetch: realtime patches the cache and notifies listeners.
-      // The optimistic override is held until the canonical value catches up
-      // (auto-prune effect above), preventing the brief flicker we used to
-      // get when finally{} cleared optimistic before realtime arrived.
-      invalidateProjectCaches(queryClient, { tasks: true, effort: true });
+      // patchTaskInCache already updated the project-scoped task cache with
+      // the authoritative row from the API response. No need to invalidate
+      // and refetch — that just kicks off a redundant network round-trip
+      // that can race with our patch and overwrite the truth with stale
+      // data if the read lags the write. Keep effort cache invalidation
+      // because the new TaskTimeLog row that this completion creates lives
+      // in a separate query.
+      invalidateProjectCaches(queryClient, { effort: true });
       scheduleDeadlineSync(projectId, 'task_completed');
 
       // Dependency unblocking feedback: count how many tasks this completion unblocks
@@ -780,10 +782,12 @@ export default function TaskManagement({ projectId, project, canEdit }) {
                   const results = await Promise.allSettled(incomplete.map(t => api.entities.ProjectTask.update(t.id, { is_completed: true, completed_at: now })));
                   const succeeded = results.filter(r => r.status === 'fulfilled').length;
                   const failed = results.filter(r => r.status === 'rejected').length;
-                  // Patch the project-scoped query cache for every successful write.
+                  // Patch the project-scoped query cache for every successful
+                  // write, using the FULL returned row so its updated_at acts
+                  // as the ordering key against later out-of-order realtime.
                   results.forEach((r, i) => {
                     if (r.status === 'fulfilled') {
-                      patchTaskInCache(incomplete[i].id, { is_completed: true, completed_at: now });
+                      patchTaskInCache(incomplete[i].id, r.value || { is_completed: true, completed_at: now });
                     }
                   });
 

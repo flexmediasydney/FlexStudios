@@ -85,18 +85,22 @@ export function useProjectTasks(projectId, { sort = 'order' } = {}) {
 
   /**
    * Patch a single task in the cache after a successful local write.
-   * Use this from mutation onSuccess to make the UI reflect the truth
-   * without relying on realtime — protects against tick→untick when
-   * the realtime channel is unavailable.
+   * Pass the FULL row returned by `api.entities.ProjectTask.update` so the
+   * cache's `updated_at` advances correctly — the realtime stale-event
+   * filter compares this timestamp to incoming events, and a partial patch
+   * that leaves an old `updated_at` would let an out-of-order earlier
+   * event regress the cache (tick → untick).
    */
-  const patchTaskInCache = useCallback((taskId, updates) => {
-    if (!taskId || !updates) return;
+  const patchTaskInCache = useCallback((taskId, fullRow) => {
+    if (!taskId || !fullRow) return;
     queryClient.setQueryData(queryKey, (prev = []) => {
       if (!Array.isArray(prev)) return prev;
       const idx = prev.findIndex(t => t.id === taskId);
       if (idx === -1) return prev;
       const next = prev.slice();
-      next[idx] = { ...prev[idx], ...updates };
+      // Merge to preserve any optimistic-only fields, but use the row's
+      // real updated_at as the authoritative ordering key.
+      next[idx] = { ...prev[idx], ...fullRow };
       return next;
     });
     // queryKey is derived from [projectId, sort]
