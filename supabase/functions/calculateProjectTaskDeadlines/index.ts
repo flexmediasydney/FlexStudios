@@ -220,6 +220,14 @@ function calculateTaskState(task: any, project: any, allTasks: any[], timezone =
           result.due_date = computedDueDate;
           result.shouldUpdate = true;
         }
+      } else if (task.due_date && task.auto_generated && !task.is_manually_set_due_date) {
+        // Re-blocked path: an upstream task was un-completed, so this task is
+        // blocked again. Clear the previously-auto-set due_date — the timer
+        // was based on an upstream completion that's no longer true. Mirrors
+        // the behaviour of the trigger-based branch below. Manually-set
+        // deadlines are preserved.
+        result.due_date = null;
+        result.shouldUpdate = true;
       }
     } else {
       const triggerMet = isTriggerConditionMet(task.timer_trigger, project);
