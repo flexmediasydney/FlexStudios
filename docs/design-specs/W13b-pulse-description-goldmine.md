@@ -6,11 +6,22 @@
 **Dependencies:**
 - **W11 must land first** — universal vision response defines the canonical-key shape (`OBJECT_*` keys, `attribute_values` JSON shape) that this extractor populates. Pre-W11, this spec's extractor would have no schema to write into.
 - **W12 must land first** — `object_registry`, `attribute_values`, `raw_attribute_observations` tables (per W12.1) need to exist; pgvector extension installed; cosine-similarity functions available.
+- **W11.7 architectural parallel** — this spec's text-extraction pattern (Sonnet/Opus over a corpus → emit structured JSON via tool-use → write to canonical tables) mirrors the unified-call image-extraction pattern. Same prompt-block conventions; same engine_settings cost-cap discipline; same manual-trigger policy.
 
 **Unblocks:**
-- **W12.5** (nightly normalisation batch) gets a 28k-row seed corpus on day one instead of waiting for live shoots to accumulate.
+- **W12.5** (manual-trigger normalisation batch) gets a 28k-row seed corpus on day one instead of waiting for live shoots to accumulate.
 - **W12.6** (discovery queue UI) has actual candidates to review post-deploy.
 - **W15b** (REA listing scoring + missed-opportunity recalibration) — every listing scored for vision-grade signals can join against the description-derived attribute set, giving a richer competitor profile.
+
+---
+
+## ⚡ Architectural alignment (2026-04-29)
+
+W13b's extractor is text-only (no images), so W11.7's unified-image-call architecture doesn't directly change W13b's flow. But:
+
+- **Same architectural principles apply**: tool-use for strict JSON output, manual-trigger only (no autonomous cron per Joseph 2026-04-27), per-invocation `cost_cap_usd`, master_admin invocation control.
+- **W13b output feeds the same `object_registry`** that W11.7's unified call reads as canonical-context-prompt. Pulse-derived canonical features (e.g. "Caesarstone benchtop" observed 80 times in REA descriptions) become high-confidence prompt context for the unified call's image judgements. **Cross-source learning**: text observations from REA listings train the unified call's image classification.
+- **W12 normalisation is the bridge**: pulse_description_extractions → normalisation pipeline → object_registry → unified call's prompt context. Same plumbing W11.7 image observations flow through.
 
 ---
 

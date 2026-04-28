@@ -5,14 +5,26 @@
 **Wave plan ref:** Wave 14 — establish the permanent benchmark set + name override patterns. Subsumes W14.1-W14.5 from `docs/WAVE_PLAN.md`.
 **Dependencies:**
 - **W7.7 ✅ shipped** — round-level `engine_tier_id`, `expected_count_target`, `package_engine_tier_mapping` are read by the calibration UI to render package + tier context per project.
-- **W8 must land first** — `tier_config_version` on rounds + `engine_version` provenance lets a calibration session capture "AI ran under config v3 of Tier P", which is the right granularity for downstream re-extraction. Without W8, calibration disagreements have no run-time pin and are harder to reproduce.
-- **W11 should land first (not strictly blocking)** — universal vision response gives per-signal scores. Calibration disagreements are richer when the editor can see "AI scored vertical_line_convergence at 6.2 here", but pre-W11 we ship with the 4-dim aggregates and the analysis paragraph (which is enough for the session's primary output: ranked editor decisions vs ranked AI decisions).
-- **W12 must land first** — W14.5 (the suggestion-engine validation step) cross-references editor disagreements against `pass2_slot_suggestion` events + `object_registry.market_frequency`. Pre-W12 the validation step degrades to "spot-check the disagreement reasons" which is fine for v1 but loses the institutional-memory feedback loop.
+- **W8 must land first** — `tier_config_version` on rounds + `engine_version` provenance lets a calibration session capture "AI ran under config v3 of Tier P", which is the right granularity for downstream re-extraction.
+- **W11 should land first (not strictly blocking)** — universal vision response gives per-signal scores. Calibration disagreements are richer when the editor can see "AI scored vertical_line_convergence at 6.2 here".
+- **W11.7 (unified architecture) recommended** — calibration is most valuable when AI and editor are compared on the SAME architecture. Mixing two_pass and unified outputs in one session muddles the signal. Recommend W14 sessions filter to one engine_mode at a time.
+- **W12 must land first** — W14.5 (the suggestion-engine validation step) cross-references editor disagreements against the unified call's `proposed_slots[]` events + `object_registry.market_frequency`.
 
 **Unblocks:**
-- **Tier 8 weight tuning closure** — the calibration session produces the data Joseph needs to confidently set per-tier dimension weights via the W8 admin UI (replacing the v1 default uniform weights with empirically-derived ones).
-- **Wave 11 prompt few-shot library** — disagreements with strong editor reasoning become canonical training_examples that future Pass 1/2 prompts inject as ground-truth examples.
+- **W8 weight tuning closure** — the calibration session produces the data Joseph needs to confidently set per-tier dimension weights via the W8 admin UI (replacing the v1 default uniform weights with empirically-derived ones).
+- **W11.7 few-shot library curation** — disagreements with strong editor reasoning become curated `engine_fewshot_examples` rows that the unified call's prompt assembly injects as ground-truth examples.
 - **Wave 16+ active learning** — the disagreement corpus is the supervised signal for any future auto-tuning of weights from editor feedback.
+
+---
+
+## ⚡ Architectural alignment (2026-04-29)
+
+W14 calibration's value compounds materially under W11.7's unified architecture:
+
+- **Few-shot library populated**: every calibration session's high-confidence disagreements (image, ai_value, editor_value, evidence) become `engine_fewshot_examples` rows. The unified call's prompt loads the top-N active examples — disagreements directly improve the next round's accuracy. This is the closed loop made concrete.
+- **Engine-mode filter**: each calibration session runs against one `engine_mode` — typically `unified` post-W11.7 default flip. The session captures which mode produced the AI baseline, so disagreements are reproducible.
+- **Quality outliers cross-validated**: under W11.7, the unified call self-flags `quality_outliers[]` (over- and under-delivered shoots vs tier expectation). W14 calibration validates these flags against editor judgement — if editors agree with most flags, the auto-flag becomes a trusted operational signal; if they disagree, the threshold is tuned.
+- **Proposed-slot validation**: the unified call's `proposed_slots[]` (taxonomy gaps the model identified) get validated against editor decisions. Editor agreement across N projects → admin promotes the proposed slot to a real `shortlisting_slot_definitions` row.
 
 ---
 

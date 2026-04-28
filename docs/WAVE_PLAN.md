@@ -117,13 +117,15 @@ eligibility). Wave 9 no longer exists.
 
 ## Wave 11 — Universal vision response schema (KEYSTONE)
 
-**Theme:** redesign Pass 1's output as a source-agnostic schema that
+**Theme:** redesign the engine's vision output as a source-agnostic schema that
 feeds object_registry + signals + image-type tables across RAW/finals/
 external listings.
 
 **Status:** 🛑 **NEEDS FULL DESIGN PHASE BEFORE EXECUTION.** This is the
 single most architecturally consequential wave in the roadmap. Cannot be
 delegated to subagents without my up-front design work + Joseph's sign-off.
+
+**Architectural pivot (2026-04-29):** the universal schema's compact per-image shape enables a unified single-Opus-call architecture (Pass 1 + Pass 2 collapsed). See W11.7 below — it inherits W11 as a hard dependency. W11 ships first (defines the schema); W11.7 ships after (changes how the schema is produced).
 
 ### Design phase deliverables (before any code)
 
@@ -154,6 +156,55 @@ delegated to subagents without my up-front design work + Joseph's sign-off.
 
 **Estimated total:** 5-6 weeks (1 week design + 4-5 weeks execution).
 Largest single wave.
+
+---
+
+## Wave 11.5 — Human reclassification capture
+
+**Theme:** operators can correct unified-call mislabels (room_type, composition, vantage, score, slot eligibility); each correction feeds project memory + cross-project canonical registry.
+
+**Status:** ⚙️ **Spec ready** — `docs/design-specs/W11-5-human-reclassification-capture.md`. Depends on W11 + W11.7 + W12. Mig 347.
+
+**Effort:** ~2.5 days execution.
+
+---
+
+## Wave 11.6 — Rejection reasons admin dashboard
+
+**Theme:** master_admin dashboard surfaces the captured override signal so a human can spot patterns and tune via W8 admin UI.
+
+**Status:** ⚙️ **Spec ready** — `docs/design-specs/W11-6-rejection-reasons-dashboard.md`. Depends on W10.3 ✅ + W11.5 + W11.7. No migration.
+
+**Effort:** ~3.5 days execution.
+
+---
+
+## Wave 11.7 — Unified single-call shortlisting architecture (KEYSTONE FOR FUTURE WAVES)
+
+**Theme:** collapse Pass 1 + Pass 2 into a single Opus 4.7 call that sees the full visual universe + makes all decisions, with async Sonnet 4.6 description backfill for rich per-image text. Project memory + canonical registry feed the unified call's prompt context — closes the "engine grows per project" loop.
+
+**Status:** 🛑 **Spec ready, depends on W11** — `docs/design-specs/W11-7-unified-shortlisting-architecture.md`. Authored 2026-04-29 from Joseph's architectural questioning. Mig 349.
+
+### Bursts
+
+| # | Item | Backlog ref | Status |
+|---|---|---|---|
+| W11.7.1 | `shortlisting-unified` edge fn — single Opus call, multi-message scaling for >50 groups, prompt-caching for cost control | P1-25 | ⚙️ ready after W11 |
+| W11.7.2 | `shortlisting-description-backfill` edge fn — async Sonnet 4.6 per-image rich descriptions | P1-25 | ⚙️ ready after W11 |
+| W11.7.3 | Migration 349: `engine_settings.engine_mode` (two_pass / unified), `shortlisting_rounds.engine_mode` stamp, `engine_fewshot_examples` table | P1-25 | ⚙️ ready after W11 |
+| W11.7.4 | Phase A coexistence (both architectures available; admin opts in per-round) | P1-25 | ⚙️ post-W11.7.1-3 |
+| W11.7.5 | Phase B 4-week pilot + comparison metrics in W11.6 dashboard | P1-25 | post-W11.7.4 |
+| W11.7.6 | Phase C default flip + Phase D Pass 1 / Pass 2 deprecation | P1-25 | post-pilot validation |
+
+**Estimated total:** 12 days execution + 4-week pilot before default flip + 4-week deprecation window. ~8-10 weeks calendar end-to-end.
+
+**Why this wave matters:** it's the architectural bridge between today's open-loop engine (data captured, learning manual) and the closed-loop ethos Joseph articulated (every override + reclassification + observation feeds the next round and every future round). Without W11.7, W12's registry, W14's calibration, and W11.5's reclassifications all land but don't compound into the engine's prompt context. With W11.7, every captured signal becomes prompt context for the next Opus call.
+
+**Pass 1 + Pass 2 deprecation timeline:**
+- Phase D begins after default flip + 4-week soak
+- `shortlisting-pass1` + `shortlisting-pass2` edge functions deleted
+- Dispatcher's `pass1` and `pass2` job kinds removed
+- `shortlisting_rounds.engine_mode` historical stamp preserved indefinitely for replay
 
 ---
 

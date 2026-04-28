@@ -1,10 +1,21 @@
 # W11.5 — Human Reclassification Capture — Design Spec
 
-**Status:** ⚙️ Future wave — depends on W11 (universal vision schema). Authored 2026-04-29 from Joseph's question on whether operators can override Pass 1's room_type / slot / score.
+**Status:** ⚙️ Future wave — depends on W11 (universal vision schema) + W11.7 (unified architecture). Authored 2026-04-29 from Joseph's question on whether operators can override Pass 1's room_type / slot / score.
 **Backlog ref:** P1-23 (new)
-**Wave plan ref:** W11.5 — operator-driven correction of Pass 1 mislabels feeds the closed-loop learning system
-**Dependencies:** W11 (per-signal scoring), W12 (object_registry — for the cross-project canonical-feature memory path)
-**Unblocks:** materially better Pass 1 accuracy via empirically-grown few-shot library; project-scoped re-runs that respect operator corrections
+**Wave plan ref:** W11.5 — operator-driven correction of unified-call mislabels feeds the closed-loop learning system
+**Dependencies:** W11 (per-signal scoring schema), W11.7 (unified single-call architecture — overrides feed prompt context), W12 (object_registry — for the cross-project canonical-feature memory path)
+**Unblocks:** materially better unified-call accuracy via empirically-grown few-shot library; project-scoped re-runs that respect operator corrections
+
+---
+
+## ⚡ Architectural alignment (2026-04-29)
+
+This spec was authored before W11.7's unified architecture was decided. Re-read in context: **under W11.7, this wave becomes simpler AND higher-leverage.**
+
+- **Simpler:** instead of modifying both Pass 1 and Pass 2 to respect overrides, only the unified call's prompt assembly (W7.6 block pattern) needs the new `projectMemoryBlock` that loads `composition_classification_overrides` rows.
+- **Higher-leverage:** the override data feeds the unified call's prompt context as project memory, so round #2 of the same project respects it directly — and after W12, the same data feeds cross-project canonical registry.
+
+Section references below to "Pass 1" / "Pass 2" should be read as "the unified call" under W11.7.
 
 ---
 

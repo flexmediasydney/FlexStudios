@@ -6,9 +6,21 @@
 **Dependencies:**
 - **W7.7 must land first** — synthetic rounds need `engine_tier_id` + `package_engine_tier_mapping` for tier provenance (`tier_used` per training row).
 - **W8 must land first** — training rows need `tier_config_version` (W8.4) so future re-extractions can be reproduced under the right tier weights.
-- **W11 strongly preferred but not blocking** — universal vision response gives richer per-row signal scores. v1 can ship under today's Pass 1 dimension aggregates if W11 slips; the schema is forward-compat.
+- **W11 strongly preferred but not blocking** — universal vision response gives richer per-row signal scores. v1 can ship under the legacy schema if W11 slips; the schema is forward-compat.
+- **W11.7 (unified architecture) recommended** — backfill rounds will produce richer, more consistent training data when the unified call is the producer. If W11.7 ships before W13a launches, all backfill goes through the unified pipeline.
 
 **Unblocks:** Wave 11+ benchmark runner gets a 50-100x larger calibration set; Wave 14's 50-project structured calibration becomes the *delta-validator* against the goldmine baseline.
+
+---
+
+## ⚡ Architectural alignment (2026-04-29)
+
+W11.7's unified architecture **simplifies W13a backfill execution**:
+
+- **Single Opus call per historical project** instead of separate Pass 1 + Pass 2 chain. Same architecture as live rounds → backfill outputs are directly comparable to live outputs (no reconciling-different-prompts at W14 calibration time).
+- **Async description backfill** (Sonnet 4.6) generates the rich descriptions for historical training data, same way as live rounds. Cost stays predictable.
+- **Quality outliers detected automatically**: under W11.7, the unified call emits `quality_outliers[]` per round. Historical Tier S rounds that over-delivered Tier P-quality work get flagged in the goldmine — useful for retroactive pricing analysis.
+- **Engine-mode stamp on synthetic rounds**: backfill rounds inherit `shortlisting_rounds.engine_mode='unified'` (or `'two_pass'` if W13a runs before W11.7's default flip). W14 calibration filters by mode for like-for-like comparison.
 
 ---
 

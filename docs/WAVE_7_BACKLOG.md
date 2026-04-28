@@ -917,6 +917,10 @@ ran each round, so post-fix benchmarking can isolate the impact.
 observed at the round-level on Saladine. Wave 11 (universal vision response
 schema) is the deeper architectural fix — per-signal scoring lets each of
 the 22 signals find its natural range without anchoring to tier ceilings.
+
+**⚡ Update 2026-04-29:** Wave 11.7 (unified architecture) **fully addresses this issue by construction.** Under W11.7, the unified Opus call sees the full distribution of images at once and assigns scores against absolute per-signal anchors, not tier centroids. The streamBAnchors block under W11.7 explicitly instructs "USE THE FULL 0-10 RANGE. A Tier S shoot can produce a 9.0; a Tier A shoot can produce a 5.0. The tier sets the customer's expectation, NOT the score's range." Plus the unified call emits `quality_outliers[]` which automatically flags over- or under-delivered shoots vs tier expectation — turning the previous bug into pricing intelligence. **P1-22 is subsumed into W11.7 once the universal-schema + unified-call path lands.** A pre-W11.7 prompt-only fix on the legacy two-pass architecture is still possible if a near-term mitigation is needed before W11/W11.7 ship.
+
+**Cross-reference for the per-image reasoning gap (P1-20):** also subsumed by W11.7. Under unified, `slot_decisions[].rationale` contains Opus's actual cross-image judgement (not text-summarised inference); `compositions[].observed_objects[]` provides the structured object/attribute data the copywriting engine downstream needs; and the async Sonnet description backfill produces the rich per-image paragraphs that today's Pass 1 emits. **All three Saladine review items (P1-20, P1-21 frontend aspect, P1-22 score compression) are addressed by W11.7's design** — P1-21 still needs the half-day frontend CSS swap, but P1-20 + P1-22 land naturally with W11.7's execution shape.
 P1-22 is a prompt-only mitigation that ships in days, not weeks.
 
 ---

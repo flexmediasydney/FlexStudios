@@ -6,9 +6,20 @@
 **Companion spec:** `docs/design-specs/W12-trigger-thresholds.md` covers the AI-suggestion threshold defaults (W12.7-W12.8). This spec covers the full wave: schema, extractor worker, manual-trigger normalisation, discovery queue UI, and AI-suggestion plumbing. The two specs are intended to be read together at execution time.
 
 **Dependencies:**
-- **Wave 11 must land first** — universal vision response defines the canonical-key shape (`OBJECT_*` keys, `observed_objects` JSONB array shape, `attribute_observations` JSON shape). Pre-W11, Pass 1 doesn't emit per-object structured output; W12's extractor would have nothing to consume.
-- **W7.6 ✅ shipped** — composable prompt blocks make adding the `objectsAndAttributes` block to Pass 1 a clean drop-in.
+- **Wave 11 must land first** — universal vision response defines the canonical-key shape (`OBJECT_*` keys, `observed_objects` JSONB array shape, `attribute_observations` JSON shape). Pre-W11, the engine doesn't emit per-object structured output; W12's extractor would have nothing to consume.
+- **Wave 11.7 (unified architecture)** — under unified, observed_objects are emitted directly by the single Opus call (cleaner cross-image consistency than the legacy two-pass split would have produced). W12's normalisation pipeline reads `composition_classifications.observed_objects` regardless of which architecture produced it.
+- **W7.6 ✅ shipped** — composable prompt blocks make adding the `objectsAndAttributes` block to the unified prompt a clean drop-in.
 - **No W8 dependency** — W12 doesn't read tier configs; the registry is tier-agnostic. (W14 calibration will join across; not a W12 concern.)
+
+---
+
+## ⚡ Architectural alignment (2026-04-29)
+
+W11.7's unified architecture **improves W12's substrate quality** without changing W12's schema or extractor logic:
+
+- **Cross-image consistency**: today's hypothetical Pass 1 would name a kitchen benchtop "stone" in one image, "Caesarstone" in another, "engineered stone" in a third — leaving W12's normalisation pipeline to merge synonyms via cosine similarity. Under W11.7, Opus sees all kitchen images at once and emits ONE consistent canonical name for the same surface. **W12's normalisation does less work; the registry grows cleaner faster.**
+- **The unified call's prompt explicitly receives the canonical registry** as context (top 200 entries by `market_frequency`). Cross-project knowledge feeds back into the engine's prompt — the closed-loop ethos compounds across projects.
+- **Observation provenance unchanged**: `raw_attribute_observations.source_type` distinguishes `internal_raw` (unified call output) from `internal_finals`, `pulse_listing`, etc. W11.7 just changes how `internal_raw` rows get produced; the table shape is unchanged.
 
 **Unblocks:**
 - **W13b (pulse description goldmine)** — needs `object_registry`, `attribute_values`, `raw_attribute_observations` tables to write into. The 28k pulse extraction sits idle until W12 schema lands.

@@ -1,10 +1,22 @@
 # W11.6 — Rejection Reasons Dashboard — Design Spec
 
-**Status:** ⚙️ Future wave — depends on W10.3 (override metadata instrumentation, ✅ shipped) + W11.5 (human reclassification, future).
+**Status:** ⚙️ Future wave — depends on W10.3 (override metadata instrumentation, ✅ shipped) + W11.5 (human reclassification, future) + W11.7 (unified architecture surfaces richer per-decision rationale).
 **Backlog ref:** P1-24 (new)
 **Wave plan ref:** W11.6 — admin-side visibility into the captured override signal so a human can spot patterns and tune
-**Dependencies:** W10.3 (`shortlisting_overrides.primary_signal_overridden` + `review_duration_seconds` + `alternative_offered_drawer_seen`), W7.7 (`engine_settings` + `package_engine_tier_mapping`)
+**Dependencies:** W10.3 (`shortlisting_overrides.primary_signal_overridden` + `review_duration_seconds` + `alternative_offered_drawer_seen`), W7.7 (`engine_settings` + `package_engine_tier_mapping`), W11.7 (unified call's `slot_decisions[].rationale` + `quality_outliers[]` outputs feed new dashboard sections)
 **Unblocks:** the human-in-the-loop tuning step that closes the "engine grows over time" loop. Without this, the override data sits inert.
+
+---
+
+## ⚡ Architectural alignment (2026-04-29)
+
+W11.7's unified architecture produces richer per-decision rationale by construction (every winner/alternative comes with a cross-image rationale paragraph from Opus, not just text-summary heuristics from Pass 2 today). This dashboard's new sections under W11.7:
+
+- **Quality outliers section** (new): renders `unified_output.quality_outliers[]` — properties where the photographer over- or under-delivered relative to tier expectation. Becomes pricing/sales intelligence ("flag for tier upgrade" / "flag for photographer feedback").
+- **Per-decision rationale viewer** (richer): each card's "Why?" now shows Opus's actual cross-image judgement, not just Pass 2's text-summarised inference.
+- **Engine-mode timeline** (new): annotates the override-rate timeline with `shortlisting_rounds.engine_mode` transitions (two_pass → unified) so the impact of the architecture flip is measurable.
+
+W11.6 ships AFTER W11.7's coexistence period (Phase B) so the dashboard reads from a stable unified output shape.
 
 ---
 
