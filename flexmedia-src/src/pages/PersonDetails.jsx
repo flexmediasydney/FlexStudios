@@ -30,6 +30,7 @@ import ContactFiles from '@/components/contacts/ContactFiles';
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
+import PulseLinkCard from '@/components/pulse/PulseLinkCard';
 import AgentMarketShareSection from '@/components/marketshare/AgentMarketShareSection';
 import NurturingSequences from '@/components/nurturing/NurturingSequences';
 import ThemeBrandingSubtab from '@/components/themes/ThemeBrandingSubtab';
@@ -1510,6 +1511,15 @@ export default function PersonDetails() {
                       />
                     </div>
                   )}
+                  {/* CRM → Pulse linking: always-visible card. Lets the user
+                      link this CRM agent to its Industry Pulse counterpart
+                      (or dismiss if not in Pulse). When linked, displays the
+                      pulse record + Open / Unlink. Migration 348. */}
+                  <PulseLinkCard
+                    entityType="agent"
+                    crmId={agentId}
+                    crmName={agent?.name}
+                  />
                   <PulseIntelligencePanel entityType="agent" crmEntityId={agentId} crmEntity={agent} />
                 </div>
               </div>

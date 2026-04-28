@@ -23,6 +23,7 @@ import ContactFiles from "@/components/contacts/ContactFiles";
 import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
+import PulseLinkCard from '@/components/pulse/PulseLinkCard';
 import AgencyMarketShareSection from '@/components/marketshare/AgencyMarketShareSection';
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
@@ -771,7 +772,13 @@ export default function OrgDetails() {
             )}
             {activeTab === 'intelligence' && (
               <div className="h-full overflow-y-auto">
-                <div className="p-4 pb-6">
+                <div className="p-4 pb-6 space-y-4">
+                  {/* CRM → Pulse linking: always-visible card (migration 348). */}
+                  <PulseLinkCard
+                    entityType="agency"
+                    crmId={agencyId}
+                    crmName={agency?.name}
+                  />
                   <PulseIntelligencePanel entityType="agency" crmEntityId={agencyId} crmEntity={agency} />
                 </div>
               </div>
