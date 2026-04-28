@@ -92,12 +92,22 @@ const GENERATOR = 'shortlisting-pass2';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const SONNET_MODEL = 'claude-sonnet-4-6';
+// Joseph 2026-04-29: Pass 2 is the highest-leverage AI call in the engine —
+// one call per round, full Pass 1 universe, decides every winner + alternative
+// + slot proposal. A wrong call here cascades into every shortlist outcome.
+// Opus 4.7 is materially better at cross-image synthesis + complex reasoning;
+// 5× per-call cost is rounding error against the per-round Pass 1 spend.
+//
+// Naming kept as SONNET_MODEL to avoid a sweeping rename across pass2Validator
+// and shortlisting_benchmark_results.model_versions; the constant value is
+// the source of truth. A future rename pass can clean it up post-W11.
+const SONNET_MODEL = 'claude-opus-4-7';
 // Audit defect #9: Premium (38-image) and Day-to-Dusk (31-image) packages can
 // produce JSON responses approaching 4000 tokens (winners + 2x alternatives +
 // rejected_near_duplicates + coverage_notes + slot_assignments). The previous
-// 4000 cap could truncate Sonnet mid-JSON, causing parse failure and a Pass 2
-// throw. 8192 gives 2x headroom; Sonnet 4-6 supports up to 8192 output tokens.
+// 4000 cap could truncate mid-JSON, causing parse failure and a Pass 2 throw.
+// Both Sonnet 4-6 and Opus 4-7 support up to 8192 output tokens; we keep the
+// 2× headroom regardless of which model is active.
 const SONNET_MAX_TOKENS = 8192;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
