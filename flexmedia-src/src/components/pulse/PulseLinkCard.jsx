@@ -20,15 +20,19 @@ import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/api/supabaseClient";
+import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   Link2, ExternalLink, Search, X, Loader2, Sparkles,
-  Check, Undo2, AlertTriangle,
+  Check, Undo2, AlertTriangle, ArrowRight,
 } from "lucide-react";
 
 const TABLE = (et) => (et === "agency" ? "pulse_agencies" : "pulse_agents");
@@ -52,6 +56,11 @@ function ConfidenceBar({ score }) {
 export default function PulseLinkCard({ entityType, crmId, crmName }) {
   const queryClient = useQueryClient();
   const [searchText, setSearchText] = useState("");
+  // When set, the LinkPreviewDialog is open for this candidate pulse_id.
+  // Preview RPC fetches the per-field column diff so the user sees what
+  // CRM fields will change before confirming.
+  const [pendingLinkPulseId, setPendingLinkPulseId] = useState(null);
+  const [pendingLinkLabel, setPendingLinkLabel] = useState("");
 
   // ── Current link state ────────────────────────────────────────────────────
   // Mapping row keyed by (entity_type, crm_entity_id) — single source of truth
@@ -132,7 +141,7 @@ export default function PulseLinkCard({ entityType, crmId, crmName }) {
   });
 
   // ── Mutations ─────────────────────────────────────────────────────────────
-  const invalidateAll = () => {
+  const invalidateAll = async () => {
     queryClient.invalidateQueries({ queryKey: ["pulse-link-mapping", entityType, crmId] });
     queryClient.invalidateQueries({ queryKey: ["pulse-link-suggest", entityType, crmId] });
     queryClient.invalidateQueries({ queryKey: ["pulse-link-linked-row", entityType] });
@@ -140,6 +149,13 @@ export default function PulseLinkCard({ entityType, crmId, crmName }) {
     // Also invalidate other pulse-aware UIs that read this mapping.
     queryClient.invalidateQueries({ queryKey: ["person_pulse_mapping", crmId] });
     queryClient.invalidateQueries({ queryKey: ["pulse_agency_for_crm", crmId] });
+    // Migration 350: linking now mutates the CRM agents/agencies columns
+    // via SAFR mirror. Force the entity caches to reload so the changed
+    // name/email/phone show up on PersonDetails / OrgDetails immediately.
+    await Promise.all([
+      refetchEntityList("Agent"),
+      refetchEntityList("Agency"),
+    ]);
   };
 
   const linkMut = useMutation({
@@ -153,6 +169,8 @@ export default function PulseLinkCard({ entityType, crmId, crmName }) {
     },
     onSuccess: () => {
       toast.success("Linked to Industry Pulse");
+      setPendingLinkPulseId(null);
+      setPendingLinkLabel("");
       invalidateAll();
     },
     onError: (err) => {
@@ -160,6 +178,13 @@ export default function PulseLinkCard({ entityType, crmId, crmName }) {
       toast.error("Could not link record. Try again.");
     },
   });
+
+  /** Open the preview dialog for a candidate. Triggered by clicking Link
+   *  on a suggestion row or search result. */
+  const openPreview = (pulseId, label) => {
+    setPendingLinkPulseId(pulseId);
+    setPendingLinkLabel(label || "");
+  };
 
   const unlinkMut = useMutation({
     mutationFn: async () => {
@@ -299,7 +324,7 @@ export default function PulseLinkCard({ entityType, crmId, crmName }) {
                     key={s.pulse_id}
                     suggestion={s}
                     entityType={entityType}
-                    onLink={() => linkMut.mutate(s.pulse_id)}
+                    onLink={() => openPreview(s.pulse_id, s.pulse_name)}
                     busy={busy}
                   />
                 ))}
@@ -361,14 +386,10 @@ export default function PulseLinkCard({ entityType, crmId, crmName }) {
                           size="sm"
                           variant="outline"
                           className="h-6 text-[10px] px-2"
-                          onClick={() => linkMut.mutate(r.id)}
+                          onClick={() => openPreview(r.id, r[NAME_COL(entityType)])}
                           disabled={busy}
                         >
-                          {linkMut.isPending && linkMut.variables === r.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <><Check className="h-3 w-3 mr-1" /> Link</>
-                          )}
+                          <Check className="h-3 w-3 mr-1" /> Link
                         </Button>
                       </div>
                     ))
@@ -392,7 +413,159 @@ export default function PulseLinkCard({ entityType, crmId, crmName }) {
           </div>
         )}
       </CardContent>
+
+      {/* Link preview / confirmation dialog. Lets the user see exactly which
+          CRM fields will be overwritten by Pulse before committing. Powered
+          by pulse_preview_link_changes (migration 350). */}
+      <LinkPreviewDialog
+        open={!!pendingLinkPulseId}
+        entityType={entityType}
+        crmId={crmId}
+        pulseId={pendingLinkPulseId}
+        candidateLabel={pendingLinkLabel}
+        onCancel={() => {
+          setPendingLinkPulseId(null);
+          setPendingLinkLabel("");
+        }}
+        onConfirm={() => linkMut.mutate(pendingLinkPulseId)}
+        confirming={linkMut.isPending}
+      />
     </Card>
+  );
+}
+
+// ── Link preview dialog ────────────────────────────────────────────────────
+// Fetches pulse_preview_link_changes to show what CRM columns will be
+// overwritten by Pulse data when the link is committed. The list comes from
+// the DB (single source of truth) so the dialog and the link RPC agree on
+// what's about to happen.
+function LinkPreviewDialog({
+  open, entityType, crmId, pulseId, candidateLabel,
+  onCancel, onConfirm, confirming,
+}) {
+  const previewQ = useQuery({
+    queryKey: ["pulse-link-preview", entityType, crmId, pulseId],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("pulse_preview_link_changes", {
+        p_entity_type: entityType,
+        p_crm_id: crmId,
+        p_pulse_id: pulseId,
+      });
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: open && !!crmId && !!pulseId,
+    staleTime: 0,
+  });
+
+  const rows = previewQ.data || [];
+  const changing = rows.filter((r) => r.will_change);
+  const unchanging = rows.filter((r) => !r.will_change);
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !confirming) onCancel(); }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Link2 className="h-4 w-4 text-primary" />
+            Confirm link to Industry Pulse
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3 py-1">
+          {previewQ.isLoading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="h-4 w-4 animate-spin" /> Checking what will change…
+            </div>
+          ) : (
+            <>
+              <p className="text-sm">
+                Linking to{" "}
+                <span className="font-medium">
+                  {candidateLabel || "this Industry Pulse record"}
+                </span>
+                {changing.length > 0 ? (
+                  <>
+                    {" "}will update{" "}
+                    <span className="font-medium">{changing.length} field{changing.length === 1 ? "" : "s"}</span>{" "}
+                    on the CRM record from Pulse data.
+                  </>
+                ) : (
+                  <>{" "}won't change any CRM fields — Pulse data already matches.</>
+                )}
+              </p>
+
+              {changing.length > 0 && (
+                <div className="rounded border overflow-hidden">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted/50">
+                      <tr className="text-left">
+                        <th className="px-2 py-1.5 font-medium">Field</th>
+                        <th className="px-2 py-1.5 font-medium">CRM (current)</th>
+                        <th className="px-2 py-1.5 w-3" />
+                        <th className="px-2 py-1.5 font-medium">Pulse (incoming)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {changing.map((r) => (
+                        <tr key={r.field_name} className="border-t">
+                          <td className="px-2 py-1.5 font-medium">{r.crm_label}</td>
+                          <td className="px-2 py-1.5 text-muted-foreground truncate max-w-[140px]">
+                            {r.crm_current_value
+                              ? r.crm_current_value
+                              : <span className="italic">(empty)</span>}
+                          </td>
+                          <td className="text-muted-foreground">
+                            <ArrowRight className="h-3 w-3" />
+                          </td>
+                          <td className="px-2 py-1.5 truncate max-w-[160px]">
+                            {r.pulse_value
+                              ? r.pulse_value
+                              : <span className="italic text-muted-foreground">(empty)</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {unchanging.length > 0 && (
+                <p className="text-[11px] text-muted-foreground">
+                  {unchanging.length} field{unchanging.length === 1 ? "" : "s"}{" "}
+                  ({unchanging.map((r) => r.crm_label).join(", ")}) already match
+                  or have no Pulse value — no change.
+                </p>
+              )}
+
+              <div className="flex items-start gap-2 text-[11px] text-muted-foreground bg-muted/30 rounded p-2">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                <span>
+                  After linking, manual edits you make in the CRM will always
+                  win over future Pulse scrapes for that field. You can unlink
+                  any time.
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel} disabled={confirming}>
+            Cancel
+          </Button>
+          <Button onClick={onConfirm} disabled={confirming || previewQ.isLoading}>
+            {confirming ? (
+              <><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Linking…</>
+            ) : changing.length > 0 ? (
+              <><Check className="h-3 w-3 mr-1" /> Link & apply {changing.length} change{changing.length === 1 ? "" : "s"}</>
+            ) : (
+              <><Check className="h-3 w-3 mr-1" /> Link</>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
