@@ -586,13 +586,32 @@ export default function TaskManagement({ projectId, project, canEdit }) {
 
     try {
       const completedAtForWrite = wasCompleted ? null : new Date().toISOString();
-      // Capture the FULL returned row — it carries the authoritative updated_at
-      // that the realtime stale-event filter needs to ignore any earlier
-      // out-of-order events (e.g. a takeover-only update for the same task).
-      const updatedRow = await api.entities.ProjectTask.update(task.id, {
-        is_completed: !wasCompleted,
-        completed_at: completedAtForWrite,
-      });
+      // Retry on transient errors (HTTP 5xx, statement timeouts, network blips).
+      // The DB is intermittently overloaded by background Pulse jobs holding
+      // connections, which makes the user's PATCH die with a 500 mid-flight.
+      // Without a retry the catch block reverts optimistic state — that's
+      // exactly what the user perceives as "tick → untick".
+      const TRANSIENT_PATTERNS = /5\d\d|timeout|fetch failed|network|load failed/i;
+      let updatedRow = null;
+      let lastErr = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          updatedRow = await api.entities.ProjectTask.update(task.id, {
+            is_completed: !wasCompleted,
+            completed_at: completedAtForWrite,
+          });
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err;
+          const msg = String(err?.message || err || '');
+          const isTransient = TRANSIENT_PATTERNS.test(msg);
+          if (!isTransient || attempt === 2) throw err;
+          // Backoff: 400ms, 1200ms
+          await new Promise(r => setTimeout(r, 400 * Math.pow(3, attempt)));
+        }
+      }
+      if (lastErr) throw lastErr;
       patchTaskInCache(task.id, updatedRow || {
         is_completed: !wasCompleted,
         completed_at: completedAtForWrite,
