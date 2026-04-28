@@ -13,7 +13,16 @@
  * Auth: master_admin / admin only (manual operator action).
  *
  * Body:
- *   { batch_size?: number = 10, max_runtime_ms?: number = 90000 }
+ *   { batch_size?: number = 10, max_runtime_ms?: number = 90000,
+ *     mode?: 'unprovisioned' | 'missing_kinds' = 'unprovisioned' }
+ *
+ *   - mode='unprovisioned' (default): legacy behavior — projects with
+ *     dropbox_root_path IS NULL.
+ *   - mode='missing_kinds': projects whose project_folders row count is
+ *     less than NEW_PROJECT_FOLDER_KINDS.length. Catches projects that
+ *     were provisioned before a new kind was added (e.g. Saladine-era
+ *     projects missing the Wave 6 P1 `photos_*` tree). createProjectFolders
+ *     is idempotent so re-runs only create what's missing.
  *
  * Response:
  *   { processed: number, errors: { project_id, error }[], remaining: number }
@@ -29,7 +38,7 @@ import {
   getAdminClient,
   serveWithAudit,
 } from '../_shared/supabase.ts';
-import { createProjectFolders } from '../_shared/projectFolders.ts';
+import { createProjectFolders, NEW_PROJECT_FOLDER_KINDS } from '../_shared/projectFolders.ts';
 
 const GENERATOR = 'backfillProjectFolders';
 const DEFAULT_BATCH_SIZE = 10;
@@ -61,22 +70,64 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const batchSize = typeof body.batch_size === 'number' ? body.batch_size : DEFAULT_BATCH_SIZE;
   const maxRuntimeMs = typeof body.max_runtime_ms === 'number' ? body.max_runtime_ms : DEFAULT_MAX_RUNTIME_MS;
+  const mode = body.mode === 'missing_kinds' ? 'missing_kinds' : 'unprovisioned';
 
   const admin = getAdminClient();
   const startedAt = Date.now();
   const errors: Array<{ project_id: string; error: string }> = [];
   let processed = 0;
 
-  // Pull a candidate batch; we'll process sequentially and stop early on time.
-  const { data: candidates, error: candErr } = await admin
-    .from('projects')
-    .select('id, property_address')
-    .is('dropbox_root_path', null)
-    .order('created_at', { ascending: true })
-    .limit(batchSize);
-  if (candErr) return errorResponse(`Candidate fetch failed: ${candErr.message}`, 500, req);
+  type Candidate = { id: string; property_address: string | null };
+  let candidates: Candidate[] = [];
 
-  for (const proj of candidates || []) {
+  if (mode === 'unprovisioned') {
+    const { data, error: candErr } = await admin
+      .from('projects')
+      .select('id, property_address')
+      .is('dropbox_root_path', null)
+      .order('created_at', { ascending: true })
+      .limit(batchSize);
+    if (candErr) return errorResponse(`Candidate fetch failed: ${candErr.message}`, 500, req);
+    candidates = (data || []) as Candidate[];
+  } else {
+    // missing_kinds: find projects whose project_folders row count is below
+    // the current NEW_PROJECT_FOLDER_KINDS catalog. Pulled in two steps so we
+    // can compare counts client-side without a join (admin client is plenty
+    // fast for this — we only ship batchSize candidates per call).
+    //
+    // Skip projects whose dropbox_root_path points at the legacy
+    // `/FlexMedia/Projects/...` location (pre team-folder migration). The
+    // current Dropbox token has no_write_permission on that tree, so re-running
+    // createProjectFolders against them just churns errors. Those projects
+    // need a separate path-rewrite + file-move migration before they can be
+    // backfilled.
+    const expectedCount = NEW_PROJECT_FOLDER_KINDS.length;
+    const { data: provisioned, error: provErr } = await admin
+      .from('projects')
+      .select('id, property_address')
+      .like('dropbox_root_path', '/Flex Media Team Folder/%')
+      .order('created_at', { ascending: true })
+      .limit(2000);
+    if (provErr) return errorResponse(`Candidate fetch failed: ${provErr.message}`, 500, req);
+
+    const projIds = (provisioned || []).map((p) => p.id);
+    if (projIds.length > 0) {
+      const { data: folderCounts, error: cntErr } = await admin
+        .from('project_folders')
+        .select('project_id')
+        .in('project_id', projIds);
+      if (cntErr) return errorResponse(`Folder count fetch failed: ${cntErr.message}`, 500, req);
+      const counts = new Map<string, number>();
+      for (const row of folderCounts || []) {
+        counts.set(row.project_id as string, (counts.get(row.project_id as string) || 0) + 1);
+      }
+      candidates = ((provisioned || []) as Candidate[])
+        .filter((p) => (counts.get(p.id) || 0) < expectedCount)
+        .slice(0, batchSize);
+    }
+  }
+
+  for (const proj of candidates) {
     if (Date.now() - startedAt > maxRuntimeMs) {
       console.log(`[${GENERATOR}] hit max_runtime_ms after ${processed} projects`);
       break;
@@ -85,22 +136,50 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       await createProjectFolders(proj.id, proj.property_address || null, { actorType: 'system' });
       processed++;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = err instanceof Error
+        ? err.message
+        : (typeof err === 'object' && err !== null
+            ? (JSON.stringify(err).slice(0, 500) || String(err))
+            : String(err));
       console.warn(`[${GENERATOR}] project ${proj.id} failed: ${msg}`);
       errors.push({ project_id: proj.id, error: msg });
     }
   }
 
   // How many still need provisioning?
-  const { count: remaining } = await admin
-    .from('projects')
-    .select('id', { count: 'exact', head: true })
-    .is('dropbox_root_path', null);
+  let remaining = 0;
+  if (mode === 'unprovisioned') {
+    const { count } = await admin
+      .from('projects')
+      .select('id', { count: 'exact', head: true })
+      .is('dropbox_root_path', null);
+    remaining = count ?? 0;
+  } else {
+    const expectedCount = NEW_PROJECT_FOLDER_KINDS.length;
+    const { data: provisioned } = await admin
+      .from('projects')
+      .select('id')
+      .like('dropbox_root_path', '/Flex Media Team Folder/%')
+      .limit(2000);
+    const projIds = (provisioned || []).map((p) => p.id);
+    if (projIds.length > 0) {
+      const { data: folderCounts } = await admin
+        .from('project_folders')
+        .select('project_id')
+        .in('project_id', projIds);
+      const counts = new Map<string, number>();
+      for (const row of folderCounts || []) {
+        counts.set(row.project_id as string, (counts.get(row.project_id as string) || 0) + 1);
+      }
+      remaining = projIds.filter((id) => (counts.get(id) || 0) < expectedCount).length;
+    }
+  }
 
   return jsonResponse({
     processed,
     errors,
-    remaining: remaining ?? 0,
+    remaining,
+    mode,
     elapsed_ms: Date.now() - startedAt,
   }, 200, req);
 });

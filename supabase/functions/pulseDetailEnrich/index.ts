@@ -1055,7 +1055,11 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
             const listerName = lister?.name || topAgent?.name || null;
             const listerTitle = lister?.jobTitle || topAgent?.jobTitle || null;
             const listerPhoto = lister?.mainPhoto ? `${lister.mainPhoto.server}${lister.mainPhoto.uri}` : (topAgent?.image || null);
-            const srcRefId = listing?.listingId ? String(listing.listingId) : (item?.listingId ? String(item.listingId) : null);
+            // source_ref_id must be a UUID (entity_field_sources.source_ref_id
+            // is typed UUID). cand.id is the internal pulse_listings row id;
+            // listing.listingId is REA's external integer ID and was triggering
+            // a flood of `invalid input syntax for type uuid` errors.
+            const srcRefId = cand.id;
             if (listerName) await safrObserve(admin, 'agent', agentRow.id, 'full_name', listerName, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
             if (listerTitle) await safrObserve(admin, 'agent', agentRow.id, 'job_title', listerTitle, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
             if (listerPhoto) await safrObserve(admin, 'agent', agentRow.id, 'profile_image', listerPhoto, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefId });
@@ -1211,7 +1215,7 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
                 agencyAddrObs = s || null;
               }
             }
-            const srcRefIdAg = listing?.listingId ? String(listing.listingId) : (item?.listingId ? String(item.listingId) : null);
+            const srcRefIdAg = cand.id;
             if (agencyName) await safrObserve(admin, 'agency', agencyRow.id, 'name', agencyName, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });
             if (agencyEmailObs && !isMiddlemanEmail(agencyEmailObs)) {
               await safrObserve(admin, 'agency', agencyRow.id, 'email', agencyEmailObs, 'rea_listing_detail', { source_ref_type: 'pulse_listing', source_ref_id: srcRefIdAg });

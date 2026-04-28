@@ -74,6 +74,12 @@ const ENTITY_LIST_LIMITS = {
   // ProjectTask can grow fast: ~17 tasks per project × hundreds of projects + revisions
   ProjectTask: 5000,
   TaskTimeLog: 5000,
+  // EmailMessage rows include full HTML bodies (often 10-50KB each). The 10000
+  // default was paginating through the whole table on every page load via
+  // Layout.jsx + GlobalSearch.jsx and tipped Postgres into statement_timeout
+  // (root-cause of the 2026-04-28 outage). Both consumers slice to 500
+  // client-side anyway.
+  EmailMessage: 500,
 };
 const CACHE_PRUNE_INTERVAL = 10 * 60 * 1000; // prune every 10 minutes
 const MAX_SINGLE_CACHE_SIZE = 2000; // BUG FIX: cap singleCache to prevent unbounded memory growth
