@@ -31,6 +31,7 @@ import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
 import PulseLinkCard from '@/components/pulse/PulseLinkCard';
+import EntityProvenancePanel from '@/components/pulse/EntityProvenancePanel';
 import AgentMarketShareSection from '@/components/marketshare/AgentMarketShareSection';
 import NurturingSequences from '@/components/nurturing/NurturingSequences';
 import ThemeBrandingSubtab from '@/components/themes/ThemeBrandingSubtab';
@@ -1520,6 +1521,11 @@ export default function PersonDetails() {
                     crmId={agentId}
                     crmName={agent?.name}
                   />
+                  {/* Per-field source audit panel — shows where each editable
+                      field's current value came from (you, Industry Pulse,
+                      legacy import, etc.) and lets the operator lock a field
+                      to prevent Pulse from overwriting it. Migration 352. */}
+                  <EntityProvenancePanel entityType="agent" crmId={agentId} />
                   <PulseIntelligencePanel entityType="agent" crmEntityId={agentId} crmEntity={agent} />
                 </div>
               </div>

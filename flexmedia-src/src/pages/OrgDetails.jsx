@@ -24,6 +24,7 @@ import RetentionSubtab from '@/components/retention/RetentionSubtab';
 import TouchpointTimeline from '@/components/nurturing/TouchpointTimeline';
 import PulseIntelligencePanel from '@/components/pulse/PulseIntelligencePanel';
 import PulseLinkCard from '@/components/pulse/PulseLinkCard';
+import EntityProvenancePanel from '@/components/pulse/EntityProvenancePanel';
 import AgencyMarketShareSection from '@/components/marketshare/AgencyMarketShareSection';
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
@@ -779,6 +780,8 @@ export default function OrgDetails() {
                     crmId={agencyId}
                     crmName={agency?.name}
                   />
+                  {/* Per-field source audit panel (migration 352). */}
+                  <EntityProvenancePanel entityType="agency" crmId={agencyId} />
                   <PulseIntelligencePanel entityType="agency" crmEntityId={agencyId} crmEntity={agency} />
                 </div>
               </div>
