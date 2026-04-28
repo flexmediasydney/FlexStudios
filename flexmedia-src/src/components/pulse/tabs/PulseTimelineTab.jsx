@@ -862,48 +862,84 @@ export default function PulseTimelineTab({ onOpenEntity }) {
   const loadedRef = useRef(0);
   useEffect(() => { loadedRef.current = loaded; }, [loaded]);
 
-  // ── Entity name lookup (tab-local slim projections, same pattern as PulseMappings) ─
-  const { data: pulseAgentLookup = [] } = useQuery({
-    queryKey: ["pulse-timeline-agent-lookup"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("pulse_agents")
-        .select("id, full_name")
-        .limit(25000);
-      if (error) throw error;
-      return data || [];
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  const { data: pulseAgencyLookup = [] } = useQuery({
-    queryKey: ["pulse-timeline-agency-lookup"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("pulse_agencies")
-        .select("id, name")
-        .limit(10000);
-      if (error) throw error;
-      return data || [];
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  // Listings can be massive; we only need rows referenced by currently-visible
-  // timeline events. Batched lookup triggered after each fetch.
-  const [listingNameMap, setListingNameMap] = useState({}); // listingId -> display
+  // ── Entity name lookup ──────────────────────────────────────────────────
+  // BUG FIX (2026-04-28): the previous implementation bulk-fetched every
+  // pulse_agent (.limit(25000)) and pulse_agency (.limit(10000)) and resolved
+  // names client-side. PostgREST applies a server-side `max-rows` cap that
+  // ignores the requested limit, so on production data (~9.6k pulse_agents)
+  // only a slice came back and timeline pills for entities outside that slice
+  // fell back to "<Type> <short>" placeholders. We now lazy-fetch ONLY the
+  // agents/agencies actually referenced by visible `rows`, mirroring the
+  // existing listings pattern below.
+  const [agentNameMap, setAgentNameMap] = useState({});    // pulse_agent_id   -> name
+  const [agencyNameMap, setAgencyNameMap] = useState({});  // pulse_agency_id  -> name
+  const [listingNameMap, setListingNameMap] = useState({}); // listingId       -> display
 
   const entityNameMap = useMemo(() => {
     const map = {};
-    for (const a of pulseAgentLookup) {
-      if (a?.id) map[`agent:${a.id}`] = a.full_name || "Agent";
+    for (const [id, name] of Object.entries(agentNameMap)) {
+      map[`agent:${id}`] = name || "Agent";
     }
-    for (const a of pulseAgencyLookup) {
-      if (a?.id) map[`agency:${a.id}`] = a.name || "Agency";
+    for (const [id, name] of Object.entries(agencyNameMap)) {
+      map[`agency:${id}`] = name || "Agency";
     }
     for (const [id, display] of Object.entries(listingNameMap)) {
       map[`listing:${id}`] = display;
     }
     return map;
-  }, [pulseAgentLookup, pulseAgencyLookup, listingNameMap]);
+  }, [agentNameMap, agencyNameMap, listingNameMap]);
+
+  // Lazy batch-fetch agent display names for agent rows we don't know yet.
+  useEffect(() => {
+    const needed = new Set();
+    for (const r of rows) {
+      if (r.entity_type !== "agent" || !r.pulse_entity_id) continue;
+      if (!(r.pulse_entity_id in agentNameMap)) needed.add(r.pulse_entity_id);
+    }
+    if (needed.size === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("pulse_agents")
+          .select("id, full_name")
+          .in("id", Array.from(needed));
+        if (cancelled || !Array.isArray(data)) return;
+        const updates = {};
+        for (const a of data) {
+          if (a?.id) updates[a.id] = a.full_name || null;
+        }
+        setAgentNameMap(prev => ({ ...prev, ...updates }));
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [rows, agentNameMap]);
+
+  // Lazy batch-fetch agency display names for agency rows we don't know yet.
+  useEffect(() => {
+    const needed = new Set();
+    for (const r of rows) {
+      if (r.entity_type !== "agency" || !r.pulse_entity_id) continue;
+      if (!(r.pulse_entity_id in agencyNameMap)) needed.add(r.pulse_entity_id);
+    }
+    if (needed.size === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("pulse_agencies")
+          .select("id, name")
+          .in("id", Array.from(needed));
+        if (cancelled || !Array.isArray(data)) return;
+        const updates = {};
+        for (const a of data) {
+          if (a?.id) updates[a.id] = a.name || null;
+        }
+        setAgencyNameMap(prev => ({ ...prev, ...updates }));
+      } catch { /* non-fatal */ }
+    })();
+    return () => { cancelled = true; };
+  }, [rows, agencyNameMap]);
 
   // Lazy batch-fetch listing display names for listing rows we don't know yet.
   useEffect(() => {

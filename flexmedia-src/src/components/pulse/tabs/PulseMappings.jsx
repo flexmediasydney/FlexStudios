@@ -271,35 +271,108 @@ export default function PulseMappings({
   // the top-level `useEntityList("PulseAgent"/"PulseAgency")` fetches, the
   // props `pulseAgents` / `pulseAgencies` arrive as empty arrays. Without
   // those lookup lists the rows below render just the raw `rea_id` with no
-  // name. We pull our own slim projection here (id, display-name, rea_id
-  // only) — ~500KB total vs the old 50MB full-row cache — tab-local so other
-  // tabs don't pay for it.
+  // name.
+  //
+  // BUG FIX (2026-04-28): the previous fix did a bulk `.limit(25000)` fetch
+  // of the whole pulse_agents/agencies tables, but PostgREST applies a
+  // server-side `max-rows` cap regardless of the requested limit. With ~9.6k
+  // pulse_agents in prod, only a slice came back and rows whose pulse_agent
+  // landed outside that slice rendered as "—" (e.g. jayden kiet, mitchell
+  // crawford, bill kordos all had valid mappings but no name). Now we fetch
+  // ONLY the pulse_agents/agencies actually referenced by `pulseMappings`
+  // (~16 agents in prod today), via a targeted `.in()` lookup. Constant
+  // payload, no cap to hit.
+  const { mappedPulseAgentIds, mappedPulseAgentReaIds } = useMemo(() => {
+    const ids = new Set();
+    const reaIds = new Set();
+    for (const m of pulseMappings) {
+      if (m.entity_type !== "agent") continue;
+      if (m.pulse_entity_id) ids.add(m.pulse_entity_id);
+      if (m.rea_id) reaIds.add(m.rea_id);
+    }
+    return {
+      mappedPulseAgentIds: [...ids],
+      mappedPulseAgentReaIds: [...reaIds],
+    };
+  }, [pulseMappings]);
+
+  const { mappedPulseAgencyIds, mappedPulseAgencyReaIds } = useMemo(() => {
+    const ids = new Set();
+    const reaIds = new Set();
+    for (const m of pulseMappings) {
+      if (m.entity_type !== "agency") continue;
+      if (m.pulse_entity_id) ids.add(m.pulse_entity_id);
+      if (m.rea_id) reaIds.add(m.rea_id);
+    }
+    return {
+      mappedPulseAgencyIds: [...ids],
+      mappedPulseAgencyReaIds: [...reaIds],
+    };
+  }, [pulseMappings]);
+
   const { data: pulseAgentLookup = [] } = useQuery({
-    queryKey: ["pulse-mappings-agent-lookup"],
+    queryKey: [
+      "pulse-mappings-agent-lookup",
+      mappedPulseAgentIds,
+      mappedPulseAgentReaIds,
+    ],
     queryFn: async () => {
+      if (mappedPulseAgentIds.length === 0 && mappedPulseAgentReaIds.length === 0) {
+        return [];
+      }
+      // Build an OR filter so we resolve mappings that store only `rea_id`
+      // (legacy) as well as those with a UUID `pulse_entity_id`.
+      const filters = [];
+      if (mappedPulseAgentIds.length > 0) {
+        filters.push(`id.in.(${mappedPulseAgentIds.join(",")})`);
+      }
+      if (mappedPulseAgentReaIds.length > 0) {
+        // rea_agent_id is text — quote each value to be safe.
+        const quoted = mappedPulseAgentReaIds.map((v) => `"${v}"`).join(",");
+        filters.push(`rea_agent_id.in.(${quoted})`);
+      }
       const { data, error } = await supabase
         .from("pulse_agents")
         .select("id, full_name, rea_agent_id")
-        .limit(25000);
+        .or(filters.join(","));
       if (error) throw error;
       return data || [];
     },
     staleTime: 5 * 60 * 1000,
-    enabled: pulseAgents.length === 0,
+    enabled:
+      pulseAgents.length === 0 &&
+      (mappedPulseAgentIds.length > 0 || mappedPulseAgentReaIds.length > 0),
   });
 
   const { data: pulseAgencyLookup = [] } = useQuery({
-    queryKey: ["pulse-mappings-agency-lookup"],
+    queryKey: [
+      "pulse-mappings-agency-lookup",
+      mappedPulseAgencyIds,
+      mappedPulseAgencyReaIds,
+    ],
     queryFn: async () => {
+      if (mappedPulseAgencyIds.length === 0 && mappedPulseAgencyReaIds.length === 0) {
+        return [];
+      }
+      const filters = [];
+      if (mappedPulseAgencyIds.length > 0) {
+        filters.push(`id.in.(${mappedPulseAgencyIds.join(",")})`);
+      }
+      if (mappedPulseAgencyReaIds.length > 0) {
+        const quoted = mappedPulseAgencyReaIds.map((v) => `"${v}"`).join(",");
+        filters.push(`rea_agency_id.in.(${quoted})`);
+      }
       const { data, error } = await supabase
         .from("pulse_agencies")
         .select("id, name, rea_agency_id")
-        .limit(10000);
+        .or(filters.join(","));
       if (error) throw error;
       return data || [];
     },
     staleTime: 5 * 60 * 1000,
-    enabled: pulseAgencies.length === 0,
+    enabled:
+      pulseAgencies.length === 0 &&
+      (mappedPulseAgencyIds.length > 0 || mappedPulseAgencyReaIds.length > 0),
   });
 
   // Use parent-provided arrays when available; otherwise fall back to our
