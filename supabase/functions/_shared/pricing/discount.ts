@@ -25,6 +25,7 @@ import type {
   DiscountType,
   LineItem,
   PriceMatrix,
+  PricingTier,
 } from './schema.ts';
 
 export interface BlanketResult {
@@ -67,6 +68,7 @@ export function applyBlanketDiscount(
   lineItems: LineItem[],
   agentMatrix: PriceMatrix | null,
   agencyMatrix: PriceMatrix | null,
+  tier: PricingTier,
 ): BlanketResult {
   // Display subtotal — sum of already-rounded line finals. Unchanged.
   const productLineSubtotal = lineItems
@@ -91,7 +93,7 @@ export function applyBlanketDiscount(
   }
   const productDiscountBasis = productLineSubtotal + productExtrasFromPackages;
 
-  const blanket = resolveBlanketDiscount(agentMatrix, agencyMatrix);
+  const blanket = resolveBlanketDiscount(agentMatrix, agencyMatrix, tier);
 
   let productDiscount = 0;
   let packageDiscount = 0;

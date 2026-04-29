@@ -30,6 +30,7 @@
 import type {
   PriceMatrix,
   PricingTier,
+  TierBlanketBlock,
   TierOverrideMode,
   TierOverrideProductTier,
   TierOverridePackageTier,
@@ -226,26 +227,58 @@ function resolvePackageTierForRow(
 /**
  * The active blanket discount for this project. Agent wins over agency. If
  * neither is enabled, returns null. Mutually exclusive — no stacking.
+ *
+ * Engine v3.1: per-tier blanket. The resolver inspects each candidate matrix
+ * for a `tier_blanket[tier]` block first; if absent or disabled, falls back
+ * to the legacy `blanket_discount.enabled` + scalar fields (which then apply
+ * uniformly across tiers). Both shapes coexist during the rollout window.
  */
 export interface BlanketResolution {
   matrix_id: string;
   entity_type: 'agent' | 'agency';
   package_percent: number;
   product_percent: number;
+  /** Which shape resolved this — 'tier_blanket' (v3.1) or 'legacy' (v3.0 and earlier). */
+  shape: 'legacy' | 'tier_blanket';
 }
 
 export function resolveBlanketDiscount(
   agentMatrix: PriceMatrix | null,
   agencyMatrix: PriceMatrix | null,
+  tier: PricingTier,
 ): BlanketResolution | null {
   for (const m of [agentMatrix, agencyMatrix]) {
-    if (!m?.blanket_discount?.enabled) continue;
-    return {
-      matrix_id: m.id,
-      entity_type: m.entity_type,
-      package_percent: clampPct(toNullableNumber(m.blanket_discount.package_percent) ?? 0),
-      product_percent: clampPct(toNullableNumber(m.blanket_discount.product_percent) ?? 0),
-    };
+    const bd = m?.blanket_discount;
+    if (!bd) continue;
+
+    // ─── New shape (engine v3.1): per-tier block ─────────────────────────
+    const tierBlock = bd.tier_blanket?.[tier] as TierBlanketBlock | undefined;
+    if (tierBlock) {
+      if (!tierBlock.enabled) {
+        // Tier explicitly opts out of blanket — do NOT fall through to legacy
+        // for this matrix. Legacy is only consulted when tier_blanket is
+        // absent. Otherwise an explicit disable would be silently overridden.
+        continue;
+      }
+      return {
+        matrix_id: m!.id,
+        entity_type: m!.entity_type,
+        package_percent: clampPct(toNullableNumber(tierBlock.package_percent) ?? 0),
+        product_percent: clampPct(toNullableNumber(tierBlock.product_percent) ?? 0),
+        shape: 'tier_blanket',
+      };
+    }
+
+    // ─── Legacy shape: single global enabled + percent fields ────────────
+    if (bd.enabled) {
+      return {
+        matrix_id: m!.id,
+        entity_type: m!.entity_type,
+        package_percent: clampPct(toNullableNumber(bd.package_percent) ?? 0),
+        product_percent: clampPct(toNullableNumber(bd.product_percent) ?? 0),
+        shape: 'legacy',
+      };
+    }
   }
   return null;
 }

@@ -177,13 +177,36 @@ export default function PriceMatrixEditor({ priceMatrix }) {
           premium:  validatePackageTier(pp.tier_overrides?.premium),
         },
       }));
+      // Engine v3.1: validate per-tier blanket. Each tier has independent
+      // enabled + product_percent + package_percent. Legacy fields are kept
+      // in the saved payload for back-compat readers but tier_blanket is
+      // the source of truth.
+      const validateBlanketTier = (t) => ({
+        enabled: Boolean(t?.enabled),
+        product_percent: clamp(t?.product_percent, 0, 100),
+        package_percent: clamp(t?.package_percent, 0, 100),
+      });
+      const incomingTB = data.blanket_discount?.tier_blanket || {};
+      const validatedTierBlanket = {
+        standard: validateBlanketTier(incomingTB.standard),
+        premium:  validateBlanketTier(incomingTB.premium),
+      };
+      const anyTierEnabled = validatedTierBlanket.standard.enabled || validatedTierBlanket.premium.enabled;
       const validatedBlanket = {
-        enabled: Boolean(data.blanket_discount?.enabled),
-        product_percent: Math.min(100, Math.max(0, parseFloat(data.blanket_discount?.product_percent) || 0)),
-        package_percent: Math.min(100, Math.max(0, parseFloat(data.blanket_discount?.package_percent) || 0)),
+        // Legacy scalar fields kept in sync for back-compat. We pick the
+        // standard tier's values as the legacy view because that's the most
+        // common consumer-facing tier; resolvers always prefer tier_blanket.
+        enabled: anyTierEnabled,
+        product_percent: validatedTierBlanket.standard.product_percent,
+        package_percent: validatedTierBlanket.standard.package_percent,
+        tier_blanket: validatedTierBlanket,
       };
       // Enforce mutual exclusion: default mode disables blanket
-      if (data.use_default_pricing) validatedBlanket.enabled = false;
+      if (data.use_default_pricing) {
+        validatedBlanket.enabled = false;
+        validatedBlanket.tier_blanket.standard.enabled = false;
+        validatedBlanket.tier_blanket.premium.enabled = false;
+      }
       // Validate default_tier — only 'standard' | 'premium' | null allowed (matches DB CHECK)
       const validatedDefaultTier =
         data.default_tier === "standard" || data.default_tier === "premium"
@@ -389,6 +412,57 @@ export default function PriceMatrixEditor({ priceMatrix }) {
     );
   };
 
+  // ─── Per-tier BLANKET helpers (engine v3.1) ─────────────────────────────
+  // The matrix-level blanket discount has independent per-tier {enabled,
+  // product_percent, package_percent}. These mirror the per-product helpers
+  // above and write to localData.blanket_discount.tier_blanket.{tier}.
+  const setBlanketTierField = (tier, field, value) => {
+    if (!canEdit) return;
+    setLocalData(prev => {
+      const prevBD = prev.blanket_discount || {};
+      const prevTB = prevBD.tier_blanket || {};
+      const cur = prevTB[tier] || {};
+      const coerced = field === "enabled" ? Boolean(value) : clamp(value, 0, 100);
+      return {
+        ...prev,
+        blanket_discount: {
+          ...prevBD,
+          tier_blanket: {
+            ...prevTB,
+            [tier]: { ...cur, [field]: coerced },
+          },
+        },
+      };
+    });
+  };
+
+  const toggleBlanketTier = (tier) => setBlanketTierField(tier, "enabled",
+    !(localData.blanket_discount?.tier_blanket?.[tier]?.enabled));
+
+  const copyBlanketTier = (fromTier, toTier) => {
+    if (!canEdit) return;
+    const src = localData.blanket_discount?.tier_blanket?.[fromTier];
+    if (!src) return;
+    setLocalData(prev => {
+      const prevBD = prev.blanket_discount || {};
+      const prevTB = prevBD.tier_blanket || {};
+      return {
+        ...prev,
+        blanket_discount: {
+          ...prevBD,
+          tier_blanket: {
+            ...prevTB,
+            [toTier]: {
+              enabled: src.enabled,
+              product_percent: src.product_percent ?? 0,
+              package_percent: src.package_percent ?? 0,
+            },
+          },
+        },
+      };
+    });
+  };
+
   // Copy the override block from one tier to the other (in-place). Useful
   // shortcut when both tiers end up with the same override (e.g. a flat 10%
   // discount applied uniformly).
@@ -433,7 +507,14 @@ export default function PriceMatrixEditor({ priceMatrix }) {
 
   const hasChanges = JSON.stringify(localData) !== JSON.stringify(priceMatrix);
   const useDefault = localData.use_default_pricing ?? true;
-  const blanketEnabled = localData.blanket_discount?.enabled || false;
+  // Engine v3.1: matrix is in "Blanket mode" when any tier has blanket enabled
+  // OR the legacy global flag is on (back-compat with un-backfilled rows).
+  const stdTierBlanket = localData.blanket_discount?.tier_blanket?.standard;
+  const prmTierBlanket = localData.blanket_discount?.tier_blanket?.premium;
+  const blanketEnabled =
+    Boolean(stdTierBlanket?.enabled) ||
+    Boolean(prmTierBlanket?.enabled) ||
+    Boolean(localData.blanket_discount?.enabled);
   const Icon = localData.entity_type === "agency" ? Building : User;
 
   const matrixProjectTypeId = localData?.project_type_id || null;
@@ -471,9 +552,18 @@ export default function PriceMatrixEditor({ priceMatrix }) {
             {useDefault ? (
               <Badge variant="secondary" className="text-xs h-5">Default</Badge>
             ) : blanketEnabled ? (
-              <Badge className="text-xs h-5 bg-amber-100 text-amber-800 border-amber-200">
+              <Badge className="text-xs h-5 bg-amber-100 text-amber-800 border-amber-200" title={
+                `Std: ${stdTierBlanket?.enabled ? `${stdTierBlanket?.product_percent ?? 0}%/${stdTierBlanket?.package_percent ?? 0}%` : "off"}\n` +
+                `Prm: ${prmTierBlanket?.enabled ? `${prmTierBlanket?.product_percent ?? 0}%/${prmTierBlanket?.package_percent ?? 0}%` : "off"}`
+              }>
                 <Percent className="h-3 w-3 mr-0.5" />
-                {localData.blanket_discount?.product_percent ?? 0}% / {localData.blanket_discount?.package_percent ?? 0}%
+                {stdTierBlanket?.enabled
+                  ? `${stdTierBlanket?.product_percent ?? 0}%/${stdTierBlanket?.package_percent ?? 0}%`
+                  : "off"} ·
+                {" "}
+                {prmTierBlanket?.enabled
+                  ? `${prmTierBlanket?.product_percent ?? 0}%/${prmTierBlanket?.package_percent ?? 0}%`
+                  : "off"}
               </Badge>
             ) : (
               <Badge className="text-xs h-5 bg-blue-100 text-blue-800 border-blue-200">Custom</Badge>
@@ -622,8 +712,23 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                 onClick={() => {
                   if (!canEdit) return;
                   if (!useDefault) {
-                    // Switching TO default: explicitly disable blanket discount
-                    setLocalData(prev => ({ ...prev, use_default_pricing: true, blanket_discount: { ...(prev.blanket_discount || {}), enabled: false } }));
+                    // Switching TO default: disable blanket on both shapes
+                    setLocalData(prev => {
+                      const prevBD = prev.blanket_discount || {};
+                      const prevTB = prevBD.tier_blanket || {};
+                      return {
+                        ...prev,
+                        use_default_pricing: true,
+                        blanket_discount: {
+                          ...prevBD,
+                          enabled: false,
+                          tier_blanket: {
+                            standard: { ...(prevTB.standard || {}), enabled: false },
+                            premium:  { ...(prevTB.premium  || {}), enabled: false },
+                          },
+                        },
+                      };
+                    });
                   } else {
                     setField("use_default_pricing", false);
                   }
@@ -637,7 +742,22 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                 onClick={() => {
                   if (!canEdit) return;
                   if (useDefault) setField("use_default_pricing", false);
-                  setLocalData(prev => ({ ...prev, use_default_pricing: false, blanket_discount: { ...(prev.blanket_discount || {}), enabled: false } }));
+                  setLocalData(prev => {
+                    const prevBD = prev.blanket_discount || {};
+                    const prevTB = prevBD.tier_blanket || {};
+                    return {
+                      ...prev,
+                      use_default_pricing: false,
+                      blanket_discount: {
+                        ...prevBD,
+                        enabled: false,
+                        tier_blanket: {
+                          standard: { ...(prevTB.standard || {}), enabled: false },
+                          premium:  { ...(prevTB.premium  || {}), enabled: false },
+                        },
+                      },
+                    };
+                  });
                 }}
                 disabled={!canEdit}
                 className={`text-xs px-2 py-0.5 rounded border transition-colors ${!useDefault && !blanketEnabled ? "bg-blue-100 border-blue-200 text-blue-800 font-medium" : "bg-transparent border-transparent text-muted-foreground hover:bg-muted"}`}
@@ -647,7 +767,26 @@ export default function PriceMatrixEditor({ priceMatrix }) {
               <button
                 onClick={() => {
                   if (!canEdit) return;
-                  setLocalData(prev => ({ ...prev, use_default_pricing: false, blanket_discount: { ...(prev.blanket_discount || {}), enabled: !blanketEnabled } }));
+                  // Toggle Blanket mode by flipping BOTH tiers' enabled in
+                  // lockstep. Within Blanket mode the user can then
+                  // independently disable one tier and tune percents per tier.
+                  setLocalData(prev => {
+                    const prevBD = prev.blanket_discount || {};
+                    const prevTB = prevBD.tier_blanket || {};
+                    const nextEnabled = !blanketEnabled;
+                    return {
+                      ...prev,
+                      use_default_pricing: false,
+                      blanket_discount: {
+                        ...prevBD,
+                        enabled: nextEnabled,
+                        tier_blanket: {
+                          standard: { ...(prevTB.standard || {}), enabled: nextEnabled },
+                          premium:  { ...(prevTB.premium  || {}), enabled: nextEnabled },
+                        },
+                      },
+                    };
+                  });
                 }}
                 disabled={!canEdit}
                 className={`text-xs px-2 py-0.5 rounded border transition-colors flex items-center gap-0.5 ${!useDefault && blanketEnabled ? "bg-amber-100 border-amber-200 text-amber-800 font-medium" : "bg-transparent border-transparent text-muted-foreground hover:bg-muted"}`}
@@ -670,30 +809,76 @@ export default function PriceMatrixEditor({ priceMatrix }) {
             </div>
           ) : (
             <div>
-              {/* Blanket discount inputs */}
+              {/* Engine v3.1 per-tier blanket discount inputs.
+                 Each tier independently enables + tunes its own product/package
+                 percent. Standard and Premium are visually stacked. The ⇄
+                 button mirrors the other tier's values into this row. */}
               {blanketEnabled && (
-                <div className="flex items-center gap-4 px-4 py-3 bg-amber-50 border-b">
-                  <span className="text-xs font-medium text-amber-800">Blanket Discount:</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-amber-700">Products</span>
-                    <Input
-                      type="number" step="1" min="0" max="100"
-                      value={localData.blanket_discount?.product_percent ?? 0}
-                      onChange={(e) => setField("blanket_discount.product_percent", clamp(e.target.value, 0, 100))}
-                      className="h-7 w-20 text-xs bg-card border-amber-200"
-                    />
-                    <span className="text-xs text-amber-700">%</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-amber-700">Packages</span>
-                    <Input
-                      type="number" step="1" min="0" max="100"
-                      value={localData.blanket_discount?.package_percent ?? 0}
-                      onChange={(e) => setField("blanket_discount.package_percent", clamp(e.target.value, 0, 100))}
-                      className="h-7 w-20 text-xs bg-card border-amber-200"
-                    />
-                    <span className="text-xs text-amber-700">%</span>
-                  </div>
+                <div className="px-4 py-3 bg-amber-50/40 border-b space-y-1.5">
+                  <div className="text-xs font-medium text-amber-800 mb-1">Blanket Discount</div>
+                  {TIERS.map(tier => {
+                    const tierBlock = localData.blanket_discount?.tier_blanket?.[tier] || {};
+                    const enabled = Boolean(tierBlock.enabled);
+                    const otherTier = tier === "standard" ? "premium" : "standard";
+                    return (
+                      <div
+                        key={tier}
+                        className={`flex items-center gap-3 px-2 py-1.5 rounded ${enabled ? `${tier === "premium" ? "bg-purple-50" : "bg-slate-50"} border border-transparent` : "bg-muted/10"}`}
+                      >
+                        <div className="flex items-center gap-1.5 w-[110px] flex-shrink-0">
+                          <Switch
+                            checked={enabled}
+                            onCheckedChange={() => toggleBlanketTier(tier)}
+                            disabled={!canEdit}
+                            className="scale-75"
+                          />
+                          <span className="text-xs font-medium">
+                            {tier === "premium" && <Crown className="h-3 w-3 inline mr-0.5 text-purple-600" />}
+                            {TIER_LABEL[tier]}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-amber-700">Products</span>
+                          <Input
+                            type="number" step="1" min="0" max="100"
+                            value={tierBlock.product_percent ?? 0}
+                            onChange={(e) => setBlanketTierField(tier, "product_percent", e.target.value)}
+                            disabled={!enabled || !canEdit}
+                            className="h-7 w-16 text-xs bg-card border-amber-200 disabled:opacity-50"
+                          />
+                          <span className="text-xs text-amber-700">%</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-amber-700">Packages</span>
+                          <Input
+                            type="number" step="1" min="0" max="100"
+                            value={tierBlock.package_percent ?? 0}
+                            onChange={(e) => setBlanketTierField(tier, "package_percent", e.target.value)}
+                            disabled={!enabled || !canEdit}
+                            className="h-7 w-16 text-xs bg-card border-amber-200 disabled:opacity-50"
+                          />
+                          <span className="text-xs text-amber-700">%</span>
+                        </div>
+                        {!enabled && (
+                          <span className="text-xs text-muted-foreground italic">tier opts out of blanket</span>
+                        )}
+                        <div className="ml-auto">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm" variant="ghost" className="h-6 w-6 p-0"
+                                onClick={() => copyBlanketTier(otherTier, tier)}
+                                disabled={!canEdit}
+                              >
+                                <ArrowLeftRight className="h-3 w-3" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Copy {TIER_LABEL[otherTier]} → {TIER_LABEL[tier]}</TooltipContent>
+                          </Tooltip>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 

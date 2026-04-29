@@ -200,8 +200,25 @@ function legacyComputePrice(args: {
 
   let finalPrice = totalPrice;
   let appliedDiscount = 0;
-  const activeBlanket = agentM?.blanket_discount?.enabled ? agentM.blanket_discount
-                     : agencyM?.blanket_discount?.enabled ? agencyM.blanket_discount : null;
+  // Engine v3.1: dual-shape blanket. Mirror resolveBlanketDiscount logic from
+  // _shared/pricing/matrix.ts. Tier_blanket wins; explicit per-tier disable
+  // does NOT fall through to legacy on the same matrix.
+  function resolveLegacyBlanket(m: any): any {
+    const bd = m?.blanket_discount;
+    if (!bd) return null;
+    const tierBlock = bd.tier_blanket?.[pricing_tier];
+    if (tierBlock) {
+      if (!tierBlock.enabled) return null;
+      return {
+        enabled: true,
+        product_percent: tierBlock.product_percent,
+        package_percent: tierBlock.package_percent,
+      };
+    }
+    if (bd.enabled) return bd;
+    return null;
+  }
+  const activeBlanket = resolveLegacyBlanket(agentM) || resolveLegacyBlanket(agencyM);
   if (activeBlanket) {
     const productPct = Math.min(100, Math.max(0, parseFloat(activeBlanket.product_percent) || 0));
     const packagePct = Math.min(100, Math.max(0, parseFloat(activeBlanket.package_percent) || 0));

@@ -60,7 +60,9 @@ export function computePrice(input: PricingInput): PricingResult {
   });
 
   // ─── Blanket discount (agent wins over agency, mutually exclusive) ───
-  const blanket = applyBlanketDiscount(lineItems, agentMatrix, agencyMatrix);
+  // Engine v3.1: tier is passed in so the resolver can pick a per-tier
+  // blanket block (tier_blanket.standard / tier_blanket.premium) when present.
+  const blanket = applyBlanketDiscount(lineItems, agentMatrix, agencyMatrix, input.pricing_tier);
 
   // ─── Manual per-project adjustment (discount or fee) ─────────────────
   const manual = applyManualAdjustment(blanket.post_blanket, {

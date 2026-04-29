@@ -167,7 +167,37 @@ serveWithAudit('logPriceMatrixChange', async (req) => {
         try {
           const oldD = JSON.parse(change.old_value) || {};
           const newD = JSON.parse(change.new_value) || {};
-          if (!oldD.enabled && newD.enabled) {
+
+          // Engine v3.1: per-tier diff against tier_blanket. Render a summary
+          // like "Std blanket enabled (Products 10%, Packages 5%)" or
+          // "Prm Products 10%→15%". Falls back to legacy diff when neither
+          // shape has tier_blanket.
+          const fmtBlanketTier = (t: any): string | null => {
+            if (!t || !t.enabled) return null;
+            const parts: string[] = [];
+            if ((t.product_percent ?? 0) > 0) parts.push(`Products ${t.product_percent}%`);
+            if ((t.package_percent ?? 0) > 0) parts.push(`Packages ${t.package_percent}%`);
+            return parts.length > 0 ? parts.join(', ') : 'enabled (0%/0%)';
+          };
+          const oldTB = oldD.tier_blanket || null;
+          const newTB = newD.tier_blanket || null;
+
+          if (oldTB || newTB) {
+            const details: string[] = [];
+            for (const tier of TIERS_V3) {
+              const oldDesc = fmtBlanketTier(oldTB?.[tier]);
+              const newDesc = fmtBlanketTier(newTB?.[tier]);
+              if (oldDesc === newDesc) continue;
+              if (oldDesc == null && newDesc != null) {
+                details.push(`${TIER_SHORT[tier]} blanket enabled (${newDesc})`);
+              } else if (oldDesc != null && newDesc == null) {
+                details.push(`${TIER_SHORT[tier]} blanket disabled (was ${oldDesc})`);
+              } else {
+                details.push(`${TIER_SHORT[tier]} blanket ${oldDesc} → ${newDesc}`);
+              }
+            }
+            summaryParts.push(details.length > 0 ? details.join(', ') : 'Blanket discount touched');
+          } else if (!oldD.enabled && newD.enabled) {
             summaryParts.push(`Enabled blanket discount: Products ${newD.product_percent}%, Packages ${newD.package_percent}%`);
           } else if (oldD.enabled && !newD.enabled) {
             summaryParts.push('Disabled blanket discount');

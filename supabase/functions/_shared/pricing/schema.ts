@@ -54,6 +54,20 @@ export interface TierOverridePackageTier {
   } | null;
 }
 
+/**
+ * Per-tier blanket discount block (engine v3.1.0-shared).
+ *
+ * Same idea as tier_overrides but at the matrix level: each tier independently
+ * declares whether the matrix's blanket discount applies + at what percentages.
+ * Lives under `blanket_discount.tier_blanket` alongside the legacy scalar
+ * fields. Resolver detects tier_blanket first and falls back to legacy.
+ */
+export interface TierBlanketBlock {
+  enabled?: boolean;
+  product_percent?: number | string | null;
+  package_percent?: number | string | null;
+}
+
 // ─── Inputs ──────────────────────────────────────────────────────────────
 
 export interface ProductLine {
@@ -143,9 +157,12 @@ export interface PriceMatrix {
     tier_overrides?: Partial<Record<PricingTier, TierOverrideProductTier>> | null;
   }> | null;
   blanket_discount?: {
+    /** Legacy global toggle. Engine v3.1 reads tier_blanket first. */
     enabled?: boolean;
     package_percent?: number | string | null;
     product_percent?: number | string | null;
+    /** Engine v3.1 — per-tier independent blanket. */
+    tier_blanket?: Partial<Record<PricingTier, TierBlanketBlock>> | null;
   } | null;
   snapshot_date?: string | null;
 }
@@ -232,5 +249,8 @@ export interface PricingResult {
  *   v3.0.0-shared — per-tier independent overrides + percent_off / percent_markup modes.
  *                   Reads BOTH legacy (override_enabled + standard_/premium_ scalar fields)
  *                   and new (tier_overrides) shapes; new saves write tier_overrides only.
+ *   v3.1.0-shared — per-tier independent blanket discount (tier_blanket). Resolver
+ *                   detects tier_blanket first, else legacy enabled/product_percent/package_percent.
+ *                   Math equivalence preserved when both tiers carry identical legacy values.
  */
-export const ENGINE_VERSION = 'v3.0.0-shared';
+export const ENGINE_VERSION = 'v3.1.0-shared';

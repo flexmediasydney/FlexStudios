@@ -362,25 +362,60 @@ serveWithAudit('deepLogicAuditPriceMatrix', async (req) => {
       }
     }
 
-    // TEST 5: Blanket discount validation
+    // TEST 5: Blanket discount validation (engine v3.1: tier_blanket aware)
     for (const matrix of priceMatrices) {
-      if (matrix.blanket_discount?.enabled) {
-        const prodDiscount = matrix.blanket_discount.product_percent;
-        const pkgDiscount = matrix.blanket_discount.package_percent;
+      const bd = matrix.blanket_discount;
+      if (!bd) continue;
 
+      // Validate per-tier blocks if present
+      if (bd.tier_blanket) {
+        for (const tier of TIERS_V3) {
+          const t = bd.tier_blanket[tier];
+          if (!t) continue;  // missing tier block — engine treats as disabled
+          if (typeof t.enabled !== 'boolean') {
+            findings.warnings.push({
+              type: 'INVALID_TIER_BLANKET_ENABLED',
+              matrix_id: matrix.id,
+              issue: `tier_blanket.${tier}.enabled must be boolean (got ${typeof t.enabled})`,
+            });
+          }
+          if (!t.enabled) continue;
+          if (typeof t.product_percent !== 'number' || t.product_percent < 0 || t.product_percent > 100) {
+            findings.warnings.push({
+              type: 'INVALID_TIER_BLANKET_DISCOUNT',
+              matrix_id: matrix.id,
+              issue: `tier_blanket.${tier}.product_percent must be 0–100 (got ${t.product_percent})`,
+            });
+          }
+          if (typeof t.package_percent !== 'number' || t.package_percent < 0 || t.package_percent > 100) {
+            findings.warnings.push({
+              type: 'INVALID_TIER_BLANKET_DISCOUNT',
+              matrix_id: matrix.id,
+              issue: `tier_blanket.${tier}.package_percent must be 0–100 (got ${t.package_percent})`,
+            });
+          }
+        }
+      } else if (bd.enabled) {
+        // Pre-v3.1 row — flag for backfill, then validate legacy fields
+        findings.warnings.push({
+          type: 'NEEDS_TIER_BLANKET_BACKFILL',
+          matrix_id: matrix.id,
+          issue: `blanket_discount missing tier_blanket — migration 362 backfill should have populated this`,
+        });
+        const prodDiscount = bd.product_percent;
+        const pkgDiscount = bd.package_percent;
         if (typeof prodDiscount !== 'number' || prodDiscount < 0 || prodDiscount > 100) {
           findings.warnings.push({
             type: 'INVALID_BLANKET_DISCOUNT',
             matrix_id: matrix.id,
-            issue: `Invalid product discount percentage: ${prodDiscount}. Must be 0-100`
+            issue: `Invalid product discount percentage: ${prodDiscount}. Must be 0-100`,
           });
         }
-
         if (typeof pkgDiscount !== 'number' || pkgDiscount < 0 || pkgDiscount > 100) {
           findings.warnings.push({
             type: 'INVALID_BLANKET_DISCOUNT',
             matrix_id: matrix.id,
-            issue: `Invalid package discount percentage: ${pkgDiscount}. Must be 0-100`
+            issue: `Invalid package discount percentage: ${pkgDiscount}. Must be 0-100`,
           });
         }
       }

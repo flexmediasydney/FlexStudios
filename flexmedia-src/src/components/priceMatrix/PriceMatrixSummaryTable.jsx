@@ -43,10 +43,22 @@ export default function PriceMatrixSummaryTable({ priceMatrix, products, package
     [agencyPriceMatrix],
   );
 
-  const blanket = useMemo(
-    () => resolveBlanketDiscount(agentMatrix, agencyMatrix),
+  // Engine v3.1: blanket resolves per-tier. The summary table renders both
+  // tiers in adjacent columns, so we resolve once per tier and use the
+  // appropriate one when applying the blanket onto each component.
+  const stdBlanket = useMemo(
+    () => resolveBlanketDiscount(agentMatrix, agencyMatrix, "standard"),
     [agentMatrix, agencyMatrix],
   );
+  const prmBlanket = useMemo(
+    () => resolveBlanketDiscount(agentMatrix, agencyMatrix, "premium"),
+    [agentMatrix, agencyMatrix],
+  );
+  // Used by mode-badge display when at least one tier has a blanket — the
+  // table's existing badge UI assumes a single blanket. We treat any tier's
+  // blanket as "blanket fired" for badge purposes; the per-tier values still
+  // drive the actual numeric column.
+  const blanket = stdBlanket || prmBlanket;
 
   // Derive the mode badge tag for a row, preserving the prior UX exactly:
   //   - Agent matrix fired            → "blanket" or "override"
@@ -89,20 +101,22 @@ export default function PriceMatrixSummaryTable({ priceMatrix, products, package
       if (preOverride.unit != null) preUnit = Math.max(0, preOverride.unit);
     }
 
-    // Blanket only applies when there's no per-item override (engine semantics
-    // are "blanket on subtotal of non-overridden lines"; for this preview table
-    // the closest per-component analogue is "skip blanket if override fired").
-    if (!stdOverride && !preOverride && blanket && blanket.product_percent > 0) {
-      const pct = blanket.product_percent;
-      stdBase = applyBlanketToComponent(stdBase, pct);
-      stdUnit = applyBlanketToComponent(stdUnit, pct);
-      preBase = applyBlanketToComponent(preBase, pct);
-      preUnit = applyBlanketToComponent(preUnit, pct);
-      mode = modeFor(blanket.entity_type, "blanket");
+    // Blanket only applies when there's no per-item override. Engine v3.1:
+    // each tier resolves its own blanket. The preview applies std blanket to
+    // std components, premium blanket to premium components.
+    if (!stdOverride && stdBlanket && stdBlanket.product_percent > 0) {
+      stdBase = applyBlanketToComponent(stdBase, stdBlanket.product_percent);
+      stdUnit = applyBlanketToComponent(stdUnit, stdBlanket.product_percent);
+      mode = modeFor(stdBlanket.entity_type, "blanket");
+    }
+    if (!preOverride && prmBlanket && prmBlanket.product_percent > 0) {
+      preBase = applyBlanketToComponent(preBase, prmBlanket.product_percent);
+      preUnit = applyBlanketToComponent(preUnit, prmBlanket.product_percent);
+      if (mode === "master") mode = modeFor(prmBlanket.entity_type, "blanket");
     }
 
     return { id: product.id, name: product.name, pricing_type: product.pricing_type, stdBase, stdUnit, preBase, preUnit, mode };
-  }), [activeProducts, agentMatrix, agencyMatrix, blanket, isClubFlex]);
+  }), [activeProducts, agentMatrix, agencyMatrix, stdBlanket, prmBlanket, isClubFlex]);
 
   const resolvedPackages = useMemo(() => activePackages.map(pkg => {
     const stdTier = pkg.standard_tier || {};
@@ -122,15 +136,17 @@ export default function PriceMatrixSummaryTable({ priceMatrix, products, package
       if (!stdOverride) mode = modeFor(preOverride.entity_type, "override");
     }
 
-    if (!stdOverride && !preOverride && blanket && blanket.package_percent > 0) {
-      const pct = blanket.package_percent;
-      stdPrice = applyBlanketToComponent(stdPrice, pct);
-      prePrice = applyBlanketToComponent(prePrice, pct);
-      mode = modeFor(blanket.entity_type, "blanket");
+    if (!stdOverride && stdBlanket && stdBlanket.package_percent > 0) {
+      stdPrice = applyBlanketToComponent(stdPrice, stdBlanket.package_percent);
+      mode = modeFor(stdBlanket.entity_type, "blanket");
+    }
+    if (!preOverride && prmBlanket && prmBlanket.package_percent > 0) {
+      prePrice = applyBlanketToComponent(prePrice, prmBlanket.package_percent);
+      if (mode === "master") mode = modeFor(prmBlanket.entity_type, "blanket");
     }
 
     return { id: pkg.id, name: pkg.name, stdPrice, prePrice, mode };
-  }), [activePackages, agentMatrix, agencyMatrix, blanket, isClubFlex]);
+  }), [activePackages, agentMatrix, agencyMatrix, stdBlanket, prmBlanket, isClubFlex]);
 
   return (
     <div className="space-y-4 mt-3 pt-3 border-t">
