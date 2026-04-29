@@ -31,7 +31,20 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
     const productMap = new Map(allProducts.map((p: any) => [p.id, p]));
     const packageMap = new Map(allPackages.map((p: any) => [p.id, p]));
 
+    // Track the longest onsite duration AND the source it came from. The
+    // source becomes the task's product_id (or package_id when scheduling_time
+    // dominates) so onsite shows up under the level it's derived from rather
+    // than as a free-floating "Project-level" task.
     let onsiteMaxMins = 0;
+    let onsiteSourceProductId: string | null = null;
+    let onsiteSourcePackageId: string | null = null;
+    const considerSource = (mins: number, productId: string | null, packageId: string | null) => {
+      if (mins > onsiteMaxMins) {
+        onsiteMaxMins = mins;
+        onsiteSourceProductId = productId;
+        onsiteSourcePackageId = packageId;
+      }
+    };
 
     (project.products || []).forEach((item: any) => {
       const product = productMap.get(item.product_id);
@@ -42,7 +55,7 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
       const increment = tier.onsite_time_increment || 0;
       const includedQty = tier.included_qty || product.min_quantity || 1;
       const mins = base + Math.max(0, qty - includedQty) * increment;
-      if (mins > onsiteMaxMins) onsiteMaxMins = mins;
+      considerSource(mins, item.product_id, null);
     });
 
     // Onsite time is MAX across BOTH the package-level scheduling_time AND
@@ -58,7 +71,7 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
       const schedulingTime = tier.scheduling_time || 0;
 
       // Package-level contribution
-      if (schedulingTime > onsiteMaxMins) onsiteMaxMins = schedulingTime;
+      considerSource(schedulingTime, null, pkgItem.package_id);
 
       // Product-level contribution — always evaluated, even when the package
       // also has scheduling_time set. Whichever is bigger wins.
@@ -71,7 +84,7 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
         const increment = prodTier.onsite_time_increment || 0;
         const includedQty = prodTier.included_qty || product.min_quantity || 1;
         const mins = base + Math.max(0, qty - includedQty) * increment;
-        if (mins > onsiteMaxMins) onsiteMaxMins = mins;
+        considerSource(mins, prodItem.product_id, null);
       });
     });
 
@@ -144,7 +157,8 @@ serveWithAudit('syncOnsiteEffortTasks', async (req) => {
 
       const alreadyCompleted = existingTask?.is_completed && existingTask?.is_locked;
       const taskData: any = {
-        project_id, title: `Onsite - ${role.charAt(0).toUpperCase() + role.slice(1)}`,
+        project_id, product_id: onsiteSourceProductId, package_id: onsiteSourcePackageId,
+        title: `Onsite - ${role.charAt(0).toUpperCase() + role.slice(1)}`,
         task_type: 'onsite', auto_assign_role: role, template_id: templateId, auto_generated: true,
         ...(alreadyCompleted ? {} : { is_completed: false, is_locked: false }),
         is_deleted: false, is_blocked: false, estimated_minutes: onsiteMaxMins, due_date: dueDate,

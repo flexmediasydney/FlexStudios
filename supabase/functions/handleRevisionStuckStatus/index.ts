@@ -22,7 +22,10 @@ serveWithAudit('handleRevisionStuckStatus', async (req) => {
 
     // Get all tasks for the revision
     const tasks = await entities.ProjectTask.filter({ project_id: rev.project_id });
-    const revisionTasks = tasks.filter((t: any) => t.title?.startsWith(`[Revision #${rev.revision_number}]`));
+    const revisionTasks = tasks.filter((t: any) =>
+      t.revision_id === rev.id ||
+      (!t.revision_id && t.title?.startsWith(`[Revision #${rev.revision_number}]`))
+    );
 
     // Get all time logs for revision tasks
     const timeLogs = await entities.TaskTimeLog.filter({ project_id: rev.project_id });

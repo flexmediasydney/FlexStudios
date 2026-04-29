@@ -249,6 +249,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
   );
 
   const { data: products = [] } = useEntityList("Product", null, 500, { is_active: true });
+  const { data: packages = [] } = useEntityList("Package", null, 500, { is_active: true });
   const { data: users = [] } = useEntityList("User", null, 500);
   const { data: teams = [] } = useEntityList("InternalTeam", null, 200, { is_active: true });
 
@@ -943,6 +944,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
           project={project}
           user={user}
           products={products}
+          packages={packages}
           groupBy={sortBy === "urgency" ? "urgency" : "product"}
           revisions={revisions}
         />

@@ -88,13 +88,17 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
   const statusConfig = STATUS_CONFIG[revision.status] || STATUS_CONFIG.identified;
   const StatusIcon = statusConfig.icon;
 
-  // Subscribe to real-time task updates for this revision
+  // Subscribe to real-time task updates for this revision.
+  // Uses the revision_id FK; falls back to title-prefix matching for any
+  // pre-backfill rows that slipped through (deleted tasks etc.) so legacy
+  // data still renders correctly.
   useEffect(() => {
     const filtered = tasks.filter(t =>
-      t.title?.startsWith(`[Revision #${revision.revision_number}]`)
+      t.revision_id === revision.id ||
+      (!t.revision_id && t.title?.startsWith(`[Revision #${revision.revision_number}]`))
     );
     setRevisionTasksLocal(filtered);
-  }, [tasks, revision.revision_number]);
+  }, [tasks, revision.id, revision.revision_number]);
 
   const revisionTasks = revisionTasksLocal;
 
@@ -324,6 +328,7 @@ function RevisionCard({ revision, project, canEdit, tasks, allProducts = [], all
       const taskData = {
         title: `[Revision #${revision.revision_number}] ${newTaskTitle.trim()}`,
         project_id: project.id,
+        revision_id: revision.id,
         task_type: "back_office",
         due_date: newTaskDueDate || revision.due_date || null,
         is_completed: false,

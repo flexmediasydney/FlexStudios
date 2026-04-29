@@ -61,6 +61,7 @@ export default function TaskListView({
   project,
   user,
   products = [],
+  packages = [],
   groupBy = "product",
   revisions = []
 }) {
@@ -89,25 +90,47 @@ export default function TaskListView({
 
   const getProductName = (productId) => {
     const product = products.find(p => p.id === productId);
-    return product?.name || "Other Tasks";
+    return product?.name || "Product";
   };
 
   const getProductById = (productId) => {
     return products.find(p => p.id === productId);
   };
 
-  // Build a map: revision_number -> revision object
+  const getPackageName = (packageId) => {
+    const pkg = packages.find(p => p.id === packageId);
+    return pkg?.name || "Package";
+  };
+
+  // Build a map: revision_id -> revision object (for FK-based lookup, post-356)
+  const revisionById = {};
+  revisions.forEach(r => {
+    revisionById[r.id] = r;
+  });
+  // Legacy: fallback map for any unbackfilled rows that still rely on the
+  // [Revision #N] title prefix.
   const revisionByNumber = {};
   revisions.forEach(r => {
     revisionByNumber[r.revision_number] = r;
   });
 
-  // Detect if a task belongs to a revision
-  const getRevisionNumber = (task) => {
+  // Resolve a task to its revision via FK first, falling back to the legacy
+  // title-prefix shape. Returns null when the task is not part of any request.
+  const getTaskRevision = (task) => {
+    if (task.revision_id && revisionById[task.revision_id]) {
+      return revisionById[task.revision_id];
+    }
     const match = task.title?.match(/^\[Revision #(\d+)\]/);
-    return match ? parseInt(match[1], 10) : null;
+    if (match) {
+      const num = parseInt(match[1], 10);
+      return revisionByNumber[num] || null;
+    }
+    return null;
   };
 
+  // Group tasks into the four canonical levels: product, package, project, request.
+  // Requests get one group PER revision so multiple requests of the same media
+  // type don't visually collapse into a single bucket.
   const groupTasks = () => {
     if (groupBy === "urgency") {
       const sorted = [...enrichedTasks].sort((a, b) => {
@@ -120,21 +143,41 @@ export default function TaskListView({
     if (groupBy === "product") {
       const grouped = {};
       enrichedTasks.forEach(task => {
-        const revNum = getRevisionNumber(task);
-        if (revNum !== null) {
-          const rev = revisionByNumber[revNum];
-          const revType = rev?.revision_type || "images";
-          const revKind = rev?.request_kind || "revision"; // Get revision or change_request
-          const key = `__revision__${revType}__${revKind}`;
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(task);
+        const rev = getTaskRevision(task);
+        let key;
+        if (rev) {
+          key = `__request__${rev.id}`;
+        } else if (task.product_id) {
+          key = `__product__${task.product_id}`;
+        } else if (task.package_id) {
+          key = `__package__${task.package_id}`;
         } else {
-          const key = task.product_id || "Uncategorized";
-          if (!grouped[key]) grouped[key] = [];
-          grouped[key].push(task);
+          key = `__project__`;
         }
+        if (!grouped[key]) grouped[key] = [];
+        grouped[key].push(task);
       });
-      return grouped;
+
+      // Stable display order: products → packages → project → requests
+      // (requests sorted by revision_number ascending).
+      const sortedEntries = Object.entries(grouped).sort(([a], [b]) => {
+        const rank = (k) => {
+          if (k.startsWith("__product__")) return 0;
+          if (k.startsWith("__package__")) return 1;
+          if (k === "__project__") return 2;
+          if (k.startsWith("__request__")) return 3;
+          return 4;
+        };
+        const ra = rank(a), rb = rank(b);
+        if (ra !== rb) return ra - rb;
+        if (a.startsWith("__request__")) {
+          const revA = revisionById[a.replace("__request__", "")];
+          const revB = revisionById[b.replace("__request__", "")];
+          return (revA?.revision_number || 0) - (revB?.revision_number || 0);
+        }
+        return 0;
+      });
+      return Object.fromEntries(sortedEntries);
     }
     return { "Tasks": enrichedTasks };
   };
@@ -146,36 +189,53 @@ export default function TaskListView({
   return (
     <div className="space-y-3">
       {Object.entries(grouped).map(([groupKey, groupedTasks]) => {
-        const isRevisionGroup = groupKey.startsWith("__revision__");
-        const [revisionType, revisionKind] = isRevisionGroup ? groupKey.replace("__revision__", "").split("__") : [null, null];
-        const revTypeConfig = revisionType ? REVISION_TYPE_CONFIG[revisionType] : null;
-        const revKindConfig = revisionKind ? REVISION_KIND_CONFIG[revisionKind] : null;
+        const isRequestGroup = groupKey.startsWith("__request__");
+        const isProductGroup = groupKey.startsWith("__product__");
+        const isPackageGroup = groupKey.startsWith("__package__");
+        const isProjectGroup = groupKey === "__project__";
+
+        const requestRev = isRequestGroup ? revisionById[groupKey.replace("__request__", "")] : null;
+        const productId = isProductGroup ? groupKey.replace("__product__", "") : null;
+        const packageId = isPackageGroup ? groupKey.replace("__package__", "") : null;
+
+        const revTypeConfig = requestRev ? REVISION_TYPE_CONFIG[requestRev.revision_type] : null;
+        const revKindConfig = requestRev ? REVISION_KIND_CONFIG[requestRev.request_kind || "revision"] : null;
+        const isChangeRequest = requestRev?.request_kind === "change_request";
         return (
         <div key={groupKey} className="space-y-1.5">
            {(groupBy === "product" || groupBy === "urgency") && (
              <div className="space-y-1">
-               {isRevisionGroup ? (
+               {isRequestGroup ? (
                  <p className={`text-xs font-medium px-2 py-1 rounded border flex items-center gap-1.5 ${revKindConfig?.color || "bg-muted/40 text-muted-foreground"}`}>
                    <span>{revTypeConfig?.icon}</span>
-                   {revisionKind === "change_request" ? "Change Request" : "Revision"} Tasks — {revTypeConfig?.label}
+                   {isChangeRequest ? "Change Request" : "Revision"} #{requestRev?.revision_number} — {revTypeConfig?.label}
+                   {requestRev?.title && <span className="font-normal opacity-80">· {requestRev.title}</span>}
                  </p>
-               ) : (
+               ) : isProductGroup ? (
                  <>
                    <p className="text-xs font-medium text-muted-foreground px-1 py-1 bg-muted/40 rounded">
-                     {groupBy === "product" ? getProductName(groupKey) : groupKey}
+                     {getProductName(productId)}
                    </p>
-                   {groupBy === "product" && (
-                     <ProductBrandingSummary product={getProductById(groupKey)} agency={project?.agency} />
-                   )}
+                   <ProductBrandingSummary product={getProductById(productId)} agency={project?.agency} />
                  </>
-               )}
+               ) : isPackageGroup ? (
+                 <p className="text-xs font-medium text-muted-foreground px-1 py-1 bg-indigo-50 dark:bg-indigo-950/30 rounded">
+                   📦 {getPackageName(packageId)}
+                 </p>
+               ) : isProjectGroup ? (
+                 <p className="text-xs font-medium text-muted-foreground px-1 py-1 bg-muted/40 rounded">
+                   Project-level tasks
+                 </p>
+               ) : null}
              </div>
            )}
           <div className="space-y-1">
             {groupedTasks.map(task => {
-              const revNum = getRevisionNumber(task);
-              const cleanTitle = revNum !== null ? task.title.replace(/^\[Revision #\d+\]\s*/, "") : task.title;
-              const rev = revNum !== null ? revisionByNumber[revNum] : null;
+              const rev = getTaskRevision(task);
+              // Strip the legacy [Revision #N] prefix when present so old rows
+              // display cleanly alongside new ones (which never carry it).
+              const cleanTitle = task.title?.replace(/^\[Revision #\d+\]\s*/, "") || task.title;
+              const revNum = rev?.revision_number ?? null;
               const revType = rev?.revision_type || null;
               const revKind = rev?.request_kind || null;
               const revTypeConfig = revType ? REVISION_TYPE_CONFIG[revType] : null;

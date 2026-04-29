@@ -44,7 +44,10 @@ serveWithAudit('updateRevisionStatus', async (req) => {
 
     const rev = revisionArr[0];
     const tasks = await entities.ProjectTask.filter({ project_id: rev.project_id }, null, 1000);
-    const revisionTasks = tasks.filter((t: any) => t.title?.startsWith(`[Revision #${rev.revision_number}]`));
+    const revisionTasks = tasks.filter((t: any) =>
+      t.revision_id === rev.id ||
+      (!t.revision_id && t.title?.startsWith(`[Revision #${rev.revision_number}]`))
+    );
 
     let newStatus = rev.status;
     const updates: any = {};

@@ -54,8 +54,9 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
      return tasks.reduce((sum, task) => {
        // Exclude deleted/archived (match ProjectDetails EffortLoggingTab filter)
        if (task.is_deleted || task.is_archived) return sum;
-       // Exclude revision tasks — counted separately below
-       if (/^\[Revision #\d+\]/.test(task.title || "")) return sum;
+       // Exclude revision tasks — counted separately below.
+       // Use revision_id FK; fall back to title prefix for any unbackfilled rows.
+       if (task.revision_id || /^\[Revision #\d+\]/.test(task.title || "")) return sum;
        const role = task.auto_assign_role;
        if (!role || role === "none") return sum;
        const mins = typeof task.estimated_minutes === "number" ? task.estimated_minutes : 0;
@@ -64,11 +65,15 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
    }, [tasks]);
 
    // Revision effort tracking: actual + estimated from revision tasks on the project
+   const matchesRevision = (task, rev) => (
+     task.revision_id === rev.id ||
+     (!task.revision_id && task.title?.startsWith(`[Revision #${rev.revision_number}]`))
+   );
+
    const revisionActualSeconds = useMemo(() => {
      return revisions.reduce((sum, rev) => {
        const revisionTasks = tasks.filter(t =>
-         !t.is_deleted && !t.is_archived &&
-         t.title?.startsWith(`[Revision #${rev.revision_number}]`)
+         !t.is_deleted && !t.is_archived && matchesRevision(t, rev)
        );
        return sum + revisionTasks.reduce((taskSum, task) => {
          const revisionLogs = timeLogs.filter(l => l.task_id === task.id);
@@ -80,8 +85,7 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
    const revisionEstimatedSeconds = useMemo(() => {
      return revisions.reduce((sum, rev) => {
        const revisionTasks = tasks.filter(t =>
-         !t.is_deleted && !t.is_archived &&
-         t.title?.startsWith(`[Revision #${rev.revision_number}]`)
+         !t.is_deleted && !t.is_archived && matchesRevision(t, rev)
        );
        const estimatedMins = revisionTasks.reduce((tSum, task) => {
          const mins = typeof task.estimated_minutes === "number" ? task.estimated_minutes : 0;

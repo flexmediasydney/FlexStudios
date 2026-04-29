@@ -108,7 +108,7 @@ const urgencyBorderClass = {
 
 /* ─────────────────────────── Mini Progress Bar ─────────────────────────── */
 function TaskProgressBar({ tasks }) {
-  const regularTasks = tasks.filter(t => !t.parent_task_id && !t.is_deleted && !t.is_archived && !/^\[Revision #\d+\]/.test(t.title || ""));
+  const regularTasks = tasks.filter(t => !t.parent_task_id && !t.is_deleted && !t.is_archived && !t.revision_id && !/^\[Revision #\d+\]/.test(t.title || ""));
   if (regularTasks.length === 0) return null;
 
   const completed = regularTasks.filter(t => t.is_completed).length;
@@ -324,7 +324,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks, showPricing })
         // so the collapsed overview progress bar is consistent with card-level bars.
         const colTasks = allTasks.filter(t =>
           colProjects.some(p => p.id === t.project_id) && !t.parent_task_id && !t.is_deleted
-          && !/^\[Revision #\d+\]/.test(t.title || "")
+          && !t.revision_id && !/^\[Revision #\d+\]/.test(t.title || "")
         );
         const tasksDone = colTasks.filter(t => t.is_completed).length;
         const tasksTotal = colTasks.length;

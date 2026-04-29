@@ -65,7 +65,7 @@ function getTaskSource(task, productMap, packageMap) {
   }
   if (tid.startsWith("project_type:")) return { key: "project", label: "Project Level", color: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400" };
   if (tid.startsWith("onsite:")) return { key: "onsite", label: "Onsite", color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" };
-  if (/^\[Revision #\d+\]/.test(task.title || "")) return { key: "request", label: "Request", color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400" };
+  if (task.revision_id || /^\[Revision #\d+\]/.test(task.title || "")) return { key: "request", label: "Request", color: "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400" };
   return { key: "manual", label: "Manual", color: "bg-gray-100 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400" };
 }
 

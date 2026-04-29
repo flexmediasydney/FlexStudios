@@ -31,7 +31,10 @@ Deno.serve(async (req) => {
 
     // Get all tasks for the revision
     const tasks = await base44.entities.ProjectTask.filter({ project_id: rev.project_id });
-    const revisionTasks = tasks.filter(t => t.title?.startsWith(`[Revision #${rev.revision_number}]`));
+    const revisionTasks = tasks.filter(t =>
+      t.revision_id === rev.id ||
+      (!t.revision_id && t.title?.startsWith(`[Revision #${rev.revision_number}]`))
+    );
 
     // Mark all revision tasks as deleted
     for (const task of revisionTasks) {

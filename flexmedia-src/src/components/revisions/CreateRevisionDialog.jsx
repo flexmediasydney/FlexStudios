@@ -169,6 +169,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
 
           const task = await api.entities.ProjectTask.create({
             project_id: project.id,
+            revision_id: revision.id,
             title: `[Revision #${revNum}] ${tmpl.title}`,
             description: tmpl.description || "",
             task_type: tmpl.task_type || "back_office",
@@ -230,6 +231,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
 
           const rlTask = await api.entities.ProjectTask.create({
             project_id: project.id,
+            revision_id: revision.id,
             title: `[Revision #${revNum}] ${rlTmpl.title}`,
             description: rlTmpl.description || "",
             task_type: rlTmpl.task_type || "back_office",
@@ -273,6 +275,7 @@ export default function CreateRevisionDialog({ open, onClose, project, existingR
 
         await api.entities.ProjectTask.create({
           project_id: project.id,
+          revision_id: revision.id,
           title: `[Revision #${revNum}] ${mt.title}`,
           description: mt.description || "",
           task_type: mt.task_type || "back_office",

@@ -175,7 +175,7 @@ function calculateEffortMetrics(timeLogs, projectTasks, projectRevisions) {
   projectRevisions.forEach(revision => {
     if (revision.status === 'completed' || revision.status === 'rejected') return;
     projectTasks.forEach(task => {
-      if (task.revision_id === revision.id || task.title?.startsWith(`[Revision #${revision.revision_number}]`)) {
+      if (task.revision_id === revision.id || (!task.revision_id && task.title?.startsWith(`[Revision #${revision.revision_number}]`))) {
         revisionTaskIds.add(task.id);
       }
     });

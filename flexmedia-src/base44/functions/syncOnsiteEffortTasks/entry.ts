@@ -29,8 +29,22 @@ Deno.serve(async (req) => {
     const productMap = new Map(allProducts.map(p => [p.id, p]));
     const packageMap = new Map(allPackages.map(p => [p.id, p]));
 
-    // === Find longest onsite duration (same logic as effort engine) ===
+    // === Find the longest onsite duration AND remember its source ===
+    // Onsite work belongs to the product (or package) it's derived from, not
+    // to the project as a whole. We pick the longest source as the canonical
+    // owner so total onsite minutes match the effort engine's expectation,
+    // then stamp the resulting task with that source's product_id/package_id.
     let onsiteMaxMins = 0;
+    let onsiteSourceProductId: string | null = null;
+    let onsiteSourcePackageId: string | null = null;
+
+    const considerSource = (mins: number, productId: string | null, packageId: string | null) => {
+      if (mins > onsiteMaxMins) {
+        onsiteMaxMins = mins;
+        onsiteSourceProductId = productId;
+        onsiteSourcePackageId = packageId;
+      }
+    };
 
     (project.products || []).forEach(item => {
       const product = productMap.get(item.product_id);
@@ -40,7 +54,7 @@ Deno.serve(async (req) => {
       const base = tier.onsite_time || 0;
       const increment = tier.onsite_time_increment || 0;
       const mins = base + Math.max(0, qty - 1) * increment;
-      if (mins > onsiteMaxMins) onsiteMaxMins = mins;
+      considerSource(mins, item.product_id, null);
     });
 
     (project.packages || []).forEach(pkgItem => {
@@ -49,7 +63,8 @@ Deno.serve(async (req) => {
       const tier = pkg[tierKey] || pkg.standard_tier || {};
       const schedulingTime = tier.scheduling_time || 0;
       if (schedulingTime > 0) {
-        if (schedulingTime > onsiteMaxMins) onsiteMaxMins = schedulingTime;
+        // Package overrides per-product timing — owner is the package itself.
+        considerSource(schedulingTime, null, pkgItem.package_id);
       } else {
         (pkgItem.products || pkg.products || []).forEach(prodItem => {
           const product = productMap.get(prodItem.product_id);
@@ -59,7 +74,7 @@ Deno.serve(async (req) => {
           const base = prodTier.onsite_time || 0;
           const increment = prodTier.onsite_time_increment || 0;
           const mins = base + Math.max(0, qty - 1) * increment;
-          if (mins > onsiteMaxMins) onsiteMaxMins = mins;
+          considerSource(mins, prodItem.product_id, null);
         });
       }
     });
@@ -138,6 +153,8 @@ Deno.serve(async (req) => {
 
       const taskData = {
         project_id,
+        product_id: onsiteSourceProductId,
+        package_id: onsiteSourcePackageId,
         title: `Onsite - ${role.charAt(0).toUpperCase() + role.slice(1)}`,
         task_type: 'onsite',
         auto_assign_role: role,
