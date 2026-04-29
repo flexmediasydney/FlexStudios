@@ -63,7 +63,16 @@ export function computeLineItems(input: LineItemsInput): LineItem[] {
     let basePrice = nonNegative(tier.base_price);
     let unitPrice = nonNegative(tier.unit_price);
 
-    const override = resolveProductOverride(item.product_id, input.tier, input.agent_matrix, input.agency_matrix);
+    // Pass master tier values so engine v3 percent_off / percent_markup modes
+    // can compute final values. Legacy 'fixed' / engine-v2 paths ignore them.
+    const override = resolveProductOverride(
+      item.product_id,
+      input.tier,
+      input.agent_matrix,
+      input.agency_matrix,
+      basePrice,
+      unitPrice,
+    );
     if (override) {
       if (override.base != null) basePrice = Math.max(0, override.base);
       if (override.unit != null) unitPrice = Math.max(0, override.unit);
@@ -105,8 +114,15 @@ export function computeLineItems(input: LineItemsInput): LineItem[] {
     const tierBasePrice = nonNegative(tier.package_price);
     const qty = Math.max(1, pkg.quantity || 1);
 
-    // Package-level override (one override replaces tier base price entirely)
-    const pkgOverride = resolvePackageOverride(pkg.package_id, input.tier, input.agent_matrix, input.agency_matrix);
+    // Package-level override (one override replaces tier base price entirely).
+    // Pass master tier price so engine v3 percent modes can compute against it.
+    const pkgOverride = resolvePackageOverride(
+      pkg.package_id,
+      input.tier,
+      input.agent_matrix,
+      input.agency_matrix,
+      tierBasePrice,
+    );
     const matrixPrice = pkgOverride ? pkgOverride.price : tierBasePrice;
 
     // Nested extra: for each product in the package's MASTER composition,
@@ -134,7 +150,19 @@ export function computeLineItems(input: LineItemsInput): LineItem[] {
         || {};
       let unitPrice = nonNegative(prodTier.unit_price);
 
-      const nestedOverride = resolveProductOverride(masterProd.product_id, input.tier, input.agent_matrix, input.agency_matrix);
+      // Master master values for the nested product — needed for engine v3
+      // percent modes. The base value is unused for nested unit-overflow but
+      // pass it for resolver consistency.
+      const nestedMasterBase = nonNegative(prodTier.base_price);
+      const nestedMasterUnit = unitPrice;
+      const nestedOverride = resolveProductOverride(
+        masterProd.product_id,
+        input.tier,
+        input.agent_matrix,
+        input.agency_matrix,
+        nestedMasterBase,
+        nestedMasterUnit,
+      );
       if (nestedOverride?.unit != null) unitPrice = Math.max(0, nestedOverride.unit);
 
       const extraCost = unitPrice * extraQty;

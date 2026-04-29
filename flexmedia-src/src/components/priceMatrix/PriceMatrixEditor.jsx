@@ -5,7 +5,7 @@ import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityDa
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import AccessBadge from '@/components/auth/AccessBadge';
-import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp, Crown, Sparkles, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronUp, Save, RotateCcw, Building, User, Percent, History, AlertTriangle, Lock, TrendingUp, Crown, Sparkles, RefreshCw, ArrowLeftRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,42 @@ import RecomputeAffectedProjectsDialog from "./RecomputeAffectedProjectsDialog";
 
 const safeNum = (val) => { const n = parseFloat(val); return isFinite(n) && n >= 0 ? n : 0; };
 const clamp = (val, min, max) => Math.min(Math.max(safeNum(val), min), max);
+const TIERS = ["standard", "premium"];
+const MODES = [
+  { value: "fixed",          label: "Fixed",      short: "$" },
+  { value: "percent_off",    label: "% off",       short: "−%" },
+  { value: "percent_markup", label: "% markup",    short: "+%" },
+];
+const TIER_LABEL = { standard: "Standard", premium: "Premium" };
+
+// Build an empty per-tier block from a master-tier object. mode='fixed' with
+// the master values pre-filled is the engine-equivalent of "no override" —
+// users edit the values to make it actually do something. master_snapshot is
+// captured at write time so stale-master detection works later.
+function buildTierFixed(masterBase, masterUnit) {
+  return {
+    enabled: false,
+    mode: "fixed",
+    base: safeNum(masterBase),
+    unit: safeNum(masterUnit),
+    master_snapshot: {
+      base: safeNum(masterBase),
+      unit: safeNum(masterUnit),
+      snapshot_at: new Date().toISOString(),
+    },
+  };
+}
+function buildPackageTierFixed(masterPrice) {
+  return {
+    enabled: false,
+    mode: "fixed",
+    price: safeNum(masterPrice),
+    master_snapshot: {
+      price: safeNum(masterPrice),
+      snapshot_at: new Date().toISOString(),
+    },
+  };
+}
 
 export default function PriceMatrixEditor({ priceMatrix }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -90,17 +126,56 @@ export default function PriceMatrixEditor({ priceMatrix }) {
         const master = packages.find(p => p.id === pp.package_id);
         return master ? { ...pp, package_name: master.name } : pp;
       });
+      // Engine v3: validate per-tier overrides. Each tier independently has
+      // {enabled, mode, base/unit/price, percent}. We sanitise numeric fields
+      // and clamp percents to [0, 100]. Legacy fields are dropped — backfill
+      // in migration 361 ensured every row has tier_overrides populated.
+      const validateProductTier = (tierObj) => {
+        if (!tierObj) return { enabled: false, mode: "fixed", base: 0, unit: 0 };
+        const mode = ["fixed", "percent_off", "percent_markup"].includes(tierObj.mode) ? tierObj.mode : "fixed";
+        const out = {
+          enabled: Boolean(tierObj.enabled),
+          mode,
+          master_snapshot: tierObj.master_snapshot || null,
+        };
+        if (mode === "fixed") {
+          out.base = Math.max(0, parseFloat(tierObj.base) || 0);
+          out.unit = Math.max(0, parseFloat(tierObj.unit) || 0);
+        } else {
+          out.percent = clamp(tierObj.percent, 0, 100);
+        }
+        return out;
+      };
+      const validatePackageTier = (tierObj) => {
+        if (!tierObj) return { enabled: false, mode: "fixed", price: 0 };
+        const mode = ["fixed", "percent_off", "percent_markup"].includes(tierObj.mode) ? tierObj.mode : "fixed";
+        const out = {
+          enabled: Boolean(tierObj.enabled),
+          mode,
+          master_snapshot: tierObj.master_snapshot || null,
+        };
+        if (mode === "fixed") {
+          out.price = Math.max(0, parseFloat(tierObj.price) || 0);
+        } else {
+          out.percent = clamp(tierObj.percent, 0, 100);
+        }
+        return out;
+      };
       const validatedProductPricing = syncedProductPricing.map(pp => ({
-        ...pp,
-        standard_base: Math.max(0, parseFloat(pp.standard_base) || 0),
-        standard_unit: Math.max(0, parseFloat(pp.standard_unit) || 0),
-        premium_base: Math.max(0, parseFloat(pp.premium_base) || 0),
-        premium_unit: Math.max(0, parseFloat(pp.premium_unit) || 0),
+        product_id: pp.product_id,
+        product_name: pp.product_name,
+        tier_overrides: {
+          standard: validateProductTier(pp.tier_overrides?.standard),
+          premium:  validateProductTier(pp.tier_overrides?.premium),
+        },
       }));
       const validatedPackagePricing = syncedPackagePricing.map(pp => ({
-        ...pp,
-        standard_price: Math.max(0, parseFloat(pp.standard_price) || 0),
-        premium_price: Math.max(0, parseFloat(pp.premium_price) || 0),
+        package_id: pp.package_id,
+        package_name: pp.package_name,
+        tier_overrides: {
+          standard: validatePackageTier(pp.tier_overrides?.standard),
+          premium:  validatePackageTier(pp.tier_overrides?.premium),
+        },
       }));
       const validatedBlanket = {
         enabled: Boolean(data.blanket_discount?.enabled),
@@ -204,113 +279,152 @@ export default function PriceMatrixEditor({ priceMatrix }) {
   const getProductPricing = (productId) => localData?.product_pricing?.find(p => p.product_id === productId);
   const getPackagePricing = (packageId) => localData?.package_pricing?.find(p => p.package_id === packageId);
 
-  const setProductField = (productId, field, value) => {
+  // Materialise a product_pricing entry with full tier_overrides scaffolding.
+  // Used when the user first interacts with a product that has no row yet
+  // (post-backfill this should be rare, but the UI may show products that
+  // were added to the catalogue after the matrix was last edited).
+  const materialiseProductRow = (product) => ({
+    product_id: product.id,
+    product_name: product.name,
+    tier_overrides: {
+      standard: buildTierFixed(product?.standard_tier?.base_price, product?.standard_tier?.unit_price),
+      premium:  buildTierFixed(product?.premium_tier?.base_price,  product?.premium_tier?.unit_price),
+    },
+  });
+  const materialisePackageRow = (pkg) => ({
+    package_id: pkg.id,
+    package_name: pkg.name,
+    tier_overrides: {
+      standard: buildPackageTierFixed(pkg?.standard_tier?.package_price),
+      premium:  buildPackageTierFixed(pkg?.premium_tier?.package_price),
+    },
+  });
+
+  // Patch a single tier sub-block on a product or package row. patch is a
+  // partial object merged over the existing tier block (e.g. { enabled: true }
+  // or { mode: 'percent_off', percent: 10 }).
+  const patchProductTier = (productId, tier, patch) => {
+    if (!canEdit) return;
     setLocalData(prev => {
-      const list = [...(prev?.product_pricing || [])];
-      const idx = list.findIndex(p => p.product_id === productId);
       const product = products.find(p => p.id === productId);
-      const coerced = field === "override_enabled" ? Boolean(value) : safeNum(value);
+      const list = [...(prev?.product_pricing || [])];
+      let idx = list.findIndex(p => p.product_id === productId);
       if (idx === -1) {
-        list.push({
-          product_id: productId, product_name: product?.name || productId,
-          override_enabled: false,
-          standard_base: product?.standard_tier?.base_price || 0,
-          standard_unit: product?.standard_tier?.unit_price || 0,
-          premium_base: product?.premium_tier?.base_price || 0,
-          premium_unit: product?.premium_tier?.unit_price || 0,
-          [field]: coerced
-        });
-      } else { list[idx] = { ...list[idx], [field]: coerced }; }
+        list.push(materialiseProductRow(product || { id: productId, name: productId }));
+        idx = list.length - 1;
+      }
+      const row = list[idx];
+      const currentTier = row.tier_overrides?.[tier]
+        || buildTierFixed(product?.[`${tier}_tier`]?.base_price, product?.[`${tier}_tier`]?.unit_price);
+      list[idx] = {
+        ...row,
+        tier_overrides: {
+          ...(row.tier_overrides || {}),
+          [tier]: { ...currentTier, ...patch },
+        },
+      };
       return { ...prev, product_pricing: list };
     });
   };
 
-  const setPackageField = (packageId, field, value) => {
+  const patchPackageTier = (packageId, tier, patch) => {
+    if (!canEdit) return;
     setLocalData(prev => {
-      const list = [...(prev?.package_pricing || [])];
-      const idx = list.findIndex(p => p.package_id === packageId);
       const pkg = packages.find(p => p.id === packageId);
-      const coerced = field === "override_enabled" ? Boolean(value) : safeNum(value);
+      const list = [...(prev?.package_pricing || [])];
+      let idx = list.findIndex(p => p.package_id === packageId);
       if (idx === -1) {
-        list.push({
-          package_id: packageId, package_name: pkg?.name || packageId,
-          override_enabled: false,
-          standard_price: pkg?.standard_tier?.package_price || 0,
-          premium_price: pkg?.premium_tier?.package_price || 0,
-          [field]: coerced
-        });
-      } else { list[idx] = { ...list[idx], [field]: coerced }; }
+        list.push(materialisePackageRow(pkg || { id: packageId, name: packageId }));
+        idx = list.length - 1;
+      }
+      const row = list[idx];
+      const currentTier = row.tier_overrides?.[tier]
+        || buildPackageTierFixed(pkg?.[`${tier}_tier`]?.package_price);
+      list[idx] = {
+        ...row,
+        tier_overrides: {
+          ...(row.tier_overrides || {}),
+          [tier]: { ...currentTier, ...patch },
+        },
+      };
       return { ...prev, package_pricing: list };
     });
   };
 
-  const toggleProductOverride = (productId) => {
+  // Toggle the per-tier `enabled` flag. When flipping ON, refresh the
+  // master_snapshot so stale-master detection is anchored at this moment.
+  const toggleProductTier = (productId, tier) => {
     if (!canEdit) return;
-    setLocalData(prev => {
-      const existing = prev?.product_pricing?.find(p => p.product_id === productId);
-      const product = products.find(p => p.id === productId);
-      const masterSnapshot = {
-        master_standard_base: product?.standard_tier?.base_price ?? 0,
-        master_standard_unit: product?.standard_tier?.unit_price ?? 0,
-        master_premium_base: product?.premium_tier?.base_price ?? 0,
-        master_premium_unit: product?.premium_tier?.unit_price ?? 0,
-        master_snapshot_at: new Date().toISOString(),
-      };
-      if (existing) {
-        return {
-          ...prev,
-          product_pricing: prev.product_pricing.map(p =>
-            p.product_id === productId
-              ? { ...p, override_enabled: !p.override_enabled, ...((!p.override_enabled) ? masterSnapshot : {}) }
-              : p
-          )
-        };
-      }
-      return {
-        ...prev,
-        product_pricing: [...(prev?.product_pricing || []), {
-          product_id: productId, product_name: product?.name || productId,
-          override_enabled: true,
-          standard_base: product?.standard_tier?.base_price || 0,
-          standard_unit: product?.standard_tier?.unit_price || 0,
-          premium_base: product?.premium_tier?.base_price || 0,
-          premium_unit: product?.premium_tier?.unit_price || 0,
-          ...masterSnapshot
-        }]
-      };
+    const product = products.find(p => p.id === productId);
+    const existing = getProductPricing(productId)?.tier_overrides?.[tier];
+    const willEnable = !(existing?.enabled);
+    const masterBase = safeNum(product?.[`${tier}_tier`]?.base_price);
+    const masterUnit = safeNum(product?.[`${tier}_tier`]?.unit_price);
+    patchProductTier(productId, tier, willEnable
+      ? {
+          enabled: true,
+          mode: existing?.mode || "fixed",
+          base: existing?.mode === "fixed" ? (existing?.base ?? masterBase) : masterBase,
+          unit: existing?.mode === "fixed" ? (existing?.unit ?? masterUnit) : masterUnit,
+          master_snapshot: { base: masterBase, unit: masterUnit, snapshot_at: new Date().toISOString() },
+        }
+      : { enabled: false }
+    );
+  };
+
+  const togglePackageTier = (packageId, tier) => {
+    if (!canEdit) return;
+    const pkg = packages.find(p => p.id === packageId);
+    const existing = getPackagePricing(packageId)?.tier_overrides?.[tier];
+    const willEnable = !(existing?.enabled);
+    const masterPrice = safeNum(pkg?.[`${tier}_tier`]?.package_price);
+    patchPackageTier(packageId, tier, willEnable
+      ? {
+          enabled: true,
+          mode: existing?.mode || "fixed",
+          price: existing?.mode === "fixed" ? (existing?.price ?? masterPrice) : masterPrice,
+          master_snapshot: { price: masterPrice, snapshot_at: new Date().toISOString() },
+        }
+      : { enabled: false }
+    );
+  };
+
+  // Copy the override block from one tier to the other (in-place). Useful
+  // shortcut when both tiers end up with the same override (e.g. a flat 10%
+  // discount applied uniformly).
+  const copyProductTier = (productId, fromTier, toTier) => {
+    if (!canEdit) return;
+    const row = getProductPricing(productId);
+    const src = row?.tier_overrides?.[fromTier];
+    if (!src) return;
+    // Master snapshot stays anchored to the destination tier's master values
+    // so stale-detection remains meaningful.
+    const product = products.find(p => p.id === productId);
+    const destMasterBase = safeNum(product?.[`${toTier}_tier`]?.base_price);
+    const destMasterUnit = safeNum(product?.[`${toTier}_tier`]?.unit_price);
+    patchProductTier(productId, toTier, {
+      enabled: src.enabled,
+      mode: src.mode || "fixed",
+      base: src.base,
+      unit: src.unit,
+      percent: src.percent,
+      master_snapshot: { base: destMasterBase, unit: destMasterUnit, snapshot_at: new Date().toISOString() },
     });
   };
 
-  const togglePackageOverride = (packageId) => {
+  const copyPackageTier = (packageId, fromTier, toTier) => {
     if (!canEdit) return;
-    setLocalData(prev => {
-      const existing = prev?.package_pricing?.find(p => p.package_id === packageId);
-      const pkg = packages.find(p => p.id === packageId);
-      const masterSnapshot = {
-        master_standard_price: pkg?.standard_tier?.package_price ?? 0,
-        master_premium_price: pkg?.premium_tier?.package_price ?? 0,
-        master_snapshot_at: new Date().toISOString(),
-      };
-      if (existing) {
-        return {
-          ...prev,
-          package_pricing: prev.package_pricing.map(p =>
-            p.package_id === packageId
-              ? { ...p, override_enabled: !p.override_enabled, ...((!p.override_enabled) ? masterSnapshot : {}) }
-              : p
-          )
-        };
-      }
-      return {
-        ...prev,
-        package_pricing: [...(prev?.package_pricing || []), {
-          package_id: packageId, package_name: pkg?.name || packageId,
-          override_enabled: true,
-          standard_price: pkg?.standard_tier?.package_price || 0,
-          premium_price: pkg?.premium_tier?.package_price || 0,
-          ...masterSnapshot
-        }]
-      };
+    const row = getPackagePricing(packageId);
+    const src = row?.tier_overrides?.[fromTier];
+    if (!src) return;
+    const pkg = packages.find(p => p.id === packageId);
+    const destMasterPrice = safeNum(pkg?.[`${toTier}_tier`]?.package_price);
+    patchPackageTier(packageId, toTier, {
+      enabled: src.enabled,
+      mode: src.mode || "fixed",
+      price: src.price,
+      percent: src.percent,
+      master_snapshot: { price: destMasterPrice, snapshot_at: new Date().toISOString() },
     });
   };
 
@@ -600,10 +714,12 @@ export default function PriceMatrixEditor({ priceMatrix }) {
                   activePackages={activePackages}
                   getProductPricing={getProductPricing}
                   getPackagePricing={getPackagePricing}
-                  toggleProductOverride={toggleProductOverride}
-                  togglePackageOverride={togglePackageOverride}
-                  setProductField={setProductField}
-                  setPackageField={setPackageField}
+                  patchProductTier={patchProductTier}
+                  patchPackageTier={patchPackageTier}
+                  toggleProductTier={toggleProductTier}
+                  togglePackageTier={togglePackageTier}
+                  copyProductTier={copyProductTier}
+                  copyPackageTier={copyPackageTier}
                   newProducts={newProducts}
                   newPackages={newPackages}
                   canEdit={canEdit}
@@ -655,157 +771,347 @@ function PriceInput({ value, onChange, onBlur, readOnly, masked }) {
   );
 }
 
-function OverridesTable({ activeProducts, activePackages, getProductPricing, getPackagePricing, toggleProductOverride, togglePackageOverride, setProductField, setPackageField, newProducts, newPackages, canEdit, canSeePrices = true }) {
+// Engine v3 OverridesTable — two sub-rows per product/package, one per tier.
+// Each sub-row independently controls: enabled, mode (fixed | percent_off |
+// percent_markup), values. Master tier price is shown as a pinned reference
+// for each row. A "copy" button mirrors the override from the OPPOSITE tier.
+function OverridesTable({
+  activeProducts, activePackages,
+  getProductPricing, getPackagePricing,
+  patchProductTier, patchPackageTier,
+  toggleProductTier, togglePackageTier,
+  copyProductTier, copyPackageTier,
+  newProducts, newPackages, canEdit, canSeePrices = true,
+}) {
   const masked = !canSeePrices;
   return (
     <div>
-      {/* Products table */}
       {activeProducts.length > 0 && (
         <div>
           <div className="px-4 py-2 bg-muted/20 border-b">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Products</span>
           </div>
-          <table className="w-full">
-            <thead>
-              <tr className="border-b bg-muted/10">
-                <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium w-[200px]">Name</th>
-                <th className="text-center px-3 py-2 text-xs text-muted-foreground font-medium w-20">Override</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Standard Tier — Base Price">Std Base</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Standard Tier — Per-Unit Price">Std Unit</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Premium Tier — Base Price">Pre Base</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Premium Tier — Per-Unit Price">Pre Unit</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeProducts.map(product => {
-                const pricing = getProductPricing(product.id);
-                const isEnabled = pricing?.override_enabled || false;
-                const isNew = newProducts.some(p => p.id === product.id);
-                const fields = [
-                  { field: "standard_base", val: pricing?.standard_base ?? product.standard_tier?.base_price ?? 0, master: product.standard_tier?.base_price ?? 0, snap: "master_standard_base" },
-                  { field: "standard_unit", val: pricing?.standard_unit ?? product.standard_tier?.unit_price ?? 0, master: product.standard_tier?.unit_price ?? 0, snap: "master_standard_unit" },
-                  { field: "premium_base", val: pricing?.premium_base ?? product.premium_tier?.base_price ?? 0, master: product.premium_tier?.base_price ?? 0, snap: "master_premium_base" },
-                  { field: "premium_unit", val: pricing?.premium_unit ?? product.premium_tier?.unit_price ?? 0, master: product.premium_tier?.unit_price ?? 0, snap: "master_premium_unit" },
-                ];
-                return (
-                  <tr key={product.id} className={`border-b last:border-b-0 ${isNew ? "bg-orange-50/50" : isEnabled ? "bg-blue-50/30" : "hover:bg-muted/10"}`}>
-                    <td className="px-4 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium">{product.name}</span>
-                        {isNew && <Badge className="text-xs h-4 bg-orange-100 text-orange-700 border-orange-200 px-1">New</Badge>}
-                      </div>
-                      {!isEnabled && (
-                        <div className="text-xs text-muted-foreground">
-                          ${product.standard_tier?.base_price ?? 0} base{product.standard_tier?.unit_price ? ` + $${product.standard_tier.unit_price}/unit` : ""}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <Switch checked={isEnabled} onCheckedChange={() => toggleProductOverride(product.id)} disabled={!canEdit} className="scale-75" />
-                    </td>
-                    {fields.map(({ field, val, master, snap }) => {
-                      const masterAtOverride = pricing?.[snap];
-                      const drifted = masterAtOverride !== undefined && masterAtOverride !== master;
-                      return (
-                        <td key={field} className="px-3 py-2">
-                          {isEnabled ? (
-                            <div>
-                              <PriceInput
-                                value={val}
-                                onChange={(e) => canEdit && setProductField(product.id, field, e.target.value)}
-                                onBlur={(e) => canEdit && setProductField(product.id, field, clamp(e.target.value, 0, Infinity))}
-                                readOnly={!canEdit}
-                                masked={masked}
-                              />
-                              {drifted && (
-                                <div className="text-xs text-amber-600 flex items-center gap-0.5 mt-0.5">
-                                  <TrendingUp className="h-2.5 w-2.5" />was ${masterAtOverride}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground tabular-nums">${master}</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="divide-y">
+            {activeProducts.map(product => (
+              <ProductOverrideCard
+                key={product.id}
+                product={product}
+                pricing={getProductPricing(product.id)}
+                isNew={newProducts.some(p => p.id === product.id)}
+                patchTier={patchProductTier}
+                toggleTier={toggleProductTier}
+                copyTier={copyProductTier}
+                canEdit={canEdit}
+                masked={masked}
+              />
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Packages table */}
       {activePackages.length > 0 && (
         <div className="border-t">
           <div className="px-4 py-2 bg-muted/20 border-b">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Packages</span>
           </div>
-          <table className="w-full">
-            <thead>
-              <tr className="border-b bg-muted/10">
-                <th className="text-left px-4 py-2 text-xs text-muted-foreground font-medium">Name</th>
-                <th className="text-center px-3 py-2 text-xs text-muted-foreground font-medium w-20">Override</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Standard Tier — Package Price">Std Price</th>
-                <th className="text-left px-3 py-2 text-xs text-muted-foreground font-medium cursor-help" title="Premium Tier — Package Price">Pre Price</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activePackages.map(pkg => {
-                const pricing = getPackagePricing(pkg.id);
-                const isEnabled = pricing?.override_enabled || false;
-                const isNew = newPackages.some(p => p.id === pkg.id);
-                const fields = [
-                  { field: "standard_price", val: pricing?.standard_price ?? pkg.standard_tier?.package_price ?? 0, master: pkg.standard_tier?.package_price ?? 0, snap: "master_standard_price" },
-                  { field: "premium_price", val: pricing?.premium_price ?? pkg.premium_tier?.package_price ?? 0, master: pkg.premium_tier?.package_price ?? 0, snap: "master_premium_price" },
-                ];
-                return (
-                  <tr key={pkg.id} className={`border-b last:border-b-0 ${isNew ? "bg-orange-50/50" : isEnabled ? "bg-blue-50/30" : "hover:bg-muted/10"}`}>
-                    <td className="px-4 py-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-sm font-medium">{pkg.name}</span>
-                        {isNew && <Badge className="text-xs h-4 bg-orange-100 text-orange-700 border-orange-200 px-1">New</Badge>}
-                      </div>
-                      {!isEnabled && <div className="text-xs text-muted-foreground">${pkg.standard_tier?.package_price ?? 0} std</div>}
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <Switch checked={isEnabled} onCheckedChange={() => togglePackageOverride(pkg.id)} disabled={!canEdit} className="scale-75" />
-                    </td>
-                    {fields.map(({ field, val, master, snap }) => {
-                      const masterAtOverride = pricing?.[snap];
-                      const drifted = masterAtOverride !== undefined && masterAtOverride !== master;
-                      return (
-                        <td key={field} className="px-3 py-2">
-                          {isEnabled ? (
-                            <div>
-                              <PriceInput
-                                value={val}
-                                onChange={(e) => canEdit && setPackageField(pkg.id, field, e.target.value)}
-                                onBlur={(e) => canEdit && setPackageField(pkg.id, field, clamp(e.target.value, 0, Infinity))}
-                                readOnly={!canEdit}
-                                masked={masked}
-                              />
-                              {drifted && (
-                                <div className="text-xs text-amber-600 flex items-center gap-0.5 mt-0.5">
-                                  <TrendingUp className="h-2.5 w-2.5" />was ${masterAtOverride}
-                                </div>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground tabular-nums">${master}</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="divide-y">
+            {activePackages.map(pkg => (
+              <PackageOverrideCard
+                key={pkg.id}
+                pkg={pkg}
+                pricing={getPackagePricing(pkg.id)}
+                isNew={newPackages.some(p => p.id === pkg.id)}
+                patchTier={patchPackageTier}
+                toggleTier={togglePackageTier}
+                copyTier={copyPackageTier}
+                canEdit={canEdit}
+                masked={masked}
+              />
+            ))}
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// One product = one card with two tier sub-rows.
+function ProductOverrideCard({ product, pricing, isNew, patchTier, toggleTier, copyTier, canEdit, masked }) {
+  const isPerUnit = product.pricing_type === "per_unit";
+  const anyEnabled = TIERS.some(t => pricing?.tier_overrides?.[t]?.enabled);
+  return (
+    <div className={`px-4 py-3 ${isNew ? "bg-orange-50/40" : anyEnabled ? "bg-blue-50/20" : ""}`}>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-sm font-medium">{product.name}</span>
+        {isNew && <Badge className="text-xs h-4 bg-orange-100 text-orange-700 border-orange-200 px-1">New</Badge>}
+        <Badge variant="outline" className="text-[10px] h-4 px-1 text-muted-foreground">
+          {isPerUnit ? "per-unit" : "fixed"}
+        </Badge>
+      </div>
+      <div className="space-y-1.5">
+        {TIERS.map(tier => (
+          <ProductTierRow
+            key={tier}
+            product={product}
+            tier={tier}
+            block={pricing?.tier_overrides?.[tier]}
+            patchTier={patchTier}
+            toggleTier={toggleTier}
+            copyTier={copyTier}
+            canEdit={canEdit}
+            masked={masked}
+            isPerUnit={isPerUnit}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProductTierRow({ product, tier, block, patchTier, toggleTier, copyTier, canEdit, masked, isPerUnit }) {
+  const masterTier = product[`${tier}_tier`] || {};
+  const masterBase = safeNum(masterTier.base_price);
+  const masterUnit = safeNum(masterTier.unit_price);
+  const enabled = Boolean(block?.enabled);
+  const mode = block?.mode || "fixed";
+  const otherTier = tier === "standard" ? "premium" : "standard";
+
+  // Stale-master detection: block.master_snapshot was captured at toggle time.
+  const snap = block?.master_snapshot || {};
+  const baseDrifted = snap.base !== undefined && Number(snap.base) !== masterBase;
+  const unitDrifted = snap.unit !== undefined && Number(snap.unit) !== masterUnit;
+
+  return (
+    <div className={`flex items-center gap-2 px-2 py-1.5 rounded ${enabled ? `${tier === "premium" ? "bg-purple-50" : "bg-slate-50"} border border-transparent` : "bg-muted/10"}`}>
+      {/* Tier label + enable */}
+      <div className="flex items-center gap-1.5 w-[110px] flex-shrink-0">
+        <Switch checked={enabled} onCheckedChange={() => toggleTier(product.id, tier)} disabled={!canEdit} className="scale-75" />
+        <span className="text-xs font-medium">
+          {tier === "premium" && <Crown className="h-3 w-3 inline mr-0.5 text-purple-600" />}
+          {TIER_LABEL[tier]}
+        </span>
+      </div>
+
+      {/* Mode selector — only when enabled */}
+      {enabled ? (
+        <select
+          value={mode}
+          disabled={!canEdit}
+          onChange={(e) => patchTier(product.id, tier, { mode: e.target.value })}
+          className="h-6 text-xs rounded border bg-background px-1 disabled:opacity-50"
+        >
+          {MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+      ) : (
+        <span className="text-xs text-muted-foreground italic w-[80px]">using master</span>
+      )}
+
+      {/* Inputs — vary by mode */}
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        {!enabled ? (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            ${masterBase}{isPerUnit ? ` + $${masterUnit}/unit` : ""} <span className="text-muted-foreground/60">(master)</span>
+          </span>
+        ) : mode === "fixed" ? (
+          <>
+            <TierFieldGroup
+              label="Base"
+              value={block?.base ?? masterBase}
+              master={masterBase}
+              snapped={snap.base}
+              drifted={baseDrifted}
+              onChange={(v) => patchTier(product.id, tier, { base: v })}
+              canEdit={canEdit} masked={masked}
+            />
+            {isPerUnit && (
+              <TierFieldGroup
+                label="Unit"
+                value={block?.unit ?? masterUnit}
+                master={masterUnit}
+                snapped={snap.unit}
+                drifted={unitDrifted}
+                onChange={(v) => patchTier(product.id, tier, { unit: v })}
+                canEdit={canEdit} masked={masked}
+              />
+            )}
+          </>
+        ) : (
+          <PercentFieldGroup
+            mode={mode}
+            value={block?.percent ?? 0}
+            masterBase={masterBase}
+            masterUnit={isPerUnit ? masterUnit : null}
+            onChange={(v) => patchTier(product.id, tier, { percent: v })}
+            canEdit={canEdit} masked={masked}
+          />
+        )}
+      </div>
+
+      {/* Copy from other tier */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="sm" variant="ghost"
+            className="h-6 w-6 p-0 flex-shrink-0"
+            onClick={() => copyTier(product.id, otherTier, tier)}
+            disabled={!canEdit}
+          >
+            <ArrowLeftRight className="h-3 w-3" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Copy {TIER_LABEL[otherTier]} → {TIER_LABEL[tier]}</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+function PackageOverrideCard({ pkg, pricing, isNew, patchTier, toggleTier, copyTier, canEdit, masked }) {
+  const anyEnabled = TIERS.some(t => pricing?.tier_overrides?.[t]?.enabled);
+  return (
+    <div className={`px-4 py-3 ${isNew ? "bg-orange-50/40" : anyEnabled ? "bg-blue-50/20" : ""}`}>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-sm font-medium">{pkg.name}</span>
+        {isNew && <Badge className="text-xs h-4 bg-orange-100 text-orange-700 border-orange-200 px-1">New</Badge>}
+      </div>
+      <div className="space-y-1.5">
+        {TIERS.map(tier => (
+          <PackageTierRow
+            key={tier}
+            pkg={pkg}
+            tier={tier}
+            block={pricing?.tier_overrides?.[tier]}
+            patchTier={patchTier}
+            toggleTier={toggleTier}
+            copyTier={copyTier}
+            canEdit={canEdit}
+            masked={masked}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PackageTierRow({ pkg, tier, block, patchTier, toggleTier, copyTier, canEdit, masked }) {
+  const masterPrice = safeNum(pkg[`${tier}_tier`]?.package_price);
+  const enabled = Boolean(block?.enabled);
+  const mode = block?.mode || "fixed";
+  const otherTier = tier === "standard" ? "premium" : "standard";
+  const snap = block?.master_snapshot || {};
+  const drifted = snap.price !== undefined && Number(snap.price) !== masterPrice;
+
+  return (
+    <div className={`flex items-center gap-2 px-2 py-1.5 rounded ${enabled ? `${tier === "premium" ? "bg-purple-50" : "bg-slate-50"} border border-transparent` : "bg-muted/10"}`}>
+      <div className="flex items-center gap-1.5 w-[110px] flex-shrink-0">
+        <Switch checked={enabled} onCheckedChange={() => toggleTier(pkg.id, tier)} disabled={!canEdit} className="scale-75" />
+        <span className="text-xs font-medium">
+          {tier === "premium" && <Crown className="h-3 w-3 inline mr-0.5 text-purple-600" />}
+          {TIER_LABEL[tier]}
+        </span>
+      </div>
+
+      {enabled ? (
+        <select
+          value={mode}
+          disabled={!canEdit}
+          onChange={(e) => patchTier(pkg.id, tier, { mode: e.target.value })}
+          className="h-6 text-xs rounded border bg-background px-1 disabled:opacity-50"
+        >
+          {MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+      ) : (
+        <span className="text-xs text-muted-foreground italic w-[80px]">using master</span>
+      )}
+
+      <div className="flex items-center gap-3 flex-1 min-w-0">
+        {!enabled ? (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            ${masterPrice} <span className="text-muted-foreground/60">(master)</span>
+          </span>
+        ) : mode === "fixed" ? (
+          <TierFieldGroup
+            label="Price"
+            value={block?.price ?? masterPrice}
+            master={masterPrice}
+            snapped={snap.price}
+            drifted={drifted}
+            onChange={(v) => patchTier(pkg.id, tier, { price: v })}
+            canEdit={canEdit} masked={masked}
+          />
+        ) : (
+          <PercentFieldGroup
+            mode={mode}
+            value={block?.percent ?? 0}
+            masterBase={masterPrice}
+            masterUnit={null}
+            onChange={(v) => patchTier(pkg.id, tier, { percent: v })}
+            canEdit={canEdit} masked={masked}
+          />
+        )}
+      </div>
+
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            size="sm" variant="ghost"
+            className="h-6 w-6 p-0 flex-shrink-0"
+            onClick={() => copyTier(pkg.id, otherTier, tier)}
+            disabled={!canEdit}
+          >
+            <ArrowLeftRight className="h-3 w-3" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Copy {TIER_LABEL[otherTier]} → {TIER_LABEL[tier]}</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+function TierFieldGroup({ label, value, master, snapped, drifted, onChange, canEdit, masked }) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</span>
+      <PriceInput
+        value={value}
+        onChange={(e) => canEdit && onChange(safeNum(e.target.value))}
+        onBlur={(e) => canEdit && onChange(clamp(e.target.value, 0, Infinity))}
+        readOnly={!canEdit}
+        masked={masked}
+      />
+      <span className="text-[10px] text-muted-foreground/70 tabular-nums">/ master ${master}</span>
+      {drifted && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="text-[10px] text-amber-600 flex items-center gap-0.5 cursor-help">
+              <TrendingUp className="h-2.5 w-2.5" />was ${snapped}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>Master {label.toLowerCase()} changed since override was last set</TooltipContent>
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
+function PercentFieldGroup({ mode, value, masterBase, masterUnit, onChange, canEdit, masked }) {
+  const sign = mode === "percent_off" ? -1 : 1;
+  const factor = 1 + (sign * Number(value || 0)) / 100;
+  const previewBase = Math.max(0, masterBase * factor);
+  const previewUnit = masterUnit != null ? Math.max(0, masterUnit * factor) : null;
+  return (
+    <div className="flex items-center gap-1">
+      <Input
+        type="number" step="1" min="0" max="100"
+        value={value ?? 0}
+        onChange={(e) => canEdit && onChange(clamp(e.target.value, 0, 100))}
+        readOnly={!canEdit}
+        className="h-7 w-16 text-xs px-1.5 tabular-nums"
+      />
+      <span className="text-xs text-muted-foreground">%</span>
+      <span className="text-[10px] text-muted-foreground/70 tabular-nums">
+        →{masked ? " ***" : ` $${previewBase.toFixed(0)}`}{previewUnit != null ? (masked ? " / ***" : ` / $${previewUnit.toFixed(0)}/u`) : ""}
+        <span className="text-muted-foreground/60"> from ${masterBase}{masterUnit != null ? `/$${masterUnit}` : ""}</span>
+      </span>
     </div>
   );
 }

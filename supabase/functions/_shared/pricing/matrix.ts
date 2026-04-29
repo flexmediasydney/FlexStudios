@@ -27,7 +27,13 @@
 //   T6. Agency matrix default_tier (same)
 //   T7. Master product/package *_tier (engine fallback)
 
-import type { PriceMatrix, PricingTier } from './schema.ts';
+import type {
+  PriceMatrix,
+  PricingTier,
+  TierOverrideMode,
+  TierOverrideProductTier,
+  TierOverridePackageTier,
+} from './schema.ts';
 
 /**
  * Pick the single matrix row from a list that should apply to this project.
@@ -63,12 +69,24 @@ export function resolveActiveMatrix(raw: PriceMatrix | null): PriceMatrix | null
 /**
  * Look up a per-item override (product or package) across the agent+agency
  * matrices. Returns null if no override is enabled.
+ *
+ * Master values are accepted for the percent_off / percent_markup modes
+ * introduced by engine v3 — those modes compute final values relative to
+ * the master tier price, so the resolver must know what the master price
+ * IS at compute time. Callers that only know they want the legacy shape
+ * (e.g. UI summary preview using the matrix without master context) can
+ * pass the same value as both master_* and treat the percent path as a
+ * graceful no-op when master values are 0.
  */
 export interface ProductOverrideResolution {
   matrix_id: string;
   entity_type: 'agent' | 'agency';
   base: number | null;
   unit: number | null;
+  /** Which engine shape resolved this override (for trace/debug). */
+  shape: 'legacy' | 'tier_overrides';
+  /** Mode for tier_overrides shape — null for legacy (which is always equivalent to 'fixed'). */
+  mode: TierOverrideMode | null;
 }
 
 export function resolveProductOverride(
@@ -76,37 +94,82 @@ export function resolveProductOverride(
   tier: PricingTier,
   agentMatrix: PriceMatrix | null,
   agencyMatrix: PriceMatrix | null,
+  masterBase: number = 0,
+  masterUnit: number = 0,
 ): ProductOverrideResolution | null {
   // Agent first, then agency.
   for (const m of [agentMatrix, agencyMatrix]) {
     if (!m?.product_pricing) continue;
-    const override = m.product_pricing.find((p) => p.product_id === productId && p.override_enabled);
-    if (!override) continue;
-    const base =
-      tier === 'premium'
-        ? toNullableNumber(override.premium_base)
-        : toNullableNumber(override.standard_base);
-    const unit =
-      tier === 'premium'
-        ? toNullableNumber(override.premium_unit)
-        : toNullableNumber(override.standard_unit);
-    // Only return the override if at least one side is meaningful.
-    if (base != null || unit != null) {
-      return {
-        matrix_id: m.id,
-        entity_type: m.entity_type,
-        base,
-        unit,
-      };
-    }
+    const row = m.product_pricing.find((p) => p.product_id === productId);
+    if (!row) continue;
+    const resolved = resolveProductTierForRow(row, tier, masterBase, masterUnit);
+    if (!resolved) continue;
+    return {
+      matrix_id: m.id,
+      entity_type: m.entity_type,
+      ...resolved,
+    };
   }
   return null;
+}
+
+function resolveProductTierForRow(
+  row: NonNullable<PriceMatrix['product_pricing']>[number],
+  tier: PricingTier,
+  masterBase: number,
+  masterUnit: number,
+): { base: number | null; unit: number | null; shape: 'legacy' | 'tier_overrides'; mode: TierOverrideMode | null } | null {
+  // ─── New shape (engine v3): per-tier enablement + mode ────────────────
+  if (row.tier_overrides) {
+    const t = row.tier_overrides[tier] as TierOverrideProductTier | undefined;
+    if (!t || !t.enabled) return null;
+    const mode = (t.mode || 'fixed') as TierOverrideMode;
+    if (mode === 'fixed') {
+      const base = toNullableNumber(t.base);
+      const unit = toNullableNumber(t.unit);
+      if (base == null && unit == null) return null;
+      return {
+        base: base != null ? Math.max(0, base) : null,
+        unit: unit != null ? Math.max(0, unit) : null,
+        shape: 'tier_overrides',
+        mode,
+      };
+    }
+    if (mode === 'percent_off' || mode === 'percent_markup') {
+      const pct = clampPct(toNullableNumber(t.percent) ?? 0);
+      const factor = mode === 'percent_off' ? 1 - pct / 100 : 1 + pct / 100;
+      return {
+        base: Math.max(0, masterBase * factor),
+        unit: Math.max(0, masterUnit * factor),
+        shape: 'tier_overrides',
+        mode,
+      };
+    }
+    // Unknown mode → treat as no override, but log via shape for debugging.
+    return null;
+  }
+
+  // ─── Legacy shape (engine v2): single override_enabled toggle ──────────
+  if (!row.override_enabled) return null;
+  const base =
+    tier === 'premium' ? toNullableNumber(row.premium_base) : toNullableNumber(row.standard_base);
+  const unit =
+    tier === 'premium' ? toNullableNumber(row.premium_unit) : toNullableNumber(row.standard_unit);
+  if (base == null && unit == null) return null;
+  return {
+    base: base != null ? Math.max(0, base) : null,
+    unit: unit != null ? Math.max(0, unit) : null,
+    shape: 'legacy',
+    mode: null,
+  };
 }
 
 export interface PackageOverrideResolution {
   matrix_id: string;
   entity_type: 'agent' | 'agency';
   price: number;
+  shape: 'legacy' | 'tier_overrides';
+  mode: TierOverrideMode | null;
 }
 
 export function resolvePackageOverride(
@@ -114,23 +177,50 @@ export function resolvePackageOverride(
   tier: PricingTier,
   agentMatrix: PriceMatrix | null,
   agencyMatrix: PriceMatrix | null,
+  masterPrice: number = 0,
 ): PackageOverrideResolution | null {
   for (const m of [agentMatrix, agencyMatrix]) {
     if (!m?.package_pricing) continue;
-    const override = m.package_pricing.find((p) => p.package_id === packageId && p.override_enabled);
-    if (!override) continue;
-    const price =
-      tier === 'premium'
-        ? toNullableNumber(override.premium_price)
-        : toNullableNumber(override.standard_price);
-    if (price == null) continue;
+    const row = m.package_pricing.find((p) => p.package_id === packageId);
+    if (!row) continue;
+    const resolved = resolvePackageTierForRow(row, tier, masterPrice);
+    if (!resolved) continue;
     return {
       matrix_id: m.id,
       entity_type: m.entity_type,
-      price: Math.max(0, price),
+      ...resolved,
     };
   }
   return null;
+}
+
+function resolvePackageTierForRow(
+  row: NonNullable<PriceMatrix['package_pricing']>[number],
+  tier: PricingTier,
+  masterPrice: number,
+): { price: number; shape: 'legacy' | 'tier_overrides'; mode: TierOverrideMode | null } | null {
+  if (row.tier_overrides) {
+    const t = row.tier_overrides[tier] as TierOverridePackageTier | undefined;
+    if (!t || !t.enabled) return null;
+    const mode = (t.mode || 'fixed') as TierOverrideMode;
+    if (mode === 'fixed') {
+      const price = toNullableNumber(t.price);
+      if (price == null) return null;
+      return { price: Math.max(0, price), shape: 'tier_overrides', mode };
+    }
+    if (mode === 'percent_off' || mode === 'percent_markup') {
+      const pct = clampPct(toNullableNumber(t.percent) ?? 0);
+      const factor = mode === 'percent_off' ? 1 - pct / 100 : 1 + pct / 100;
+      return { price: Math.max(0, masterPrice * factor), shape: 'tier_overrides', mode };
+    }
+    return null;
+  }
+
+  if (!row.override_enabled) return null;
+  const price =
+    tier === 'premium' ? toNullableNumber(row.premium_price) : toNullableNumber(row.standard_price);
+  if (price == null) return null;
+  return { price: Math.max(0, price), shape: 'legacy', mode: null };
 }
 
 /**

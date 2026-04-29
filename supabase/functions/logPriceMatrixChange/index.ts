@@ -52,7 +52,55 @@ serveWithAudit('logPriceMatrixChange', async (req) => {
     }
 
     // ─── Build human-readable summary with product/package names ────────────
+    // Engine v3: diff per-tier blocks. Each tier_overrides.{tier} has shape
+    //   { enabled, mode, base/unit/price, percent }
+    // We render a compact summary like:
+    //   "Sales Image: Std enabled fixed→$60 base/$8 unit; Prm % off 10%"
     const summaryParts: string[] = [];
+
+    // Pretty-print one tier block as "$<base>[/$<unit>]" for fixed, or
+    // "<percent>% (off|markup)" for percent modes. Returns null if disabled.
+    const fmtProductTier = (t: any): string | null => {
+      if (!t || !t.enabled) return null;
+      const mode = t.mode || 'fixed';
+      if (mode === 'fixed') {
+        const base = t.base ?? 0;
+        const unit = t.unit ?? 0;
+        return unit > 0 ? `fixed $${base} base / $${unit} unit` : `fixed $${base}`;
+      }
+      const sign = mode === 'percent_off' ? 'off' : 'markup';
+      return `${t.percent ?? 0}% ${sign}`;
+    };
+    const fmtPackageTier = (t: any): string | null => {
+      if (!t || !t.enabled) return null;
+      const mode = t.mode || 'fixed';
+      if (mode === 'fixed') return `fixed $${t.price ?? 0}`;
+      const sign = mode === 'percent_off' ? 'off' : 'markup';
+      return `${t.percent ?? 0}% ${sign}`;
+    };
+    const TIERS_V3 = ['standard', 'premium'];
+    const TIER_SHORT: Record<string, string> = { standard: 'Std', premium: 'Prm' };
+
+    // Build a per-tier diff for one product or package row.
+    const diffTierOverrides = (op: any, np: any, fmt: (t: any) => string | null): string[] => {
+      const out: string[] = [];
+      const oldT = op?.tier_overrides || {};
+      const newT = np?.tier_overrides || {};
+      for (const tier of TIERS_V3) {
+        const oldDesc = fmt(oldT[tier]);
+        const newDesc = fmt(newT[tier]);
+        if (oldDesc === newDesc) continue;
+        if (oldDesc == null && newDesc != null) {
+          out.push(`${TIER_SHORT[tier]} enabled (${newDesc})`);
+        } else if (oldDesc != null && newDesc == null) {
+          out.push(`${TIER_SHORT[tier]} disabled (was ${oldDesc})`);
+        } else {
+          out.push(`${TIER_SHORT[tier]} ${oldDesc} → ${newDesc}`);
+        }
+      }
+      return out;
+    };
+
     for (const change of changedFields) {
       if (change.field === 'product_pricing') {
         try {
@@ -63,15 +111,22 @@ serveWithAudit('logPriceMatrixChange', async (req) => {
             const op = oldPricing.find((o: any) => o.product_id === np.product_id);
             if (!op) {
               details.push(`Added ${np.product_name || 'product'}`);
-            } else {
-              const priceChanges: string[] = [];
-              if (op.standard_base !== np.standard_base) priceChanges.push(`Std $${op.standard_base}→$${np.standard_base}`);
-              if (op.premium_base !== np.premium_base) priceChanges.push(`Prm $${op.premium_base}→$${np.premium_base}`);
-              if (op.standard_unit !== np.standard_unit) priceChanges.push(`Std/unit $${op.standard_unit}→$${np.standard_unit}`);
-              if (op.premium_unit !== np.premium_unit) priceChanges.push(`Prm/unit $${op.premium_unit}→$${np.premium_unit}`);
-              if (op.override_enabled !== np.override_enabled) priceChanges.push(np.override_enabled ? 'Override enabled' : 'Override disabled');
-              if (priceChanges.length > 0) details.push(`${np.product_name || 'Product'}: ${priceChanges.join(', ')}`);
+              continue;
             }
+            // Engine v3 diff (tier_overrides)
+            const tierDiffs = diffTierOverrides(op, np, fmtProductTier);
+            if (tierDiffs.length > 0) {
+              details.push(`${np.product_name || 'Product'}: ${tierDiffs.join(', ')}`);
+              continue;
+            }
+            // Legacy fallback diff (pre-backfill rows)
+            const priceChanges: string[] = [];
+            if (op.standard_base !== np.standard_base) priceChanges.push(`Std $${op.standard_base}→$${np.standard_base}`);
+            if (op.premium_base !== np.premium_base) priceChanges.push(`Prm $${op.premium_base}→$${np.premium_base}`);
+            if (op.standard_unit !== np.standard_unit) priceChanges.push(`Std/unit $${op.standard_unit}→$${np.standard_unit}`);
+            if (op.premium_unit !== np.premium_unit) priceChanges.push(`Prm/unit $${op.premium_unit}→$${np.premium_unit}`);
+            if (op.override_enabled !== np.override_enabled) priceChanges.push(np.override_enabled ? 'Override enabled' : 'Override disabled');
+            if (priceChanges.length > 0) details.push(`${np.product_name || 'Product'}: ${priceChanges.join(', ')}`);
           }
           for (const op of oldPricing) {
             if (!newPricing.find((n: any) => n.product_id === op.product_id)) {
@@ -91,13 +146,18 @@ serveWithAudit('logPriceMatrixChange', async (req) => {
             const op = oldPkg.find((o: any) => o.package_id === np.package_id);
             if (!op) {
               details.push(`Added ${np.package_name || 'package'}`);
-            } else {
-              const changes: string[] = [];
-              if (op.standard_price !== np.standard_price) changes.push(`Std $${op.standard_price}→$${np.standard_price}`);
-              if (op.premium_price !== np.premium_price) changes.push(`Prm $${op.premium_price}→$${np.premium_price}`);
-              if (op.override_enabled !== np.override_enabled) changes.push(np.override_enabled ? 'Override enabled' : 'Override disabled');
-              if (changes.length > 0) details.push(`${np.package_name || 'Package'}: ${changes.join(', ')}`);
+              continue;
             }
+            const tierDiffs = diffTierOverrides(op, np, fmtPackageTier);
+            if (tierDiffs.length > 0) {
+              details.push(`${np.package_name || 'Package'}: ${tierDiffs.join(', ')}`);
+              continue;
+            }
+            const changes: string[] = [];
+            if (op.standard_price !== np.standard_price) changes.push(`Std $${op.standard_price}→$${np.standard_price}`);
+            if (op.premium_price !== np.premium_price) changes.push(`Prm $${op.premium_price}→$${np.premium_price}`);
+            if (op.override_enabled !== np.override_enabled) changes.push(np.override_enabled ? 'Override enabled' : 'Override disabled');
+            if (changes.length > 0) details.push(`${np.package_name || 'Package'}: ${changes.join(', ')}`);
           }
           summaryParts.push(details.length > 0 ? details.join('; ') : 'Updated package pricing');
         } catch {

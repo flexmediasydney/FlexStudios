@@ -51,8 +51,8 @@ serveWithAudit('deepLogicAuditPriceMatrix', async (req) => {
       projects: projects.length
     };
 
-    const productMap = new Map(products.map((p: any) => [p.id, p]));
-    const packageMap = new Map(packages.map((pkg: any) => [pkg.id, pkg]));
+    const productMap = new Map<string, any>(products.map((p: any) => [p.id, p]));
+    const packageMap = new Map<string, any>(packages.map((pkg: any) => [pkg.id, pkg]));
     const projectTypeMap = new Map();
 
     // Build project type map from unique project type IDs
@@ -143,6 +143,117 @@ serveWithAudit('deepLogicAuditPriceMatrix', async (req) => {
       }
     }
 
+    // ── Engine v3 validators ──────────────────────────────────────────────
+    // Validates tier_overrides shape:
+    //   { standard: { enabled, mode, base/unit/price, percent }, premium: {...} }
+    // Falls back to legacy validation for rows that haven't been backfilled
+    // yet (raises a NEEDS_BACKFILL warning so admins can spot stragglers).
+    const VALID_MODES = ['fixed', 'percent_off', 'percent_markup'];
+    const TIERS_V3: Array<'standard' | 'premium'> = ['standard', 'premium'];
+
+    const validateProductTierBlock = (matrix: any, productId: string, tier: string, t: any) => {
+      if (!t || typeof t !== 'object') {
+        findings.warnings.push({
+          type: 'MISSING_TIER_BLOCK',
+          matrix_id: matrix.id,
+          product_id: productId,
+          issue: `tier_overrides.${tier} missing on product override`,
+        });
+        return;
+      }
+      if (typeof t.enabled !== 'boolean') {
+        findings.warnings.push({
+          type: 'INVALID_TIER_ENABLED',
+          matrix_id: matrix.id,
+          product_id: productId,
+          issue: `tier_overrides.${tier}.enabled must be boolean (got ${typeof t.enabled})`,
+        });
+      }
+      if (!t.enabled) return; // disabled tiers don't need value validation
+      const mode = t.mode || 'fixed';
+      if (!VALID_MODES.includes(mode)) {
+        findings.warnings.push({
+          type: 'INVALID_TIER_MODE',
+          matrix_id: matrix.id,
+          product_id: productId,
+          issue: `tier_overrides.${tier}.mode '${mode}' not in [fixed, percent_off, percent_markup]`,
+        });
+        return;
+      }
+      if (mode === 'fixed') {
+        if (typeof t.base !== 'number' || t.base < 0) {
+          findings.warnings.push({
+            type: 'INVALID_OVERRIDE_PRICE',
+            matrix_id: matrix.id, product_id: productId,
+            issue: `tier_overrides.${tier}.base must be non-negative number (got ${t.base})`,
+          });
+        }
+        if (t.unit != null && (typeof t.unit !== 'number' || t.unit < 0)) {
+          findings.warnings.push({
+            type: 'INVALID_OVERRIDE_PRICE',
+            matrix_id: matrix.id, product_id: productId,
+            issue: `tier_overrides.${tier}.unit must be non-negative number (got ${t.unit})`,
+          });
+        }
+      } else {
+        // percent modes
+        if (typeof t.percent !== 'number' || t.percent < 0 || t.percent > 100) {
+          findings.warnings.push({
+            type: 'INVALID_TIER_PERCENT',
+            matrix_id: matrix.id, product_id: productId,
+            issue: `tier_overrides.${tier}.percent must be 0–100 for ${mode} (got ${t.percent})`,
+          });
+        }
+      }
+    };
+
+    const validatePackageTierBlock = (matrix: any, packageId: string, tier: string, t: any) => {
+      if (!t || typeof t !== 'object') {
+        findings.warnings.push({
+          type: 'MISSING_TIER_BLOCK',
+          matrix_id: matrix.id,
+          package_id: packageId,
+          issue: `tier_overrides.${tier} missing on package override`,
+        });
+        return;
+      }
+      if (typeof t.enabled !== 'boolean') {
+        findings.warnings.push({
+          type: 'INVALID_TIER_ENABLED',
+          matrix_id: matrix.id,
+          package_id: packageId,
+          issue: `tier_overrides.${tier}.enabled must be boolean (got ${typeof t.enabled})`,
+        });
+      }
+      if (!t.enabled) return;
+      const mode = t.mode || 'fixed';
+      if (!VALID_MODES.includes(mode)) {
+        findings.warnings.push({
+          type: 'INVALID_TIER_MODE',
+          matrix_id: matrix.id, package_id: packageId,
+          issue: `tier_overrides.${tier}.mode '${mode}' not in [fixed, percent_off, percent_markup]`,
+        });
+        return;
+      }
+      if (mode === 'fixed') {
+        if (typeof t.price !== 'number' || t.price < 0) {
+          findings.warnings.push({
+            type: 'INVALID_OVERRIDE_PRICE',
+            matrix_id: matrix.id, package_id: packageId,
+            issue: `tier_overrides.${tier}.price must be non-negative number (got ${t.price})`,
+          });
+        }
+      } else {
+        if (typeof t.percent !== 'number' || t.percent < 0 || t.percent > 100) {
+          findings.warnings.push({
+            type: 'INVALID_TIER_PERCENT',
+            matrix_id: matrix.id, package_id: packageId,
+            issue: `tier_overrides.${tier}.percent must be 0–100 for ${mode} (got ${t.percent})`,
+          });
+        }
+      }
+    };
+
     // TEST 3: Product pricing overrides validation
     for (const matrix of priceMatrices) {
       if (matrix.product_pricing && Array.isArray(matrix.product_pricing)) {
@@ -164,23 +275,34 @@ serveWithAudit('deepLogicAuditPriceMatrix', async (req) => {
             });
           }
 
-          // Validate numeric fields
-          if (productPricing.override_enabled) {
-            if (typeof productPricing.standard_base !== 'number' || productPricing.standard_base < 0) {
-              findings.warnings.push({
-                type: 'INVALID_OVERRIDE_PRICE',
-                matrix_id: matrix.id,
-                product_id: productPricing.product_id,
-                issue: `Invalid standard_base price: ${productPricing.standard_base}`
-              });
+          if (productPricing.tier_overrides) {
+            for (const tier of TIERS_V3) {
+              validateProductTierBlock(matrix, productPricing.product_id, tier, productPricing.tier_overrides[tier]);
             }
-            if (typeof productPricing.premium_base !== 'number' || productPricing.premium_base < 0) {
-              findings.warnings.push({
-                type: 'INVALID_OVERRIDE_PRICE',
-                matrix_id: matrix.id,
-                product_id: productPricing.product_id,
-                issue: `Invalid premium_base price: ${productPricing.premium_base}`
-              });
+          } else {
+            // Pre-backfill row — warn so admins can spot it.
+            findings.warnings.push({
+              type: 'NEEDS_TIER_OVERRIDES_BACKFILL',
+              matrix_id: matrix.id,
+              product_id: productPricing.product_id,
+              issue: `Product override row missing tier_overrides — migration 361 backfill should have populated this`,
+            });
+            // Still validate legacy numeric fields when override_enabled.
+            if (productPricing.override_enabled) {
+              if (typeof productPricing.standard_base !== 'number' || productPricing.standard_base < 0) {
+                findings.warnings.push({
+                  type: 'INVALID_OVERRIDE_PRICE',
+                  matrix_id: matrix.id, product_id: productPricing.product_id,
+                  issue: `Invalid standard_base price: ${productPricing.standard_base}`,
+                });
+              }
+              if (typeof productPricing.premium_base !== 'number' || productPricing.premium_base < 0) {
+                findings.warnings.push({
+                  type: 'INVALID_OVERRIDE_PRICE',
+                  matrix_id: matrix.id, product_id: productPricing.product_id,
+                  issue: `Invalid premium_base price: ${productPricing.premium_base}`,
+                });
+              }
             }
           }
         }
@@ -208,23 +330,32 @@ serveWithAudit('deepLogicAuditPriceMatrix', async (req) => {
             });
           }
 
-          // Validate numeric fields
-          if (packagePricing.override_enabled) {
-            if (typeof packagePricing.standard_price !== 'number' || packagePricing.standard_price < 0) {
-              findings.warnings.push({
-                type: 'INVALID_OVERRIDE_PRICE',
-                matrix_id: matrix.id,
-                package_id: packagePricing.package_id,
-                issue: `Invalid standard_price: ${packagePricing.standard_price}`
-              });
+          if (packagePricing.tier_overrides) {
+            for (const tier of TIERS_V3) {
+              validatePackageTierBlock(matrix, packagePricing.package_id, tier, packagePricing.tier_overrides[tier]);
             }
-            if (typeof packagePricing.premium_price !== 'number' || packagePricing.premium_price < 0) {
-              findings.warnings.push({
-                type: 'INVALID_OVERRIDE_PRICE',
-                matrix_id: matrix.id,
-                package_id: packagePricing.package_id,
-                issue: `Invalid premium_price: ${packagePricing.premium_price}`
-              });
+          } else {
+            findings.warnings.push({
+              type: 'NEEDS_TIER_OVERRIDES_BACKFILL',
+              matrix_id: matrix.id,
+              package_id: packagePricing.package_id,
+              issue: `Package override row missing tier_overrides — migration 361 backfill should have populated this`,
+            });
+            if (packagePricing.override_enabled) {
+              if (typeof packagePricing.standard_price !== 'number' || packagePricing.standard_price < 0) {
+                findings.warnings.push({
+                  type: 'INVALID_OVERRIDE_PRICE',
+                  matrix_id: matrix.id, package_id: packagePricing.package_id,
+                  issue: `Invalid standard_price: ${packagePricing.standard_price}`,
+                });
+              }
+              if (typeof packagePricing.premium_price !== 'number' || packagePricing.premium_price < 0) {
+                findings.warnings.push({
+                  type: 'INVALID_OVERRIDE_PRICE',
+                  matrix_id: matrix.id, package_id: packagePricing.package_id,
+                  issue: `Invalid premium_price: ${packagePricing.premium_price}`,
+                });
+              }
             }
           }
         }

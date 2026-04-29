@@ -45,34 +45,84 @@ function legacyComputePrice(args: {
   const agentM = rawAgentM?.use_default_pricing ? null : rawAgentM;
   const agencyM = rawAgencyM?.use_default_pricing ? null : rawAgencyM;
 
-  function getMatrixPrice(type: 'product' | 'package', id: string, basePrice: number): number {
-    if (type === 'product' && agentM?.product_pricing) {
-      const override = agentM.product_pricing.find((p: any) => p.product_id === id && p.override_enabled);
-      if (override) {
-        const tierPrice = pricing_tier === 'premium' ? override.premium_base : override.standard_base;
-        if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
+  // Engine v3 dual-shape resolution — mirrors supabase/functions/_shared/pricing/matrix.ts.
+  // Returns { base, unit } for a product override, or null. Master values are needed for
+  // percent_off / percent_markup modes — caller passes them in.
+  function resolveProductTierLegacy(
+    row: any,
+    tier: string,
+    masterBase: number,
+    masterUnit: number,
+  ): { base: number | null; unit: number | null } | null {
+    if (!row) return null;
+    if (row.tier_overrides) {
+      const t = row.tier_overrides[tier];
+      if (!t || !t.enabled) return null;
+      const mode = t.mode || 'fixed';
+      if (mode === 'fixed') {
+        const base = t.base != null ? Math.max(0, parseFloat(String(t.base))) : null;
+        const unit = t.unit != null ? Math.max(0, parseFloat(String(t.unit))) : null;
+        if (base == null && unit == null) return null;
+        return { base, unit };
       }
+      if (mode === 'percent_off' || mode === 'percent_markup') {
+        const pctRaw = parseFloat(String(t.percent ?? 0));
+        const pct = Math.min(100, Math.max(0, isFinite(pctRaw) ? pctRaw : 0));
+        const factor = mode === 'percent_off' ? 1 - pct / 100 : 1 + pct / 100;
+        return { base: Math.max(0, masterBase * factor), unit: Math.max(0, masterUnit * factor) };
+      }
+      return null;
     }
-    if (type === 'product' && agencyM?.product_pricing) {
-      const override = agencyM.product_pricing.find((p: any) => p.product_id === id && p.override_enabled);
-      if (override) {
-        const tierPrice = pricing_tier === 'premium' ? override.premium_base : override.standard_base;
-        if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
+    if (!row.override_enabled) return null;
+    const base = tier === 'premium' ? row.premium_base : row.standard_base;
+    const unit = tier === 'premium' ? row.premium_unit : row.standard_unit;
+    const baseN = base != null && !isNaN(parseFloat(base)) ? Math.max(0, parseFloat(base)) : null;
+    const unitN = unit != null && !isNaN(parseFloat(unit)) ? Math.max(0, parseFloat(unit)) : null;
+    if (baseN == null && unitN == null) return null;
+    return { base: baseN, unit: unitN };
+  }
+
+  function resolvePackageTierLegacy(row: any, tier: string, masterPrice: number): number | null {
+    if (!row) return null;
+    if (row.tier_overrides) {
+      const t = row.tier_overrides[tier];
+      if (!t || !t.enabled) return null;
+      const mode = t.mode || 'fixed';
+      if (mode === 'fixed') {
+        if (t.price == null) return null;
+        const p = parseFloat(String(t.price));
+        return isFinite(p) ? Math.max(0, p) : null;
       }
+      if (mode === 'percent_off' || mode === 'percent_markup') {
+        const pctRaw = parseFloat(String(t.percent ?? 0));
+        const pct = Math.min(100, Math.max(0, isFinite(pctRaw) ? pctRaw : 0));
+        const factor = mode === 'percent_off' ? 1 - pct / 100 : 1 + pct / 100;
+        return Math.max(0, masterPrice * factor);
+      }
+      return null;
+    }
+    if (!row.override_enabled) return null;
+    const price = tier === 'premium' ? row.premium_price : row.standard_price;
+    if (price == null || isNaN(parseFloat(price))) return null;
+    return Math.max(0, parseFloat(price));
+  }
+
+  function getMatrixPrice(type: 'product' | 'package', id: string, basePrice: number): number {
+    if (type === 'product') {
+      // Master values not strictly needed here since current callers pass basePrice in
+      // ignore-position; the per-product loop below uses resolveProductTierLegacy with
+      // proper master values. This helper is only called for packages now.
+      return basePrice;
     }
     if (type === 'package' && agentM?.package_pricing) {
-      const override = agentM.package_pricing.find((p: any) => p.package_id === id && p.override_enabled);
-      if (override) {
-        const tierPrice = pricing_tier === 'premium' ? override.premium_price : override.standard_price;
-        if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
-      }
+      const row = agentM.package_pricing.find((p: any) => p.package_id === id);
+      const resolved = resolvePackageTierLegacy(row, pricing_tier, basePrice);
+      if (resolved != null) return resolved;
     }
     if (type === 'package' && agencyM?.package_pricing) {
-      const override = agencyM.package_pricing.find((p: any) => p.package_id === id && p.override_enabled);
-      if (override) {
-        const tierPrice = pricing_tier === 'premium' ? override.premium_price : override.standard_price;
-        if (tierPrice != null && !isNaN(parseFloat(tierPrice))) return Math.max(0, parseFloat(tierPrice));
-      }
+      const row = agencyM.package_pricing.find((p: any) => p.package_id === id);
+      const resolved = resolvePackageTierLegacy(row, pricing_tier, basePrice);
+      if (resolved != null) return resolved;
     }
     return basePrice;
   }
@@ -86,18 +136,15 @@ function legacyComputePrice(args: {
     const tier = product[tierKey] || product.standard_tier || {};
     let basePrice = Math.max(0, parseFloat(tier.base_price) || 0);
     let unitPrice = Math.max(0, parseFloat(tier.unit_price) || 0);
-    const agentOverride = agentM?.product_pricing?.find((p: any) => p.product_id === item.product_id && p.override_enabled);
-    const agencyOverride = agencyM?.product_pricing?.find((p: any) => p.product_id === item.product_id && p.override_enabled);
-    if (agentOverride) {
-      const matrixBase = pricing_tier === 'premium' ? agentOverride.premium_base : agentOverride.standard_base;
-      const matrixUnit = pricing_tier === 'premium' ? agentOverride.premium_unit : agentOverride.standard_unit;
-      if (matrixBase != null) basePrice = Math.max(0, parseFloat(matrixBase) || 0);
-      if (matrixUnit != null) unitPrice = Math.max(0, parseFloat(matrixUnit) || 0);
-    } else if (agencyOverride) {
-      const matrixBase = pricing_tier === 'premium' ? agencyOverride.premium_base : agencyOverride.standard_base;
-      const matrixUnit = pricing_tier === 'premium' ? agencyOverride.premium_unit : agencyOverride.standard_unit;
-      if (matrixBase != null) basePrice = Math.max(0, parseFloat(matrixBase) || 0);
-      if (matrixUnit != null) unitPrice = Math.max(0, parseFloat(matrixUnit) || 0);
+    // Engine v3: dual-shape resolution. Agent first, then agency.
+    const agentRow = agentM?.product_pricing?.find((p: any) => p.product_id === item.product_id);
+    const agencyRow = agencyM?.product_pricing?.find((p: any) => p.product_id === item.product_id);
+    const resolvedOverride =
+      resolveProductTierLegacy(agentRow, pricing_tier, basePrice, unitPrice)
+      || resolveProductTierLegacy(agencyRow, pricing_tier, basePrice, unitPrice);
+    if (resolvedOverride) {
+      if (resolvedOverride.base != null) basePrice = Math.max(0, resolvedOverride.base);
+      if (resolvedOverride.unit != null) unitPrice = Math.max(0, resolvedOverride.unit);
     }
     const qty = Math.max(1, item.quantity || 1);
     let itemPrice = 0;
@@ -134,15 +181,13 @@ function legacyComputePrice(args: {
         if (extraQty > 0) {
           const prodTier = product[tierKey] || product.standard_tier || {};
           let unitPrice = Math.max(0, parseFloat(prodTier.unit_price) || 0);
-          const nestedAgentOverride = agentM?.product_pricing?.find((p: any) => p.product_id === masterProd.product_id && p.override_enabled);
-          const nestedAgencyOverride = agencyM?.product_pricing?.find((p: any) => p.product_id === masterProd.product_id && p.override_enabled);
-          if (nestedAgentOverride) {
-            const matrixUnit = pricing_tier === 'premium' ? nestedAgentOverride.premium_unit : nestedAgentOverride.standard_unit;
-            if (matrixUnit != null) unitPrice = Math.max(0, parseFloat(matrixUnit) || 0);
-          } else if (nestedAgencyOverride) {
-            const matrixUnit = pricing_tier === 'premium' ? nestedAgencyOverride.premium_unit : nestedAgencyOverride.standard_unit;
-            if (matrixUnit != null) unitPrice = Math.max(0, parseFloat(matrixUnit) || 0);
-          }
+          const masterBaseN = Math.max(0, parseFloat(prodTier.base_price) || 0);
+          const nestedAgentRow = agentM?.product_pricing?.find((p: any) => p.product_id === masterProd.product_id);
+          const nestedAgencyRow = agencyM?.product_pricing?.find((p: any) => p.product_id === masterProd.product_id);
+          const nestedResolved =
+            resolveProductTierLegacy(nestedAgentRow, pricing_tier, masterBaseN, unitPrice)
+            || resolveProductTierLegacy(nestedAgencyRow, pricing_tier, masterBaseN, unitPrice);
+          if (nestedResolved?.unit != null) unitPrice = Math.max(0, nestedResolved.unit);
           nestedExtraCost += unitPrice * extraQty;
         }
       }

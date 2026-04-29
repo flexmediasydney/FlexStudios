@@ -70,8 +70,13 @@ export default function PriceMatrixSummaryTable({ priceMatrix, products, package
     let mode = "master";
 
     // Per-item override wins over blanket (matches engine precedence).
-    const stdOverride = resolveProductOverride(product.id, "standard", agentMatrix, agencyMatrix);
-    const preOverride = resolveProductOverride(product.id, "premium", agentMatrix, agencyMatrix);
+    // Pass master tier values so engine v3 percent_* modes resolve correctly.
+    const stdMasterBase = Math.max(0, parseFloat(stdTier.base_price) || 0);
+    const stdMasterUnit = Math.max(0, parseFloat(stdTier.unit_price) || 0);
+    const preMasterBase = Math.max(0, parseFloat(preTier.base_price) || 0);
+    const preMasterUnit = Math.max(0, parseFloat(preTier.unit_price) || 0);
+    const stdOverride = resolveProductOverride(product.id, "standard", agentMatrix, agencyMatrix, stdMasterBase, stdMasterUnit);
+    const preOverride = resolveProductOverride(product.id, "premium", agentMatrix, agencyMatrix, preMasterBase, preMasterUnit);
     if (stdOverride) {
       if (stdOverride.base != null) stdBase = Math.max(0, stdOverride.base);
       if (stdOverride.unit != null) stdUnit = Math.max(0, stdOverride.unit);
@@ -106,8 +111,8 @@ export default function PriceMatrixSummaryTable({ priceMatrix, products, package
     let prePrice = Math.max(0, parseFloat(preTier.package_price) || 0);
     let mode = "master";
 
-    const stdOverride = resolvePackageOverride(pkg.id, "standard", agentMatrix, agencyMatrix);
-    const preOverride = resolvePackageOverride(pkg.id, "premium", agentMatrix, agencyMatrix);
+    const stdOverride = resolvePackageOverride(pkg.id, "standard", agentMatrix, agencyMatrix, stdPrice);
+    const preOverride = resolvePackageOverride(pkg.id, "premium", agentMatrix, agencyMatrix, prePrice);
     if (stdOverride) {
       stdPrice = stdOverride.price;
       mode = modeFor(stdOverride.entity_type, "override");

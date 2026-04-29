@@ -14,6 +14,46 @@ export type PricingTier = 'standard' | 'premium';
 export type DiscountType = 'fixed' | 'percent';
 export type DiscountMode = 'discount' | 'fee';
 
+/**
+ * Per-tier override mode (engine v3.0.0-shared).
+ *
+ * - `fixed`          — replace tier values with literal base/unit/price
+ * - `percent_off`    — apply (1 - p/100) to master tier values
+ * - `percent_markup` — apply (1 + p/100) to master tier values
+ *
+ * Storage shape (under `tier_overrides`) lives ALONGSIDE the legacy
+ * `override_enabled` + `standard_*`/`premium_*` fields during the rollout.
+ * The resolver detects tier_overrides first; if absent, falls back to legacy.
+ */
+export type TierOverrideMode = 'fixed' | 'percent_off' | 'percent_markup';
+
+/** Per-tier override block on a product row. */
+export interface TierOverrideProductTier {
+  enabled?: boolean;
+  mode?: TierOverrideMode;
+  base?: number | string | null;
+  unit?: number | string | null;
+  percent?: number | string | null;
+  /** Master tier values captured at write time (for stale detection in UI). */
+  master_snapshot?: {
+    base?: number | string | null;
+    unit?: number | string | null;
+    snapshot_at?: string | null;
+  } | null;
+}
+
+/** Per-tier override block on a package row. Packages have a single `price`. */
+export interface TierOverridePackageTier {
+  enabled?: boolean;
+  mode?: TierOverrideMode;
+  price?: number | string | null;
+  percent?: number | string | null;
+  master_snapshot?: {
+    price?: number | string | null;
+    snapshot_at?: string | null;
+  } | null;
+}
+
 // ─── Inputs ──────────────────────────────────────────────────────────────
 
 export interface ProductLine {
@@ -82,17 +122,25 @@ export interface PriceMatrix {
   use_default_pricing?: boolean | null;
   package_pricing?: Array<{
     package_id: string;
+    package_name?: string | null;
+    /** Legacy global toggle. Engine v2 reads this; engine v3 reads tier_overrides instead. */
     override_enabled?: boolean;
     standard_price?: number | string | null;
     premium_price?: number | string | null;
+    /** Engine v3 per-tier overrides — independent enablement, mode and value per tier. */
+    tier_overrides?: Partial<Record<PricingTier, TierOverridePackageTier>> | null;
   }> | null;
   product_pricing?: Array<{
     product_id: string;
+    product_name?: string | null;
+    /** Legacy global toggle. Engine v2 reads this; engine v3 reads tier_overrides instead. */
     override_enabled?: boolean;
     standard_base?: number | string | null;
     standard_unit?: number | string | null;
     premium_base?: number | string | null;
     premium_unit?: number | string | null;
+    /** Engine v3 per-tier overrides — independent enablement, mode and value per tier. */
+    tier_overrides?: Partial<Record<PricingTier, TierOverrideProductTier>> | null;
   }> | null;
   blanket_discount?: {
     enabled?: boolean;
@@ -178,5 +226,11 @@ export interface PricingResult {
   engine_version: string;
 }
 
-/** Current engine semantic version. Bump on any math change. */
-export const ENGINE_VERSION = 'v2.0.0-shared';
+/** Current engine semantic version. Bump on any math change.
+ *
+ *   v2.0.0-shared — extracted from inline edge function math.
+ *   v3.0.0-shared — per-tier independent overrides + percent_off / percent_markup modes.
+ *                   Reads BOTH legacy (override_enabled + standard_/premium_ scalar fields)
+ *                   and new (tier_overrides) shapes; new saves write tier_overrides only.
+ */
+export const ENGINE_VERSION = 'v3.0.0-shared';
