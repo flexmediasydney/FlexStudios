@@ -34,8 +34,6 @@ const getProgressPercentage = (task) => {
   return total > 0 ? Math.min(100, (elapsed / total) * 100) : 0;
 };
 
-const isRevisionTask = (task) => /^\[Revision #\d+\]/.test(task.title || "");
-
 const REVISION_KIND_BORDER = {
   revision: "border-l-4 border-l-red-600 border-t border-r border-b border-t-red-200 border-r-red-200 border-b-red-200 bg-red-50/40 dark:border-t-red-900/60 dark:border-r-red-900/60 dark:border-b-red-900/60 dark:bg-red-950/20",
   change_request: "border-l-4 border-l-purple-600 border-t border-r border-b border-t-purple-200 border-r-purple-200 border-b-purple-200 bg-purple-50/40 dark:border-t-purple-900/60 dark:border-r-purple-900/60 dark:border-b-purple-900/60 dark:bg-purple-950/20",
