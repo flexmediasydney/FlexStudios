@@ -1,31 +1,30 @@
 /**
- * anthropicVision.ts — shared Claude vision API helper.
+ * anthropicVision.ts — Wave 11.8 thin compatibility wrapper.
  *
- * Single export: `callClaudeVision(opts)`. Handles vision multi-part messages
- * (base64 inline OR URL passthrough), retries on transient errors, computes
- * per-call USD cost from token counts, and returns parsed text + raw body.
+ * Original module preserved for backward-compat: existing Pass 0/1/2 + the
+ * benchmark runner all import `callClaudeVision({model, messages, system,
+ * max_tokens, temperature})` and expect `{content, raw, usage, costUsd,
+ * durationMs, model}`. They emit free-form text, NOT tool-use JSON, and parse
+ * the text themselves (lenient JSON extraction in pass1/pass2).
  *
- * Used by:
- *   - shortlisting-pass0  (Haiku binary hard-reject cull)
- *   - shortlisting-pass1  (Sonnet classification — Phase 3)
- *   - shortlisting-pass2  (Sonnet shortlisting with full context — Phase 3)
+ * This file therefore keeps its own POST to `/v1/messages` (free-form path)
+ * but defers cost computation to the shared pricing table at
+ * `_shared/visionAdapter/pricing.ts`. That keeps the W11.8 unified pricing
+ * source-of-truth while leaving the legacy callers untouched.
+ *
+ * New code (W11.7 unified call, W11.8 retroactive comparison) should use
+ * `_shared/visionAdapter/index.ts → callVisionAdapter` directly — that path
+ * uses tool-use mode for strict-JSON output and supports both Anthropic and
+ * Google.
  *
  * API key resolution: CLAUDE_API_KEY → ANTHROPIC_API_KEY (fallback).
  *
  * Image input modes:
  *   - 'base64': inline image bytes (use for small/private images we already hold)
  *   - 'url':    Anthropic's hosted-image fetch — the API server fetches it.
- *               We use this for Dropbox temporary links so we don't have to
- *               re-encode 65 KB previews into every prompt body.
- *
- * Cost rates (USD per 1M tokens, 2026):
- *   claude-haiku-4-5   $1.00 input / $5.00 output
- *   claude-sonnet-4-6  $3.00 input / $15.00 output
- *   claude-opus-4-7    $15.00 input / $75.00 output
- *
- * Retry: 3 attempts on 429/500/502/503 with exponential backoff (1s, 2s, 4s).
- * Timeout: 90s per HTTP attempt via AbortSignal.
  */
+
+import { estimateCost } from './visionAdapter/pricing.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -75,34 +74,6 @@ export interface VisionCallResult {
   durationMs: number;
   /** Anthropic model id that handled the call (echoed from response.model). */
   model: string;
-}
-
-// ─── Pricing table (2026) ────────────────────────────────────────────────────
-// USD per 1M tokens. Keep in sync with shortlisting-engine-spec-v2.md §17.
-
-interface ModelRates {
-  inputPerMillion: number;
-  outputPerMillion: number;
-}
-
-const MODEL_RATES: Record<string, ModelRates> = {
-  'claude-haiku-4-5': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
-  'claude-sonnet-4-6': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
-  'claude-opus-4-7': { inputPerMillion: 15.0, outputPerMillion: 75.0 },
-};
-
-/**
- * Resolve a rate row for a model id. Anthropic appends date suffixes to model
- * names (e.g. `claude-haiku-4-5-20260101`) — we strip a trailing `-YYYYMMDD`
- * and re-lookup. Unknown models fall back to Sonnet rates rather than $0 so
- * cost tracking never silently undercounts.
- */
-function resolveRates(model: string): ModelRates {
-  if (MODEL_RATES[model]) return MODEL_RATES[model];
-  const stripped = model.replace(/-\d{8}$/, '');
-  if (MODEL_RATES[stripped]) return MODEL_RATES[stripped];
-  console.warn(`[anthropicVision] unknown model '${model}' — defaulting to Sonnet rates`);
-  return MODEL_RATES['claude-sonnet-4-6'];
 }
 
 // ─── HTTP / retry primitives ─────────────────────────────────────────────────
@@ -183,20 +154,22 @@ function extractText(raw: any): string {
   return out.join('');
 }
 
+/**
+ * USD cost from a free-form-text call. Delegates to the shared pricing table
+ * in `_shared/visionAdapter/pricing.ts` (W11.8 source of truth) so anthropic
+ * + the new adapter use one rate map.
+ */
 function computeCost(model: string, usage: VisionUsage): number {
-  const rates = resolveRates(model);
-  const inputTokens = usage.input_tokens || 0;
-  const outputTokens = usage.output_tokens || 0;
-  // cache_creation/cache_read are billed at standard input rates for now —
-  // collapse them into the input bucket. (When Anthropic publishes separate
-  // cached-read pricing rows in MODEL_RATES, split this out.)
-  const cacheCreation = usage.cache_creation_input_tokens || 0;
-  const cacheRead = usage.cache_read_input_tokens || 0;
-  const totalInput = inputTokens + cacheCreation + cacheRead;
-  const cost =
-    (totalInput * rates.inputPerMillion) / 1_000_000 +
-    (outputTokens * rates.outputPerMillion) / 1_000_000;
-  return Math.round(cost * 1_000_000) / 1_000_000;
+  // Combine cache_creation + cache_read into the unified cached_input_tokens
+  // bucket. estimateCost falls back to standard input rate when no cached
+  // rate is configured (same behaviour as the pre-W11.8 module).
+  const cached_input_tokens =
+    (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+  return estimateCost('anthropic', model, {
+    input_tokens: usage.input_tokens || 0,
+    output_tokens: usage.output_tokens || 0,
+    cached_input_tokens,
+  });
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────

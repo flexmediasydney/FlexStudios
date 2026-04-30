@@ -161,36 +161,53 @@ Deno.test('VENDOR_PRICING — has rows for every required (vendor, model)', () =
 });
 
 // ─── Router tests ────────────────────────────────────────────────────────────
+//
+// Each adapter has its own dedicated test file (visionAdapter.anthropic.test.ts
+// + visionAdapter.google.test.ts) covering request/response shape. The router
+// tests below verify ONLY that the right adapter is dispatched — by removing
+// API-key env vars and asserting MissingVendorCredential surfaces with the
+// correct vendor + env_var labels. This proves the switch routed correctly
+// without needing to mock fetch in this file.
 
-Deno.test('router — anthropic vendor dispatches to anthropic adapter', async () => {
-  const req = makeRequest({ vendor: 'anthropic' });
-  // The stub adapter throws VendorCallError synchronously — this confirms the
-  // switch routed to it. Once commit 3/7 lands, this test is replaced by the
-  // real-fetch unit tests in visionAdapter.anthropic.test.ts.
-  await assertRejects(
-    () => callVisionAdapter(req),
-    VendorCallError,
-  );
-});
-
-Deno.test('router — google vendor dispatches to google adapter', async () => {
-  const req = makeRequest({ vendor: 'google', model: 'gemini-2.0-pro' });
-  await assertRejects(
-    () => callVisionAdapter(req),
-    VendorCallError,
-  );
-});
-
-Deno.test('router — vendor field is preserved on dispatch', async () => {
-  const req = makeRequest({ vendor: 'anthropic' });
-  let captured: unknown = null;
+Deno.test('router — anthropic vendor routes to Anthropic adapter (verified by env-var label)', async () => {
+  const origAnthropic = Deno.env.get('ANTHROPIC_API_KEY');
+  const origClaude = Deno.env.get('CLAUDE_API_KEY');
+  Deno.env.delete('ANTHROPIC_API_KEY');
+  Deno.env.delete('CLAUDE_API_KEY');
   try {
-    await callVisionAdapter(req);
-  } catch (err) {
-    captured = err;
+    const req = makeRequest({ vendor: 'anthropic' });
+    let captured: unknown = null;
+    try {
+      await callVisionAdapter(req);
+    } catch (err) {
+      captured = err;
+    }
+    assert(captured instanceof MissingVendorCredential);
+    assertStrictEquals(captured.vendor, 'anthropic');
+    assertStrictEquals(captured.env_var, 'ANTHROPIC_API_KEY');
+  } finally {
+    if (origAnthropic !== undefined) Deno.env.set('ANTHROPIC_API_KEY', origAnthropic);
+    if (origClaude !== undefined) Deno.env.set('CLAUDE_API_KEY', origClaude);
   }
-  assert(captured instanceof VendorCallError);
-  assertStrictEquals(captured.vendor, 'anthropic');
+});
+
+Deno.test('router — google vendor routes to Google adapter (verified by env-var label)', async () => {
+  const orig = Deno.env.get('GEMINI_API_KEY');
+  Deno.env.delete('GEMINI_API_KEY');
+  try {
+    const req = makeRequest({ vendor: 'google', model: 'gemini-2.0-pro' });
+    let captured: unknown = null;
+    try {
+      await callVisionAdapter(req);
+    } catch (err) {
+      captured = err;
+    }
+    assert(captured instanceof MissingVendorCredential);
+    assertStrictEquals(captured.vendor, 'google');
+    assertStrictEquals(captured.env_var, 'GEMINI_API_KEY');
+  } finally {
+    if (orig !== undefined) Deno.env.set('GEMINI_API_KEY', orig);
+  }
 });
 
 // ─── Missing-credential error type ───────────────────────────────────────────
