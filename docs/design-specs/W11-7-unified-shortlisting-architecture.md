@@ -3,7 +3,7 @@
 **Status:** ⚙️ Architectural keystone for the next-generation engine. Authored 2026-04-29 from Joseph's questioning of why Pass 1 + Pass 2 are separate.
 **Backlog ref:** P1-25 (new)
 **Wave plan ref:** W11.7 — collapse Pass 1 + Pass 2 into a single Opus 4.7 call with per-image async description backfill
-**Dependencies:** **W11 must ship first** (provides the compact universal-vision-response schema that fits in a single 8k output token budget). Plus W7.6 (block-based prompts), W7.7 (dynamic packages + tier configs), W8 (tier-config weights), W7.5 (mutex), W7.13 (manual-mode), W10.1 (multi-camera partition), W10.3 (override metadata).
+**Dependencies:** **W11 must ship first** (provides the compact universal-vision-response schema that fits in a single 8k output token budget). Plus W7.6 (block-based prompts), W7.7 (dynamic packages + tier configs), W8 (tier-config weights), W7.5 (mutex), W7.13 (manual-mode), W10.1 (multi-camera partition), W10.3 (override metadata), **W11.8 (multi-vendor adapter — vendor selection becomes runtime config; A/B harness validates Gemini / GPT-4o parity before production rollout)**.
 **Unblocks:** the closed-loop "engine grows per project" ethos. Every project's overrides + reclassifications + observed objects feed forward into Opus's prompt context for the next project.
 
 ---
