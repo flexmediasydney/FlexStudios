@@ -143,10 +143,16 @@ export function buildAnthropicBody(req: VisionRequest): Record<string, unknown> 
     input_schema: req.tool_input_schema,
   };
 
+  // Opus 4.7 + later Anthropic models deprecate temperature parameter — they
+  // throw 400 "temperature is deprecated for this model". Only include
+  // temperature on models that still accept it. Conservative whitelist:
+  // sonnet/haiku 4.x and earlier opus/sonnet generations.
+  const acceptsTemperature = !/^claude-opus-4-[7-9]/i.test(req.model)
+    && !/^claude-opus-[5-9]/i.test(req.model);
   const body: Record<string, unknown> = {
     model: req.model,
     max_tokens: req.max_output_tokens,
-    temperature: req.temperature ?? 0,
+    ...(acceptsTemperature ? { temperature: req.temperature ?? 0 } : {}),
     system: systemArr,
     messages,
     tools: [tool],

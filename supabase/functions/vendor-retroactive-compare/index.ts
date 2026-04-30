@@ -234,11 +234,19 @@ async function fetchPreviewBase64(
   dropboxPath: string,
 ): Promise<{ data: string; media_type: string }> {
   const token = await getDropboxAccessToken();
+  // Team-folder namespace header — without this, paths like
+  // "/Flex Media Team Folder/..." resolve in the user's PERSONAL namespace
+  // and 404. Mirrors `_shared/dropbox.ts:pathRootHeader()`.
+  const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
+  const pathRootHeader: Record<string, string> = ns
+    ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) }
+    : {};
   const res = await fetch('https://content.dropboxapi.com/2/files/download', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Dropbox-API-Arg': JSON.stringify({ path: dropboxPath }),
+      ...pathRootHeader,
     },
     signal: AbortSignal.timeout(60_000),
   });
