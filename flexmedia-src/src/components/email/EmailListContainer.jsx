@@ -59,7 +59,7 @@ export default function EmailListContainer({
   const rowVirtualizer = useVirtualizer({
     count: filteredThreads.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 53, // 52px row height + 1px border
+    estimateSize: () => 37, // 36px row height + 1px border
     overscan: 10,
   });
 
@@ -75,8 +75,8 @@ export default function EmailListContainer({
   if (messagesLoading) {
     return (
       <div className="divide-y">
-        {[...Array(12)].map((_, i) => (
-          <div key={i} className="h-[52px] flex items-center px-3 gap-3 animate-pulse">
+        {[...Array(20)].map((_, i) => (
+          <div key={i} className="h-[36px] flex items-center px-3 gap-3 animate-pulse">
             <div className="h-3.5 w-3.5 bg-muted rounded flex-shrink-0" />
             <div className="h-3 w-32 bg-muted rounded flex-shrink-0" />
             <div className="h-4 w-16 bg-muted rounded-sm flex-shrink-0" />

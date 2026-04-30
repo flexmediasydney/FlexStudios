@@ -205,11 +205,13 @@ const EmailListRow = React.memo(function EmailListRow({
         <div
           className={cn(
             "group relative flex items-center gap-0 border-b border-border/60 cursor-pointer select-none",
-            "h-[52px] transition-[background-color,box-shadow] duration-150",
+            "h-[36px] transition-[background-color,box-shadow] duration-100",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary",
             isSelected
-              ? "bg-blue-50 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.2)] hover:bg-blue-100/80"
-              : "hover:bg-muted/40",
+              ? "bg-blue-50 dark:bg-blue-950/30 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.2)] hover:bg-blue-100/80"
+              : isUnread
+                ? "bg-slate-50 dark:bg-slate-800/40 hover:bg-slate-200/70 dark:hover:bg-slate-800/70"
+                : "bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800/50",
             !isSelected && priorityClass
           )}
           style={{
