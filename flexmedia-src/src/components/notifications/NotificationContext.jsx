@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, us
 import { api } from "@/api/supabaseClient";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useAuth } from "@/lib/AuthContext";
+import { usePresenceHeartbeat } from "@/lib/usePresenceHeartbeat";
 
 const NotificationContext = createContext(null);
 
@@ -28,6 +29,10 @@ export function NotificationProvider({ children }) {
   // so the owner doesn't miss their own alerts while impersonating someone.
   const { realUser, isSimulating } = useAuth();
   const notifUser = isSimulating ? realUser : currentUser;
+  // Stamp users.last_seen_at on a 60s heartbeat — groundwork for offline
+  // email fallback. Use the impersonator's real id during simulation so
+  // the owner's presence keeps updating instead of the impersonated user's.
+  usePresenceHeartbeat(notifUser?.id);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
