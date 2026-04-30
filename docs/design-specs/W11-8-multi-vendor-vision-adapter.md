@@ -1,6 +1,6 @@
 # W11.8 — Multi-Vendor Vision Adapter — Design Spec
 
-**Status:** ⚙️ Architectural defensibility — vendor-agnostic abstraction over Anthropic / Google / OpenAI vision APIs. Authored 2026-04-29 from Joseph's Path B decision (build vendor abstraction, A/B test, decide based on quality data).
+**Status:** ⚙️ Architectural defensibility — vendor-agnostic abstraction over Anthropic + Google vision APIs. Authored 2026-04-29 from Joseph's Path B decision (build vendor abstraction, A/B test, decide based on quality data). **Joseph 2026-04-29: OpenAI dropped from scope; only Anthropic + Google.**
 **Backlog ref:** P1-26 (new)
 **Wave plan ref:** W11.8 — production-grade adapter layer + per-pass model configuration + shadow-run A/B harness
 **Dependencies:** W7.7 (`engine_settings` table for runtime config), W11 (universal schema as the canonical output shape), W11.7 (unified architecture is the consumer)
@@ -27,7 +27,7 @@ New `_shared/visionAdapter.ts` exposes a unified call shape that all vendors imp
 ```typescript
 // supabase/functions/_shared/visionAdapter.ts (new)
 
-export type VisionVendor = 'anthropic' | 'google' | 'openai';
+export type VisionVendor = 'anthropic' | 'google';
 
 export interface VisionImage {
   /** 'base64' for inline bytes; 'url' for remote URL fetched server-side */
@@ -42,7 +42,7 @@ export interface VisionImage {
 
 export interface VisionRequest {
   vendor: VisionVendor;
-  /** Vendor-specific model id e.g. 'claude-opus-4-7' | 'gemini-2.0-pro' | 'gpt-4o' */
+  /** Vendor-specific model id e.g. 'claude-opus-4-7' | 'gemini-2.0-pro' */
   model: string;
   /** Tool / function name when using strict-JSON output mode */
   tool_name: string;
@@ -107,7 +107,6 @@ _shared/visionAdapter/
 ├── adapters/
 │   ├── anthropic.ts          # Claude Opus / Sonnet / Haiku
 │   ├── google.ts             # Gemini 2.0 Pro / Flash
-│   ├── openai.ts             # GPT-4o / GPT-4o-mini
 │   └── __mocks__.ts          # test fixtures
 └── visionAdapter.test.ts
 ```
@@ -123,11 +122,8 @@ _shared/visionAdapter/
 - 2M context window means many cases that need multi-message on Anthropic fit single call here
 - Auth: `GEMINI_API_KEY` Supabase secret
 
-#### OpenAI adapter notes
-- Uses `openai` SDK or REST `https://api.openai.com/v1/chat/completions`
-- Schema enforcement via `response_format: {type: 'json_schema', json_schema: {...}}`
-- 128k context window — narrower; multi-message more often needed
-- Auth: `OPENAI_API_KEY` Supabase secret
+#### OpenAI adapter — DROPPED 2026-04-29
+Joseph chose to scope the A/B comparison to Anthropic vs Google only. The adapter interface is open enough that adding OpenAI later is a single-file addition (one new file under `adapters/openai.ts` + one new pricing row + one new vendor enum value). Kept off the v1 build to avoid scope creep.
 
 ### Section 3 — Per-pass model configuration
 
@@ -138,7 +134,7 @@ The unified call (W11.7) and async backfill choose models via `engine_settings`:
 INSERT INTO engine_settings (key, value, description) VALUES
   ('vision.unified_call.vendor',
    '"anthropic"'::jsonb,
-   'Vendor for the W11.7 unified Pass 1+2 call. anthropic | google | openai'),
+   'Vendor for the W11.7 unified Pass 1+2 call. anthropic | google'),
   ('vision.unified_call.model',
    '"claude-opus-4-7"'::jsonb,
    'Model id within the chosen vendor for the unified call.'),
@@ -279,8 +275,7 @@ New page `Settings → Engine → Vendor Configuration`:
 | `anthropic-sonnet-control` | anthropic | claude-sonnet-4-6 | Pass 1 baseline (currently deployed) |
 | `google-pro-test` | google | gemini-2.0-pro | Pass 2 candidate |
 | `google-flash-test` | google | gemini-2.0-flash | Backfill candidate |
-| `openai-gpt4o-test` | openai | gpt-4o | Pass 2 alternative candidate |
-| `openai-gpt4o-mini-test` | openai | gpt-4o-mini | Backfill alternative candidate |
+~~OpenAI dropped from scope per Joseph 2026-04-29~~
 
 **Cost estimate (42 compositions on Saladine):**
 - Anthropic Opus 4.7 unified: ~$1.00
@@ -324,7 +319,7 @@ Joseph supplies these as Supabase project secrets:
 
 ```
 GEMINI_API_KEY        for Google Gemini 2.0 Pro / Flash
-OPENAI_API_KEY         for OpenAI GPT-4o / GPT-4o-mini
+~~OPENAI_API_KEY — DROPPED 2026-04-29 per Joseph; OpenAI not in v1 scope~~
 ```
 
 Anthropic credential already exists (`ANTHROPIC_API_KEY`) and is unchanged.
@@ -337,7 +332,7 @@ The retroactive comparison tool refuses to fire if the required secret for any c
 
 - 1 day adapter interface + Anthropic adapter (refactor existing `anthropicVision.ts`)
 - 1 day Google adapter
-- 1 day OpenAI adapter
+- ~~1 day OpenAI adapter~~ DROPPED
 - 0.5 day pricing table + cost-tracking instrumentation
 - 1 day shadow-run wiring in unified call (W11.7 dep)
 - 1 day retroactive comparison fn + Saladine test execution
@@ -367,7 +362,7 @@ The retroactive comparison tool refuses to fire if the required secret for any c
 
 - [x] W7.7 ✅ shipped — `engine_settings` table exists for per-pass config
 - [x] W11.7 spec authored — describes the unified call shape this adapter implements
-- [ ] Joseph provisions `GEMINI_API_KEY` and `OPENAI_API_KEY` as Supabase secrets
+- [x] Joseph provisioned `GEMINI_API_KEY` to Supabase secrets vault 2026-04-29 (OpenAI dropped from scope)
 - [ ] Migration 350 reserved at integration time
 - [ ] Joseph confirms Q1-Q4 above (defaults are defensible)
 - [ ] Saladine round_id `3ed54b53-9184-402f-9907-d168ed1968a4` confirmed as test target
