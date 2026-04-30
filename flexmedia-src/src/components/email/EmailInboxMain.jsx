@@ -270,21 +270,26 @@ export default function EmailInboxMain() {
   // Map our internal filterView + feature filters to RPC parameters.
   // The RPC accepts: folder, account_ids, search, unread_only, limit, offset.
   const rpcParamsForCurrentView = useCallback((limit, offset) => {
-    // account_ids: null = all user accounts; specific = filter to one
-    // Frontend-side account filtering by UI still runs via `filteredThreads`
-    // useMemo, so we pass NULL here (send all accounts' threads, let the
-    // client filter by `accountFilter`). We DO pass the full userAccountIds
-    // list so RLS security still holds via backend — but that's enforced
-    // in RLS policies already.
+    // account_ids: scope server-side so pagination math reflects what the
+    // user can see. If they picked a single account, send that one. If
+    // they're on "All inboxes", send the full set of their accounts —
+    // otherwise the page-N slice is filled with threads the client then
+    // filters out, leaving page 1 with ~9 of 50 visible threads.
+    let p_account_ids = null;
+    if (accountFilter !== 'all') {
+      p_account_ids = [accountFilter];
+    } else if (emailAccounts.length > 0) {
+      p_account_ids = emailAccounts.map(a => a.id);
+    }
     return {
       p_folder: filterView || 'inbox',
-      p_account_ids: null,
+      p_account_ids,
       p_search: null, // Client-side search still operates on fetched threads
       p_unread_only: false, // Client-side filter still applies
       p_limit: limit,
       p_offset: offset,
     };
-  }, [filterView]);
+  }, [filterView, accountFilter, emailAccounts]);
 
   // Flatten an RPC response's threads into a messages array (so the existing
   // `threads` useMemo can re-group by gmail_thread_id and all downstream code
@@ -299,9 +304,11 @@ export default function EmailInboxMain() {
 
   // Reset to page 1 when filters change (prevents stale offsets when switching views).
   // This runs BEFORE the fetch effect below so the fetch picks up page=1 on the next tick.
+  // Includes accountFilter so switching from "All inboxes" → a single account
+  // doesn't leave you stranded on page 5 of a now much smaller result set.
   useEffect(() => {
     setPage(1);
-  }, [JSON.stringify(messageFilters)]);
+  }, [JSON.stringify(messageFilters), accountFilter]);
 
   // Reset to page 1 when page size changes (so offsets stay sane).
   useEffect(() => {
