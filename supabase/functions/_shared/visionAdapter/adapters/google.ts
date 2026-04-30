@@ -128,6 +128,12 @@ export function buildGeminiBody(req: VisionRequest): Record<string, unknown> {
 
   contents.push({ role: 'user', parts: userParts });
 
+  // Gemini 2.5 Pro defaults to dynamic thinking budget — internal reasoning
+  // tokens are consumed FROM `maxOutputTokens` BEFORE visible output, so a
+  // 1500-token budget often leaves only 200-500 for the JSON body, truncating
+  // the response mid-`analysis`. We force thinkingBudget=0 so the model goes
+  // straight to producing the structured output. The 2.5 Flash model and
+  // earlier 2.0/1.5 models ignore thinkingConfig safely.
   const body: Record<string, unknown> = {
     systemInstruction: { parts: [{ text: req.system }] },
     contents,
@@ -136,6 +142,7 @@ export function buildGeminiBody(req: VisionRequest): Record<string, unknown> {
       responseSchema: req.tool_input_schema,
       maxOutputTokens: req.max_output_tokens,
       temperature: req.temperature ?? 0,
+      thinkingConfig: { thinkingBudget: 0 },
     },
   };
   return body;

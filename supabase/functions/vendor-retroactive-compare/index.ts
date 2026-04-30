@@ -358,7 +358,7 @@ async function runVendorOnComposition(
     system: promptSystem,
     user_text: promptUser,
     images: [{ source_type: 'base64', media_type: preview.media_type, data: preview.data }],
-    max_output_tokens: 1500,
+    max_output_tokens: 4000,
     temperature: 0,
   };
   try {
@@ -459,6 +459,56 @@ interface ProcessComparisonArgs {
   prompt: { system: string; userPrefix: string };
 }
 
+interface PrimedRun {
+  group_id: string;
+  label: string;
+  output: Record<string, unknown>;
+  cost_usd: number;
+  elapsed_ms: number;
+}
+
+/**
+ * Load existing successful shadow_runs for this (round, vendor-set) so we
+ * don't re-pay for compositions we've already classified. Per-vendor cache:
+ * if a (group_id, label) already has response_output != null, we reuse it
+ * and skip the API call.
+ *
+ * This is crucial for iterative debugging — when a vendor (e.g. Gemini)
+ * fails 95% of compositions and the adapter is fixed, re-running the
+ * harness should ONLY retry the failed combos, not re-pay $6 for the
+ * already-good Anthropic side.
+ */
+async function loadPrimedRuns(
+  round_id: string,
+  labels: string[],
+): Promise<Map<string, PrimedRun>> {
+  const primed = new Map<string, PrimedRun>();
+  if (labels.length === 0) return primed;
+  const admin = getAdminClient();
+  const { data, error } = await admin
+    .from('vendor_shadow_runs')
+    .select('group_id, label, response_output, response_usage, vendor_meta')
+    .eq('round_id', round_id)
+    .in('label', labels)
+    .not('response_output', 'is', null);
+  if (error) {
+    console.warn(`[${GENERATOR}] loadPrimedRuns failed (will treat all as fresh): ${error.message}`);
+    return primed;
+  }
+  for (const row of (data || []) as Array<Record<string, unknown>>) {
+    const group_id = row.group_id as string;
+    const label = row.label as string;
+    const output = row.response_output as Record<string, unknown> | null;
+    if (!output) continue;
+    const usage = (row.response_usage as Record<string, unknown> | null) || {};
+    const vendor_meta = (row.vendor_meta as Record<string, unknown> | null) || {};
+    const cost_usd = typeof usage.estimated_cost_usd === 'number' ? usage.estimated_cost_usd : 0;
+    const elapsed_ms = typeof vendor_meta.elapsed_ms === 'number' ? vendor_meta.elapsed_ms : 0;
+    primed.set(`${group_id}::${label}`, { group_id, label, output, cost_usd, elapsed_ms });
+  }
+  return primed;
+}
+
 /**
  * Process one composition: fetch preview once, fan out one call per vendor
  * in parallel, persist shadow runs, return the per-vendor summaries.
@@ -473,6 +523,7 @@ async function processOneComposition(
   pass_kinds: ('unified' | 'description_backfill')[],
   round_id: string,
   dropboxRoot: string,
+  primed: Map<string, PrimedRun>,
 ): Promise<Array<{
   cfg: VendorConfig;
   group_id: string;
@@ -481,7 +532,51 @@ async function processOneComposition(
   elapsed_ms: number;
   cost_usd: number;
   err?: string;
+  primed?: boolean;
 }>> {
+  // Determine which vendors actually need a fresh API call. If a vendor
+  // already has a successful shadow_run for this (round, group, label) we
+  // reuse it via the primed map and skip the call.
+  const vendorsToCall: VendorConfig[] = [];
+  const primedResults: Array<{
+    cfg: VendorConfig;
+    group_id: string;
+    stem: string;
+    resp: VisionResponse | null;
+    elapsed_ms: number;
+    cost_usd: number;
+    err?: string;
+    primed?: boolean;
+  }> = [];
+  for (const cfg of vendors_to_compare) {
+    const key = `${comp.group_id}::${cfg.label}`;
+    const p = primed.get(key);
+    if (p) {
+      // Reconstruct a minimal VisionResponse-shaped record so downstream
+      // metrics see the cached output. resp is intentionally null since
+      // there's no fresh adapter response — we hand-pack the fields the
+      // summary loop reads.
+      primedResults.push({
+        cfg,
+        group_id: comp.group_id,
+        stem: comp.stem,
+        resp: {
+          output: p.output,
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, estimated_cost_usd: p.cost_usd },
+          vendor_meta: { vendor: cfg.vendor, model: cfg.model, request_id: '', finish_reason: 'stop', elapsed_ms: p.elapsed_ms },
+          raw_response_excerpt: '',
+        } as VisionResponse,
+        elapsed_ms: p.elapsed_ms,
+        cost_usd: p.cost_usd,
+        primed: true,
+      });
+    } else {
+      vendorsToCall.push(cfg);
+    }
+  }
+  // Skip preview fetch entirely if every vendor is already primed.
+  if (vendorsToCall.length === 0) return primedResults;
+
   const previewPath = `${dropboxRoot.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews/${comp.stem}.jpg`;
   let preview: { data: string; media_type: string } | null = null;
   let previewErr: string | null = null;
@@ -495,8 +590,8 @@ async function processOneComposition(
     ? 'unified'
     : pass_kinds[0];
 
-  // Fan out vendors in parallel for this composition.
-  const vendorResults = await Promise.all(vendors_to_compare.map(async (cfg) => {
+  // Fan out vendors in parallel for this composition (those not already primed).
+  const vendorResults = await Promise.all(vendorsToCall.map(async (cfg) => {
     const startSpan = Date.now();
     let resp: VisionResponse | null = null;
     let err: string | undefined;
@@ -511,7 +606,7 @@ async function processOneComposition(
         system: prompt.system,
         user_text: prompt.userPrefix,
         images: [{ source_type: 'base64', media_type: preview.media_type, data: preview.data }],
-        max_output_tokens: 1500,
+        max_output_tokens: 4000,
         temperature: 0,
       };
       const r = await runVendorOnComposition(cfg, comp, preview, prompt.system, prompt.userPrefix);
@@ -527,7 +622,7 @@ async function processOneComposition(
         system: prompt.system,
         user_text: prompt.userPrefix,
         images: [],
-        max_output_tokens: 1500,
+        max_output_tokens: 4000,
         temperature: 0,
       };
     }
@@ -543,7 +638,9 @@ async function processOneComposition(
     return { cfg, group_id: comp.group_id, stem: comp.stem, resp, elapsed_ms, cost_usd, err };
   }));
 
-  return vendorResults;
+  // Merge primed (cached) results with fresh API results. Order doesn't
+  // matter for the summary aggregation downstream.
+  return [...primedResults, ...vendorResults];
 }
 
 /**
@@ -586,12 +683,21 @@ async function processComparison(args: ProcessComparisonArgs): Promise<void> {
     return;
   }
 
+  // Prime from existing successful shadow_runs so we don't re-pay for
+  // already-classified (composition, vendor) combos. Hugely useful for
+  // iterative debugging when one vendor's adapter fails most calls and
+  // gets fixed — second run reuses the good vendor's data.
+  const primed = await loadPrimedRuns(round_id, vendors_to_compare.map((v) => v.label));
+  if (primed.size > 0) {
+    console.log(`[${GENERATOR}] primed ${primed.size} cached results from prior shadow_runs (skipping those API calls)`);
+  }
+
   // Process compositions in batches, fanning out vendors per composition.
   for (let i = 0; i < compositionsToRun.length; i += BATCH_SIZE) {
     const batch = compositionsToRun.slice(i, i + BATCH_SIZE);
     console.log(`[${GENERATOR}] batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(compositionsToRun.length / BATCH_SIZE)} (compositions ${i + 1}..${Math.min(i + BATCH_SIZE, compositionsToRun.length)})`);
     const batchResults = await Promise.all(batch.map((comp) =>
-      processOneComposition(comp, vendors_to_compare, prompt, pass_kinds, round_id, dropboxRoot)
+      processOneComposition(comp, vendors_to_compare, prompt, pass_kinds, round_id, dropboxRoot, primed)
         .catch((err) => {
           console.error(`[${GENERATOR}] composition ${comp.stem} failed: ${err instanceof Error ? err.message : String(err)}`);
           return [] as Array<{
@@ -602,6 +708,7 @@ async function processComparison(args: ProcessComparisonArgs): Promise<void> {
             elapsed_ms: number;
             cost_usd: number;
             err?: string;
+            primed?: boolean;
           }>;
         })
     ));
