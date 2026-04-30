@@ -317,6 +317,21 @@ const COMPARISON_TOOL_SCHEMA: Record<string, unknown> = {
 
 // ─── Per-vendor sweep ────────────────────────────────────────────────────────
 
+/**
+ * Concurrency for the composition sweep. Each composition fans out one call
+ * per vendor in parallel; we then run BATCH_SIZE compositions in parallel.
+ *
+ * For 42 compositions × 2 vendors @ ~15s/call:
+ *   - sequential (old): 1260s = 21 min (way past the 400s edge worker cap)
+ *   - parallel vendors only: 630s = 10.5 min
+ *   - batches of 4 compositions × parallel vendors: ~165s = 2.75 min
+ *
+ * Both Anthropic (tier-1: 50 RPM) and Gemini 2.5 Pro pay-as-you-go (60 RPM)
+ * tolerate this comfortably. Per-call AbortSignal.timeout(90s) inside the
+ * adapter ensures one slow call can't stall the whole batch.
+ */
+const BATCH_SIZE = 4;
+
 interface ShadowRunRecord {
   group_id: string;
   vendor: VisionVendor;
@@ -433,6 +448,231 @@ async function uploadComparisonReport(
   }
 }
 
+// ─── Background processing ───────────────────────────────────────────────────
+
+interface ProcessComparisonArgs {
+  round_id: string;
+  ctx: Awaited<ReturnType<typeof loadRoundContext>>;
+  compositionsToRun: CompositionRow[];
+  vendors_to_compare: VendorConfig[];
+  pass_kinds: ('unified' | 'description_backfill')[];
+  prompt: { system: string; userPrefix: string };
+}
+
+/**
+ * Process one composition: fetch preview once, fan out one call per vendor
+ * in parallel, persist shadow runs, return the per-vendor summaries.
+ *
+ * Each call has the adapter's own AbortSignal.timeout(90s) — the slowest
+ * vendor caps the composition's wall time.
+ */
+async function processOneComposition(
+  comp: CompositionRow,
+  vendors_to_compare: VendorConfig[],
+  prompt: { system: string; userPrefix: string },
+  pass_kinds: ('unified' | 'description_backfill')[],
+  round_id: string,
+  dropboxRoot: string,
+): Promise<Array<{
+  cfg: VendorConfig;
+  group_id: string;
+  stem: string;
+  resp: VisionResponse | null;
+  elapsed_ms: number;
+  cost_usd: number;
+  err?: string;
+}>> {
+  const previewPath = `${dropboxRoot.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews/${comp.stem}.jpg`;
+  let preview: { data: string; media_type: string } | null = null;
+  let previewErr: string | null = null;
+  try {
+    preview = await fetchPreviewBase64(previewPath);
+  } catch (err) {
+    previewErr = err instanceof Error ? err.message : String(err);
+  }
+
+  const passKind: 'unified' | 'description_backfill' = pass_kinds.includes('unified')
+    ? 'unified'
+    : pass_kinds[0];
+
+  // Fan out vendors in parallel for this composition.
+  const vendorResults = await Promise.all(vendors_to_compare.map(async (cfg) => {
+    const startSpan = Date.now();
+    let resp: VisionResponse | null = null;
+    let err: string | undefined;
+    let request_payload: VisionRequest;
+
+    if (preview) {
+      request_payload = {
+        vendor: cfg.vendor,
+        model: cfg.model,
+        tool_name: COMPARISON_TOOL_NAME,
+        tool_input_schema: COMPARISON_TOOL_SCHEMA,
+        system: prompt.system,
+        user_text: prompt.userPrefix,
+        images: [{ source_type: 'base64', media_type: preview.media_type, data: preview.data }],
+        max_output_tokens: 1500,
+        temperature: 0,
+      };
+      const r = await runVendorOnComposition(cfg, comp, preview, prompt.system, prompt.userPrefix);
+      resp = r.resp;
+      err = r.error;
+    } else {
+      err = previewErr || 'preview unavailable';
+      request_payload = {
+        vendor: cfg.vendor,
+        model: cfg.model,
+        tool_name: COMPARISON_TOOL_NAME,
+        tool_input_schema: COMPARISON_TOOL_SCHEMA,
+        system: prompt.system,
+        user_text: prompt.userPrefix,
+        images: [],
+        max_output_tokens: 1500,
+        temperature: 0,
+      };
+    }
+
+    try {
+      await persistShadowRun(round_id, cfg, comp, resp, err, passKind, request_payload);
+    } catch (persistErr) {
+      console.warn(`[${GENERATOR}] persist shadow run failed: ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`);
+    }
+
+    const elapsed_ms = resp?.vendor_meta.elapsed_ms ?? (Date.now() - startSpan);
+    const cost_usd = resp?.usage.estimated_cost_usd ?? 0;
+    return { cfg, group_id: comp.group_id, stem: comp.stem, resp, elapsed_ms, cost_usd, err };
+  }));
+
+  return vendorResults;
+}
+
+/**
+ * Run the full composition sweep + metrics + persistence asynchronously.
+ *
+ * Invoked via `EdgeRuntime.waitUntil(...)` from the handler so the request
+ * returns immediately and the worker keeps running until this resolves.
+ *
+ * Progress is observable in real time via:
+ *   SELECT count(*) FROM vendor_shadow_runs WHERE round_id = '<id>'
+ * which increments after each vendor call persists.
+ *
+ * The final markdown report appears at:
+ *   <dropbox_root>/Photos/_AUDIT/vendor_comparison_<round_id>.md
+ *
+ * On completion, vendor_comparison_results gets one row per (primary, shadow)
+ * pair.
+ */
+async function processComparison(args: ProcessComparisonArgs): Promise<void> {
+  const { round_id, ctx, compositionsToRun, vendors_to_compare, pass_kinds, prompt } = args;
+  const startedAt = Date.now();
+
+  const runs: Map<string, VendorRunSummary> = new Map();
+  for (const cfg of vendors_to_compare) {
+    runs.set(cfg.label, {
+      label: cfg.label,
+      vendor: cfg.vendor,
+      model: cfg.model,
+      total_cost_usd: 0,
+      total_elapsed_ms: 0,
+      composition_count: 0,
+      failure_count: 0,
+      results: [],
+    });
+  }
+
+  const dropboxRoot = ctx.project.dropbox_root_path;
+  if (!dropboxRoot) {
+    console.warn(`[${GENERATOR}] project has no dropbox_root_path; nothing to fetch — abort`);
+    return;
+  }
+
+  // Process compositions in batches, fanning out vendors per composition.
+  for (let i = 0; i < compositionsToRun.length; i += BATCH_SIZE) {
+    const batch = compositionsToRun.slice(i, i + BATCH_SIZE);
+    console.log(`[${GENERATOR}] batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(compositionsToRun.length / BATCH_SIZE)} (compositions ${i + 1}..${Math.min(i + BATCH_SIZE, compositionsToRun.length)})`);
+    const batchResults = await Promise.all(batch.map((comp) =>
+      processOneComposition(comp, vendors_to_compare, prompt, pass_kinds, round_id, dropboxRoot)
+        .catch((err) => {
+          console.error(`[${GENERATOR}] composition ${comp.stem} failed: ${err instanceof Error ? err.message : String(err)}`);
+          return [] as Array<{
+            cfg: VendorConfig;
+            group_id: string;
+            stem: string;
+            resp: VisionResponse | null;
+            elapsed_ms: number;
+            cost_usd: number;
+            err?: string;
+          }>;
+        })
+    ));
+    for (const compResults of batchResults) {
+      for (const r of compResults) {
+        const summary = runs.get(r.cfg.label)!;
+        summary.composition_count += 1;
+        summary.total_cost_usd += r.cost_usd;
+        summary.total_elapsed_ms += r.elapsed_ms;
+        if (r.resp) {
+          summary.results.push({ group_id: r.group_id, stem: r.stem, output: r.resp.output });
+        } else {
+          summary.failure_count += 1;
+        }
+      }
+    }
+  }
+
+  // Comparison metrics — pairwise (every vendor against the first).
+  const labels = vendors_to_compare.map((v) => v.label);
+  if (labels.length < 2) {
+    console.log(`[${GENERATOR}] single-vendor mode — no pairwise comparison`);
+    return;
+  }
+
+  const primary = runs.get(labels[0])!;
+  const allComparisons = labels.slice(1).map((shadowLabel) => {
+    const shadow = runs.get(shadowLabel)!;
+    const agreement = computeAgreementMatrix(primary.results, shadow.results);
+    const score = computeScoreDelta(primary.results, shadow.results);
+    const obj = computeObjectOverlap(primary.results, shadow.results);
+    const room = computeRoomTypeAgreement(primary.results, shadow.results);
+    return { primary, shadow, agreement, score, obj, room };
+  });
+
+  const markdown = generateMarkdownReport(round_id, allComparisons);
+  const dropbox_report_path = await uploadComparisonReport(dropboxRoot, round_id, markdown);
+
+  const admin = getAdminClient();
+  for (const c of allComparisons) {
+    const summary_truncated = markdown.slice(0, 2000);
+    const { error: insErr } = await admin.from('vendor_comparison_results').insert({
+      round_id,
+      primary_vendor: c.primary.vendor,
+      primary_model: c.primary.model,
+      primary_label: c.primary.label,
+      shadow_vendor: c.shadow.vendor,
+      shadow_model: c.shadow.model,
+      shadow_label: c.shadow.label,
+      slot_decision_agreement_rate: null,
+      near_duplicate_agreement_rate: null,
+      classification_agreement_rate: c.room.agreement_rate,
+      combined_score_mean_abs_delta: c.score.mean_abs_delta,
+      combined_score_correlation: c.score.correlation,
+      observed_objects_overlap_rate: c.obj.jaccard,
+      primary_cost_usd: Number(c.primary.total_cost_usd.toFixed(6)),
+      shadow_cost_usd: Number(c.shadow.total_cost_usd.toFixed(6)),
+      primary_elapsed_ms: c.primary.total_elapsed_ms,
+      shadow_elapsed_ms: c.shadow.total_elapsed_ms,
+      disagreement_summary: summary_truncated,
+      dropbox_report_path,
+    }).select('id').single();
+    if (insErr) {
+      console.warn(`[${GENERATOR}] vendor_comparison_results insert failed: ${insErr.message}`);
+    }
+  }
+
+  const elapsed_total_s = Math.round((Date.now() - startedAt) / 1000);
+  console.log(`[${GENERATOR}] background sweep complete in ${elapsed_total_s}s — ${compositionsToRun.length} compositions × ${vendors_to_compare.length} vendors → ${dropbox_report_path ?? '(no report)'}`);
+}
+
 // ─── Handler ─────────────────────────────────────────────────────────────────
 
 async function handler(req: Request): Promise<Response> {
@@ -481,8 +721,6 @@ async function handler(req: Request): Promise<Response> {
   total_estimated = Number(total_estimated.toFixed(4));
 
   if (total_estimated > cost_cap_usd) {
-    // errorResponse only takes (message, status, req?: Request). Embed the
-    // pre-flight detail in the message so the operator sees it in the body.
     const detail = JSON.stringify({
       total_estimated_usd: total_estimated,
       cost_cap_usd,
@@ -511,174 +749,35 @@ async function handler(req: Request): Promise<Response> {
   // taxonomy + scoring anchors per spec Section 5 step 3.
   const anchors = await getActiveStreamBAnchors();
   const prompt = buildPass1Prompt(anchors);
-
-  // Per-vendor sweep. We iterate compositions outermost so a vendor partial
-  // failure leaves prior compositions persisted (resumable).
   const compositionsToRun = ctx.compositions.slice(0, total_compositions);
-  const runs: Map<string, VendorRunSummary> = new Map();
-  for (const cfg of vendors_to_compare) {
-    runs.set(cfg.label, {
-      label: cfg.label,
-      vendor: cfg.vendor,
-      model: cfg.model,
-      total_cost_usd: 0,
-      total_elapsed_ms: 0,
-      composition_count: 0,
-      failure_count: 0,
-      results: [],
-    });
-  }
 
-  for (const comp of compositionsToRun) {
-    if (!ctx.project.dropbox_root_path) continue; // Skip when project has no Dropbox root.
-    const previewPath = `${ctx.project.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews/${comp.stem}.jpg`;
-    let preview: { data: string; media_type: string } | null = null;
-    let previewErr: string | null = null;
-    try {
-      preview = await fetchPreviewBase64(previewPath);
-    } catch (err) {
-      previewErr = err instanceof Error ? err.message : String(err);
-    }
-
-    for (const cfg of vendors_to_compare) {
-      const summary = runs.get(cfg.label)!;
-      const startSpan = Date.now();
-      let resp: VisionResponse | null = null;
-      let err: string | undefined;
-      let request_payload: VisionRequest | null = null;
-
-      if (preview) {
-        request_payload = {
-          vendor: cfg.vendor,
-          model: cfg.model,
-          tool_name: COMPARISON_TOOL_NAME,
-          tool_input_schema: COMPARISON_TOOL_SCHEMA,
-          system: prompt.system,
-          user_text: prompt.userPrefix,
-          images: [{ source_type: 'base64', media_type: preview.media_type, data: preview.data }],
-          max_output_tokens: 1500,
-          temperature: 0,
-        };
-        const r = await runVendorOnComposition(cfg, comp, preview, prompt.system, prompt.userPrefix);
-        resp = r.resp;
-        err = r.error;
-      } else {
-        err = previewErr || 'preview unavailable';
-        // Persist a failure row so the operator sees which images couldn't be fetched.
-        request_payload = {
-          vendor: cfg.vendor,
-          model: cfg.model,
-          tool_name: COMPARISON_TOOL_NAME,
-          tool_input_schema: COMPARISON_TOOL_SCHEMA,
-          system: prompt.system,
-          user_text: prompt.userPrefix,
-          images: [],
-          max_output_tokens: 1500,
-          temperature: 0,
-        };
-      }
-
-      const passKind: 'unified' | 'description_backfill' = pass_kinds.includes('unified')
-        ? 'unified'
-        : pass_kinds[0];
-      try {
-        await persistShadowRun(round_id, cfg, comp, resp, err, passKind, request_payload);
-      } catch (persistErr) {
-        console.warn(`[${GENERATOR}] persist shadow run failed: ${persistErr instanceof Error ? persistErr.message : String(persistErr)}`);
-      }
-
-      summary.composition_count += 1;
-      if (resp) {
-        summary.total_cost_usd += resp.usage.estimated_cost_usd;
-        summary.total_elapsed_ms += resp.vendor_meta.elapsed_ms;
-        summary.results.push({
-          group_id: comp.group_id,
-          stem: comp.stem,
-          output: resp.output,
-        });
-      } else {
-        summary.failure_count += 1;
-        summary.total_elapsed_ms += Date.now() - startSpan;
-      }
-    }
-  }
-
-  // Comparison metrics — pairwise (every vendor against the first).
-  const labels = vendors_to_compare.map((v) => v.label);
-  if (labels.length < 2) {
-    return jsonResponse({
-      ok: true,
-      mode: 'single_vendor',
-      round_id,
-      summaries: Array.from(runs.values()),
-      note: 'only one vendor specified — no pairwise comparison computed',
-    });
-  }
-
-  const primary = runs.get(labels[0])!;
-  const writeRows: Array<{ id: string }> = [];
-  let dropbox_report_path: string | null = null;
-
-  // Generate a single markdown report covering all comparisons (primary vs each shadow).
-  const allComparisons = labels.slice(1).map((shadowLabel) => {
-    const shadow = runs.get(shadowLabel)!;
-    const agreement = computeAgreementMatrix(primary.results, shadow.results);
-    const score = computeScoreDelta(primary.results, shadow.results);
-    const obj = computeObjectOverlap(primary.results, shadow.results);
-    const room = computeRoomTypeAgreement(primary.results, shadow.results);
-    return { primary, shadow, agreement, score, obj, room };
+  // Kick off the heavy work in the background. The request returns
+  // immediately with a "started" ack so the gateway doesn't time out.
+  // Progress is observable via vendor_shadow_runs row count for round_id.
+  const bgWork = processComparison({
+    round_id,
+    ctx,
+    compositionsToRun,
+    vendors_to_compare,
+    pass_kinds,
+    prompt: { system: prompt.system, userPrefix: prompt.userPrefix },
+  }).catch((err) => {
+    console.error(`[${GENERATOR}] background sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   });
-
-  const markdown = generateMarkdownReport(round_id, allComparisons);
-  dropbox_report_path = await uploadComparisonReport(ctx.project.dropbox_root_path, round_id, markdown);
-
-  for (const c of allComparisons) {
-    const admin = getAdminClient();
-    const summary_truncated = markdown.slice(0, 2000);
-    const { data, error: insErr } = await admin.from('vendor_comparison_results').insert({
-      round_id,
-      primary_vendor: c.primary.vendor,
-      primary_model: c.primary.model,
-      primary_label: c.primary.label,
-      shadow_vendor: c.shadow.vendor,
-      shadow_model: c.shadow.model,
-      shadow_label: c.shadow.label,
-      slot_decision_agreement_rate: null, // v1 unified-only; no slot decisions
-      near_duplicate_agreement_rate: null,
-      classification_agreement_rate: c.room.agreement_rate,
-      combined_score_mean_abs_delta: c.score.mean_abs_delta,
-      combined_score_correlation: c.score.correlation,
-      observed_objects_overlap_rate: c.obj.jaccard,
-      primary_cost_usd: Number(c.primary.total_cost_usd.toFixed(6)),
-      shadow_cost_usd: Number(c.shadow.total_cost_usd.toFixed(6)),
-      primary_elapsed_ms: c.primary.total_elapsed_ms,
-      shadow_elapsed_ms: c.shadow.total_elapsed_ms,
-      disagreement_summary: summary_truncated,
-      dropbox_report_path,
-    }).select('id').single();
-    if (insErr) {
-      console.warn(`[${GENERATOR}] vendor_comparison_results insert failed: ${insErr.message}`);
-    } else if (data) {
-      writeRows.push({ id: (data as { id: string }).id });
-    }
-  }
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).EdgeRuntime?.waitUntil?.(bgWork);
 
   return jsonResponse({
     ok: true,
+    mode: 'background',
     round_id,
-    mode: 'live',
     total_compositions,
-    summaries: Array.from(runs.values()).map((s) => ({
-      label: s.label,
-      vendor: s.vendor,
-      model: s.model,
-      composition_count: s.composition_count,
-      failure_count: s.failure_count,
-      total_cost_usd: Number(s.total_cost_usd.toFixed(6)),
-      total_elapsed_ms: s.total_elapsed_ms,
-    })),
-    comparison_results_inserted: writeRows.length,
-    dropbox_report_path,
+    vendors: vendors_to_compare.map((cfg) => ({ label: cfg.label, vendor: cfg.vendor, model: cfg.model })),
+    preflight,
+    total_estimated_usd: total_estimated,
+    cost_cap_usd,
+    progress_query: `SELECT vendor, label, count(*) FROM vendor_shadow_runs WHERE round_id = '${round_id}' GROUP BY vendor, label`,
+    note: `Sweep running in background. Expect ~${Math.ceil(total_compositions / BATCH_SIZE) * 30}s wall time at ${BATCH_SIZE}-composition batches × parallel vendors. Report will appear at Photos/_AUDIT/vendor_comparison_${round_id}.md`,
   });
 }
 
