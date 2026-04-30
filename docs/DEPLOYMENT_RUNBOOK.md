@@ -133,13 +133,54 @@ These are read by various shortlisting functions and the shared helpers
 | `DROPBOX_APP_KEY` | `_shared/dropbox.ts` | OAuth client identification |
 | `DROPBOX_APP_SECRET` | `_shared/dropbox.ts` | OAuth client secret |
 | `DROPBOX_TEAM_NAMESPACE_ID` | `_shared/dropbox.ts` | team-folder scoping |
-| `ANTHROPIC_API_KEY` (or `CLAUDE_API_KEY`) | `_shared/anthropicVision.ts` (used by pass0/pass1/pass2/pass3 + benchmark + training extractor) | Claude vision API |
+| `ANTHROPIC_API_KEY` (or `CLAUDE_API_KEY`) | `_shared/anthropicVision.ts` (used by pass0/pass1/pass2/pass3 + benchmark + training extractor) + `_shared/visionAdapter/adapters/anthropic.ts` (W11.8) | Claude vision API |
+| `GEMINI_API_KEY` | `_shared/visionAdapter/adapters/google.ts` + `vendor-retroactive-compare` (W11.8) | Google Gemini vision API — required when any per-pass `vision.*.vendor` engine_setting is `"google"` or when the retroactive comparison fn is asked to compare a Google variant |
 | `MODAL_PHOTOS_EXTRACT_URL` | `shortlisting-extract` | Modal worker endpoint for CR3 EXIF/JPEG extraction |
 | `PASS1_CONCURRENCY` (optional) | `shortlisting-pass1` | concurrency cap for parallel Sonnet calls (default 8 at time of writing) |
 
 The first three (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
 `SUPABASE_ANON_KEY`) are always available in the Supabase function runtime
 and do not need manual setting.
+
+### Adding `GEMINI_API_KEY` (Wave 11.8 — Google Gemini vision)
+
+Wave 11.8 ships the multi-vendor vision adapter (`_shared/visionAdapter/`).
+The Anthropic adapter reuses `ANTHROPIC_API_KEY` (already set). The Google
+adapter requires a separate `GEMINI_API_KEY` Supabase secret.
+
+`GEMINI_API_KEY` is **already provisioned in production** (Joseph 2026-04-29,
+prior to W11.8 deployment). The instructions below are reference for any
+future region or staging environment that needs it.
+
+To set it manually:
+
+```bash
+SUPABASE_ACCESS_TOKEN=<token> npx supabase secrets set \
+  --project-ref <project-ref> \
+  GEMINI_API_KEY=<your-google-ai-studio-key>
+```
+
+Obtain the key from <https://aistudio.google.com/app/apikey>. Use a project-
+scoped key (not a personal key) so it survives the source human leaving the
+team.
+
+To verify the secret is set without leaking it:
+
+```bash
+SUPABASE_ACCESS_TOKEN=<token> npx supabase secrets list \
+  --project-ref <project-ref>
+```
+
+The secret is read by:
+- `_shared/visionAdapter/adapters/google.ts` — fires for any per-pass call
+  whose `vision.*.vendor` engine_setting is `"google"` (today: none in
+  production by default)
+- `vendor-retroactive-compare` — fires when the operator selects a Google
+  variant in the Vendor Comparison admin page
+
+The adapter throws `MissingVendorCredential` (with `env_var: "GEMINI_API_KEY"`)
+when the secret is unset — surfaces in logs and as a toast in the admin UI
+rather than a generic 5xx.
 
 ---
 

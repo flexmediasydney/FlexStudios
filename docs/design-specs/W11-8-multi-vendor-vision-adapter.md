@@ -1,6 +1,20 @@
 # W11.8 — Multi-Vendor Vision Adapter — Design Spec
 
-**Status:** ⚙️ Architectural defensibility — vendor-agnostic abstraction over Anthropic + Google vision APIs. Authored 2026-04-29 from Joseph's Path B decision (build vendor abstraction, A/B test, decide based on quality data). **Joseph 2026-04-29: OpenAI dropped from scope; only Anthropic + Google.**
+**Status:** ✅ Shipped 2026-04-30 — multi-vendor vision adapter (Anthropic + Google) + retroactive A/B comparison harness + Saladine A/B test ready to fire. Joseph 2026-04-29: OpenAI dropped from scope; only Anthropic + Google.
+
+**Implementation commits (worktree `agent-a7d4a6556d05cdcc8`, awaiting orchestrator cherry-pick into main):**
+- 1/7 `71e6825` — migration 350 (`vendor_shadow_runs`, `vendor_comparison_results`, 9 `engine_settings` rows)
+- 2/7 `5bd9f30` — shared adapter interface (`_shared/visionAdapter/{types,pricing,index}.ts`) + 19 unit tests
+- 3/7 `20e5356` — Anthropic adapter (tool-use + ephemeral cache) + thin compat wrapper at `_shared/anthropicVision.ts` + 15 unit tests
+- 4/7 `7d6946b` — Google (Gemini) adapter (generateContent + responseSchema) + 19 unit tests
+- 5/7 `68ea593` — `vendor-retroactive-compare` edge fn (master_admin only, cost gate, dropbox markdown upload)
+- 6/7 `c074aaf` — comparison metrics + markdown report generator + 24 unit tests
+- 7/7 (this commit) — `SettingsVendorComparison.jsx` admin page + nav + DEPLOYMENT_RUNBOOK GEMINI_API_KEY section
+
+**Test count delta:** +76 tests (52 across `visionAdapter*.test.ts` — pricing/router/anthropic/google — plus 24 in `vendorComparisonMetrics.test.ts`).
+**Frontend build:** clean, `SettingsVendorComparison-*.js` bundle present in `dist/assets/`.
+
+
 **Backlog ref:** P1-26 (new)
 **Wave plan ref:** W11.8 — production-grade adapter layer + per-pass model configuration + shadow-run A/B harness
 **Dependencies:** W7.7 (`engine_settings` table for runtime config), W11 (universal schema as the canonical output shape), W11.7 (unified architecture is the consumer)

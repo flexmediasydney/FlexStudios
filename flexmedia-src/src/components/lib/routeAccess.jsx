@@ -49,6 +49,7 @@ export const ROUTE_ACCESS = {
   SettingsShortlistingPrompts: OWNER_ONLY,
   SettingsEngineSettings: OWNER_ONLY,
   SettingsPackageTierMapping: OWNER_ONLY,
+  SettingsVendorComparison: OWNER_ONLY,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,
