@@ -107,11 +107,37 @@ const NOTIFICATION_TYPES_LIST = [
 ];
 
 function PushDeviceCard({ userId }) {
-  const { supported, permission, subscribed, busy, error, subscribe, unsubscribe } = usePushSubscription(userId);
+  const { supported, iosNeedsInstall, permission, subscribed, busy, error, subscribe, unsubscribe } = usePushSubscription(userId);
 
-  // We hide the card entirely on browsers that can't do Web Push at all
-  // (no SW or no PushManager). On iOS, this also covers regular Safari —
-  // the card only renders inside the installed PWA where push works.
+  // iOS Safari (regular browser, not home-screen PWA) reports the Push API
+  // as present but pushManager.subscribe rejects. Show install steps instead
+  // of a button that would fail on tap.
+  if (iosNeedsInstall) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2"><Smartphone className="h-4 w-4" /> Push Notifications</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            iPhone and iPad require FlexStudios to be installed to your home screen before push can be enabled.
+            One-time setup:
+          </p>
+          <ol className="text-sm text-foreground/90 space-y-1.5 list-decimal pl-5">
+            <li>Tap the <span className="font-medium">Share</span> button in Safari (square with an up-arrow).</li>
+            <li>Scroll down and tap <span className="font-medium">Add to Home Screen</span>.</li>
+            <li>Open FlexStudios from the new home-screen icon.</li>
+            <li>Come back to this page and tap <span className="font-medium">Enable push notifications</span>.</li>
+          </ol>
+          <p className="text-[11px] text-muted-foreground">
+            Apple only allows this on installed Progressive Web Apps — not in regular Safari, Chrome on iPhone, or any other iOS browser.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // Browsers that genuinely don't expose the Push API at all (rare modern case).
   if (!supported) {
     return (
       <Card>
@@ -120,8 +146,7 @@ function PushDeviceCard({ userId }) {
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            This browser doesn't support push notifications. On iPhone, install FlexStudios to your home screen
-            (Share → Add to Home Screen) and open it from there to enable push.
+            This browser doesn't support push notifications. Use a recent version of Chrome, Edge, Firefox, or Safari.
           </p>
         </CardContent>
       </Card>

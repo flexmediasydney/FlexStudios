@@ -26,11 +26,35 @@ function arrayBufferToBase64Url(buffer) {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+function isIOS() {
+  if (typeof navigator === 'undefined') return false;
+  // iPadOS 13+ reports as MacIntel; the touch check disambiguates.
+  return /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.userAgent.includes('Mac') && typeof document !== 'undefined' && 'ontouchend' in document);
+}
+
+function isStandalone() {
+  if (typeof window === 'undefined') return false;
+  return (typeof window.matchMedia === 'function' && window.matchMedia('(display-mode: standalone)').matches)
+    || window.navigator?.standalone === true;
+}
+
 function isSupported() {
-  return typeof window !== 'undefined'
-    && 'serviceWorker' in navigator
-    && 'PushManager' in window
-    && 'Notification' in window;
+  if (typeof window === 'undefined') return false;
+  if (!('serviceWorker' in navigator)) return false;
+  if (!('PushManager' in window)) return false;
+  if (!('Notification' in window)) return false;
+  // iOS deliberately blocks pushManager.subscribe outside an installed PWA.
+  // Treat that as "not supported here" so the UI surfaces install steps
+  // instead of an Enable button that would fail on tap.
+  if (isIOS() && !isStandalone()) return false;
+  return true;
+}
+
+// True when the device CAN do push but needs the user to install the PWA
+// to their home screen first (iOS Safari outside standalone mode).
+export function requiresIOSInstall() {
+  return isIOS() && !isStandalone();
 }
 
 async function getRegistration() {
@@ -77,6 +101,7 @@ async function deleteSubscriptionRow(endpoint) {
 
 export function usePushSubscription(userId) {
   const [supported]   = useState(() => isSupported());
+  const [iosNeedsInstall] = useState(() => requiresIOSInstall());
   const [permission, setPermission] = useState(() =>
     !isSupported() ? 'unsupported' : (typeof Notification !== 'undefined' ? Notification.permission : 'default')
   );
@@ -179,7 +204,7 @@ export function usePushSubscription(userId) {
     }
   }, [supported]);
 
-  return { supported, permission, subscribed, busy, error, subscribe, unsubscribe };
+  return { supported, iosNeedsInstall, permission, subscribed, busy, error, subscribe, unsubscribe };
 }
 
 // Helper for the diagnostic surface used in Settings: returns the rows the
