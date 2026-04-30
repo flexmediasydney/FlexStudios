@@ -14,6 +14,7 @@ import { toast } from 'sonner';
 // javascript:/data:/vbscript: URIs, base, form, meta, and HTML comments.
 import { sanitizeEditorHtml as sanitizeHtml } from '@/utils/sanitizeHtml';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
+import { notifyNoteMentions, notifyNoteReply } from './noteNotifications';
 
 export default function UnifiedNoteComposer({
   agencyId, projectId, agentId, teamId,
@@ -22,7 +23,9 @@ export default function UnifiedNoteComposer({
   isReply = false,
   parentNoteId = null,
   replyToAuthor = null,
+  parentNoteAuthorEmail = null,
   initialHtml = null,
+  initialMentions = null,
   noteId = null,
   onSave,
   onCancel,
@@ -33,7 +36,7 @@ export default function UnifiedNoteComposer({
   const fileInputRef = useRef(null);
   const mentionDropRef = useRef(null);
   const [editorEmpty, setEditorEmpty] = useState(!initialHtml);
-  const [mentions, setMentions] = useState([]);
+  const [mentions, setMentions] = useState(() => Array.isArray(initialMentions) ? initialMentions : []);
   const [attachments, setAttachments] = useState([]);
   const [uploadingFiles, setUploadingFiles] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -163,13 +166,39 @@ export default function UnifiedNoteComposer({
     const plainText = (el.innerText || el.textContent || '').trim();
     setSaving(true);
     try {
+      const ctxBase = {
+        contextType, contextLabel,
+        agencyId, projectId, agentId, teamId,
+        authorName: currentUser?.full_name,
+        authorUserId: currentUser?.id,
+      };
+
       if (noteId) {
+        // Edit: only fire notifications for NEWLY-added mentions vs initialMentions.
+        const previousIds = new Set(
+          (Array.isArray(initialMentions) ? initialMentions : [])
+            .map(m => m?.userId).filter(Boolean)
+        );
+        const newMentionIds = mentions
+          .map(m => m?.userId).filter(Boolean)
+          .filter(id => !previousIds.has(id));
+
         await retryWithBackoff(
-          () => api.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized }),
+          () => api.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized, mentions }),
           { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
         );
+
+        if (newMentionIds.length) {
+          notifyNoteMentions({
+            ...ctxBase,
+            mentionedUserIds: newMentionIds,
+            noteId,
+            noteContent: plainText,
+            isReply: !!parentNoteId,
+          }).catch(() => {});
+        }
       } else {
-        await retryWithBackoff(
+        const created = await retryWithBackoff(
           () => api.entities.OrgNote.create({
             agency_id: agencyId,
             ...(projectId && { project_id: projectId }),
@@ -189,6 +218,36 @@ export default function UnifiedNoteComposer({
           }),
           { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
         );
+        const createdId = created?.id || null;
+
+        const mentionedUserIds = mentions.map(m => m?.userId).filter(Boolean);
+
+        if (mentionedUserIds.length) {
+          notifyNoteMentions({
+            ...ctxBase,
+            mentionedUserIds,
+            noteId: createdId,
+            noteContent: plainText,
+            isReply: !!parentNoteId,
+          }).catch(() => {});
+        }
+
+        // Reply: notify the parent note's author too (skip if author replied to self
+        // or was already @mentioned in this reply).
+        if (parentNoteId && parentNoteAuthorEmail) {
+          const parentAuthor = users.find(u => u.email === parentNoteAuthorEmail);
+          if (parentAuthor?.id) {
+            notifyNoteReply({
+              ...ctxBase,
+              parentAuthorUserId: parentAuthor.id,
+              parentNoteId,
+              noteId: createdId,
+              noteContent: plainText,
+              alreadyMentionedUserIds: mentionedUserIds,
+            }).catch(() => {});
+          }
+        }
+
         // Auto-update agent's last_contacted_at
         if (agentId) {
           api.entities.Agent.update(agentId, {

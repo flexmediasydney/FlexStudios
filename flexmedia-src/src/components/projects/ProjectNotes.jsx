@@ -12,7 +12,8 @@ import { useCurrentUser } from "@/components/auth/PermissionGuard";
 import { Loader2, Paperclip, X, FileText, Music, Video, Image as ImageIcon, Send, AtSign } from "lucide-react";
 import { toast } from "sonner";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
-import { createNotification, writeFeedEvent } from "@/components/notifications/createNotification";
+import { writeFeedEvent } from "@/components/notifications/createNotification";
+import { notifyNoteMentions } from "@/components/notes/noteNotifications";
 
 export default function ProjectNotes({ projectId }) {
   const fileInputRef = useRef(null);
@@ -74,7 +75,7 @@ export default function ProjectNotes({ projectId }) {
     if (!noteContent.trim()) return;
 
     setSubmitting(true);
-    await createNoteMutation.mutateAsync({
+    const created = await createNoteMutation.mutateAsync({
       project_id: projectId,
       content: noteContent,
       attachments: selectedFiles,
@@ -87,23 +88,17 @@ export default function ProjectNotes({ projectId }) {
     if (mentions.length > 0) {
       const mentionedUserIds = allUsers
         .filter(u => mentions.includes(u.email))
-        .map(u => u.id)
-        .filter(id => id && id !== currentUser?.id);
+        .map(u => u.id);
 
-      for (const userId of mentionedUserIds) {
-        createNotification({
-          userId,
-          type: 'project_assigned_to_you',
-          title: `${currentUser?.full_name || 'Someone'} mentioned you in a note`,
-          message: noteContent.length > 80 ? noteContent.slice(0, 80) + '…' : noteContent,
-          projectId,
-          entityType: 'note',
-          ctaUrl: 'ProjectDetails',
-          ctaParams: { id: projectId },
-          sourceUserId: currentUser?.id,
-          idempotencyKey: `note_mention:${projectId}:${userId}:${Date.now()}`,
-        }).catch(() => {});
-      }
+      notifyNoteMentions({
+        mentionedUserIds,
+        noteId: created?.id,
+        noteContent,
+        contextType: 'project',
+        projectId,
+        authorName: currentUser?.full_name,
+        authorUserId: currentUser?.id,
+      }).catch(() => {});
     }
 
     // Feed event for note creation

@@ -20,6 +20,7 @@ const NOTIFICATION_CATEGORIES = {
   project:    { label: "Projects",   icon: "📁", color: "bg-violet-100 text-violet-700", description: "Stage changes, assignments, deliveries, pricing updates" },
   task:       { label: "Tasks",      icon: "📋", color: "bg-cyan-100 text-cyan-700", description: "Task assignments, deadlines, completions, auto-generation" },
   revision:   { label: "Revisions",  icon: "🔄", color: "bg-amber-100 text-amber-700", description: "Revision requests, approvals, stale revision alerts" },
+  notes:      { label: "Notes",      icon: "💬", color: "bg-pink-100 text-pink-700", description: "@mentions and replies on notes you're part of" },
   tonomo:     { label: "Tonomo",     icon: "⚡", color: "bg-emerald-100 text-emerald-700", description: "Booking arrivals, payments, mapping gaps, auto-approvals" },
   financial:  { label: "Financial",  icon: "💰", color: "bg-green-100 text-green-700", description: "Overdue invoices, payment receipts, first notices" },
   email:      { label: "Email",      icon: "📧", color: "bg-orange-100 text-orange-700", description: "Client emails, reply reminders, sync failures" },
@@ -61,6 +62,9 @@ const NOTIFICATION_TYPES_LIST = [
   { type: "revision_stale_48h",          category: "revision",   label: "Revision open 48+ hours" },
   { type: "revision_all_resolved",       category: "revision",   label: "All revisions resolved" },
   { type: "change_request_created",      category: "revision",   label: "New change request" },
+  // Notes
+  { type: "note_mention",                category: "notes",      label: "@mentioned in a note or comment" },
+  { type: "note_reply",                  category: "notes",      label: "Reply on your note" },
   // Tonomo / Bookings
   { type: "booking_arrived_pending_review", category: "tonomo",  label: "New booking pending review" },
   { type: "booking_cancellation",        category: "tonomo",     label: "Booking cancelled" },

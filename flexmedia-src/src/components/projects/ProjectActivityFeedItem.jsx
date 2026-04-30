@@ -316,6 +316,7 @@ export default function ProjectActivityFeedItem({
                           isReply
                           parentNoteId={item._raw.id}
                           replyToAuthor={item._raw.author_name}
+                          parentNoteAuthorEmail={item._raw.author_email}
                           onSave={() => { setIsReplying(false); onNoteRefresh?.(); }}
                           onCancel={() => setIsReplying(false)}
                         />

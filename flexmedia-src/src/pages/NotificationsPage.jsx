@@ -20,6 +20,7 @@ const CATEGORY_TABS = [
   { value: "task",       label: "Tasks",    icon: "📋" },
   { value: "project",    label: "Projects", icon: "📁" },
   { value: "revision",   label: "Revisions",icon: "🔄" },
+  { value: "notes",      label: "Notes",    icon: "💬" },
   { value: "tonomo",     label: "Tonomo",   icon: "⚡" },
   { value: "financial",  label: "Financial",icon: "💰" },
   { value: "scheduling", label: "Scheduling",icon:"📅" },

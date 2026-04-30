@@ -43,6 +43,7 @@ const CATEGORY_ICON = {
   task:       "📋",
   project:    "📁",
   revision:   "🔄",
+  notes:      "💬",
   tonomo:     "⚡",
   financial:  "💰",
   scheduling: "📅",

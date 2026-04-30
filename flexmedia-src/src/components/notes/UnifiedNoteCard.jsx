@@ -278,6 +278,7 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
             currentUser={currentUser}
             noteId={note.id}
             initialHtml={note.content_html || note.content}
+            initialMentions={Array.isArray(note.mentions) ? note.mentions : []}
             onSave={() => { setIsEditing(false); onRefresh?.(); }}
             onCancel={() => setIsEditing(false)}
           />
@@ -347,6 +348,7 @@ export default function UnifiedNoteCard({ note, replies = [], showContext, onRef
                 isReply
                 parentNoteId={note.id}
                 replyToAuthor={note.author_name}
+                parentNoteAuthorEmail={note.author_email}
                 onSave={() => { setIsReplying(false); onRefresh?.(); }}
                 onCancel={() => setIsReplying(false)}
               />

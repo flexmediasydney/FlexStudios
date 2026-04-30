@@ -72,6 +72,9 @@ const TYPE_CONFIG = {
   schema_warning:                 { category: "system",     severity: "warning",  ctaLabel: "View Tonomo" },
   rule_engine_error:              { category: "system",     severity: "critical", ctaLabel: "View Automation" },
   timer_running_warning:          { category: "task",       severity: "warning",  ctaLabel: "View Task" },
+  // notes
+  note_mention:                   { category: "notes",      severity: "info",     ctaLabel: "View Note" },
+  note_reply:                     { category: "notes",      severity: "info",     ctaLabel: "View Note" },
 };
 
 /**
