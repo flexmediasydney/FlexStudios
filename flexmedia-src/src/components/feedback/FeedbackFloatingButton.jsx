@@ -16,11 +16,11 @@ export default function FeedbackFloatingButton() {
   const [hover, setHover] = useState(false);
   const location = useLocation();
 
-  // Hide on the Feedback page itself. The registered route is /Feedback; an
-  // explicit /feedback redirect sends visitors to /Feedback so either form
-  // still matches after normalisation.
+  // Hide on the Feedback page itself. The registered route is /Feedback2;
+  // legacy /feedback and /Feedback both redirect there, so this path check
+  // covers all entry forms after normalisation.
   const path = (location.pathname || '').toLowerCase().replace(/\/+$/, '');
-  if (path === '/feedback') return null;
+  if (path === '/feedback' || path === '/feedback2') return null;
 
   return (
     <>

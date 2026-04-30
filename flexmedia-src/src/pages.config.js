@@ -89,7 +89,7 @@ const DroneCommandCenter = React.lazy(() => import('./pages/DroneCommandCenter')
 const DronePinEditor = React.lazy(() => import('./pages/DronePinEditor'));
 const DroneBoundaryEditor = React.lazy(() => import('./pages/DroneBoundaryEditor'));
 const ProjectLocationPage = React.lazy(() => import('./pages/ProjectLocationPage'));
-const Feedback = React.lazy(() => import('./pages/Feedback'));
+const Feedback2 = React.lazy(() => import('./pages/Feedback2'));
 const FieldMode = React.lazy(() => import('./pages/FieldMode'));
 const NotificationsPage = React.lazy(() => import('./pages/NotificationsPage'));
 const NotificationsPulse = React.lazy(() => import('./pages/NotificationsPulse'));
@@ -165,7 +165,7 @@ export const PAGES = {
     "EmailSyncSettings": EmailSyncSettings,
     "SettingsEmailSyncHealth": SettingsEmailSyncHealth,
     "SettingsOperationsHealth": SettingsOperationsHealth,
-    "Feedback": Feedback,
+    "Feedback2": Feedback2,
     "FieldMode": FieldMode,
     "GoalDetails": GoalDetails,
     "Goals": Goals,

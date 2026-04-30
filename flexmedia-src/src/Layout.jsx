@@ -267,7 +267,7 @@ function LayoutContent({ currentPageName, children }) {
               can("NotificationsPulse") && { name: "Pulse", href: "NotificationsPulse", icon: Activity },
             ].filter(Boolean)
           },
-          can("Feedback") && { name: "Feedback", href: "Feedback", icon: MessageSquareWarning },
+          can("Feedback2") && { name: "Feedback", href: "Feedback2", icon: MessageSquareWarning },
         ].filter(Boolean)
       },
       {
@@ -564,7 +564,7 @@ function LayoutContent({ currentPageName, children }) {
       <NotificationToast />
       {/* Global Quick Log Touchpoint (Ctrl+Shift+L) */}
       <QuickLogTouchpoint open={quickLogOpen} onClose={() => setQuickLogOpen(false)} />
-      {/* Global Feedback "Report" button — hidden on /Feedback to avoid redundancy */}
+      {/* Global Feedback "Report" button — hidden on /Feedback2 to avoid redundancy */}
       <FeedbackFloatingButton />
       {/* Skip to content link for keyboard navigation */}
       <a

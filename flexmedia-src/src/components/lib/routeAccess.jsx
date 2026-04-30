@@ -97,7 +97,7 @@ export const ROUTE_ACCESS = {
   BountyBoard: ALL_LEVELS,
   InternalRoadmap: ALL_LEVELS,
   Favorites: ALL_LEVELS,
-  Feedback: ALL_LEVELS,
+  Feedback2: ALL_LEVELS,
 
   // ── SETTINGS (admin+) ────────────────────────────────────
   Settings: ADMIN_AND_ABOVE,
