@@ -1,13 +1,16 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, Bell, Settings, History, ChevronDown, ChevronRight, Mail } from "lucide-react";
+import { ArrowLeft, Bell, Settings, History, ChevronDown, ChevronRight, Mail, Smartphone, Loader2 } from "lucide-react";
+import { usePushSubscription } from "@/lib/usePushSubscription";
 
-// Notification types that enqueue an email when the recipient is offline.
-// Must stay in sync with the FALLBACK_ELIGIBLE set in the
-// sendNotificationEmails edge function and the trigger whitelist in
-// migration 364_notification_email_fallback.sql.
+// Notification types that enqueue an email when the recipient is offline,
+// and types that fire a Web Push to subscribed devices. Must stay in sync
+// with the FALLBACK_ELIGIBLE constants in the sendNotificationEmails and
+// sendPushNotifications edge functions plus the trigger whitelists in
+// migrations 364 and 365.
 const EMAIL_FALLBACK_ELIGIBLE = new Set(['note_mention', 'note_reply']);
+const PUSH_ELIGIBLE = new Set(['note_mention', 'note_reply']);
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -103,6 +106,64 @@ const NOTIFICATION_TYPES_LIST = [
   { type: "engine_error",               category: "system",     label: "System engine error" },
 ];
 
+function PushDeviceCard({ userId }) {
+  const { supported, permission, subscribed, busy, error, subscribe, unsubscribe } = usePushSubscription(userId);
+
+  // We hide the card entirely on browsers that can't do Web Push at all
+  // (no SW or no PushManager). On iOS, this also covers regular Safari —
+  // the card only renders inside the installed PWA where push works.
+  if (!supported) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2"><Smartphone className="h-4 w-4" /> Push Notifications</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            This browser doesn't support push notifications. On iPhone, install FlexStudios to your home screen
+            (Share → Add to Home Screen) and open it from there to enable push.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  let statusText = '';
+  let statusTone = 'text-muted-foreground';
+  if (subscribed)              { statusText = 'Push notifications are enabled on this device.'; statusTone = 'text-green-700 dark:text-green-400'; }
+  else if (permission === 'granted') statusText = 'Permission granted, but this device isn\'t subscribed yet.';
+  else if (permission === 'denied')  { statusText = 'Notifications are blocked. To enable: open device Settings → FlexStudios → Notifications → Allow.'; statusTone = 'text-amber-700 dark:text-amber-400'; }
+  else                              statusText = 'Get an alert on your phone\'s lock screen when you\'re @-mentioned.';
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2"><Smartphone className="h-4 w-4" /> Push Notifications</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className={`text-sm ${statusTone}`}>{statusText}</p>
+        {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+        <div className="flex gap-2">
+          {subscribed ? (
+            <Button variant="outline" size="sm" onClick={unsubscribe} disabled={busy}>
+              {busy ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+              Disable on this device
+            </Button>
+          ) : (
+            <Button size="sm" onClick={subscribe} disabled={busy || permission === 'denied'}>
+              {busy ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : null}
+              Enable push notifications
+            </Button>
+          )}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          You'll see a system permission prompt the first time. iOS only allows it inside the installed PWA.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 function MyPreferencesTab({ userId }) {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(new Set(["scheduling", "task"]));
@@ -167,6 +228,21 @@ function MyPreferencesTab({ userId }) {
     onError: (err) => toast.error(err?.message || 'Failed to save email preference'),
   });
 
+  const savePushPrefMutation = useMutation({
+    mutationFn: async ({ type, category, enabled }) => {
+      const existing = prefs.find(p => p.user_id === userId && p.notification_type === type);
+      if (existing) {
+        return api.entities.NotificationPreference.update(existing.id, { push_enabled: enabled });
+      } else {
+        return api.entities.NotificationPreference.create({
+          user_id: userId, notification_type: type, category, push_enabled: enabled
+        });
+      }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifPrefs", userId] }),
+    onError: (err) => toast.error(err?.message || 'Failed to save push preference'),
+  });
+
   const saveCategoryMutation = useMutation({
     mutationFn: async ({ category, enabled }) => {
       const existing = prefs.find(
@@ -220,6 +296,15 @@ function MyPreferencesTab({ userId }) {
     return EMAIL_FALLBACK_ELIGIBLE.has(type);
   }
 
+  function getPushPref(type) {
+    // Default ON for push-eligible types when no explicit preference exists
+    // (matches the edge-function default in sendPushNotifications).
+    const p = prefs.find(x => x.user_id === userId && x.notification_type === type);
+    if (p?.push_enabled === true) return true;
+    if (p?.push_enabled === false) return false;
+    return PUSH_ELIGIBLE.has(type);
+  }
+
   const grouped = useMemo(() => {
     const g = {};
     for (const t of NOTIFICATION_TYPES_LIST) {
@@ -231,6 +316,7 @@ function MyPreferencesTab({ userId }) {
 
   return (
     <div className="space-y-6">
+      <PushDeviceCard userId={userId} />
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Delivery Options</CardTitle>
@@ -364,10 +450,23 @@ function MyPreferencesTab({ userId }) {
                   <div className="border-t divide-y">
                     {types.map(t => {
                       const emailEligible = EMAIL_FALLBACK_ELIGIBLE.has(t.type);
+                      const pushEligible  = PUSH_ELIGIBLE.has(t.type);
                       return (
                         <div key={t.type} className={`flex items-center justify-between gap-3 px-4 py-2.5 pl-12 ${!catEnabled ? "opacity-50" : ""}`}>
                           <Label className="text-sm font-normal cursor-pointer flex-1 min-w-0">{t.label}</Label>
                           <div className="flex items-center gap-5 shrink-0">
+                            {pushEligible ? (
+                              <div className="flex items-center gap-1.5" title="Push notification on installed devices">
+                                <Smartphone className="h-3.5 w-3.5 text-muted-foreground" />
+                                <Switch
+                                  checked={getPushPref(t.type)}
+                                  onCheckedChange={v => savePushPrefMutation.mutate({ type: t.type, category, enabled: v })}
+                                  disabled={!catEnabled || !getPref(t.type, category)}
+                                />
+                              </div>
+                            ) : (
+                              <span className="w-[58px]" aria-hidden="true" />
+                            )}
                             {emailEligible ? (
                               <div className="flex items-center gap-1.5" title="Email me when I'm offline">
                                 <Mail className="h-3.5 w-3.5 text-muted-foreground" />

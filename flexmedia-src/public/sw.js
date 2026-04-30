@@ -1,4 +1,4 @@
-const CACHE_VERSION = 2;
+const CACHE_VERSION = 3;
 const CACHE_NAME = `flexstudios-v${CACHE_VERSION}`;
 const STATIC_ASSETS = [
   '/',
@@ -93,4 +93,71 @@ self.addEventListener('fetch', (event) => {
   // API calls and other requests: network-only (do NOT cache dynamic data)
   // This prevents stale Supabase/API responses from being served from cache
   event.respondWith(fetch(request));
+});
+
+// ─── Web Push (RFC 8030) ──────────────────────────────────────────────────────
+//
+// `push` fires when the OS delivers a push from our edge function. We render
+// an OS-level notification (lock screen banner / notification center entry).
+//
+// `notificationclick` fires when the user taps it — we focus an existing
+// FlexStudios tab if one exists, otherwise open a new one at the deep-link
+// URL the edge function sent.
+//
+// Payload contract (set by sendNotificationEmails-equivalent edge fn):
+//   { title, body, url, tag?, notificationId?, icon? }
+
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+
+  let payload = {};
+  try { payload = event.data.json(); } catch { payload = { title: 'FlexStudios', body: event.data.text() }; }
+
+  const title = payload.title || 'FlexStudios';
+  const options = {
+    body: payload.body || '',
+    icon: payload.icon || '/icons/icon-192x192.png',
+    badge: payload.badge || '/icons/icon-192x192.png',
+    tag: payload.tag,                  // collapses duplicate notifications for the same target
+    data: { url: payload.url || '/', notificationId: payload.notificationId || null },
+    requireInteraction: false,
+    vibrate: [180, 80, 180],
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || '/';
+
+  event.waitUntil((async () => {
+    const allClients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    // Prefer focusing an existing tab on the same origin, then navigate it.
+    for (const client of allClients) {
+      try {
+        const u = new URL(client.url);
+        if (u.origin === self.location.origin) {
+          await client.focus();
+          if ('navigate' in client) await client.navigate(targetUrl).catch(() => {});
+          return;
+        }
+      } catch { /* ignore malformed url */ }
+    }
+    if (self.clients.openWindow) {
+      await self.clients.openWindow(targetUrl);
+    }
+  })());
+});
+
+// Some browsers fire `pushsubscriptionchange` when the subscription is
+// invalidated server-side (key rotation, browser data clear, etc). When we
+// see this, post a message to any open clients so they can re-subscribe and
+// PUT the new endpoint to our DB. If no clients are open, the next app
+// session will pick it up via usePushSubscription.
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil((async () => {
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    clients.forEach(c => c.postMessage({ type: 'PUSH_SUBSCRIPTION_CHANGE' }));
+  })());
 });
