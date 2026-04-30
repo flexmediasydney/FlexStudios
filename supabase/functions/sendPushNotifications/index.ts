@@ -22,7 +22,22 @@
 import { getAdminClient, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 import webpush from 'https://esm.sh/web-push@3.6.7';
 
-const FALLBACK_ELIGIBLE = new Set(['note_mention', 'note_reply']);
+// Default-on type set. Must stay in sync with public._notif_push_default_on
+// in migration 367_notification_push_email_full_coverage.sql and the
+// PUSH_DEFAULT_ON set in flexmedia-src/src/pages/SettingsNotifications.jsx.
+const PUSH_DEFAULT_ON = new Set([
+  'note_mention','note_reply',
+  'task_assigned','task_overdue','task_deadline_approaching','task_dependency_unblocked',
+  'project_assigned_to_you','project_owner_assigned',
+  'photographer_assigned',
+  'timer_running_warning',
+  'booking_arrived_pending_review','booking_urgent_review',
+  'booking_cancellation','booking_no_photographer',
+  'revision_created','revision_urgent','change_request_created',
+  'shoot_moved_to_onsite','shoot_overdue','shoot_date_changed','reschedule_advanced_stage',
+  'calendar_event_conflict',
+  'email_requires_reply',
+]);
 const APP_URL = (Deno.env.get('NOTIFICATION_APP_URL') || 'https://flexstudios.app').replace(/\/+$/, '');
 
 const VAPID_PUBLIC  = Deno.env.get('VAPID_PUBLIC_KEY')  || '';
@@ -37,6 +52,7 @@ interface NotificationRow {
   id: string;
   user_id: string;
   type: string;
+  category: string | null;
   title: string;
   message: string | null;
   cta_url: string | null;
@@ -88,30 +104,31 @@ serveWithAudit('sendPushNotifications', async (req) => {
   // 1. Hydrate the notification.
   const { data: notif, error: nErr } = await admin
     .from('notifications')
-    .select('id, user_id, type, title, message, cta_url, cta_params')
+    .select('id, user_id, type, category, title, message, cta_url, cta_params')
     .eq('id', notificationId)
     .single();
   if (nErr || !notif) return errorResponse(`notification not found: ${nErr?.message || notificationId}`, 404);
 
-  if (!FALLBACK_ELIGIBLE.has((notif as NotificationRow).type)) {
-    return jsonResponse({ ok: true, skipped: 'type_not_eligible' });
-  }
   if (!(notif as NotificationRow).user_id) {
     return jsonResponse({ ok: true, skipped: 'no_user_id' });
   }
 
-  // 2. Check the user's preference (default ON for fallback-eligible types).
+  // 2. Resolve effective preference for this user × this type.
+  // Trigger has already gated by default-ON ∪ explicit-ON, so we only
+  // re-check here to honour an explicit OFF override that landed in the
+  // window between trigger and send.
+  const n = notif as NotificationRow & { category?: string };
   const { data: prefs = [] } = await admin
     .from('notification_preferences')
     .select('notification_type, category, push_enabled')
-    .eq('user_id', (notif as NotificationRow).user_id);
+    .eq('user_id', n.user_id);
 
-  const typePref = (prefs as any[]).find(p => p.notification_type === (notif as NotificationRow).type);
-  const catPref  = (prefs as any[]).find(p => p.category === 'notes' && (!p.notification_type || p.notification_type === '*'));
+  const typePref = (prefs as any[]).find(p => p.notification_type === n.type);
+  const catPref  = (prefs as any[]).find(p => p.category && p.category === (n as any).category && (!p.notification_type || p.notification_type === '*'));
   let allowed: boolean;
   if (typePref?.push_enabled === true || typePref?.push_enabled === false) allowed = typePref.push_enabled;
   else if (catPref?.push_enabled === true || catPref?.push_enabled === false) allowed = catPref.push_enabled;
-  else allowed = true; // default ON for fallback-eligible types
+  else allowed = PUSH_DEFAULT_ON.has(n.type);
   if (!allowed) return jsonResponse({ ok: true, skipped: 'pref_disabled' });
 
   // 3. Pull the user's subscriptions.

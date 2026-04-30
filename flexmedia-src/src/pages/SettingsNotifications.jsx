@@ -4,13 +4,33 @@ import { toast } from "sonner";
 import { ArrowLeft, Bell, Settings, History, ChevronDown, ChevronRight, Mail, Smartphone, Loader2 } from "lucide-react";
 import { usePushSubscription } from "@/lib/usePushSubscription";
 
-// Notification types that enqueue an email when the recipient is offline,
-// and types that fire a Web Push to subscribed devices. Must stay in sync
-// with the FALLBACK_ELIGIBLE constants in the sendNotificationEmails and
-// sendPushNotifications edge functions plus the trigger whitelists in
-// migrations 364 and 365.
-const EMAIL_FALLBACK_ELIGIBLE = new Set(['note_mention', 'note_reply']);
-const PUSH_ELIGIBLE = new Set(['note_mention', 'note_reply']);
+// Default-on type sets for email + push delivery. Must stay in sync with
+// the matching constants in sendNotificationEmails/index.ts,
+// sendPushNotifications/index.ts, and the SQL helpers
+// _notif_push_default_on / _notif_email_default_on in migration 367.
+//
+// Every notification type is *available* via every channel — these sets
+// only decide what's pre-checked for users who haven't picked their own
+// preference. An explicit user pref always wins over the default.
+const PUSH_DEFAULT_ON = new Set([
+  'note_mention','note_reply',
+  'task_assigned','task_overdue','task_deadline_approaching','task_dependency_unblocked',
+  'project_assigned_to_you','project_owner_assigned',
+  'photographer_assigned',
+  'timer_running_warning',
+  'booking_arrived_pending_review','booking_urgent_review',
+  'booking_cancellation','booking_no_photographer',
+  'revision_created','revision_urgent','change_request_created',
+  'shoot_moved_to_onsite','shoot_overdue','shoot_date_changed','reschedule_advanced_stage',
+  'calendar_event_conflict',
+  'email_requires_reply',
+]);
+const EMAIL_DEFAULT_ON = new Set([
+  ...PUSH_DEFAULT_ON,
+  'invoice_overdue_7d','invoice_overdue_14d','payment_received','payment_overdue_first',
+  'revision_stale_48h',
+  'email_received_from_client','email_sync_failed',
+]);
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -313,21 +333,21 @@ function MyPreferencesTab({ userId }) {
   }
 
   function getEmailPref(type) {
-    // Default ON for fallback-eligible types when no explicit preference exists
-    // (matches the edge-function default in sendNotificationEmails).
+    // Default ON for the EMAIL_DEFAULT_ON set when no explicit preference
+    // exists (matches the edge-function + trigger default-on policy).
     const p = prefs.find(x => x.user_id === userId && x.notification_type === type);
     if (p?.email_enabled === true) return true;
     if (p?.email_enabled === false) return false;
-    return EMAIL_FALLBACK_ELIGIBLE.has(type);
+    return EMAIL_DEFAULT_ON.has(type);
   }
 
   function getPushPref(type) {
-    // Default ON for push-eligible types when no explicit preference exists
-    // (matches the edge-function default in sendPushNotifications).
+    // Default ON for the PUSH_DEFAULT_ON set when no explicit preference
+    // exists (matches the edge-function + trigger default-on policy).
     const p = prefs.find(x => x.user_id === userId && x.notification_type === type);
     if (p?.push_enabled === true) return true;
     if (p?.push_enabled === false) return false;
-    return PUSH_ELIGIBLE.has(type);
+    return PUSH_DEFAULT_ON.has(type);
   }
 
   const grouped = useMemo(() => {
@@ -473,49 +493,37 @@ function MyPreferencesTab({ userId }) {
 
                 {isExpanded && (
                   <div className="border-t divide-y">
-                    {types.map(t => {
-                      const emailEligible = EMAIL_FALLBACK_ELIGIBLE.has(t.type);
-                      const pushEligible  = PUSH_ELIGIBLE.has(t.type);
-                      return (
-                        <div key={t.type} className={`flex items-center justify-between gap-3 px-4 py-2.5 pl-12 ${!catEnabled ? "opacity-50" : ""}`}>
-                          <Label className="text-sm font-normal cursor-pointer flex-1 min-w-0">{t.label}</Label>
-                          <div className="flex items-center gap-5 shrink-0">
-                            {pushEligible ? (
-                              <div className="flex items-center gap-1.5" title="Push notification on installed devices">
-                                <Smartphone className="h-3.5 w-3.5 text-muted-foreground" />
-                                <Switch
-                                  checked={getPushPref(t.type)}
-                                  onCheckedChange={v => savePushPrefMutation.mutate({ type: t.type, category, enabled: v })}
-                                  disabled={!catEnabled || !getPref(t.type, category)}
-                                />
-                              </div>
-                            ) : (
-                              <span className="w-[58px]" aria-hidden="true" />
-                            )}
-                            {emailEligible ? (
-                              <div className="flex items-center gap-1.5" title="Email me when I'm offline">
-                                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
-                                <Switch
-                                  checked={getEmailPref(t.type)}
-                                  onCheckedChange={v => saveEmailPrefMutation.mutate({ type: t.type, category, enabled: v })}
-                                  disabled={!catEnabled || !getPref(t.type, category)}
-                                />
-                              </div>
-                            ) : (
-                              <span className="w-[58px]" aria-hidden="true" />
-                            )}
-                            <div className="flex items-center gap-1.5" title="In-app notification">
-                              <Bell className="h-3.5 w-3.5 text-muted-foreground" />
-                              <Switch
-                                checked={getPref(t.type, category)}
-                                onCheckedChange={v => savePrefMutation.mutate({ type: t.type, category, enabled: v })}
-                                disabled={!catEnabled}
-                              />
-                            </div>
+                    {types.map(t => (
+                      <div key={t.type} className={`flex items-center justify-between gap-3 px-4 py-2.5 pl-12 ${!catEnabled ? "opacity-50" : ""}`}>
+                        <Label className="text-sm font-normal cursor-pointer flex-1 min-w-0">{t.label}</Label>
+                        <div className="flex items-center gap-5 shrink-0">
+                          <div className="flex items-center gap-1.5" title="Push notification on installed devices">
+                            <Smartphone className="h-3.5 w-3.5 text-muted-foreground" />
+                            <Switch
+                              checked={getPushPref(t.type)}
+                              onCheckedChange={v => savePushPrefMutation.mutate({ type: t.type, category, enabled: v })}
+                              disabled={!catEnabled || !getPref(t.type, category)}
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5" title="Email me when I'm offline">
+                            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                            <Switch
+                              checked={getEmailPref(t.type)}
+                              onCheckedChange={v => saveEmailPrefMutation.mutate({ type: t.type, category, enabled: v })}
+                              disabled={!catEnabled || !getPref(t.type, category)}
+                            />
+                          </div>
+                          <div className="flex items-center gap-1.5" title="In-app notification">
+                            <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+                            <Switch
+                              checked={getPref(t.type, category)}
+                              onCheckedChange={v => savePrefMutation.mutate({ type: t.type, category, enabled: v })}
+                              disabled={!catEnabled}
+                            />
                           </div>
                         </div>
-                      );
-                    })}
+                      </div>
+                    ))}
                   </div>
                 )}
               </CardContent>

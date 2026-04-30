@@ -14,7 +14,26 @@
 
 import { getAdminClient, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
-const FALLBACK_ELIGIBLE = new Set(['note_mention', 'note_reply']);
+// Default-on type set. Must stay in sync with public._notif_email_default_on
+// in migration 367_notification_push_email_full_coverage.sql and the
+// EMAIL_DEFAULT_ON set in flexmedia-src/src/pages/SettingsNotifications.jsx.
+const EMAIL_DEFAULT_ON = new Set([
+  'note_mention','note_reply',
+  'task_assigned','task_overdue','task_deadline_approaching','task_dependency_unblocked',
+  'project_assigned_to_you','project_owner_assigned',
+  'photographer_assigned',
+  'timer_running_warning',
+  'booking_arrived_pending_review','booking_urgent_review',
+  'booking_cancellation','booking_no_photographer',
+  'revision_created','revision_urgent','change_request_created',
+  'shoot_moved_to_onsite','shoot_overdue','shoot_date_changed','reschedule_advanced_stage',
+  'calendar_event_conflict',
+  'email_requires_reply',
+  // Additionally:
+  'invoice_overdue_7d','invoice_overdue_14d','payment_received','payment_overdue_first',
+  'revision_stale_48h',
+  'email_received_from_client','email_sync_failed',
+]);
 const ACTIVE_WINDOW_MINUTES = 2;
 const BATCH_SIZE = 50;
 const MAX_ATTEMPTS = 3;
@@ -35,6 +54,7 @@ interface NotificationRow {
   id: string;
   user_id: string;
   type: string;
+  category: string | null;
   title: string;
   message: string | null;
   is_read: boolean;
@@ -176,7 +196,7 @@ serveWithAudit('sendNotificationEmails', async (req) => {
   const userIds  = [...new Set(due.map(r => r.user_id))];
 
   const [{ data: notifications = [] }, { data: users = [] }, { data: prefs = [] }] = await Promise.all([
-    admin.from('notifications').select('id, user_id, type, title, message, is_read, is_dismissed, cta_url, cta_label, cta_params').in('id', notifIds),
+    admin.from('notifications').select('id, user_id, type, category, title, message, is_read, is_dismissed, cta_url, cta_label, cta_params').in('id', notifIds),
     admin.from('users').select('id, email, full_name, last_seen_at, is_active').in('id', userIds),
     admin.from('notification_preferences').select('user_id, notification_type, category, email_enabled').in('user_id', userIds),
   ]);
@@ -229,14 +249,15 @@ serveWithAudit('sendNotificationEmails', async (req) => {
       skipped++; continue;
     }
 
-    // Preference resolution: explicit type overrides explicit category overrides default(true)
-    // for fallback-eligible types only.
+    // Preference resolution: explicit type pref wins, then category-wildcard
+    // pref, otherwise the per-type default (matches the trigger-side gate
+    // and the SettingsNotifications UI default-on policy).
     let allowed: boolean;
     const typePref = prefByKey[`type:${u.id}:${n.type}`];
-    const catPref  = prefByKey[`cat:${u.id}:notes`];
+    const catPref  = n.category ? prefByKey[`cat:${u.id}:${n.category}`] : null;
     if (typePref === true || typePref === false) allowed = typePref;
     else if (catPref === true || catPref === false) allowed = catPref;
-    else allowed = FALLBACK_ELIGIBLE.has(n.type); // default
+    else allowed = EMAIL_DEFAULT_ON.has(n.type);
 
     if (!allowed) {
       await admin.from('notification_email_queue').update({ status: 'skipped', skip_reason: 'pref_disabled', updated_at: completedAt }).eq('id', row.id);
