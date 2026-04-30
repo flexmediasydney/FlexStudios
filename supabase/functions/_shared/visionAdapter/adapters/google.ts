@@ -130,16 +130,22 @@ export function buildGeminiBody(req: VisionRequest): Record<string, unknown> {
 
   // Gemini 2.5 Pro defaults to dynamic (-1) thinking budget — internal
   // reasoning tokens are consumed FROM `maxOutputTokens` BEFORE visible
-  // output. With a 1500-token budget the model burned ~1000 thinking and
-  // truncated the JSON body mid-`analysis`. We pin thinking to its
-  // floor (128 for 2.5 Pro; 2.5 Flash accepts 0) and turn off `includeThoughts`
-  // so the budget primarily produces actual output. With max_output_tokens=4000
-  // this leaves ~3872 tokens for JSON — plenty.
+  // output. We control budget explicitly per model.
   //
-  // Pro requires a non-zero budget ("This model only works in thinking mode"),
-  // so we route by model name. Flash and Lite tolerate 0.
+  // Iteration history:
+  //   - 1st pass: default dynamic → 75% truncation as Pro burned ~1000 tokens
+  //   - 2nd pass: thinkingBudget=0 → 400 INVALID_ARGUMENT, Pro requires non-zero
+  //   - 3rd pass: thinkingBudget=128 (floor) → 42/42 ok but terse output (avg
+  //     692 chars analysis vs Opus 1358; 4.5 objects vs 7.8)
+  //   - 4th pass (here): thinkingBudget=1024 for Pro → enough headroom to
+  //     enumerate architectural detail under the iter-4 minItems=8 schema
+  //     and the master-architectural-photographer granularity directive.
+  //     With max_output_tokens=4000, ~2976 tokens remain for output —
+  //     plenty for ~250-word analysis + 8–12 multi-noun key_elements.
+  //
+  // Pro requires a non-zero budget. Flash and Lite tolerate 0.
   const isProModel = /gemini-2\.5-pro/i.test(req.model);
-  const thinkingBudget = isProModel ? 128 : 0;
+  const thinkingBudget = isProModel ? 1024 : 0;
   const body: Record<string, unknown> = {
     systemInstruction: { parts: [{ text: req.system }] },
     contents,

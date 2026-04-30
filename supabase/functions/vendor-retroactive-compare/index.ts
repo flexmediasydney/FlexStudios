@@ -279,24 +279,100 @@ async function fetchPreviewBase64(
  * patternProperties, no additionalProperties: keep it flat).
  */
 const COMPARISON_TOOL_NAME = 'classify_image';
+/**
+ * Iteration 4: schema enriched with `description` fields and `minItems`.
+ *
+ * The first three iterations let `key_elements` default to terse single
+ * nouns on Gemini ('window', 'desk') vs Opus's verbose noun phrases
+ * ('window with venetian blinds', 'shaker-style cabinetry'). Both Anthropic
+ * tool-use and Gemini responseSchema honour `description` fields on
+ * properties — using them to specify granularity, content rules, and
+ * forbidden patterns is the cheapest way to align verbosity across vendors.
+ *
+ * Per-property guidance:
+ *   - analysis: 5–7 detailed sentences, ~250 words minimum, no nested JSON
+ *     (Opus emitted a stringified JSON-in-string at 1/42 in iter 3)
+ *   - key_elements: minItems=8, multi-noun phrases with material/treatment
+ *     descriptors, single-noun entries forbidden
+ *   - zones_visible: minItems=2, area names not object names
+ *   - clutter_detail: prose explanation, not a list
+ */
 const COMPARISON_TOOL_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    analysis: { type: 'string' },
-    room_type: { type: 'string' },
+    analysis: {
+      type: 'string',
+      description:
+        'Write 5–7 detailed sentences (~250 words minimum) covering: ' +
+        '(1) composition geometry, vantage and depth layering; ' +
+        '(2) lighting condition, exposure stage (single bracket vs final HDR), and tonal balance; ' +
+        '(3) distinguishing architectural features and materials with specific descriptors ' +
+        '(e.g. "Corinthian column with capital", "terracotta hipped roof", "shaker cabinetry", ' +
+        '"gooseneck mixer tap" — NOT generic nouns like "column", "roof", "cabinetry"); ' +
+        '(4) styling state, distractions, clutter, and retouch concerns; ' +
+        '(5) hero-shot vs supporting-angle judgement with reasoning. ' +
+        'Do NOT emit nested JSON — return only the descriptive paragraph as a single string.',
+    },
+    room_type: {
+      type: 'string',
+      description:
+        'Use one room_type value from the canonical taxonomy in the system prompt. ' +
+        'Prefer the most specific applicable value — e.g. bedroom_guest over bedroom_secondary ' +
+        'when the bedroom is clearly a formally-styled spare room; alfresco_undercover over alfresco ' +
+        'when the alfresco is roofed; exterior_facade_hero over exterior_front when the shot is ' +
+        'a hero-quality framing of the front facade.',
+    },
     room_type_confidence: { type: 'number' },
-    composition_type: { type: 'string' },
-    vantage_point: { type: 'string' },
+    composition_type: {
+      type: 'string',
+      description: 'Use one value from the composition_type taxonomy in the system prompt.',
+    },
+    vantage_point: {
+      type: 'string',
+      description:
+        'Use one of: interior_looking_out | exterior_looking_in | neutral | ' +
+        'low_angle | high_angle | eye_level_through_threshold | aerial_oblique | aerial_nadir.',
+    },
     time_of_day: { type: 'string' },
     is_drone: { type: 'boolean' },
     is_exterior: { type: 'boolean' },
     is_detail_shot: { type: 'boolean' },
-    zones_visible: { type: 'array', items: { type: 'string' } },
-    key_elements: { type: 'array', items: { type: 'string' } },
+    zones_visible: {
+      type: 'array',
+      minItems: 2,
+      description:
+        'List of distinct functional zones visible in the frame ' +
+        '(e.g. "kitchen", "dining_zone", "alfresco_through_doors", "study_through_archway"). ' +
+        'Different from key_elements — these are AREAS, not objects.',
+      items: { type: 'string' },
+    },
+    key_elements: {
+      type: 'array',
+      minItems: 8,
+      description:
+        'List 8 OR MORE specific architectural and styling elements visible in the frame. ' +
+        'Each entry MUST be a multi-noun phrase that includes a material, treatment, style or ' +
+        'descriptor — NOT a generic single noun. ' +
+        'GOOD: "casement window with venetian blinds", "four-poster bed with timber frame", ' +
+        '"patterned Persian rug", "shaker-style cabinetry", "gooseneck mixer tap", ' +
+        '"terracotta tiled hipped roof", "Corinthian column with capital", ' +
+        '"variegated red-brown brick veneer", "ornate white turned baluster railing". ' +
+        'FORBIDDEN single-noun entries: "window", "bed", "rug", "cabinetry", "tap", ' +
+        '"roof", "column", "brick", "balustrade". ' +
+        'Aim for the level of granularity a master architectural photographer would write ' +
+        'in a Tier P feature description — every architectural feature, finish, fixture and ' +
+        'styling element gets a specific, identifiable phrase.',
+      items: { type: 'string' },
+    },
     is_styled: { type: 'boolean' },
     indoor_outdoor_visible: { type: 'boolean' },
     clutter_severity: { type: 'string' },
-    clutter_detail: { type: 'string' },
+    clutter_detail: {
+      type: 'string',
+      description:
+        'Prose paragraph identifying clutter or retouch concerns and proposing remediation. ' +
+        'Empty string when clutter_severity is "none".',
+    },
     flag_for_retouching: { type: 'boolean' },
     technical_score: { type: 'number' },
     lighting_score: { type: 'number' },
@@ -312,8 +388,66 @@ const COMPARISON_TOOL_SCHEMA: Record<string, unknown> = {
     'composition_score',
     'aesthetic_score',
     'key_elements',
+    'zones_visible',
   ],
 };
+
+/**
+ * Iteration 4: V2 expanded room taxonomy + master-architectural-photographer
+ * granularity directive, appended to the user_text. This is a prompt-only
+ * change (no schema enum) so models can still emit any value but are guided
+ * toward the V2 set.
+ *
+ * The 23 V2 additions on top of the 40 W7.6 types lift specificity in
+ * categories where the existing taxonomy lumped distinct feature rooms:
+ *   - bedroom granularity (guest, nursery, kids)
+ *   - living granularity (formal, family, media-dedicated)
+ *   - kitchen + pantry (butlers_pantry, walk_in_pantry, island_hero)
+ *   - bathroom granularity (powder, main, ensuite_walkthrough)
+ *   - alfresco granularity (undercover, pavilion)
+ *   - outdoor entertainment (pool_with_water_feature, bbq_zone, firepit_zone)
+ *   - exterior framing (streetscape, facade_hero, entry_portico, garage_feature)
+ *   - detail shots (hardware, textile)
+ *
+ * Total taxonomy: 40 → 63 room types.
+ */
+const V2_TAXONOMY_AND_GRANULARITY_INSTRUCTION = [
+  '',
+  '── ITERATION 4 ENRICHMENT ──',
+  '',
+  'EXPANDED ROOM TYPE TAXONOMY (use these in addition to the canonical 40, prefer the most specific):',
+  'bedroom_guest | bedroom_nursery | bedroom_kids | living_formal | living_family | ' +
+    'living_media_dedicated | kitchen_butlers_pantry | kitchen_pantry_walk_in | ' +
+    'kitchen_island_hero | bathroom_powder | bathroom_main | ensuite_walkthrough | ' +
+    'alfresco_undercover | alfresco_pavilion | pool_with_water_feature | bbq_zone | ' +
+    'firepit_zone | exterior_streetscape | exterior_facade_hero | exterior_entry_portico | ' +
+    'exterior_garage_feature | detail_hardware | detail_textile',
+  '',
+  'EXPANDED COMPOSITION_TYPE VALUES (use these alongside the canonical set):',
+  'hero_wide | hero_axial | hero_threshold_through | supporting_corner_two_point | ' +
+    'supporting_axial_one_point | detail_close | detail_macro | aerial_oblique | ' +
+    'aerial_nadir | streetscape_context | feature_pull_back | feature_step_in | ' +
+    'lifestyle_anchor',
+  '',
+  'EXPANDED VANTAGE_POINT VALUES:',
+  'interior_looking_out | exterior_looking_in | neutral | low_angle | high_angle | ' +
+    'eye_level_through_threshold | aerial_oblique | aerial_nadir | seated_height | ' +
+    'standing_height | counter_height | floor_anchor | ceiling_detail',
+  '',
+  'GRANULARITY DIRECTIVE — write as a master architectural photographer:',
+  '• Every architectural feature, finish, and fixture gets a specific phrase that names',
+  '  the material, style, or treatment. NEVER a single generic noun.',
+  '• "Federation-influenced fretwork", "Corinthian column with acanthus capital",',
+  '  "shaker-style raised-panel cabinetry", "terracotta tiled hipped roof",',
+  '  "variegated red-brown brick veneer", "white turned-baluster railing".',
+  '• If your draft `key_elements` includes any of these forbidden bare nouns, expand them:',
+  '  window → window with [treatment]; bed → [style] bed with [material] frame;',
+  '  rug → [pattern] [origin/style] rug; tap → [shape] mixer tap in [finish];',
+  '  cabinetry → [door style] [colour] cabinetry; roof → [material] [shape] roof;',
+  '  fence → [material/colour] fence (e.g. "Colorbond fence", "white timber picket fence").',
+  '• Aim for 8–12 entries in key_elements. Aim for ~250 words in analysis.',
+  '',
+].join('\n');
 
 // ─── Per-vendor sweep ────────────────────────────────────────────────────────
 
@@ -867,7 +1001,13 @@ async function handler(req: Request): Promise<Response> {
     compositionsToRun,
     vendors_to_compare,
     pass_kinds,
-    prompt: { system: prompt.system, userPrefix: prompt.userPrefix },
+    // Iter 4: append V2 taxonomy + granularity directive to userPrefix.
+    // Prompt-only addition — schema room_type stays free-form so models
+    // emit any value without erroring, but they're guided to the V2 set.
+    prompt: {
+      system: prompt.system,
+      userPrefix: prompt.userPrefix + V2_TAXONOMY_AND_GRANULARITY_INSTRUCTION,
+    },
   }).catch((err) => {
     console.error(`[${GENERATOR}] background sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   });
