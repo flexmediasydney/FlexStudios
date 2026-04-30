@@ -20,6 +20,28 @@ class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, errorInfo) {
+    // Stale-deploy auto-recover: when Vercel ships a new build, the in-memory
+    // app holds references to old chunk hashes (e.g. ProjectDetails-XYZ.js)
+    // that are now 404s on the CDN. React Suspense surfaces these as caught
+    // errors which never reach the window-level `unhandledrejection` listener
+    // in App.jsx. Detect here and force one reload (rate-limited so we never
+    // ping-pong if the new bundle also fails).
+    const msg = error?.message || "";
+    const isChunkLoadError =
+      msg.includes("Failed to fetch dynamically imported module") ||
+      msg.includes("Importing a module script failed") ||
+      msg.includes("Loading chunk") ||
+      msg.includes("Loading CSS chunk");
+    if (isChunkLoadError && typeof window !== "undefined") {
+      const reloadKey = "_chunk_reload";
+      const lastReload = Number(sessionStorage.getItem(reloadKey) || 0);
+      if (Date.now() - lastReload > 30000) {
+        sessionStorage.setItem(reloadKey, String(Date.now()));
+        window.location.reload();
+        return;
+      }
+    }
+
     // Always log to console with component stack for debugging
     console.error(
       `[ErrorBoundary${this.props.fallbackLabel ? ` :: ${this.props.fallbackLabel}` : ""}] Caught error:`,
