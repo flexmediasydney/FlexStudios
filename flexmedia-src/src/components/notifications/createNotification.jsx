@@ -119,7 +119,7 @@ export async function createNotification(params) {
       cta_params:      params.ctaParams    ? JSON.stringify(params.ctaParams) : null,
       is_read:         false,
       is_dismissed:    false,
-      source:          "user_action",
+      source:          "user",
       source_user_id:  params.sourceUserId || null,
       idempotency_key: params.idempotencyKey || null,
       created_date:    new Date().toISOString(),
