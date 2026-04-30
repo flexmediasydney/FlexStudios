@@ -56,8 +56,11 @@ export default function UnifiedNoteComposer({
     }
   }, [initialHtml]);
 
+  // Hide retired/inactive users from the @ picker so duplicates and ex-staff
+  // don't pollute mention notifications.
+  const activeUsers = users.filter(u => u.is_active !== false);
   const filteredUsers = mentionQuery
-    ? users.filter(u => u.full_name?.toLowerCase().includes((mentionQuery.query || '').toLowerCase())).slice(0, 6)
+    ? activeUsers.filter(u => u.full_name?.toLowerCase().includes((mentionQuery.query || '').toLowerCase())).slice(0, 6)
     : [];
 
   const checkEmpty = () => {

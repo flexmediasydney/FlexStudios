@@ -159,7 +159,7 @@ export default function ProjectNotes({ projectId }) {
               <div className="border rounded-md p-2 bg-muted/50 max-h-48 overflow-y-auto">
                 <p className="text-xs text-muted-foreground mb-2">Tag team members:</p>
                 <div className="space-y-1">
-                  {allUsers.map(user => (
+                  {allUsers.filter(u => u.is_active !== false).map(user => (
                     <button
                       key={user.id}
                       type="button"
