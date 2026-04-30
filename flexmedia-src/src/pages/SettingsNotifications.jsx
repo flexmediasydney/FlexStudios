@@ -1,7 +1,13 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import { ArrowLeft, Bell, Settings, History, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowLeft, Bell, Settings, History, ChevronDown, ChevronRight, Mail } from "lucide-react";
+
+// Notification types that enqueue an email when the recipient is offline.
+// Must stay in sync with the FALLBACK_ELIGIBLE set in the
+// sendNotificationEmails edge function and the trigger whitelist in
+// migration 364_notification_email_fallback.sql.
+const EMAIL_FALLBACK_ELIGIBLE = new Set(['note_mention', 'note_reply']);
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -146,6 +152,21 @@ function MyPreferencesTab({ userId }) {
     onError: (err) => toast.error(err?.message || 'Failed to save notification preference'),
   });
 
+  const saveEmailPrefMutation = useMutation({
+    mutationFn: async ({ type, category, enabled }) => {
+      const existing = prefs.find(p => p.user_id === userId && p.notification_type === type);
+      if (existing) {
+        return api.entities.NotificationPreference.update(existing.id, { email_enabled: enabled });
+      } else {
+        return api.entities.NotificationPreference.create({
+          user_id: userId, notification_type: type, category, email_enabled: enabled
+        });
+      }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["notifPrefs", userId] }),
+    onError: (err) => toast.error(err?.message || 'Failed to save email preference'),
+  });
+
   const saveCategoryMutation = useMutation({
     mutationFn: async ({ category, enabled }) => {
       const existing = prefs.find(
@@ -188,6 +209,15 @@ function MyPreferencesTab({ userId }) {
     if (!getCategoryPref(category)) return false;
     const p = prefs.find(x => x.user_id === userId && x.notification_type === type);
     return p?.in_app_enabled !== false;
+  }
+
+  function getEmailPref(type) {
+    // Default ON for fallback-eligible types when no explicit preference exists
+    // (matches the edge-function default in sendNotificationEmails).
+    const p = prefs.find(x => x.user_id === userId && x.notification_type === type);
+    if (p?.email_enabled === true) return true;
+    if (p?.email_enabled === false) return false;
+    return EMAIL_FALLBACK_ELIGIBLE.has(type);
   }
 
   const grouped = useMemo(() => {
@@ -332,16 +362,36 @@ function MyPreferencesTab({ userId }) {
 
                 {isExpanded && (
                   <div className="border-t divide-y">
-                    {types.map(t => (
-                      <div key={t.type} className={`flex items-center justify-between px-4 py-2.5 pl-12 ${!catEnabled ? "opacity-50" : ""}`}>
-                        <Label className="text-sm font-normal cursor-pointer">{t.label}</Label>
-                        <Switch
-                          checked={getPref(t.type, category)}
-                          onCheckedChange={v => savePrefMutation.mutate({ type: t.type, category, enabled: v })}
-                          disabled={!catEnabled}
-                        />
-                      </div>
-                    ))}
+                    {types.map(t => {
+                      const emailEligible = EMAIL_FALLBACK_ELIGIBLE.has(t.type);
+                      return (
+                        <div key={t.type} className={`flex items-center justify-between gap-3 px-4 py-2.5 pl-12 ${!catEnabled ? "opacity-50" : ""}`}>
+                          <Label className="text-sm font-normal cursor-pointer flex-1 min-w-0">{t.label}</Label>
+                          <div className="flex items-center gap-5 shrink-0">
+                            {emailEligible ? (
+                              <div className="flex items-center gap-1.5" title="Email me when I'm offline">
+                                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                                <Switch
+                                  checked={getEmailPref(t.type)}
+                                  onCheckedChange={v => saveEmailPrefMutation.mutate({ type: t.type, category, enabled: v })}
+                                  disabled={!catEnabled || !getPref(t.type, category)}
+                                />
+                              </div>
+                            ) : (
+                              <span className="w-[58px]" aria-hidden="true" />
+                            )}
+                            <div className="flex items-center gap-1.5" title="In-app notification">
+                              <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+                              <Switch
+                                checked={getPref(t.type, category)}
+                                onCheckedChange={v => savePrefMutation.mutate({ type: t.type, category, enabled: v })}
+                                disabled={!catEnabled}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>
