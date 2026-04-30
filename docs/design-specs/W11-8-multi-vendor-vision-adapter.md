@@ -1,6 +1,12 @@
 # W11.8 — Multi-Vendor Vision Adapter — Design Spec
 
-**Status:** ✅ Shipped 2026-04-30 — multi-vendor vision adapter (Anthropic + Google) + retroactive A/B comparison harness + Saladine A/B test ready to fire. Joseph 2026-04-29: OpenAI dropped from scope; only Anthropic + Google.
+**Status:** ✅ Shipped 2026-04-30. **Role updated 2026-04-30:** following the Saladine A/B iter-1 → iter-4 progression (validated head-to-head on the Saladine project), the Shape D engine now ships **Gemini 2.5 Pro as the production primary vendor**. W11.8's adapter layer remains in production as the **audit / A/B harness + production failover layer** — not the primary architecture. Joseph 2026-04-29: OpenAI dropped from scope; only Anthropic + Google.
+
+> **TL;DR for readers:**
+> - **Production engine default vendor: Gemini 2.5 Pro** (per Saladine A/B iter-4 results).
+> - **Anthropic Opus 4.7 retained as failover** via configurable `engine_settings.production_vendor`.
+> - **W11.8 is the adapter layer + ongoing audit harness**, not the primary architecture. The primary architecture is the Shape D 5-call multi-stage engine documented in `W11-7-unified-shortlisting-architecture.md`.
+> - **Iter-1 → iter-4 is validated history**; the iteration log lives in W11.7 alongside the architecture rationale.
 
 **Implementation commits (worktree `agent-a7d4a6556d05cdcc8`, awaiting orchestrator cherry-pick into main):**
 - 1/7 `71e6825` — migration 350 (`vendor_shadow_runs`, `vendor_comparison_results`, 9 `engine_settings` rows)
@@ -16,9 +22,9 @@
 
 
 **Backlog ref:** P1-26 (new)
-**Wave plan ref:** W11.8 — production-grade adapter layer + per-pass model configuration + shadow-run A/B harness
-**Dependencies:** W7.7 (`engine_settings` table for runtime config), W11 (universal schema as the canonical output shape), W11.7 (unified architecture is the consumer)
-**Unblocks:** ability to A/B test vendors without code changes; vendor lock-in defence; cost optimisation paths; future fine-tuned-self-hosted-model migration path
+**Wave plan ref:** W11.8 — production-grade adapter layer + per-stage model configuration + shadow-run A/B harness; post-Saladine repositioned as audit/A/B + failover
+**Dependencies:** W7.7 (`engine_settings` table for runtime config), W11 (universal schema as the canonical output shape), W11.7 (Shape D multi-stage architecture is the consumer)
+**Unblocks:** ongoing vendor A/B testing without code changes; vendor lock-in defence; production failover when the primary vendor degrades; future fine-tuned-self-hosted-model migration path
 
 ---
 
@@ -26,9 +32,19 @@
 
 Joseph 2026-04-29: *"i want path B [build vendor abstraction now, decide later], and i want to see us use a real testcase project that we already have rendered the jpg previews for and see the results across the whole engine comparing both API sources against each other."*
 
-Today's engine is locked to Anthropic. Switching any pass to another vendor requires code changes to every edge function that calls the vision API. Path B inverts this: **vendor selection becomes runtime configuration**, A/B testing becomes a flag, and FlexMedia retains optionality on cost + quality decisions.
+The pre-Shape D engine was locked to Anthropic. Switching any pass to another vendor would have required code changes to every edge function that calls the vision API. Path B inverts this: **vendor selection becomes runtime configuration**, A/B testing becomes a flag, and FlexMedia retains optionality on cost + quality decisions.
 
-The 13 Saladine project (round `3ed54b53`, 42 composition_groups) is the live test case — its preview JPEGs are already in Dropbox at `Photos/Raws/Shortlist Proposed/Previews/IMG_*.jpg`. Re-running its Pass 1 + Pass 2 logic through Gemini and GPT-4o produces directly-comparable outputs to validate quality before committing.
+The 13 Saladine project (round `3ed54b53`, 42 composition_groups) was the live test case — its preview JPEGs already lived in Dropbox at `Photos/Raws/Shortlist Proposed/Previews/IMG_*.jpg`. Re-running the engine logic through Gemini and Anthropic across iter-1 through iter-4 produced directly-comparable outputs that validated Gemini 2.5 Pro as the primary vendor before committing the Shape D architecture flip. The iter-1 → iter-4 progression itself is captured as validated history in W11.7's architecture-decision narrative; W11.8 simply provided the substrate.
+
+## Post-Saladine role (production architecture, 2026-04-30)
+
+Following Saladine iter-4 sign-off:
+
+- **Production primary vendor: Gemini 2.5 Pro** is the default for all Shape D stages (Stage 1 batch enrichment + Stage 4 visual master synthesis). The full architecture rationale lives in `W11-7-unified-shortlisting-architecture.md`.
+- **Anthropic Opus 4.7 is retained as production failover.** When Gemini returns a hard error (rate limit, vendor outage, schema validation failure on retry) the orchestrator transparently routes the same prompt through Anthropic Opus 4.7 via this adapter. Operator UX is unaffected; the audit log records `vendor_meta.failover_triggered: true`.
+- **`engine_settings.production_vendor` is configurable** (key shape: `vision.shape_d.primary_vendor` and `vision.shape_d.failover_vendor`), so a master_admin can flip the primary back to Anthropic in seconds if Gemini quality regresses on a model update.
+- **Adapter abstraction stays as a long-term asset.** Vendor portability + ongoing audit are still core engine properties — not artifacts of one A/B experiment. Future fine-tuned self-hosted models, a hypothetical OpenAI re-introduction, or Australian-data-residency requirements all plug in as new adapter implementations without touching the Shape D orchestrator.
+- **Audit / A/B harness role.** The shadow-run mechanism (Section 4) continues to fire periodically in production: every Nth shape_d round is run through the failover vendor in parallel and the comparison results land in `vendor_comparison_results`. This keeps the model-quality regression signal alive so a future Anthropic-Gemini swap is data-driven, not panic-driven.
 
 ---
 
@@ -139,39 +155,42 @@ _shared/visionAdapter/
 #### OpenAI adapter — DROPPED 2026-04-29
 Joseph chose to scope the A/B comparison to Anthropic vs Google only. The adapter interface is open enough that adding OpenAI later is a single-file addition (one new file under `adapters/openai.ts` + one new pricing row + one new vendor enum value). Kept off the v1 build to avoid scope creep.
 
-### Section 3 — Per-pass model configuration
+### Section 3 — Per-stage model configuration
 
-The unified call (W11.7) and async backfill choose models via `engine_settings`:
+The Shape D stages (W11.7) choose models via `engine_settings`. Production defaults (post-Saladine iter-4) are Gemini 2.5 Pro on Stage 1 + Stage 4; Anthropic Opus 4.7 acts as failover.
 
 ```sql
 -- Already exists from W7.7; we just add new keys
 INSERT INTO engine_settings (key, value, description) VALUES
-  ('vision.unified_call.vendor',
+  ('vision.shape_d.primary_vendor',
+   '"google"'::jsonb,
+   'Production primary vendor for all Shape D stages. google | anthropic'),
+  ('vision.shape_d.failover_vendor',
    '"anthropic"'::jsonb,
-   'Vendor for the W11.7 unified Pass 1+2 call. anthropic | google'),
-  ('vision.unified_call.model',
+   'Vendor used when the primary returns a hard error (rate limit / outage / schema fail on retry).'),
+  ('vision.shape_d.stage1.model',
+   '"gemini-2.5-pro"'::jsonb,
+   'Model id within the primary vendor for Stage 1 batch per-image enrichment (3-4 batches × 50 images).'),
+  ('vision.shape_d.stage4.model',
+   '"gemini-2.5-pro"'::jsonb,
+   'Model id within the primary vendor for Stage 4 visual master synthesis (1 cross-image call across all 200).'),
+  ('vision.shape_d.failover_stage1_model',
    '"claude-opus-4-7"'::jsonb,
-   'Model id within the chosen vendor for the unified call.'),
-  ('vision.description_backfill.vendor',
-   '"anthropic"'::jsonb,
-   'Vendor for the async per-image description backfill.'),
-  ('vision.description_backfill.model',
-   '"claude-sonnet-4-6"'::jsonb,
-   'Model id for description backfill.'),
-  ('vision.pass0_hardreject.vendor',
-   '"anthropic"'::jsonb,
-   'Vendor for Pass 0 hard-reject classification.'),
-  ('vision.pass0_hardreject.model',
-   '"claude-haiku-4"'::jsonb,
-   'Model id for Pass 0.'),
+   'Model id within the failover vendor for Stage 1.'),
+  ('vision.shape_d.failover_stage4_model',
+   '"claude-opus-4-7"'::jsonb,
+   'Model id within the failover vendor for Stage 4.'),
   ('vision.shadow_run.enabled',
    'false'::jsonb,
-   'When true, every unified call ALSO fires a parallel shadow run against vision.shadow_run.vendor for A/B comparison. Cost doubles when enabled.'),
+   'When true, every Nth Shape D round ALSO fires a parallel shadow run against vision.shadow_run.vendor for ongoing A/B comparison. Cost grows by the sample fraction.'),
+  ('vision.shadow_run.sample_rate',
+   '0.05'::jsonb,
+   'Fraction of rounds to fire a shadow run on (0.0-1.0). 0.05 = every 20th round.'),
   ('vision.shadow_run.vendor',
-   '"google"'::jsonb,
-   'Shadow vendor when shadow_run.enabled=true.'),
+   '"anthropic"'::jsonb,
+   'Shadow vendor when shadow_run.enabled=true. Defaults to the failover vendor.'),
   ('vision.shadow_run.model',
-   '"gemini-2.0-pro"'::jsonb,
+   '"claude-opus-4-7"'::jsonb,
    'Shadow model.')
 ON CONFLICT (key) DO NOTHING;
 ```
@@ -368,7 +387,7 @@ The retroactive comparison tool refuses to fire if the required secret for any c
 **Recommendation:** **Both.** Live admin page for interactive review; PDF export to `Photos/_AUDIT/vendor_comparison_<round_id>.pdf` for posterity (matches W7.4's audit JSON pattern).
 
 **Q4.** Default vendor for production after the A/B test?
-**Recommendation:** **Don't pre-decide.** Let the test data decide. Default unchanged until report is reviewed.
+**Recommendation (resolved 2026-04-30):** **Gemini 2.5 Pro is the production primary** per Saladine A/B iter-4 results. **Anthropic Opus 4.7 is retained as configurable failover** via `engine_settings.vision.shape_d.failover_vendor`. Full architecture rationale lives in W11.7.
 
 ---
 
@@ -386,9 +405,10 @@ The retroactive comparison tool refuses to fire if the required secret for any c
 ## What W11.8 protects you against
 
 1. **Vendor pricing changes** — when Anthropic or Google raise prices, switch via config rather than code change
-2. **Vendor quality regression** — if Opus 4.7 quality drops on a model update, fallback to Gemini Pro behind a flag
-3. **Vendor outage** — `vision.unified_call.fallback_vendor` setting (future addition) lets the fn try a second vendor on first-vendor failure
-4. **Future fine-tuned self-hosted model** — when FlexMedia eventually fine-tunes Llama 3.2 90B Vision on the W13a goldmine corpus, it plugs into the same adapter interface as a fourth vendor (with `vendor: 'self_hosted'`)
+2. **Vendor quality regression** — if Gemini 2.5 Pro quality drops on a model update, flip `vision.shape_d.primary_vendor` to `"anthropic"` and the failover wiring takes over with no code change
+3. **Vendor outage** — `vision.shape_d.failover_vendor` runs automatically when the primary returns a hard error; operator UX is unaffected
+4. **Future fine-tuned self-hosted model** — when FlexMedia eventually fine-tunes Llama 3.2 90B Vision on the W13a goldmine corpus, it plugs into the same adapter interface as a third vendor (with `vendor: 'self_hosted'`)
 5. **Geographic / sovereignty** — if Australian regulation requires data residency, can route through a self-hosted Australian-region GPU without code rewrite
+6. **Ongoing audit signal** — the shadow-run sampling at 5% of production rounds keeps the regression-detection signal warm, so the next vendor swap is data-driven rather than panic-driven
 
-This is **defensive architectural insurance** — modest engineering cost (~7 days), high optionality value over the next 3-5 years of engine evolution.
+This is **defensive architectural insurance** — engineering cost paid in full (~7 days, shipped 2026-04-30), high optionality value over the next 3-5 years of engine evolution.

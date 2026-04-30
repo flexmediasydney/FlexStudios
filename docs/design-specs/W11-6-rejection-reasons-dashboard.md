@@ -1,22 +1,27 @@
 # W11.6 — Rejection Reasons Dashboard — Design Spec
 
-**Status:** ⚙️ Future wave — depends on W10.3 (override metadata instrumentation, ✅ shipped) + W11.5 (human reclassification, future) + W11.7 (unified architecture surfaces richer per-decision rationale).
+**Status:** ⚙️ Future wave — depends on W10.3 (override metadata instrumentation, ✅ shipped) + W11.5 (human reclassification, future) + W11.7 (Shape D multi-stage architecture surfaces richer per-decision rationale, master_listing copy, voice tier metadata, canonical registry coverage). Terminology + dashboard widgets refreshed 2026-04-30 to align with the rewritten W11.7.
 **Backlog ref:** P1-24 (new)
 **Wave plan ref:** W11.6 — admin-side visibility into the captured override signal so a human can spot patterns and tune
-**Dependencies:** W10.3 (`shortlisting_overrides.primary_signal_overridden` + `review_duration_seconds` + `alternative_offered_drawer_seen`), W7.7 (`engine_settings` + `package_engine_tier_mapping`), W11.7 (unified call's `slot_decisions[].rationale` + `quality_outliers[]` outputs feed new dashboard sections)
+**Dependencies:** W10.3 (`shortlisting_overrides.primary_signal_overridden` + `review_duration_seconds` + `alternative_offered_drawer_seen`), W7.7 (`engine_settings` + `package_engine_tier_mapping`), W11.7 (Stage 4 visual master synthesis emits `slot_decisions[].rationale`, `quality_outliers[]`, `master_listing` block, `voice_tier`, plus Stage 1's `appeal_signals` / `concern_signals` / `retouch_priority` / `gallery_position_hint` / `style_archetype` enrichment fields)
 **Unblocks:** the human-in-the-loop tuning step that closes the "engine grows over time" loop. Without this, the override data sits inert.
 
 ---
 
-## ⚡ Architectural alignment (2026-04-29)
+## ⚡ Architectural alignment (2026-04-30)
 
-W11.7's unified architecture produces richer per-decision rationale by construction (every winner/alternative comes with a cross-image rationale paragraph from Opus, not just text-summary heuristics from Pass 2 today). This dashboard's new sections under W11.7:
+W11.7's Shape D engine produces richer per-decision rationale by construction (every winner/alternative comes with a cross-image rationale paragraph from Stage 4's visual master synthesis across all 200 images, not just text-summary heuristics from a single-image scoring pass). It also emits master_listing copy + voice tier metadata + canonical registry references that the dashboard can analyse across projects. New / updated sections under W11.7:
 
-- **Quality outliers section** (new): renders `unified_output.quality_outliers[]` — properties where the photographer over- or under-delivered relative to tier expectation. Becomes pricing/sales intelligence ("flag for tier upgrade" / "flag for photographer feedback").
-- **Per-decision rationale viewer** (richer): each card's "Why?" now shows Opus's actual cross-image judgement, not just Pass 2's text-summarised inference.
-- **Engine-mode timeline** (new): annotates the override-rate timeline with `shortlisting_rounds.engine_mode` transitions (two_pass → unified) so the impact of the architecture flip is measurable.
+- **Quality outliers section** (new): renders Stage 4's `quality_outliers[]` — properties where the photographer over- or under-delivered relative to tier expectation. Becomes pricing/sales intelligence ("flag for tier upgrade" / "flag for photographer feedback").
+- **Per-decision rationale viewer** (richer): each card's "Why?" now shows Stage 4's actual cross-image judgement, not just a single-image text-summarised inference.
+- **Stage 4 self-correction events** (new): every time Stage 4 visually corrects a Stage 1 classification (different room_type, different slot eligibility, different score) without operator action, the event is logged and surfaced here so admins see the cross-stage learning rate.
+- **Voice tier distribution** (new): per-project counts of master_listing `voice_tier` values (`Premium` / `Standard` / `Approachable`) with a stacked bar chart over time. Helps detect whether tier inference is drifting against package mappings.
+- **Master listing copy metrics** (new): histograms of `master_listing.word_count` and `master_listing.reading_grade_level` per voice tier and per package. Surfaces over-long copy or grade-level mismatches with the target audience.
+- **Canonical registry coverage** (new): % of `key_elements` per project that resolved to canonical IDs in the registry vs free-form. Trends down as W12 grows; a sudden spike in unresolved elements signals new architectural patterns or registry gaps.
+- **Cost-per-stage attribution** (new): per-round Gemini spend split into Stage 1 (3-4 batch calls) vs Stage 4 (1 master synthesis). Verifies the ~$3.84 / 200-angle target and surfaces drift if a vendor change inflates either bucket.
+- **Engine-mode timeline** (updated): annotates the override-rate timeline with `shortlisting_rounds.engine_mode` transitions (two_pass → shape_d) so the impact of the architecture flip is measurable.
 
-W11.6 ships AFTER W11.7's coexistence period (Phase B) so the dashboard reads from a stable unified output shape.
+W11.6 ships AFTER W11.7's coexistence period (Phase B) so the dashboard reads from a stable Shape D output shape.
 
 ---
 
@@ -33,6 +38,10 @@ Master_admins / admins need a single page that surfaces:
 - "Is the engine consistently failing on a specific room_type / package / tier?"
 - "Did the W8 weight-tuning session 4 weeks ago actually improve override patterns, or just shift them?"
 - "Which projects have the highest override rate — and are they tagged `Tier S` but consistently scored Tier P-quality?"
+- "How often does Stage 4 visually correct Stage 1, and how often do operators confirm those corrections?"
+- "Are master_listings in the right voice tier, and is the copy length / reading grade matching package expectation?"
+- "What % of key_elements are still resolving as free-form vs canonical — is the W12 registry catching up?"
+- "Where is the Gemini spend going — Stage 1 batch enrichment or Stage 4 master synthesis?"
 
 Without this surface, the override signal exists but doesn't drive action.
 
@@ -42,7 +51,7 @@ Without this surface, the override signal exists but doesn't drive action.
 
 ### Section 1 — Page: `Settings → Engine → Override Patterns`
 
-Master_admin / admin only. Single-page dashboard with 5 sections:
+Master_admin / admin only. Single-page dashboard with 5 core sections (A-E) plus 4 Shape-D-specific widgets (F-I) added under W11.7:
 
 #### Header KPIs (4 cards, last 30 days default)
 
@@ -58,6 +67,8 @@ Master_admin / admin only. Single-page dashboard with 5 sections:
 Horizontal bar chart of `primary_signal_overridden` values (the 14 curated signals + 'other'), ordered by frequency. Each bar shows count + a sparkline of trend over the last 90 days.
 
 Click a bar → drill down into rounds where that signal was cited. Useful for: *"operators cite 'cluttered foreground' 47% of the time on rejected hero_wide rear-exterior shots — is the prompt's clutter detection too lenient?"*
+
+Filterable / groupable by Shape D Stage 1 enrichment fields when the round used `engine_mode='shape_d'`: `appeal_signals`, `concern_signals`, `retouch_priority`, `gallery_position_hint`, `style_archetype`. e.g. *"Of the rejections citing 'cluttered foreground', how many had Stage 1's `concern_signals` already flag clutter? If most did, the issue is operator threshold, not engine miss."*
 
 #### Section B — Per-room-type override heatmap
 
@@ -104,9 +115,43 @@ Each row links to the project's swimlane + a "Schedule W14 inclusion" button (ma
 
 #### Section E — Reclassification log (W11.5 dependency)
 
-Once W11.5 ships, this section renders `composition_classification_overrides` with `human_room_type` corrections grouped by `(ai_room_type → human_room_type)`. Surfaces patterns like "Pass 1 says `exterior_front` but operators corrected to `exterior_rear` 8 times in 30 days; common evidence keyword: hills_hoist."
+Once W11.5 ships, this section renders `composition_classification_overrides` with `human_room_type` corrections grouped by `(ai_room_type → human_room_type)` and split by `override_source` (stage1 vs stage4). Surfaces patterns like "Stage 1 says `exterior_front` but operators corrected to `exterior_rear` 8 times in 30 days; common evidence keyword: hills_hoist."
 
-Operator action: master_admin reviews the pattern, decides whether the `streamBAnchors.ts` block needs an update. Direct path from observation to prompt iteration.
+Operator action: master_admin reviews the pattern, decides whether the relevant prompt block needs an update. Direct path from observation to prompt iteration.
+
+#### Section F — Stage 4 self-correction events (Shape D only)
+
+Renders Stage 4 visual master synthesis events that visually corrected a Stage 1 classification (different room_type / different slot / score adjusted by ≥1.0) without operator intervention. Grouped by `(stage1_value → stage4_value)`. Each row shows:
+
+| Stage 1 → Stage 4 | Count (30d) | Operator confirm rate | Common evidence (Stage 4 rationale keywords) |
+|---|---|---|---|
+| `exterior_front` → `exterior_rear` | 14 | 86% | hills_hoist, hot_water_system, garden_tap |
+| `bedroom_secondary` → `study` | 9 | 78% | desk, monitor, bookshelf |
+
+High operator-confirm rate = the model's self-correction is trustworthy and should graduate into the few-shot library. Low rate = Stage 4 is over-correcting; tune its synthesis prompt.
+
+#### Section G — Voice tier distribution + master_listing copy metrics (Shape D only)
+
+Two side-by-side widgets:
+
+1. **Voice tier distribution** — stacked bar over time of `master_listing.voice_tier` (`Premium` / `Standard` / `Approachable`) per project's package. A Tier-S Gold project producing `Approachable` copy is a misalignment worth investigating.
+2. **Copy metrics histograms** — `master_listing.word_count` and `master_listing.reading_grade_level` distributions, faceted by voice tier. Surfaces over-long Premium copy (e.g. >180 words) or grade-mismatched Approachable copy (e.g. grade level >10).
+
+Drill-down: click a tier band → list of projects → click a project → master_listing preview + per-image listing copy from Stage 1.
+
+#### Section H — Canonical registry coverage (Shape D + W12)
+
+Per-round metric: `% of key_elements that resolved to canonical IDs` (vs free-form / unresolved). Trend line over 90 days; expect upward trend as W12's registry grows. Sudden drop indicates either (a) a new architectural pattern Stage 1 / Stage 4 is naming for the first time, or (b) a registry regression worth W12 admin's attention. Click the bar → list of unresolved free-form labels grouped by frequency, with one-click "promote to canonical" deep-link into the W12 discovery queue.
+
+#### Section I — Cost-per-stage attribution (Shape D only)
+
+Per-round Gemini spend split into:
+
+- **Stage 1 batch enrichment** (3-4 batch calls × 50 images each)
+- **Stage 4 visual master synthesis** (1 cross-image call across all 200)
+- **Anthropic A/B / failover** (when W11.8 audit harness fired)
+
+Compared against the v1 target (~$3.84 / 200-angle shoot). Per-tier and per-package roll-ups; outliers >2σ above mean tagged for review. Critical for catching prompt-bloat regressions and validating that voice-tier modulation isn't inflating Stage 4 token usage.
 
 ---
 
@@ -126,15 +171,21 @@ interface AnalyticsRequest {
 // Returns aggregated metrics per the page's sections
 interface AnalyticsResponse {
   kpis: { total: number; rate: number; avg_duration_s: number; confirmed_pct: number };
-  signal_frequency: Array<{ signal: string; count: number; trend: number[] }>;
+  signal_frequency: Array<{ signal: string; count: number; trend: number[]; appeal_signals_filter?: string[]; concern_signals_filter?: string[]; style_archetype_filter?: string }>;
   room_type_heatmap: Array<{ room_type: string; tier: string; rate: number; sample_size: number }>;
   tier_config_events: Array<{ activated_at: string; tier_code: string; version: number; notes: string }>;
   outlier_projects: Array<{ project_id: string; address: string; package: string; tier: string; rate: number; common_signals: string[] }>;
-  reclassification_patterns: Array<{ ai_value: string; human_value: string; count: number; common_evidence: string[] }>;
+  reclassification_patterns: Array<{ ai_value: string; human_value: string; count: number; common_evidence: string[]; override_source: 'stage1' | 'stage4' }>;
+  // Shape D widgets (W11.7)
+  stage4_self_corrections: Array<{ stage1_value: string; stage4_value: string; count: number; operator_confirm_rate: number; rationale_keywords: string[] }>;
+  voice_tier_distribution: Array<{ tier: string; package: string; voice_tier: 'Premium' | 'Standard' | 'Approachable'; count: number; week: string }>;
+  master_listing_metrics: Array<{ voice_tier: string; word_count_p50: number; word_count_p95: number; reading_grade_p50: number }>;
+  canonical_coverage: Array<{ week: string; resolved_pct: number; unresolved_top_labels: Array<{ label: string; count: number }> }>;
+  cost_per_stage: Array<{ round_id: string; stage1_usd: number; stage4_usd: number; ab_audit_usd: number; total_usd: number }>;
 }
 ```
 
-The fn reads `shortlisting_overrides`, `composition_classification_overrides` (W11.5), `shortlisting_rounds`, `shortlisting_tier_configs`, `package_engine_tier_mapping`. All read-only; no DB writes.
+The fn reads `shortlisting_overrides`, `composition_classification_overrides` (W11.5), `shortlisting_rounds`, `shortlisting_tier_configs`, `package_engine_tier_mapping`, plus Shape D outputs (`master_listings`, Stage 1 enrichment columns on `composition_classifications`, Stage 4 synthesis log, `vendor_shadow_runs` for cost). All read-only; no DB writes.
 
 Heavy aggregation — push to materialised views if the dashboard is slow. v1 ships with on-demand SQL; v2 adds a `mv_override_analytics` materialized view refreshed nightly via pg_cron (or manual-trigger per Joseph's policy on cron).
 
@@ -145,8 +196,9 @@ Heavy aggregation — push to materialised views if the dashboard is slow. v1 sh
 From any chart/cell/row, the dashboard navigates to either:
 
 1. **Round detail** — existing swimlane page with `?focus=overrides` filter that highlights only the overridden cards
-2. **Override detail modal** — shows the full override row + Pass 1 analysis + Pass 2 rationale + the operator's review_duration + alternative_offered status. Useful for forensic "why did the operator override this exactly?"
+2. **Override detail modal** — shows the full override row + Stage 1 per-image enrichment + Stage 4 cross-image rationale + the operator's review_duration + alternative_offered status. Useful for forensic "why did the operator override this exactly?"
 3. **W8 admin** (existing) — "tune Tier S weights to address this pattern" deep-link
+4. **W12 discovery queue** (Shape D + W12) — from Section H, deep-link directly to "promote free-form label X to canonical" workflow
 
 ---
 
@@ -161,9 +213,10 @@ If v2 adds the materialised view: that's a pure additive migration with no rollb
 ## Effort estimate
 
 - 1 day backend (`engine-override-analytics` edge fn — heavy SQL, RLS)
-- 2 days frontend (the dashboard page; shadcn-ui + recharts; 5 sections; drill-downs)
+- 2 days frontend (the dashboard page; shadcn-ui + recharts; 5 core sections + drill-downs)
+- 1 day Shape D widgets F-I (Stage 4 self-corrections, voice tier distribution, master_listing metrics, canonical coverage, cost-per-stage attribution)
 - 0.5 day tests
-- Total: **~3.5 days**
+- Total: **~4.5 days**
 
 ---
 

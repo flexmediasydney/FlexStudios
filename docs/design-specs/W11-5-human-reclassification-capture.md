@@ -1,27 +1,29 @@
 # W11.5 — Human Reclassification Capture — Design Spec
 
-**Status:** ⚙️ Future wave — depends on W11 (universal vision schema) + W11.7 (unified architecture). Authored 2026-04-29 from Joseph's question on whether operators can override Pass 1's room_type / slot / score.
+**Status:** ⚙️ Future wave — depends on W11 (universal vision schema) + W11.7 (Shape D multi-stage architecture). Authored 2026-04-29 from Joseph's question on whether operators can override Stage 1's room_type / slot / score; terminology refreshed 2026-04-30 to align with the rewritten W11.7 (Gemini-anchored Shape D, 5-call multi-stage).
 **Backlog ref:** P1-23 (new)
-**Wave plan ref:** W11.5 — operator-driven correction of unified-call mislabels feeds the closed-loop learning system
-**Dependencies:** W11 (per-signal scoring schema), W11.7 (unified single-call architecture — overrides feed prompt context), W12 (object_registry — for the cross-project canonical-feature memory path)
-**Unblocks:** materially better unified-call accuracy via empirically-grown few-shot library; project-scoped re-runs that respect operator corrections
+**Wave plan ref:** W11.5 — operator-driven correction of Shape D mislabels feeds the closed-loop learning system
+**Dependencies:** W11 (per-signal scoring schema), W11.7 (Shape D multi-stage architecture — overrides feed `project_memory` consumed in Stage 1's prompt context), W12 (object_registry — for the cross-project canonical-feature memory path)
+**Unblocks:** materially better Shape D engine accuracy via empirically-grown few-shot library; project-scoped re-runs that respect operator corrections
 
 ---
 
-## ⚡ Architectural alignment (2026-04-29)
+## ⚡ Architectural alignment (2026-04-30)
 
-This spec was authored before W11.7's unified architecture was decided. Re-read in context: **under W11.7, this wave becomes simpler AND higher-leverage.**
+This spec was originally authored against the "single Opus call + Sonnet backfill" framing. Under the rewritten W11.7 (`docs/design-specs/W11-7-unified-shortlisting-architecture.md`), the engine is now a **Shape D multi-stage call**: 3-4 Stage 1 batch calls × 50 images each (full per-image enrichment), followed by 1 Stage 4 visual master synthesis call across all 200 images. This wave still becomes simpler AND higher-leverage:
 
-- **Simpler:** instead of modifying both Pass 1 and Pass 2 to respect overrides, only the unified call's prompt assembly (W7.6 block pattern) needs the new `projectMemoryBlock` that loads `composition_classification_overrides` rows.
-- **Higher-leverage:** the override data feeds the unified call's prompt context as project memory, so round #2 of the same project respects it directly — and after W12, the same data feeds cross-project canonical registry.
+- **Simpler:** instead of modifying multiple passes to respect overrides, only Stage 1's prompt assembly (W7.6 block pattern) needs the new `projectMemoryBlock` that loads `composition_classification_overrides` rows.
+- **Higher-leverage:** the override data feeds Stage 1's prompt context as `project_memory`, so round #2 of the same project respects it directly — and after W12, the same data feeds cross-project canonical registry.
+- **Two override classes:** v1 captures both (a) **Stage 1 overrides** — operator corrects a per-image classification (room_type / composition / vantage / score) — and (b) **Stage 4 overrides** — Stage 4's visual master synthesis already corrected a Stage 1 mistake (different image won the slot than Stage 1 alone would have predicted), and the operator confirms or further refines that correction. Both classes share the same table; `override_source` distinguishes which stage was being corrected.
+- **Few-shot feedback loop:** W11.5 reclassifications populate the `pass1_fewshot_examples` library that Stage 1 reads on every subsequent batch call, so the engine learns from each operator correction without code changes.
 
-Section references below to "Pass 1" / "Pass 2" should be read as "the unified call" under W11.7.
+Section references below to "Pass 1" / "Pass 2" should be read as **Stage 1** (per-image enrichment) and **Stage 4** (visual master synthesis) under the Shape D engine.
 
 ---
 
 ## Problem (Joseph 2026-04-29)
 
-Pass 1 sometimes mislabels images. The 13 Saladine review surfaced IMG_6195 — a clearly-rear shot (Hills Hoist clothesline, hot water system, both back-of-house signals) classified as `exterior_front`. Pass 2 trusted Pass 1's room_type label and never considered IMG_6195 for the `exterior_rear` slot, leaving the operator with no path to correct the routing without re-running the round (which produces the same mislabel).
+Stage 1 sometimes mislabels images. The 13 Saladine review surfaced IMG_6195 — a clearly-rear shot (Hills Hoist clothesline, hot water system, both back-of-house signals) classified as `exterior_front`. Stage 4 traditionally trusted Stage 1's room_type label and never considered IMG_6195 for the `exterior_rear` slot, leaving the operator with no path to correct the routing without re-running the round (which produces the same mislabel). Under Shape D's visual master synthesis, Stage 4 *can* override Stage 1's label across all 200 images — but operators still need a path to lock in corrections that survive future rounds.
 
 **Today's operator capabilities:**
 - Drag to approve/reject ✓
@@ -31,8 +33,9 @@ Pass 1 sometimes mislabels images. The 13 Saladine review surfaced IMG_6195 — 
 - **Override a composition_type / vantage_point** ❌
 - **Manually adjust a score** ❌
 - **Add a new slot eligibility for a composition** ❌
+- **Confirm / refine a Stage 4 correction of a Stage 1 label** ❌
 
-The fundamental engine ethos — *grow with each operator response* — is undercut when the operator can't correct what the model got demonstrably wrong.
+The fundamental engine ethos — *grow with each operator response* — is undercut when the operator can't correct what the model got demonstrably wrong, OR confirm when the model's own internal cross-stage correction was right.
 
 ---
 
@@ -47,6 +50,9 @@ CREATE TABLE composition_classification_overrides (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   group_id UUID NOT NULL REFERENCES composition_groups(id) ON DELETE CASCADE,
   round_id UUID NOT NULL REFERENCES shortlisting_rounds(id) ON DELETE CASCADE,
+  -- Which stage emitted the value the operator is correcting / confirming
+  override_source TEXT NOT NULL DEFAULT 'stage1'
+    CHECK (override_source IN ('stage1', 'stage4')),
   -- Original AI values (denormalised so we can replay the override decision)
   ai_room_type TEXT,
   ai_composition_type TEXT,
@@ -63,7 +69,7 @@ CREATE TABLE composition_classification_overrides (
   actor_user_id UUID NOT NULL REFERENCES auth.users(id),
   actor_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (group_id, round_id)        -- one override per group per round; subsequent edits update the row
+  UNIQUE (group_id, round_id, override_source)  -- one override per group per round per stage
 );
 
 CREATE INDEX idx_class_overrides_round ON composition_classification_overrides(round_id);
@@ -72,35 +78,39 @@ CREATE INDEX idx_class_overrides_human_room_type ON composition_classification_o
   WHERE human_room_type IS NOT NULL;
 ```
 
-### Section 2 — Pass 2 reads the COALESCE'd values
+### Section 2 — Stage 4 reads the COALESCE'd values via project_memory
 
-`shortlisting-pass2/index.ts` modifies its data assembly:
+Under the Shape D engine, the `shortlisting-shape-d` orchestrator loads `composition_classification_overrides` rows for the current project at round-start and injects them into the Stage 1 prompt as `project_memory` (per W11.7's prompt-block contract). Stage 4's visual master synthesis then sees authoritative human-corrected values when computing slot decisions across all 200 images.
 
 ```typescript
-// Before W11.5
-const room_type = composition_classification.room_type;
+// Round-start: orchestrator builds project_memory
+const overrides = await fetchProjectOverrides(project_id);
+const projectMemoryBlock = renderProjectMemoryBlock(overrides);
 
-// After W11.5
-const override = await fetchOverride(round_id, group_id);
-const room_type = override?.human_room_type ?? composition_classification.room_type;
+// Stage 1 batch call (per 50-image batch)
+const stage1Prompt = assembleStage1Prompt({ projectMemoryBlock, /* ... */ });
+
+// Stage 4 visual master synthesis reads COALESCE'd values
+const room_type = override?.human_room_type ?? stage1.composition_classification.room_type;
 // Same pattern for composition_type, vantage_point, combined_score
 ```
 
-**Effect:** when operator reclassifies IMG_6195 from `exterior_front` to `exterior_rear` in round N, round N+1 (next ingest of same project) routes IMG_6195 to the exterior_rear slot. Pass 1 still emits its original guess on round N+1, but the override row persists across rounds for the same group.
+**Effect:** when operator reclassifies IMG_6195 from `exterior_front` to `exterior_rear` in round N, round N+1 (next ingest of same project) routes IMG_6195 to the exterior_rear slot via `project_memory`. Stage 1 may still emit its original guess on a fresh image, but the override row persists across rounds for the same group and is authoritative once Stage 4 sees it.
 
 ### Section 3 — Frontend (engine swimlane only)
 
-New `ReclassifyMenu` component on `ShortlistingCard.jsx` (engine mode only — manual mode has no Pass 1 to reclassify against):
+New `ReclassifyMenu` component on `ShortlistingCard.jsx` (engine mode only — manual mode has no Stage 1 / Stage 4 to reclassify against):
 
 - Right-click or "..." menu on each card → "Reclassify"
 - Modal opens with:
-  - Current Pass 1 values (room_type, composition_type, vantage_point, combined_score) shown read-only
+  - Current Stage 1 values (room_type, composition_type, vantage_point, combined_score) shown read-only
+  - Stage 4 corrected values (when `override_source='stage4'`) shown as "Engine corrected during synthesis" pill so the operator sees the cross-stage delta
   - Override fields: dropdown for room_type (from `eligible_room_types` registry), composition_type (from taxonomy), vantage_point (3 values), score slider (0-10)
   - `eligible_slot_ids` multiselect (default = inferred from new room_type via slot_definitions)
   - `override_reason` free-text required field (≥ 20 chars)
   - "Save override" → POST to new edge fn `reclassify-composition`
 
-Visual indication on cards with active overrides: amber border + "Reclassified" badge; clicking the badge opens read-only diff modal.
+Visual indication on cards with active overrides: amber border + "Reclassified" badge; clicking the badge opens read-only diff modal. Cards where Stage 4 visually corrected Stage 1 (without operator action) display a separate "Engine self-corrected" badge — clicking it opens the Stage 1 → Stage 4 diff and offers a one-click "Confirm" button that writes a `stage4`-source override row.
 
 ### Section 4 — Edge fn `reclassify-composition`
 
@@ -110,6 +120,7 @@ Visual indication on cards with active overrides: amber border + "Reclassified" 
 interface ReclassifyRequest {
   group_id: string;
   round_id: string;
+  override_source: 'stage1' | 'stage4';  // which stage's value is being corrected/confirmed
   human_room_type?: string;
   human_composition_type?: string;
   human_vantage_point?: string;
@@ -121,12 +132,12 @@ interface ReclassifyRequest {
 
 // 1. Auth: master_admin / admin / manager (employees can suggest but not commit per RLS)
 // 2. Validate: room_type must exist in shortlisting_room_types registry; combined_score in [0,10]
-// 3. UPSERT composition_classification_overrides row
+// 3. UPSERT composition_classification_overrides row (keyed on group_id + round_id + override_source)
 // 4. Emit shortlisting_events.event_type='human_reclassification' with the diff
 // 5. Return the override row + a "next-round impact preview" (which slots would change)
 ```
 
-The "next-round impact preview" runs the slot-resolver against the override + remaining ai-classifications and surfaces "If we re-ran Pass 2 now, IMG_6195 would route to exterior_rear and IMG_6210 would lose its winner status to a closer match." Operator sees the consequence before committing.
+The "next-round impact preview" runs the slot-resolver against the override + remaining ai-classifications and surfaces "If we re-ran Stage 4 now, IMG_6195 would route to exterior_rear and IMG_6210 would lose its winner status to a closer match." Operator sees the consequence before committing.
 
 ### Section 5 — Cross-project canonical memory (W12 hook)
 
@@ -151,15 +162,15 @@ confidence: 0.9
 observation_count: 10
 ```
 
-Wave 11's Pass 1 prompt block `objectsAndAttributes` then primes the model:
+Wave 11's Stage 1 prompt block `objectsAndAttributes` then primes the model:
 
 > "When the image contains any of these registry-canonical objects, weight room_type per the listed signal: hills_hoist → exterior_rear (90% confidence, 10 observations)."
 
-**Net effect:** by the 11th project where IMG_6195-style mislabel could happen, Pass 1 has **empirically-grown evidence** that Hills Hoist is a back-yard signal, regardless of facade dominance in the frame. This is the closed-loop ethos working.
+**Net effect:** by the 11th project where IMG_6195-style mislabel could happen, Stage 1 has **empirically-grown evidence** that Hills Hoist is a back-yard signal, regardless of facade dominance in the frame. This is the closed-loop ethos working.
 
-### Section 6 — Few-shot library for Pass 1 (Wave 14 hook)
+### Section 6 — Few-shot library for Stage 1 (Wave 14 hook)
 
-W14 calibration session captures 50 stratified projects' editor decisions including reclassifications. The output feeds a `pass1_fewshot_examples` table:
+Every W11.5 reclassification — whether sourced from a Stage 1 mislabel or a confirmed Stage 4 self-correction — populates the `pass1_fewshot_examples` library that Stage 1 reads on every batch call. W14 calibration session also captures 50 stratified projects' editor decisions including reclassifications. The combined output feeds a `pass1_fewshot_examples` table:
 
 ```sql
 CREATE TABLE pass1_fewshot_examples (
@@ -176,9 +187,9 @@ CREATE TABLE pass1_fewshot_examples (
 );
 ```
 
-Wave 11's Pass 1 prompt assembly conditionally injects the top-N most-frequent few-shot examples (Wave 14 admin curates which ones graduate from raw observation to active prompt material):
+Wave 11's Stage 1 prompt assembly conditionally injects the top-N most-frequent few-shot examples (Wave 14 admin curates which ones graduate from raw observation to active prompt material):
 
-> "EMPIRICAL CORRECTION EXAMPLES: 8 cases where Pass 1 said `exterior_front` but operators corrected to `exterior_rear`. Common evidence: Hills Hoist clothesline, hot water system, garden tap. When you see these elements in the frame, prefer `exterior_rear` even if the facade is prominent."
+> "EMPIRICAL CORRECTION EXAMPLES: 8 cases where Stage 1 said `exterior_front` but operators corrected to `exterior_rear`. Common evidence: Hills Hoist clothesline, hot water system, garden tap. When you see these elements in the frame, prefer `exterior_rear` even if the facade is prominent."
 
 This is what "engine grows with each project" actually means in concrete terms.
 
@@ -193,8 +204,8 @@ Reserve **next-available** at integration time. Recommend `347_composition_class
 ## Effort estimate
 
 - 0.5 day backend (table + edge fn + RLS)
-- 1 day frontend (ReclassifyMenu component + impact-preview modal)
-- 0.5 day Pass 2 plumbing (COALESCE override into the data assembly)
+- 1 day frontend (ReclassifyMenu component + impact-preview modal + Stage 4 self-correction "Confirm" badge)
+- 0.5 day Stage 4 plumbing (COALESCE override into the visual master synthesis data assembly + Stage 1 `project_memory` block)
 - 0.5 day tests + audit JSON extension
 - Total: **~2.5 days**
 

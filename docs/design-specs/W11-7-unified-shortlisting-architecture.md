@@ -1,56 +1,129 @@
-# W11.7 — Unified Single-Call Shortlisting Architecture — Design Spec
+# W11.7 — Multi-Stage Vision Engine Architecture (Shape D) — Design Spec
 
-**Status:** ⚙️ Architectural keystone for the next-generation engine. Authored 2026-04-29 from Joseph's questioning of why Pass 1 + Pass 2 are separate.
-**Backlog ref:** P1-25 (new)
-**Wave plan ref:** W11.7 — collapse Pass 1 + Pass 2 into a single Opus 4.7 call with per-image async description backfill
-**Dependencies:** **W11 must ship first** (provides the compact universal-vision-response schema that fits in a single 8k output token budget). Plus W7.6 (block-based prompts), W7.7 (dynamic packages + tier configs), W8 (tier-config weights), W7.5 (mutex), W7.13 (manual-mode), W10.1 (multi-camera partition), W10.3 (override metadata), **W11.8 (multi-vendor adapter — vendor selection becomes runtime config; A/B harness validates Gemini / GPT-4o parity before production rollout)**.
-**Unblocks:** the closed-loop "engine grows per project" ethos. Every project's overrides + reclassifications + observed objects feed forward into Opus's prompt context for the next project.
-
----
-
-## Why this exists
-
-Joseph 2026-04-29: *"if pass 1 is dropped completely, and we purely just send all images to opus 4.7 vision API, can't it then create the same scoring and descriptive results (or even better) compared to current pass 1, AND within context of the whole project, AND do classifications and slot selections and also provide the deductive reasoning/why behind each image and all the objects and attributes and absolutely everything we need?"*
-
-**Yes, it can.** Today's two-pass split (per-image Pass 1 → text-only Pass 2) was a reasonable first design when Sonnet was the strongest available model. With Opus 4.7 and W11's compact per-image schema, a single oracle that sees the full visual universe outperforms the two-pass chain on every measurable axis.
-
-The two-pass design has three architectural costs the unified design eliminates:
-
-1. **Mislabel cascade.** Pass 1 mislabeled IMG_6195 as `exterior_front` despite identifying Hills Hoist + hot water system in the image (both back-yard signals). Pass 2 trusted the label and never considered it for `exterior_rear`. The single oracle sees the contradictory evidence and the cohort simultaneously — no cascade.
-
-2. **Score compression.** Pass 1 anchors per-image scores to the tier's anchor band without cross-image context to differentiate. The unified call sees the full distribution and assigns scores against absolute signal anchors, not tier centroids.
-
-3. **Inert override data.** Round #2 of a project today never sees round #1's overrides. The unified call's prompt explicitly carries `composition_classification_overrides` from prior rounds as authoritative context.
+**Status:** Architectural keystone for the next-generation engine. Current revision authored 2026-04-30 / 2026-05-01 after 4 iterations of A/B testing on a 42-group Saladine round.
+**Backlog ref:** P1-25 (rebadged from "unified single call" to "multi-stage Shape D")
+**Wave plan ref:** W11.7 — collapse Pass 1 + Pass 2 into a 5-call Shape D pipeline (Stage 1 batched per-image enrichment + Stage 4 visual master synthesis), Gemini-anchored
+**Vendor primary:** Gemini 2.5 Pro (`thinkingBudget=2048` for Stage 1, `=16384` for Stage 4)
+**Vendor failover / audit:** Anthropic Opus 4.7 via `W11.8` multi-vendor adapter
+**Dependencies:** `W11` (universal schema — must ship first), `W7.6` (block-based prompts), `W7.7` (dynamic packages + tier configs), `W8` (tier weights), `W7.5` (mutex), `W7.13` (manual-mode), `W10.1` (multi-camera partition), `W10.3` (override metadata), `W11.5` (project memory), `W11.8` (multi-vendor adapter), `W12` (canonical objects registry), `W14` (few-shot library)
+**Unblocks:** closed-loop "engine grows per project" ethos. Every project's overrides + reclassifications + observed objects feed forward into the prompt context for the next project.
 
 ---
 
-## Architecture
+## What changed (iter-1 → iter-5)
 
-### Section 1 — The unified call shape
+The engine ran four distinct iterations on the same 42-composition_group Saladine round between 2026-04-29 and 2026-05-01. Each iteration was a controlled A/B against the prior shape on the SAME inputs, so deltas are signal not noise.
 
-`shortlisting-unified` (new edge function) replaces `shortlisting-pass1` + `shortlisting-pass2`.
+| Iter | Shape | Vendor | Calls/shoot | Output target | Verdict |
+|---|---|---|---|---|---|
+| 1 | Pass 1 (per-image) + Pass 2 (text-only) | Sonnet 4.6 | 42 + 1 = 43 | 4 dim aggregates + slot decisions | Mislabel cascade (IMG_6195), score compression, inert overrides. **Baseline killed.** |
+| 2 | Single unified Opus call + async Sonnet description backfill | Opus 4.7 | 1 + 42 = 43 | Compact universal schema, descriptions filled later | Better classifications, but description latency hurt operator UX; cost ~$3-5; Opus accuracy on exterior orientation was inferior to Gemini. |
+| 3 | Single unified Gemini 2.5 Pro call (no batching) | Gemini 2.5 Pro | 1 | All 42 images, full per-image output | **Hit the 65K output token cap.** Truncation mid-image #36. Demonstrated Gemini classifies exteriors more accurately than Opus (e.g. correctly labelled IMG_6195 as `exterior_rear`) and is 12× cheaper at scale. But output-cap means single-call doesn't scale. |
+| 4 | Stage 1 batched (50 imgs/call) + slot decisions text-only | Gemini 2.5 Pro | 4 + 1 = 5 | Per-image verbose outputs in 4 batches; slot decisions from text only | Per-image quality excellent. **But:** slot-decision quality degraded — text-only judging for "which kitchen is the hero?" lost the visual cross-comparison Joseph's W11.7 thesis explicitly required. |
+| **5 (Shape D, ship)** | **Stage 1 batched + Stage 4 visual master synthesis** | **Gemini 2.5 Pro** | **3-4 + 1 = 4-5** | **Per-image enrichment in batches; final stage SEES every image AND reads Stage 1 JSON** | **Best of both. Slot decisions made WITH visual cross-comparison + text context. Master listing copy synthesised at the same stage. Cost ~$3.84 / 200-shoot.** |
 
-Per round:
-1. Round bootstrap reads `projects` (packages, products, pricing_tier) → resolves engine_tier_id + expected_count_target via existing W7.7 helpers
-2. Pass 0 still runs first (Haiku hard-reject + bracket detection); produces composition_groups with best_bracket_stem
-3. Unified call fires with all preview JPEGs + structured prompt context
-4. Pass 3 still runs after (rule-based validator)
+### Why Gemini 2.5 Pro (not Opus 4.7) became the production anchor
 
-#### Inputs the unified call receives
+1. **Exterior orientation accuracy.** On the Saladine A/B, Gemini correctly classified IMG_6195 as `exterior_rear` (Hills Hoist + hot water system visible). Opus 4.7 said `exterior_side`. Gemini's spatial reasoning on yard cues outperformed Opus on this and 6 other contested exterior frames.
+2. **Cost.** Gemini 2.5 Pro is ~12× cheaper per output token at our typical shoot volume. At 200 angles × 5 shoots/week × 50 weeks = 50K angles/yr, the cost delta becomes material.
+3. **Output token ceiling.** Gemini's 65K output token cap is higher than Opus's 8K, which is what makes Stage 1 batching possible (50 verbose per-image outputs in one call).
+4. **Multi-image Stage 4 reasoning.** With `thinkingBudget=16384`, Gemini produces visibly better cross-image dedup and gallery sequencing than Opus did in iter-2.
+
+Anthropic stays in production via `W11.8` for two roles: failover when Gemini is down, and continuous A/B audit (every Nth round runs both vendors and the diffs surface in the W11.6 dashboard).
+
+### Why async Sonnet description backfill is GONE
+
+In iter-2 the per-image rich description was generated by a separate post-round Sonnet pass. Operator UX was degraded by the latency (descriptions appeared 30-60s after the swimlane rendered). Iter-3 onward proved Gemini can produce verbose ~1,700-char `analysis` strings inline within the Stage 1 batched call — no separate backfill needed. The async description job is deleted.
+
+---
+
+## Architecture (Shape D)
+
+### High-level
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Pass 0  (Haiku hard-reject + AEB bracket detection)                         │
+│  → produces composition_groups + best_bracket_stem per group                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Stage 1 — Batched per-image enrichment   (Gemini 2.5 Pro, parallel)         │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐                   │
+│  │ Batch 1  │   │ Batch 2  │   │ Batch 3  │   │ Batch 4  │  ← parallel       │
+│  │ 50 imgs  │   │ 50 imgs  │   │ 50 imgs  │   │ 50 imgs  │                   │
+│  └──────────┘   └──────────┘   └──────────┘   └──────────┘                   │
+│  Each: full UniversalVisionResponse + listing_copy + lineage per image       │
+│  thinkingBudget=2048, maxOutputTokens=6000, ~$0.66/call                      │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼ merge per-image JSONs
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Stage 4 — Visual master synthesis        (Gemini 2.5 Pro, single call)      │
+│  Inputs: ALL ~200 image previews + Stage 1 merged JSON as textual context    │
+│  Outputs: slot_decisions[] + master_listing{} + gallery_sequence[] +         │
+│           dedup_groups[] + missing_shot_recommendations[] +                  │
+│           stage_4_overrides[] (when visual cross-ref corrects Stage 1)       │
+│  thinkingBudget=16384, ~$1.20/call                                           │
+└──────────────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Pass 3  (rule-based validator)  +  W12 canonical-rollup pass                │
+│  → composition_signal_scores, composition_classifications,                   │
+│    shortlisting_slot_decisions, master_listing snapshot, observed_objects    │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why 5 calls and not 1
+
+Three constraints force the shape:
+
+1. **Output token ceiling.** A 200-angle shoot needs ~200 × 1,700 chars ≈ 340K characters of verbose `analysis` plus 22 signal scores + listing_copy + lineage per image. That blows past Gemini's 65K output token cap roughly 6× over.
+2. **Visual-context requirement on slot decisions.** Joseph's original W11.7 thesis (2026-04-29) was that "which-is-the-hero?" judgments require visual cross-comparison, not text. Iter-4 confirmed this empirically: text-only slot decisions degraded vs visual.
+3. **Per-image quality.** Sending all 200 images at once forces the model to spread attention thinly. Iter-3 showed quality degradation on per-image scoring as the image count rose toward 50. The 50-image-per-batch ceiling is empirically the sweet spot for full-quality per-image emissions.
+
+So we **batch the verbose per-image work** (Stage 1, parallel) and **reserve a single visual call** (Stage 4) for the cross-image judgements that need to see everything. The 5-call total is the minimum that satisfies all three constraints.
+
+### Stage 1 — batched per-image enrichment
+
+`shortlisting-shape-d-stage1` (new edge fn, runs per batch).
+
+#### Batch construction
+
+Composition groups are partitioned into batches of ≤50, ordered for stable cache keys:
 
 ```typescript
-interface UnifiedCallInput {
-  // Visual universe
+function partitionIntoStage1Batches(groups: CompositionGroup[]): Batch[] {
+  const sorted = [...groups].sort((a, b) =>
+    (a.is_secondary_camera ? 1 : 0) - (b.is_secondary_camera ? 1 : 0)
+    || a.capture_timestamp_ms - b.capture_timestamp_ms);
+  const batches: Batch[] = [];
+  for (let i = 0; i < sorted.length; i += 50) {
+    batches.push({ batch_index: i / 50, groups: sorted.slice(i, i + 50) });
+  }
+  return batches;
+}
+```
+
+3-batch typical (150 angles), 4-batch for 151-200 angles. Batches run in parallel via `Promise.all` with per-batch retry.
+
+#### Inputs the Stage 1 call receives
+
+```typescript
+interface Stage1BatchInput {
+  // Visual universe — only the 50 images for THIS batch
   images: Array<{
     composition_group_id: string;
     stem: string;                          // best_bracket_stem from Pass 0
-    preview_url: string;                   // 1024px-wide JPEG preview from Modal
+    preview_url: string;                   // 1024px JPEG preview from Modal
     is_secondary_camera: boolean;          // W10.1
     capture_timestamp_ms: number;
     aeb_bracket_value: number | null;
   }>;
 
-  // Round context
+  // Round context (cached across batches via Anthropic-style prompt cache when on Anthropic; Gemini context cache when on Gemini)
   round: {
     id: string;
     package_name: string;
@@ -59,48 +132,34 @@ interface UnifiedCallInput {
     expected_count_target: number;
     expected_count_min: number;
     expected_count_max: number;
-    engine_role_set: string[];             // ['photo_day_shortlist', ...] from W7.7
+    engine_role_set: string[];
   };
 
-  // Slot definitions (from W7.7 product-driven slot eligibility)
-  slot_definitions: Array<{
-    slot_id: string;
-    display_name: string;
-    phase: 1 | 2 | 3;
-    eligible_room_types: string[];
-    max_images: number;
-    min_images: number;
-    notes: string | null;
-  }>;
+  // Caller-provided property tier (W11.7.8)
+  property_tier: 'premium' | 'standard' | 'approachable';        // default 'standard'
+  property_voice_anchor_override: string | null;                  // optional per-project override
 
   // Project memory (W11.5)
   project_memory: {
     prior_overrides: Array<{
-      stem: string;
-      ai_room_type: string;
-      human_room_type: string;
-      evidence: string[];
-      override_reason: string;
+      stem: string; ai_room_type: string; human_room_type: string;
+      evidence: string[]; override_reason: string;
     }>;
     prior_locked_rounds_count: number;
   };
 
-  // Cross-project canonical knowledge (W12)
+  // Cross-project canonical knowledge (W12 — top 200 by frequency)
   canonical_object_registry: Array<{
-    canonical_label: string;               // e.g. 'hills_hoist'
-    category: string;                      // 'fixture'
-    room_type_signal: string | null;       // 'exterior_rear'
-    signal_confidence: number;             // 0-1
-    market_frequency: number;              // observation count
+    canonical_label: string; category: string;
+    room_type_signal: string | null; signal_confidence: number;
+    market_frequency: number;
   }>;
 
   // Few-shot library (W14 + W11.5)
   active_fewshot_examples: Array<{
     example_kind: 'room_type_correction' | 'composition_correction' | 'reject_pattern';
-    ai_value: string;
-    human_value: string;
-    evidence_keywords: string[];
-    description: string;
+    ai_value: string; human_value: string;
+    evidence_keywords: string[]; description: string;
   }>;
 
   // Tier-aware engine config (W8)
@@ -110,184 +169,317 @@ interface UnifiedCallInput {
     hard_reject_thresholds: { technical: number; lighting: number };
   };
 
-  // Engine settings (W7.7 universal)
+  // Engine settings
   engine_settings: {
-    pass2_visual_context_enabled: true;   // always true under unified
     fewshot_max_active: number;            // default 20
+    stage1_batch_size: number;             // default 50
+    stage1_thinking_budget: number;        // default 2048
+    stage1_max_output_tokens: number;      // default 6000
   };
 }
 ```
 
-#### Outputs the unified call produces
+#### Outputs the Stage 1 call produces (per image)
 
-The unified output fits in **~6,000-7,500 tokens** for typical Gold rounds (≤50 composition_groups). Per-image rich descriptions are deferred to the async backfill (Section 3).
+Each image emits a `UniversalVisionResponse` (W11) PLUS the iter-5+ additions:
 
 ```typescript
-interface UnifiedCallOutput {
+interface Stage1PerImageOutput extends UniversalVisionResponse {
+  // ─── W11 fields (analysis, image_classification, room_classification,
+  //     observed_objects, signal_scores, quality_flags, key_elements, ...) ─────
+
+  // ─── iter-5+ additions (see W11 schema spec for full list) ─────────────────
+  listing_copy: { headline: string; paragraphs: string };
+  appeal_signals: string[];
+  concern_signals: string[];
+  buyer_persona_hints: string[];
+  retouch_priority: 'urgent' | 'recommended' | 'none';
+  retouch_estimate_minutes: number | null;
+  gallery_position_hint: 'lead_image' | 'early_gallery' | 'late_gallery' | 'archive_only';
+  social_first_friendly: boolean;
+  requires_human_review: boolean;
+  confidence_per_field: { room_type: number; scoring: number; classification: number; /* ... */ };
+  style_archetype: string | null;
+  era_hint: string | null;
+  material_palette_summary: string[];
+  embedding_anchor_text: string;
+  searchable_keywords: string[];
+  shot_intent: 'hero_establishing' | 'scale_clarification' | 'lifestyle_anchor'
+             | 'material_proof' | 'indoor_outdoor_connection' | 'detail_specimen'
+             | 'record_only' | 'reshoot_candidate';
+  canonical_object_ids: string[] | null;   // null on first emission; W12 rollup populates
+}
+
+interface Stage1BatchOutput {
   schema_version: '1.0';
+  batch_index: number;
   round_id: string;
-  model_version: 'claude-opus-4-7';
-  prompt_block_versions: Record<string, string>;  // W7.6 provenance
-  
-  // Per-image structured data (~80-100 tokens per image)
-  compositions: Array<{
+  vendor: 'gemini' | 'anthropic';
+  model_version: string;
+  thinking_budget: number;
+  prompt_block_versions: Record<string, string>;
+  per_image: Stage1PerImageOutput[];        // length ≤50
+}
+```
+
+Notable per-image fields:
+
+| Field | Purpose |
+|---|---|
+| `analysis` | Verbose ~1,700 char prose. Lead with reasoning, derive scores from observation. |
+| `key_elements` | 12+ multi-noun architectural phrases, e.g. `"calacatta_marble_waterfall_island"`, not `"island"`. |
+| `listing_copy.headline` | 6-10 word headline for THIS image. Tier-aware voice. |
+| `listing_copy.paragraphs` | 2-3 paragraphs, ~120-180 words. |
+| `signal_scores` | 22 absolute 0-10 scores per W11 (nullable for context-dependent). |
+| `clutter_severity` | `'none' | 'minor_photoshoppable' | 'moderate_retouch' | 'major_reject'` |
+| `confidence_per_field` | Per-field confidence enables W11.6 to surface low-confidence cards for review. |
+| `embedding_anchor_text` | 50-word summary optimised for vector embedding (W11.13 / pgvector). |
+| `canonical_object_ids` | `null` on first emission; W12 post-rollup pass maps free-text observations to canonical IDs. |
+
+#### Stage 1 budget knobs
+
+| Setting | Default | Range | Notes |
+|---|---|---|---|
+| `stage1_thinking_budget` | 2048 | 0-8192 | Set 0 to disable thinking when cost-sensitive |
+| `stage1_max_output_tokens` | 6000 | 4000-12000 | Headroom for verbose per-image. |
+| `stage1_batch_size` | 50 | 30-65 | Above 65 quality degrades on a 65K cap |
+
+### Stage 4 — visual master synthesis
+
+`shortlisting-shape-d-stage4` (new edge fn, single invocation per round, runs after all Stage 1 batches succeed).
+
+The Stage 4 call **sees every preview** (all ~200 images at once) AND receives the merged Stage 1 per-image JSON as supplementary text context.
+
+This is the architectural core of the iter-5 design. Slot decisions, gallery sequencing, dedup grouping, and master listing copy all need cross-image visual reasoning, not text-only summary reading.
+
+#### Inputs the Stage 4 call receives
+
+```typescript
+interface Stage4Input {
+  round: Stage1BatchInput['round'];
+  property_tier: 'premium' | 'standard' | 'approachable';
+  property_voice_anchor_override: string | null;
+
+  // ALL images (visual context)
+  images: Array<{
     composition_group_id: string;
     stem: string;
-    
-    // Classification (replaces Pass 1's room_type / composition / vantage)
-    room_type: string;
-    composition_type: string;
-    vantage_point: 'interior_looking_out' | 'exterior_looking_in' | 'neutral';
-    image_type: string[];                  // ['day', 'exterior'] etc — W11
-    
-    // Signal scores (W11 per-signal, 22 absolute 0-10 scores)
-    signal_scores: Record<string, number | null>;
-    
-    // Dimension rollup (W8 weighted)
-    dimension_scores: { technical: number; lighting: number; composition: number; aesthetic: number };
-    combined_score: number;                 // weighted via active_tier_config
-    
-    // Evidence (compact — full descriptions go to async backfill)
-    key_evidence: string[];                 // 3-5 noun-phrases per image: ['hills_hoist', 'brick_facade', ...]
-    observed_objects: Array<{               // W12 substrate
-      raw_label: string;
-      attributes: Array<{ key: string; value: string }>;  // [{key:'material', value:'caesarstone'}]
-      confidence: number;                   // 0-1
-    }>;
-    
-    // Meta
+    preview_url: string;
     is_secondary_camera: boolean;
-    is_relevant_property_content: boolean;  // W11 — false for headshots/test/BTS
-    quarantine_reason: string | null;       // when is_relevant=false
-    clutter_severity: 'none' | 'minor_photoshoppable' | 'moderate_retouch' | 'major_reject';
+  }>;                                      // typically 100-200
+
+  // Stage 1 outputs as text (supplementary)
+  stage_1_merged: Stage1PerImageOutput[];  // length = total angles
+
+  // Slot definitions (from W7.7 product-driven slot eligibility)
+  slot_definitions: Array<{
+    slot_id: string; display_name: string; phase: 1 | 2 | 3;
+    eligible_room_types: string[]; max_images: number; min_images: number;
+    notes: string | null;
   }>;
-  
-  // Slot decisions (cross-image judgement)
+
+  // Same project_memory + canonical_object_registry + tier_config as Stage 1
+  // (sent again so Stage 4 can override with full context)
+  project_memory: Stage1BatchInput['project_memory'];
+  canonical_object_registry: Stage1BatchInput['canonical_object_registry'];
+  active_tier_config: Stage1BatchInput['active_tier_config'];
+
+  engine_settings: {
+    stage4_thinking_budget: number;        // default 16384
+    stage4_max_output_tokens: number;      // default 12000
+  };
+}
+```
+
+#### Outputs the Stage 4 call produces
+
+```typescript
+interface Stage4Output {
+  schema_version: '1.0';
+  round_id: string;
+  vendor: 'gemini' | 'anthropic';
+  model_version: string;
+  thinking_budget: number;
+  prompt_block_versions: Record<string, string>;
+
+  // Slot decisions — made WITH visual cross-comparison
   slot_decisions: Array<{
     slot_id: string;
     phase: 1 | 2 | 3;
     winner: { stem: string; rationale: string };
-    alternatives: Array<{ stem: string; rationale: string }>;  // typically 2
+    alternatives: Array<{ stem: string; rationale: string }>;   // typically 2
     rejected_near_duplicates: Array<{ stem: string; near_dup_of: string }>;
   }>;
-  
+
   // Slot proposals (W12 hook — model identified taxonomy gaps)
   proposed_slots: Array<{
     proposed_slot_id: string;
     candidate_stems: string[];
     reasoning: string;
   }>;
-  
-  // Round-level
-  coverage_notes: string;
-  quality_outliers: Array<{                 // tier-mismatch flags (Q3 from Joseph)
+
+  // Master listing object (full structure in W11 schema spec)
+  master_listing: {
+    headline: string;
+    sub_headline: string;
+    scene_setting_paragraph: string;
+    interior_paragraph: string;
+    lifestyle_paragraph: string;
+    closing_paragraph: string | null;
+    key_features: string[];
+    location_paragraph: string;
+    target_buyer_summary: string;
+    seo_meta_description: string;          // ≤155 chars
+    social_post_caption: string;           // Instagram-ready
+    print_brochure_summary: string;        // ~200 words
+    agent_one_liner: string;               // 10-15 words
+    open_home_email_blurb: string;         // 3-4 lines
+    word_count: number;
+    reading_grade_level: number;
+    tone_anchor: string;
+  };
+
+  // Cross-image only emitted by Stage 4
+  gallery_sequence: string[];              // ordered stems for marketing gallery
+  dedup_groups: Array<{
+    group_label: string;
+    image_stems: string[];
+  }>;
+  missing_shot_recommendations: string[];
+  narrative_arc_score: number;             // 0-10 — gallery walkthrough coherence
+  property_archetype_consensus: string;    // master-level archetype
+  overall_property_score: number;          // single property-level Tier rating
+
+  // Audit trail when Stage 4's visual context corrects Stage 1
+  stage_4_overrides: Array<{
     stem: string;
-    actual_score: number;
+    field: string;                         // e.g. "room_type"
+    stage_1_value: string;
+    stage_4_value: string;
+    reason: string;                        // e.g. "visual cross-comparison shows this is rear yard not side passage"
+  }>;
+
+  // Coverage / outliers
+  coverage_notes: string;
+  quality_outliers: Array<{
+    stem: string; actual_score: number;
     expected_for_tier: number;
     direction: 'over_delivered' | 'under_delivered';
-    suggestion: string;                     // "consider tier_p pricing for similar listings"
+    suggestion: string;
   }>;
 }
 ```
 
-### Section 2 — Multi-message scaling (Joseph's Option C, confirmed 2026-04-29)
+#### Stage 4 budget knobs
 
-For rounds where output would exceed 8k tokens (typically >60 composition_groups), the unified call uses Anthropic's multi-turn conversation pattern with **prompt caching** to keep costs bounded.
+| Setting | Default | Notes |
+|---|---|---|
+| `stage4_thinking_budget` | 16384 | Multi-image reasoning needs the headroom. |
+| `stage4_max_output_tokens` | 12000 | Master listing + slot decisions + dedup is verbose. |
 
-#### Scaling tiers
+#### Why Stage 4 must see the actual images (not just Stage 1 text)
 
-```typescript
-function selectExecutionMode(group_count: number): ExecutionMode {
-  if (group_count <= 50) return 'single_call';
-  if (group_count <= 100) return 'multi_message_2_turn';
-  return 'multi_message_3_turn';
+Iter-4 shipped without Stage 4's visual context — slot decisions were made by a text-only call reading Stage 1 JSON. Result:
+
+- **Hero-pick degradation.** "Which kitchen image is the hero?" lost subtle cues (lighting on the splashback at angle B, foreground anchor at angle C) that Stage 1 prose summarised but didn't fully capture.
+- **Dedup misses.** Two visually near-identical "kitchen wide" shots from slightly different vantages were grouped as distinct because Stage 1 emitted slightly different `key_elements` for each.
+- **Gallery sequencing flat.** Without seeing the visual flow, the model produced a competent but uninspired gallery order.
+
+Iter-5 (Shape D) restores visual context to Stage 4. Slot picks, dedup grouping, and gallery sequence quality all visibly improved on the Saladine A/B.
+
+### Stage 4 overrides (the audit trail)
+
+When Stage 4's visual cross-comparison finds Stage 1 made a mistake, it writes a row to `stage_4_overrides[]` rather than silently changing the answer. The pipeline applies the override AND surfaces the diff in W11.6 for operator review.
+
+Example:
+
+```json
+{
+  "stem": "IMG_6195",
+  "field": "room_type",
+  "stage_1_value": "exterior_side",
+  "stage_4_value": "exterior_rear",
+  "reason": "Visual cross-reference with IMG_6193 (clearly facade) confirms IMG_6195 sits on opposite side of building. Hills Hoist + hot-water unit in same frame. Side passage classification incorrect."
 }
 ```
 
-#### Single-call mode (≤50 groups)
+These rows feed W14 as graduate-quality few-shot candidates ("AI labelled X → corrected by visual cross-reference"). They are first-class training data.
 
-One Opus request. Receives all images + full prompt context. Emits the full UnifiedCallOutput in one response.
-- Cost: ~$1.20-1.80
-- Latency: ~30-60s
+### Failure isolation
 
-#### Multi-message 2-turn (51-100 groups)
+Stage 1 batches run in parallel. If batch 2 fails after retries, batches 1, 3, and 4 still complete. The round dispatcher handles partial completion:
 
-```
-Request 1:
-  cache_control: { type: 'ephemeral', ttl: 300 }  // Anthropic 5-min prompt cache
-  messages: [
-    { role: 'user', content: [...all images, prompt, "Process compositions 1..N/2"] }
-  ]
-  → Opus emits compositions[] for the first half (~7k tokens)
+| State | Action |
+|---|---|
+| All Stage 1 batches succeed | Proceed to Stage 4 |
+| 1 Stage 1 batch fails (retries exhausted) | Mark round `degraded`. Stage 4 runs against the partial set with a `partial_input: true` flag in its prompt. Operator sees a "Round produced with 50 images missing" banner in the swimlane. |
+| Stage 4 fails | Retry once. On second failure, fall back to text-only Stage 4 (Stage 1 outputs become slot-decision input via the iter-4 codepath, kept as compatibility shim). |
+| Vendor outage on Gemini | `W11.8` adapter routes to Anthropic Opus 4.7 with the same prompt blocks. Cost jumps ~12× but the round completes. |
 
-Request 2:
-  messages: [
-    ...Request 1's messages,
-    { role: 'assistant', content: <Request 1's response> },
-    { role: 'user', content: "Now process compositions N/2+1..N AND emit slot_decisions across all N." }
-  ]
-  → Opus emits compositions[] for second half + slot_decisions[]
-```
+Round-level state stamped into `shortlisting_rounds.engine_mode` (`shape_d_full`, `shape_d_partial`, `shape_d_textfallback`, `unified_anthropic_failover`) for replay reproducibility.
 
-With prompt caching: ~$0.80-2.00/round (vs ~$3-5 without caching).
-Latency: ~60-120s.
+---
 
-#### Multi-message 3-turn (>100 groups)
+## Per-shoot orchestration
 
-Three sequential Opus requests within one logical conversation:
-1. Classifications for compositions 1..N/3
-2. Classifications for N/3+1..2N/3
-3. Classifications for 2N/3+1..N + cross-cohort slot_decisions
+`shortlisting-shape-d` (new top-level edge fn — replaces the old `shortlisting-unified` orchestrator).
 
-With prompt caching:
-- Request 1: full price (~$2.50)
-- Requests 2 + 3: cached input @ 10% + new output (~$0.80 each)
-- Total: ~$4.10 for a 150-group round, ~$5.50 for 200 groups.
+Pseudocode:
 
-### Section 3 — Async description backfill (Sonnet 4.6)
+```typescript
+async function runShapeDRound(roundId: string) {
+  const round = await loadRoundContext(roundId);
+  const groups = await loadCompositionGroups(roundId);
 
-Rich 3-sentence per-image descriptions are NOT in the unified call's output (would break the 8k budget). They're generated immediately after the round opens to the operator via a background job.
+  // Stage 0 dependencies: Pass 0 (Haiku reject + bracket detection) already complete
 
-#### Trigger
-Pass 3 completion → emits `shortlisting_jobs` row of kind `description_backfill` per round.
+  // Stage 1 — batched per-image enrichment, parallel
+  const batches = partitionIntoStage1Batches(groups);
+  const stage1Promises = batches.map((batch, i) =>
+    callStage1(round, batch, { batch_index: i }).catch(err => ({ error: err, batch_index: i }))
+  );
+  const stage1Results = await Promise.all(stage1Promises);
 
-#### Worker
-New edge fn `shortlisting-description-backfill`. For each composition_group in the round:
-1. Loads the unified call's output for the round (slot decisions + classification context)
-2. Loads the image preview (Modal Dropbox path)
-3. Calls Sonnet 4.6 with: image + structured context (round meta, slot decision for this image, key_evidence, observed_objects, near-duplicates)
-4. Sonnet emits a 150-word description paragraph
-5. Persists to `composition_classifications.analysis` (same column today's Pass 1 writes)
+  const stage1Errors = stage1Results.filter(r => 'error' in r);
+  if (stage1Errors.length > 1) {
+    return markRoundFailed(roundId, 'too_many_stage1_failures', stage1Errors);
+  }
 
-#### Parallelism + cost
-35 backfill calls in parallel via `Promise.all` batches. ~$0.015/call × 35 = **$0.53/round**. Latency: ~30-60s post-round.
+  const stage1Merged = mergeStage1Outputs(stage1Results.filter(r => !('error' in r)));
+  const partial = stage1Errors.length === 1;
 
-#### Operator UX
-- Round completes → operator sees swimlane with classifications + scores + slot decisions immediately
-- "Why?" buttons on each card render skeleton "Generating description..." for ~30-60s, then show the rich text
-- Backfill is best-effort — if one Sonnet call fails, that card shows a fallback "Description unavailable; click to retry"
+  // Stage 4 — visual master synthesis, single call seeing all images
+  const stage4 = await callStage4(round, groups, stage1Merged, { partial }).catch(err => null);
+  if (!stage4) {
+    return markRoundFailed(roundId, 'stage4_failed_after_retry');
+  }
 
-### Section 4 — Project memory (W11.5 hook)
+  // Apply Stage 4 overrides over Stage 1 base
+  const consolidated = applyStage4Overrides(stage1Merged, stage4.stage_4_overrides);
 
-The unified call's prompt assembly (W7.6 block pattern) includes a new `projectMemoryBlock` that loads:
+  // Persist
+  await persistCompositionClassifications(consolidated);
+  await persistSignalScores(consolidated);
+  await persistSlotDecisions(stage4.slot_decisions);
+  await persistMasterListing(stage4.master_listing);
+  await persistObservedObjects(consolidated);  // feeds W12 rollup
+  await persistGalleryArtifacts(stage4);       // dedup_groups, gallery_sequence, etc.
 
-```sql
--- Prior overrides for this project
-SELECT
-  cg.delivery_reference_stem,
-  cco.ai_room_type,
-  cco.human_room_type,
-  cco.override_reason
-FROM composition_classification_overrides cco
-JOIN composition_groups cg ON cg.id = cco.group_id
-JOIN shortlisting_rounds sr ON sr.id = cco.round_id
-WHERE sr.project_id = $current_project_id
-  AND cco.human_room_type IS NOT NULL
-ORDER BY cco.actor_at DESC
-LIMIT 50;
+  // Pass 3 (rule-based validator) + W12 canonical rollup
+  await dispatchValidationJobs(roundId);
+  await dispatchCanonicalRollupJob(roundId);
+
+  return markRoundComplete(roundId, partial ? 'shape_d_partial' : 'shape_d_full');
+}
 ```
 
-Rendered into the prompt as:
+---
+
+## Project memory + canonical registry hooks
+
+### Project memory (W11.5)
+
+Every Stage 1 batch and the Stage 4 call receive the same `project_memory` block, rendered into the prompt as authoritative prior corrections:
 
 ```
 PROJECT MEMORY (prior operator corrections on this property):
@@ -301,89 +493,176 @@ When images in the current set show similar evidence, apply the same
 classification pattern.
 ```
 
-Opus uses this in its judgement. Round #2 of the same property never re-mislabels IMG_6195.
+Round #2 of the same property never re-mislabels IMG_6195 — both stages see the prior correction.
 
-### Section 5 — Canonical registry context (W12 hook)
+### Canonical registry (W12)
 
-Top-200 most-frequent canonical objects from `object_registry` are loaded into the prompt:
+Top-200 most-frequent canonical objects from `object_registry` are loaded into both stages:
 
 ```
 CANONICAL FEATURE REGISTRY (top 200 by frequency, for cross-project consistency):
 - hills_hoist (rotary clothesline): exterior_rear signal, 92% confidence, 47 obs
 - caesarstone (engineered stone benchtop): kitchen_main signal, 96%, 80 obs
 - subway_tile_splashback: kitchen_main, 87%, 42 obs
-- terracotta_tile_roof: exterior signal (any orientation), 99%, 211 obs
-- ducted_air_vent: interior signal, 94%, 156 obs
-- corrugated_iron_shed: exterior_rear signal, 81%, 28 obs
+- terracotta_tile_roof: exterior signal, 99%, 211 obs
 ...
 ```
 
-Opus uses these as evidence weights. When a previously-unseen project shows a Hills Hoist in a frame, Opus draws on the cross-project pattern even though it has zero direct experience with this property.
+**Free-text Gemini outputs map to canonical IDs via post-rollup pass.** Stage 1 emits raw `observed_objects[]` with attribute strings; the W12 rollup batch (runs after Stage 4 commits) does cosine-similarity normalisation against the registry and writes back `canonical_object_ids[]` per image.
 
-### Section 6 — Few-shot examples (W14 hook)
+### Few-shot library (W14)
 
-Active examples from `pass1_fewshot_examples` (renamed to `engine_fewshot_examples` post-W11.7) are loaded:
+Active examples from `engine_fewshot_examples` (renamed from `pass1_fewshot_examples` post-W11.7) are loaded:
 
 ```
 EMPIRICAL CORRECTION EXAMPLES (from operator overrides across recent projects):
 1. AI labelled exterior_front → human corrected to exterior_rear (8 cases).
    Common evidence: hills_hoist, hot_water_system, garden_tap.
 2. AI labelled living_room → human corrected to living_secondary (12 cases).
-   Common evidence: vantage_above_main_floor, distinct staircase visible, secondary furniture style.
-3. AI labelled bedroom_secondary → human corrected to master_bedroom (5 cases).
-   Common evidence: ensuite_door_visible, larger_room_volume, premium_finishes.
-
-Apply these patterns when current images match the evidence keywords.
+   Common evidence: vantage_above_main_floor, distinct staircase, secondary furniture style.
+...
 ```
 
 Default cap: 20 examples in active prompt (configurable via `engine_settings.fewshot_max_active`). W14 admin curates which examples graduate to active.
 
-### Section 7 — Scoring under unified architecture
+---
 
-Per-image scores are **absolute against per-signal anchors**, not tier-relative. Stream B anchors block (W7.6) is rewritten:
+## Voice tier modulation (W11.7.8)
 
+`property_tier` is a caller-provided input on every shoot:
+
+| Tier | Voice anchor | When used |
+|---|---|---|
+| `premium` | Belle Property / luxury domain magazine — restrained, evocative, specific materials | $5M+ properties, premium homes, architectural pieces |
+| `standard` | Domain editorial — confident, warm, specific but accessible | Most listings — default |
+| `approachable` | Friendly, plain-language — clear features without pretension | Entry-level homes, investor stock, student rentals |
+
+The tier injects a voice anchor block into both Stage 1 and Stage 4 prompts. Stage 1's `listing_copy` and Stage 4's `master_listing` are both tier-aware. Default is `standard` to avoid pretentious copy on average homes.
+
+`property_voice_anchor_override` allows a per-project manual override (e.g. "warm but agent-led, not editorial") when the tier presets aren't a good fit. Free-text string injected into the voice block verbatim.
+
+Full spec: separate doc `W11-7-8-voice-tier-modulation.md` (coming).
+
+---
+
+## Master listing copy synthesis (W11.7.7)
+
+The `master_listing` object emitted by Stage 4 is a complete listing-publishing artifact:
+
+| Field | Length | Purpose |
+|---|---|---|
+| `headline` | 8-15 words | Hook tier, tier-appropriate Sydney voice |
+| `sub_headline` | 1 sentence | Elaboration |
+| `scene_setting_paragraph` | ~150-200 words | Facade, character, first impression |
+| `interior_paragraph` | ~150-220 words | Floor plan + key rooms |
+| `lifestyle_paragraph` | ~150-200 words | Entertaining, family, indoor-outdoor |
+| `closing_paragraph` | optional, ~100-150 words | Material specificity / unique angle |
+| `key_features` | 6-10 bullets | Specific, no clichés |
+| `location_paragraph` | ~80-120 words | Suburb pocket, walking distances |
+| `target_buyer_summary` | 1 sentence | Who this is for |
+| `seo_meta_description` | ≤155 chars | Listing page meta |
+| `social_post_caption` | 1-2 lines + 5-8 hashtags | Instagram-ready |
+| `print_brochure_summary` | ~200 words | Brochure distillation |
+| `agent_one_liner` | 10-15 words | Verbal pitch |
+| `open_home_email_blurb` | 3-4 lines | Email teaser |
+| `word_count` | int | Self-reported |
+| `reading_grade_level` | int | Flesch-Kincaid (target 8-10) |
+| `tone_anchor` | string | Voice anchor self-report |
+
+Full spec: separate doc `W11-7-7-master-listing-copy.md` (coming).
+
+---
+
+## Master-class prompt enrichment (W11.7.9)
+
+The Stage 1 + Stage 4 system prompts include reference excerpts from luxury real estate copy (Belle Property, Domain editorial, Christie's) calibrated to the property tier. These excerpts seed voice without hardcoding sentence templates. The enrichment block is curated by Joseph and lives in versioned prompt blocks (W7.6 pattern).
+
+Full spec: separate doc `W11-7-9-master-class-prompt-enrichment.md` (coming).
+
+---
+
+## Cost model
+
+Per-call, average:
+
+| Stage | Calls/200-shoot | Cost/call | Sub-total |
+|---|---|---|---|
+| Pass 0 (Haiku reject) | 1 | $0.04 | $0.04 |
+| Stage 1 batches (50 imgs each) | 4 | $0.66 | $2.64 |
+| Stage 4 visual synthesis | 1 | $1.20 | $1.20 |
+| **Total** | **6 (5 vision + 1 reject)** | | **~$3.84** |
+
+### Linear scaling
+
+| Angles | Stage 1 batches | Total cost | Wall time |
+|---|---|---|---|
+| 50 | 1 | $1.94 | ~2 min |
+| 100 | 2 | $2.60 | ~3 min |
+| 150 | 3 | $3.26 | ~4 min |
+| **200 (typical photo-day)** | **4** | **$3.84** | **~5 min** |
+| 300 (multi-day) | 6 | $5.16 | ~6 min |
+| 400 (extra-large) | 8 | $6.48 | ~8 min |
+
+Latency dominated by Stage 4 (~60-90s) since Stage 1 batches run parallel.
+
+### Anthropic failover cost
+
+When `W11.8` routes to Anthropic Opus 4.7 due to Gemini outage, costs roughly multiply by 12× (the cost reason Gemini won as anchor). Budget it as ~$45/200-shoot worst-case. The W11.6 dashboard alerts on >5% Anthropic-routed rounds in any 24h window.
+
+---
+
+## Migration plan (existing pass1+pass2 → Shape D)
+
+### Phase A — coexistence (~2 weeks)
+
+Both `shortlisting-pass1` + `shortlisting-pass2` AND `shortlisting-shape-d-stage1` + `shortlisting-shape-d-stage4` deployed. `engine_settings.engine_mode` toggles per-round:
+
+```sql
+INSERT INTO engine_settings (key, value, description) VALUES
+  ('engine_mode', '"two_pass"'::jsonb, 'two_pass | shape_d');
 ```
-SCORING ANCHORS — USE THE FULL 0-10 RANGE.
 
-5 = MINIMUM acceptable score for the lowest tier (Tier S).
-8 = MINIMUM threshold to reach Tier P quality.
-9.5 = MINIMUM threshold to reach Tier A.
+Default: `'two_pass'`. master_admin flips per-project to `'shape_d'` for pilot.
 
-The tier sets the customer's expectation for the FLOOR of acceptable
-quality. It does NOT cap the upper range of scores. A Tier S shoot can
-produce a 9.0 if the photographer over-delivered. A Tier A shoot can
-produce a 5.0 if the work didn't meet the price-tier expectation.
+### Phase B — pilot (~4 weeks)
 
-Score against the absolute per-signal anchors. Do not anchor scores to
-the tier's expected score; anchor them to the actual visual quality.
+Selected projects (master_admin opt-in) run in Shape D. Side-by-side with two-pass on similar properties. Compare:
 
-When you find compositions that score >1.5 above the tier's score_anchor,
-flag them in `quality_outliers` with direction='over_delivered' and the
-suggestion 'consider tier upgrade for similar listings'. Conversely flag
-under-delivered shoots so operators can address quality issues with
-photographers.
-```
+| Metric | Target |
+|---|---|
+| Slot decision agreement rate vs two-pass | ≥85% on same input set |
+| Override rate (post-operator review) | ≤ two_pass override rate |
+| Operator review duration per card | ≤ two_pass (richer rationale should help) |
+| Cost per round | within published envelope (±20%) |
+| Wall-time | ≤ 10 min p95 |
+| Stage 4 override rate (Stage 1 corrections) | 2-8% of images is healthy; >15% means Stage 1 prompt needs work |
+| Anthropic failover rate | <2% of rounds |
 
-Combined score is computed via Wave 8's tier-config weighted rollup over the 4 dimension scores; dimension scores are themselves weighted rollups over the 22 W11 per-signal scores. All anchors absolute, no tier compression by construction.
+### Phase C — default flip (~2 weeks)
 
-### Section 8 — Migration from two-pass to unified
+`engine_settings.engine_mode = 'shape_d'` becomes default. New rounds use Shape D by default; legacy rounds remain queryable in their original two-pass output shape (audit-trail integrity).
 
-#### Phase A — coexistence
-Both `shortlisting-pass1` + `shortlisting-pass2` AND `shortlisting-unified` deployed. Engine settings flag `engine_mode: 'two_pass' | 'unified'` toggles per-round. Default: `'two_pass'` for safety; admin flips to `'unified'` after smoke-test confidence.
+### Phase D — Pass 1/Pass 2 deprecation (~4 weeks)
 
-#### Phase B — pilot
-Selected projects (master_admin opt-in) run in `unified` mode. Side-by-side with rounds that ran in `two_pass`. Compare:
-- Slot decision agreement rate (should be ≥85% on the same set)
-- Override rate (should be ≤ two_pass)
-- Operator review duration per card (should be ≤ two_pass since rationale is richer)
+`shortlisting-pass1` + `shortlisting-pass2` deleted. Their dispatcher chain entries (`pass1`, `pass2` job kinds) marked legacy in the dispatcher. Job replays of historical rounds use a compatibility shim that re-runs Shape D against the historical inputs (Pass 0 outputs untouched).
 
-#### Phase C — default flip
-After pilot succeeds, `engine_settings.engine_mode = 'unified'` becomes default. New rounds use unified by default; legacy rounds remain queryable in their original two-pass output shape (audit-trail integrity).
+Total timeline: ~12 weeks. Coexistence shape lets us roll back at any point if quality regresses.
 
-#### Phase D — deprecation
-`shortlisting-pass1` + `shortlisting-pass2` deleted. Their dispatcher chain entries (`pass1`, `pass2` job kinds) marked legacy in the dispatcher. Job replays of historical rounds use a compatibility shim that re-runs unified mode against the historical inputs.
+---
 
-Estimated phase timeline: A=2 weeks, B=4 weeks (parallel runs), C=2 weeks, D=4 weeks. Total ~12 weeks. Coexistence shape lets us roll back at any point if quality regresses.
+## Sub-burst structure (delivery breakdown)
+
+| Sub | Title | Scope |
+|---|---|---|
+| **W11.7.1** | shortlisting-shape-d edge fn build | Top-level orchestrator. Stage 1 partition + parallel dispatch + merge. Stage 4 invocation. Persistence. Failure isolation. |
+| **W11.7.2** | Stage 1 batch handler | `shortlisting-shape-d-stage1` edge fn. Prompt assembly (W7.6 blocks + new Stage 1 blocks). Vendor adapter call (W11.8). Per-image schema validation. |
+| **W11.7.3** | Stage 4 visual master synthesis handler | `shortlisting-shape-d-stage4` edge fn. ALL-images prompt assembly + Stage 1 JSON injection. Master listing extraction. Override emission. |
+| **W11.7.4** | Phase A coexistence | engine_mode setting + admin UI. Round-level engine_mode stamp. Backwards-compat shim. |
+| **W11.7.5** | Phase B 4-week pilot | A/B harness via W11.8. W11.6 dashboard panels for Shape D vs two-pass. Daily summary email to Joseph. |
+| **W11.7.6** | Phase C default flip + Phase D deprecation | engine_mode default flip. Pass 1/Pass 2 edge fn deletion. Dispatcher cleanup. Replay-shim build. |
+| **W11.7.7** | Master listing copy synthesis | Separate spec (link). Stage 4 prompt block. SEO/social/brochure derivative outputs. |
+| **W11.7.8** | Voice tier modulation | Separate spec (link). property_tier input. Voice anchor block (premium/standard/approachable). Override mechanism. |
+| **W11.7.9** | Master-class prompt enrichment | Separate spec (link). Reference excerpts library. Tier-aware injection. Curation workflow. |
 
 ---
 
@@ -392,28 +671,34 @@ Estimated phase timeline: A=2 weeks, B=4 weeks (parallel runs), C=2 weeks, D=4 w
 Reserve mig **349** (after W7.7=339, W10.1=340, W7.13=341, W10.3=342, W13b=343, W8=344, W12=345, W14=346, W11.5=347, W11.6=348).
 
 ```sql
--- 349_unified_shortlisting_engine.sql
--- W11.7: schema additions to support unified architecture coexistence.
+-- 349_shape_d_shortlisting_engine.sql
+-- W11.7: schema additions to support Shape D coexistence.
 
 -- 1. Engine mode setting
 INSERT INTO engine_settings (key, value, description) VALUES
   ('engine_mode',
    '"two_pass"'::jsonb,
-   'Wave 11.7: which shortlisting architecture to use. "two_pass" = legacy Pass 1 + Pass 2; "unified" = single Opus call with async description backfill. Master_admin flips to "unified" after pilot validation.')
+   'Wave 11.7: which shortlisting architecture to use. "two_pass" = legacy Pass 1 + Pass 2; "shape_d" = 5-call multi-stage Gemini-anchored. master_admin flips per-project then default after pilot validation.'),
+  ('shape_d_stage1_batch_size', '50'::jsonb, 'Wave 11.7: max images per Stage 1 call.'),
+  ('shape_d_stage1_thinking_budget', '2048'::jsonb, 'Wave 11.7: Gemini thinkingBudget for Stage 1.'),
+  ('shape_d_stage4_thinking_budget', '16384'::jsonb, 'Wave 11.7: Gemini thinkingBudget for Stage 4.'),
+  ('shape_d_default_property_tier', '"standard"'::jsonb, 'Wave 11.7: voice tier when project does not specify.')
 ON CONFLICT (key) DO NOTHING;
 
--- 2. Round-level execution-mode stamp (replay reproducibility)
+-- 2. Round-level engine_mode stamp (replay reproducibility)
 ALTER TABLE shortlisting_rounds
-  ADD COLUMN IF NOT EXISTS engine_mode TEXT;
+  ADD COLUMN IF NOT EXISTS engine_mode TEXT,
+  ADD COLUMN IF NOT EXISTS property_tier TEXT,
+  ADD COLUMN IF NOT EXISTS property_voice_anchor_override TEXT;
 COMMENT ON COLUMN shortlisting_rounds.engine_mode IS
-  'Wave 11.7: "two_pass" or "unified". Captured at ingest from the active engine_settings.engine_mode value.';
+  'Wave 11.7: "two_pass" or "shape_d_full" or "shape_d_partial" or "shape_d_textfallback" or "unified_anthropic_failover".';
 
 -- 3. Backfill: existing rounds were two_pass
 UPDATE shortlisting_rounds
 SET engine_mode = 'two_pass'
 WHERE engine_mode IS NULL;
 
--- 4. Few-shot library table
+-- 4. Few-shot library table (renamed from pass1_fewshot_examples)
 CREATE TABLE IF NOT EXISTS engine_fewshot_examples (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   example_kind TEXT NOT NULL,
@@ -430,73 +715,99 @@ CREATE TABLE IF NOT EXISTS engine_fewshot_examples (
 );
 CREATE INDEX idx_fewshot_active ON engine_fewshot_examples(in_active_prompt) WHERE in_active_prompt = TRUE;
 
+-- 5. Master listing snapshot per round
+CREATE TABLE IF NOT EXISTS shortlisting_master_listings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  round_id UUID NOT NULL REFERENCES shortlisting_rounds(id) ON DELETE CASCADE,
+  master_listing JSONB NOT NULL,
+  property_tier TEXT NOT NULL,
+  voice_anchor_used TEXT,
+  word_count INT,
+  reading_grade_level NUMERIC,
+  vendor TEXT NOT NULL,
+  model_version TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(round_id)
+);
+
+-- 6. Stage 4 override audit
+CREATE TABLE IF NOT EXISTS shortlisting_stage4_overrides (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  round_id UUID NOT NULL REFERENCES shortlisting_rounds(id) ON DELETE CASCADE,
+  stem TEXT NOT NULL,
+  field TEXT NOT NULL,
+  stage_1_value TEXT,
+  stage_4_value TEXT,
+  reason TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_stage4_overrides_round ON shortlisting_stage4_overrides(round_id);
+
+-- 7. Gallery artifacts per round (sequence + dedup)
+ALTER TABLE shortlisting_rounds
+  ADD COLUMN IF NOT EXISTS gallery_sequence TEXT[],
+  ADD COLUMN IF NOT EXISTS dedup_groups JSONB,
+  ADD COLUMN IF NOT EXISTS missing_shot_recommendations TEXT[],
+  ADD COLUMN IF NOT EXISTS narrative_arc_score NUMERIC,
+  ADD COLUMN IF NOT EXISTS overall_property_score NUMERIC,
+  ADD COLUMN IF NOT EXISTS property_archetype_consensus TEXT;
+
 NOTIFY pgrst, 'reload schema';
 ```
 
 ---
 
-## Cost model summary
-
-| Round size | Mode | Cost / round |
-|---|---|---|
-| Small (≤50 groups, typical Gold) | Single Opus call | ~$1.78-2.38 |
-| Medium (51-100 groups, premium video) | Multi-message 2-turn + caching | ~$2.50-3.50 |
-| Large (101-150 groups, half-day Flex) | Multi-message 3-turn + caching | ~$4.10-5.00 |
-| Extra-large (151-200+ groups, multi-day shoots) | Multi-message 3-turn + caching, 2-turn fallback per group-cluster | ~$5.50-8.00 |
-
-In all tiers, async Sonnet description backfill adds ~$0.50-1.00.
-
-**Today's cost: $1.50-3.90/round** (depending on group count).
-**Unified cost: $1.78-9.00/round** (linear scaling with size).
-
-The premium-package end is more expensive but the quality lift on those rounds is the highest-leverage business outcome (Tier P/A pricing depends on shortlist quality).
-
----
-
 ## Risks + mitigations
 
-| Risk | Mitigation |
-|---|---|
-| Opus 4.7 quality regresses or is deprecated | `engine_settings.unified_model = 'claude-opus-4-7'` is admin-editable; swap fast |
-| Single-call failure mode (whole round fails) | Retry once; on second failure, fall back to legacy `engine_mode='two_pass'` for that one round |
-| Output token edge cases on huge rounds | Multi-message scaling; runtime detection at pre-flight |
-| Prompt caching invalidation | Anthropic's 5-min cache TTL is sufficient for sequential turns within one round |
-| Operator confusion during Phase A coexistence | Settings → Engine Settings displays current `engine_mode` clearly; round metadata pages show which mode produced each historical round |
-| W11 schema not yet shipped | This spec hard-blocks on W11. Cannot dispatch implementation until W11 lands |
+| Risk | Likelihood | Mitigation |
+|---|---|---|
+| Gemini 2.5 Pro deprecated or rate-limited | Medium | `W11.8` adapter routes to Anthropic Opus 4.7 within 60s. Cost spikes but rounds complete. Continuous A/B keeps failover prompts hot. |
+| Stage 1 batch quality regresses on >50 images | Low (empirical) | `stage1_batch_size` setting capped at 65; alarm if any deployed round exceeds 50. |
+| Stage 4 hits 12K output token cap on 200+ angles | Medium | Pre-flight estimator. If projected tokens >10K, master_listing fields trim verbose paragraphs to mid-tier lengths. |
+| Stage 4 visual reasoning regresses on huge image counts (>250) | Medium | Stage 4 is single-call by design. If we measurably degrade above 250, switch to a Stage 4a (slot decisions) + Stage 4b (master listing) sub-split. Track in pilot. |
+| Single Stage 1 batch failure tanks the round | Low | Failure isolation: 1 failed batch → degraded mode, others succeed. >1 failure → round marked failed, easy retry. |
+| Output schema mismatch between Stage 1 and Stage 4 overrides | Medium | Strict TS types on adapter boundary. Schema mismatch → automatic Stage 4 retry once, then dump payloads to W11.6 for triage. |
+| Gemini's 65K output cap drops in a future model rev | Low | Stage 1 monitors per-batch output token count; alarms at >55K. We always have headroom to drop batch_size to 40. |
+| Operator confusion during Phase A coexistence | Medium | Settings → Engine Settings shows current `engine_mode`. Round metadata pages show which mode produced each historical round. |
+| Master listing quality varies by tier/property | Medium | Pilot includes editorial review of every master_listing for the first 200 rounds. Calibration loop adjusts prompts. |
+| W11.8 adapter latency adds overhead | Low | Adapter is thin (HTTP shim). Measured overhead <250ms / call. |
+| Stage 4 override rate too high (Stage 1 prompt unstable) | Medium | Pilot threshold: if >15% of images get Stage 4-overridden, freeze Phase B and tune Stage 1 prompt blocks (W14 candidate examples). |
 
 ---
 
 ## Open questions for sign-off
 
-**Q1.** Coexistence period length?
-**Recommendation:** 4-week pilot (Phase B) before flipping default. Long enough for ~120 unified rounds across operators; short enough to ship the value soon.
+**Q1.** Stage 4 split for >250 angle shoots? **Recommendation:** ship Shape D as single-Stage 4. Add Stage 4a/4b split as a deferred sub-burst (W11.7.10) only if pilot data shows degradation past 250.
 
-**Q2.** Pilot project selection?
-**Recommendation:** master_admin opt-in per-project. Allows controlled comparison against fresh two-pass rounds on similar properties.
+**Q2.** Pilot project selection? **Recommendation:** master_admin opt-in per-project. Allows controlled comparison vs fresh two-pass rounds on similar properties. Target 10-20 projects across S/P/A tiers.
 
-**Q3.** Description backfill failure UX?
-**Recommendation:** show "Description unavailable — retry" link on the card. Operator click → fires single Sonnet call for that image. Reduces blast radius of partial failures.
+**Q3.** Gemini context cache vs Anthropic prompt cache? **Recommendation:** use whichever the active vendor offers. W11.8 handles cache key construction abstractly. Document the cache TTL per vendor in W11.8 spec.
 
-**Q4.** Should the unified output's `quality_outliers` automatically generate revenue-intelligence notifications?
-**Recommendation:** No automatic notification at v1; surface in W11.6 dashboard as a list. After 3 months of data we have a sense of false-positive rate; then decide.
+**Q4.** Master listing quality gate before publishing? **Recommendation:** pilot phase requires human editorial review of every master_listing. Phase C onwards: spot-check 1-in-10. Phase D onwards: trust the model + W11.6 sentiment-monitoring dashboard.
 
-**Q5.** Backwards-compat for legacy rounds?
-**Recommendation:** `shortlisting_rounds.engine_mode` stamps per round. Audit JSON includes the stamp. Replay paths read the stamp and route to the right engine version. Simple.
+**Q5.** Failover round audit visibility? **Recommendation:** Anthropic-failover rounds are flagged in W11.6 with a vendor badge so operators see they were produced by the audit fork. Cost dashboard separates Gemini and Anthropic spend.
+
+**Q6.** Backwards-compat for legacy rounds? **Recommendation:** `shortlisting_rounds.engine_mode` stamp per round + audit JSON includes the stamp. Replay paths read the stamp and route to the right engine version.
 
 ---
 
 ## Pre-execution checklist
 
-- [x] W11 universal schema spec exists (this wave depends on its compact per-image shape)
-- [x] W7.6 prompt blocks composable (this wave assembles the unified prompt from existing blocks + new ones)
+- [x] W11 universal schema spec exists
+- [x] W11.8 multi-vendor adapter spec exists (Gemini primary + Anthropic failover)
+- [x] W7.6 prompt blocks composable (this wave assembles Shape D prompts from existing blocks + new ones)
 - [x] W7.7 dynamic packages + tier configs (this wave reads them in)
 - [x] W8 tier configs versioned (this wave reads active tier_config in)
 - [x] W11.5 reclassification spec exists (this wave consumes the override data as project_memory)
 - [x] W11.6 rejection dashboard spec exists (this wave's outputs feed it)
-- [ ] **W11 must ship before W11.7 implementation begins** (universal schema is the input shape)
-- [ ] Joseph signs off on coexistence period (Q1) + pilot mechanism (Q2)
+- [x] W12 canonical objects registry spec exists (this wave's `observed_objects` feeds it; rollup pass populates `canonical_object_ids`)
+- [ ] **W11 must ship before W11.7 implementation begins** (universal schema + iter-5 additions are the input shape)
+- [ ] W11.8 multi-vendor adapter must ship before W11.7.1 dispatch
+- [ ] Joseph signs off on coexistence period (Q2) + master_listing quality gate (Q4)
 - [ ] Migration 349 reserved at integration time
-- [ ] Cost-model agreement: Joseph confirms ~$1.78-9.00/round linear-scaling envelope is acceptable
+- [ ] Cost-model agreement: Joseph confirms ~$3.84/200-shoot is acceptable
+- [ ] Voice anchor library (W11.7.8) curated for premium/standard/approachable tiers
+- [ ] Master-class prompt enrichment library (W11.7.9) curated
 
 ---
 
@@ -504,6 +815,7 @@ The premium-package end is more expensive but the quality lift on those rounds i
 
 - `shortlisting-pass1` edge fn (deleted Phase D)
 - `shortlisting-pass2` edge fn (deleted Phase D)
+- `shortlisting-description-backfill` edge fn (was iter-2 spec; never shipped — Stage 1 produces verbose descriptions inline)
 - `pass1` and `pass2` job kinds in dispatcher (legacy-tagged Phase C, removed Phase D)
 - Pass 1 → Pass 2 chain coordination logic
 - The Pass 1 trust assumption that caused IMG_6195's mislabel
@@ -511,26 +823,66 @@ The premium-package end is more expensive but the quality lift on those rounds i
 ## What this wave preserves (unchanged)
 
 - Pass 0 (Haiku hard-reject + bracket detection) — still runs first
-- Pass 3 (rule-based validator) — still runs last
+- Pass 3 (rule-based validator) — still runs last (against Stage 4's consolidated output)
 - All composition_groups + composition_classifications + shortlisting_overrides + shortlisting_rounds tables (additive only)
 - The lock + audit JSON pipeline (W7.4 / W7.5)
 - The dispatcher mutex (W7.5)
 - Manual mode (W7.13)
-- The frontend swimlane (rendering against `composition_classifications.analysis` and slot decisions same as today)
-- W7.6 composable prompt blocks (reused; new blocks added)
+- The frontend swimlane (rendering against `composition_classifications.analysis` + slot decisions same as today)
+- W7.6 composable prompt blocks (reused; new Shape D blocks added)
 - W7.7 dynamic packages
 - W8 tier configs
+- W11.5 project memory
+- W11.6 rejection dashboard
+- W11.8 multi-vendor adapter
+- W12 canonical objects registry
+- W14 few-shot library
+
+## What this wave adds (net new)
+
+- Stage 1 batch handler (parallel per-batch enrichment)
+- Stage 4 visual master synthesis (single call, sees all images)
+- Master listing object (per-shoot listing copy) — see W11.7.7
+- Voice tier modulation — see W11.7.8
+- Master-class prompt enrichment — see W11.7.9
+- Stage 4 override audit table (`shortlisting_stage4_overrides`)
+- Master listing snapshot table (`shortlisting_master_listings`)
+- Property tier input on rounds (`property_tier`, `property_voice_anchor_override`)
+- Gallery sequence + dedup groups + narrative arc score columns on `shortlisting_rounds`
+
+---
 
 ## Effort estimate
 
-- 1 day: spec finalisation + Joseph sign-off
-- 2 days: `shortlisting-unified` edge fn (assembly, prompt construction, multi-message handler, prompt caching wiring)
-- 2 days: `shortlisting-description-backfill` edge fn + Sonnet integration
-- 2 days: dispatcher chain updates (collapse pass1+pass2 into unified job kind; add description_backfill job kind)
-- 1 day: migration 349 + admin UI for engine_settings.engine_mode toggle
-- 2 days: tests (unit for prompt assembly; integration for multi-message; smoke for backfill)
-- 1 day: cost-monitoring dashboard (real-time per-round cost surfaced in W11.6)
-- 1 day: docs (deployment runbook, replay paths, rollback procedure)
-- **Total: ~12 days execution + 4-week pilot before default flip**
+| Sub | Description | Days |
+|---|---|---|
+| Spec finalisation + Joseph sign-off | This doc + W11.7.7/8/9 sub-specs | 2 |
+| W11.7.1: shortlisting-shape-d orchestrator | Top-level edge fn build | 2 |
+| W11.7.2: Stage 1 batch handler | Edge fn + prompt assembly + W11.8 wiring | 2 |
+| W11.7.3: Stage 4 visual synthesis handler | Edge fn + multi-image prompt + override extraction | 2 |
+| W11.7.4: Phase A coexistence | engine_mode toggle + round stamp + backwards-compat shim | 1 |
+| Migration 349 + admin UI | Engine settings UI for Shape D toggles | 1 |
+| Tests | Unit (prompt assembly), integration (multi-batch), smoke (Stage 4 against fixtures) | 2 |
+| W11.6 dashboard panels for Shape D | Per-round cost, override rate, vendor breakdown | 1 |
+| Docs | Deployment runbook, replay paths, rollback procedure | 1 |
+| **Implementation total** | | **~14 days** |
+| W11.7.5: Phase B 4-week pilot | Live A/B run with master_admin opt-in projects | 4 weeks (calendar) |
+| W11.7.6: Phase C/D deprecation | Default flip + Pass 1/Pass 2 deletion + replay shim | ~3 days work spread over 6 weeks |
+| **Grand total** | | **~14 days build + 12 weeks calendar to full deprecation** |
 
-This is the largest single wave of work since W7.7 + W11. Justified by the architectural compounding it unlocks for every downstream wave.
+This is the largest single wave of work since W7.7 + W11. Justified by the architectural compounding it unlocks for every downstream wave (W11.13 pgvector similarity uses `embedding_anchor_text`, W12 canonical rollup uses `observed_objects`, W14 grad-quality few-shots use `stage_4_overrides`, W15a/b reuse the same Shape D pattern across internal-finals + external-listings).
+
+---
+
+## Cross-references
+
+- `W11` — Universal Vision Response Schema (input/output shape)
+- `W11.5` — Project Memory (override metadata feeding the prompt)
+- `W11.6` — Rejection Dashboard (consumes Shape D outputs)
+- `W11.8` — Multi-Vendor Adapter (Gemini primary, Anthropic failover/audit)
+- `W11.13` — pgvector similarity search (consumes `embedding_anchor_text`)
+- `W12` — Canonical Objects Registry (consumes `observed_objects`, populates `canonical_object_ids`)
+- `W14` — Few-Shot Library (consumes `stage_4_overrides` as graduate candidates)
+- `W7.6` — Composable Prompt Blocks
+- `W7.7` — Dynamic Packages + Tier Configs
+- `W8` — Tier Weights

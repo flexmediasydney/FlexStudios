@@ -119,13 +119,17 @@ eligibility). Wave 9 no longer exists.
 
 **Theme:** redesign the engine's vision output as a source-agnostic schema that
 feeds object_registry + signals + image-type tables across RAW/finals/
-external listings.
+external listings, **plus the Shape-D-specific fields** that emerged from the
+2026-04-30 architecture pivot: `master_listing` per project, `voice_tier`,
+canonical_id references, `appeal_signals`, `concern_signals`, `retouch_priority`,
+`gallery_position_hint`, `style_archetype`, `embedding_anchor_text`, and the
+5-level canonical vocabulary hierarchy.
 
 **Status:** 🛑 **NEEDS FULL DESIGN PHASE BEFORE EXECUTION.** This is the
 single most architecturally consequential wave in the roadmap. Cannot be
 delegated to subagents without my up-front design work + Joseph's sign-off.
 
-**Architectural pivot (2026-04-29):** the universal schema's compact per-image shape enables a unified single-Opus-call architecture (Pass 1 + Pass 2 collapsed). See W11.7 below — it inherits W11 as a hard dependency. W11 ships first (defines the schema); W11.7 ships after (changes how the schema is produced).
+**Architectural pivot (2026-04-30):** the universal schema's compact per-image shape now anchors a **Shape D 5-call multi-stage Gemini-anchored architecture** (3-4 Stage 1 batch calls × 50 images each for full per-image enrichment, plus 1 Stage 4 visual master synthesis call across all 200 images). See W11.7 below — it inherits W11 as a hard dependency. W11 ships first (defines the schema, including master_listing + voice_tier + canonical_id + Stage 1 enrichment fields); W11.7 ships after (changes how the schema is produced).
 
 ### Design phase deliverables (before any code)
 
@@ -161,9 +165,9 @@ Largest single wave.
 
 ## Wave 11.5 — Human reclassification capture
 
-**Theme:** operators can correct unified-call mislabels (room_type, composition, vantage, score, slot eligibility); each correction feeds project memory + cross-project canonical registry.
+**Theme:** operators can correct Shape D mislabels (room_type, composition, vantage, score, slot eligibility) for both Stage 1 mistakes AND Stage 4 self-corrections; each correction feeds `project_memory` consumed in Stage 1's prompt context + cross-project canonical registry.
 
-**Status:** ⚙️ **Spec ready** — `docs/design-specs/W11-5-human-reclassification-capture.md`. Depends on W11 + W11.7 + W12. Mig 347.
+**Status:** ⚙️ **Spec ready** — `docs/design-specs/W11-5-human-reclassification-capture.md` (terminology refreshed 2026-04-30). Depends on W11 + W11.7 + W12. Mig 347.
 
 **Effort:** ~2.5 days execution.
 
@@ -171,40 +175,60 @@ Largest single wave.
 
 ## Wave 11.6 — Rejection reasons admin dashboard
 
-**Theme:** master_admin dashboard surfaces the captured override signal so a human can spot patterns and tune via W8 admin UI.
+**Theme:** master_admin dashboard surfaces the captured override signal so a human can spot patterns and tune via W8 admin UI. Expanded under W11.7 to surface Stage 4 self-correction events, voice tier distribution, master_listing copy metrics, canonical registry coverage, and cost-per-stage attribution.
 
-**Status:** ⚙️ **Spec ready** — `docs/design-specs/W11-6-rejection-reasons-dashboard.md`. Depends on W10.3 ✅ + W11.5 + W11.7. No migration.
+**Status:** ⚙️ **Spec ready** — `docs/design-specs/W11-6-rejection-reasons-dashboard.md` (widgets expanded 2026-04-30). Depends on W10.3 ✅ + W11.5 + W11.7. No migration.
 
-**Effort:** ~3.5 days execution.
+**Effort:** ~4.5 days execution.
 
 ---
 
-## Wave 11.7 — Unified single-call shortlisting architecture (KEYSTONE FOR FUTURE WAVES)
+## Wave 11.7 — Shape D multi-stage Gemini-anchored shortlisting architecture (KEYSTONE FOR FUTURE WAVES)
 
-**Theme:** collapse Pass 1 + Pass 2 into a single Opus 4.7 call that sees the full visual universe + makes all decisions, with async Sonnet 4.6 description backfill for rich per-image text. Project memory + canonical registry feed the unified call's prompt context — closes the "engine grows per project" loop.
+**Theme:** the Shape D engine — 3-4 Stage 1 batch calls × 50 images each (full per-image enrichment: analysis, scoring, classification, clutter detection, per-image listing copy), plus 1 Stage 4 visual master synthesis call across all 200 images that emits slot decisions + a project-level `master_listing`. Primary vendor: **Gemini 2.5 Pro** per Saladine A/B iter-4 results; Anthropic Opus 4.7 retained as production failover. Project memory + canonical registry + few-shot library feed Stage 1's prompt context — closes the "engine grows per project" loop.
 
-**Status:** 🛑 **Spec ready, depends on W11** — `docs/design-specs/W11-7-unified-shortlisting-architecture.md`. Authored 2026-04-29 from Joseph's architectural questioning. Mig 349.
+**Status:** 🛑 **Spec ready (rewritten), depends on W11** — `docs/design-specs/W11-7-unified-shortlisting-architecture.md`. Authored 2026-04-29; rewritten 2026-04-30 after Saladine A/B iter-1 → iter-4 progression and the architecture pivot to Shape D / Gemini-primary. Mig 349.
 
 ### Bursts
 
 | # | Item | Backlog ref | Status |
 |---|---|---|---|
-| W11.7.1 | `shortlisting-unified` edge fn — single Opus call, multi-message scaling for >50 groups, prompt-caching for cost control | P1-25 | ⚙️ ready after W11 |
-| W11.7.2 | `shortlisting-description-backfill` edge fn — async Sonnet 4.6 per-image rich descriptions | P1-25 | ⚙️ ready after W11 |
-| W11.7.3 | Migration 349: `engine_settings.engine_mode` (two_pass / unified), `shortlisting_rounds.engine_mode` stamp, `engine_fewshot_examples` table | P1-25 | ⚙️ ready after W11 |
-| W11.7.4 | Phase A coexistence (both architectures available; admin opts in per-round) | P1-25 | ⚙️ post-W11.7.1-3 |
-| W11.7.5 | Phase B 4-week pilot + comparison metrics in W11.6 dashboard | P1-25 | post-W11.7.4 |
-| W11.7.6 | Phase C default flip + Phase D Pass 1 / Pass 2 deprecation | P1-25 | post-pilot validation |
+| W11.7.1 | `shortlisting-shape-d` edge fn — orchestration: project_memory load, Stage 1 batch dispatch, Stage 4 synthesis dispatch, master_listing persistence, vendor failover wiring | P1-25 | ⚙️ ready after W11 |
+| W11.7.2 | Stage 1 batch handler — per-batch Gemini 2.5 Pro call (50 images), full per-image enrichment (analysis, scoring, classification, clutter, per-image listing copy, appeal_signals, concern_signals, retouch_priority, gallery_position_hint, style_archetype) | P1-25 | ⚙️ ready after W11 |
+| W11.7.3 | Stage 4 visual master synthesis handler — single Gemini 2.5 Pro call across all 200 images, emits slot_decisions[] + master_listing block (voice_tier, word_count, reading_grade_level, key_elements with canonical_id refs, embedding_anchor_text) | P1-25 | ⚙️ ready after W11 |
+| W11.7.4 | Phase A coexistence — both architectures available; admin opts in per-round; W10.3 + W11.5 capture data on both paths | P1-25 | ⚙️ post-W11.7.1-3 |
+| W11.7.5 | Phase B 4-week pilot — Shape D run on a sampled fraction of production rounds; comparison metrics surfaced in W11.6 dashboard (override rate, Stage 4 self-correction rate, voice tier distribution, cost-per-stage) | P1-25 | post-W11.7.4 |
+| W11.7.6 | Phase C default flip — Shape D becomes the default; Phase D deprecates legacy Pass 1 / Pass 2 edge fns | P1-25 | post-pilot validation |
+| W11.7.7 | Master listing copy synthesis — full spec for Stage 4's `master_listing` output: structure, fields, validators, voice/grade-level constraints, lifecycle in `master_listings` table, integration with delivery (NEW spec being authored separately) | P1-25 | ⚙️ spec being authored |
+| W11.7.8 | Voice tier modulation — full spec for the Premium / Standard / Approachable tier system: package mapping, modulation rules at Stage 4, override paths, audit signals (NEW spec being authored separately) | P1-25 | ⚙️ spec being authored |
+| W11.7.9 | Master-class prompt enrichment — full spec for the perceptual rubric, Sydney market primer, voice exemplars, and the 5-level canonical vocabulary hierarchy that anchor both Stage 1 and Stage 4 prompts (NEW spec being authored separately) | P1-25 | ⚙️ spec being authored |
 
-**Estimated total:** 12 days execution + 4-week pilot before default flip + 4-week deprecation window. ~8-10 weeks calendar end-to-end.
+**Cost model:** ~$3.14 - $6.00 per shoot depending on size. Saladine validation (200 angles): ~$3.84 / shoot under Gemini 2.5 Pro on the iter-4 prompt set. Lower bound (small shoots / tier-A) ~$3.14; upper bound (large shoots with full Stage 1 enrichment + master_listing) ~$6.00. Replaces the earlier Opus-anchored projection of $1.78 - $9.00.
 
-**Why this wave matters:** it's the architectural bridge between today's open-loop engine (data captured, learning manual) and the closed-loop ethos Joseph articulated (every override + reclassification + observation feeds the next round and every future round). Without W11.7, W12's registry, W14's calibration, and W11.5's reclassifications all land but don't compound into the engine's prompt context. With W11.7, every captured signal becomes prompt context for the next Opus call.
+**Estimated total:** 14-16 days execution (existing W11.7.1-6 + 3 new sub-bursts) + 4-week pilot before default flip + 4-week deprecation window. ~9-11 weeks calendar end-to-end.
+
+**Why this wave matters:** it's the architectural bridge between today's open-loop engine (data captured, learning manual) and the closed-loop ethos Joseph articulated (every override + reclassification + observation feeds the next round and every future round). Without W11.7, W12's registry, W14's calibration, and W11.5's reclassifications all land but don't compound into the engine's prompt context. With Shape D, every captured signal becomes prompt context for the next Stage 1 batch — Gemini-primary cost economics make this loop affordable to run on every round.
 
 **Pass 1 + Pass 2 deprecation timeline:**
 - Phase D begins after default flip + 4-week soak
 - `shortlisting-pass1` + `shortlisting-pass2` edge functions deleted
 - Dispatcher's `pass1` and `pass2` job kinds removed
-- `shortlisting_rounds.engine_mode` historical stamp preserved indefinitely for replay
+- `shortlisting_rounds.engine_mode` historical stamp preserved indefinitely for replay (`two_pass` | `shape_d`)
+
+---
+
+## Wave 11.8 — Multi-vendor vision adapter (audit / A/B + failover)
+
+**Theme:** vendor-agnostic adapter layer over Anthropic + Google vision APIs, per-stage model configuration in `engine_settings`, shadow-run A/B harness, production failover wiring.
+
+**Status:** ✅ **Shipped 2026-04-30.** Role updated post-Saladine: serves as the **audit / A/B harness + production failover layer** — NOT the primary architecture. The Shape D engine (W11.7) is the primary; W11.8 is the substrate that enables vendor portability + ongoing audit.
+
+**Production defaults (post-Saladine iter-4):**
+- `vision.shape_d.primary_vendor` = `"google"` (Gemini 2.5 Pro)
+- `vision.shape_d.failover_vendor` = `"anthropic"` (Opus 4.7)
+- `vision.shadow_run.enabled` toggleable; sample rate ~5% of production rounds keeps regression-detection signal warm
+
+**Spec:** `docs/design-specs/W11-8-multi-vendor-vision-adapter.md` (status + role updated 2026-04-30).
 
 ---
 
@@ -336,17 +360,22 @@ The big business value. Per spec section 24:
 
 ```
 Critical path (serial):
-  W7 → W8 → W11 → W12 → W13a/b/c → W14 → W15a/b/c
+  W7 → W8 → W11 → W11.7 (Shape D, Gemini-primary) → W12 → W13a/b/c → W14 → W15a/b/c
 
 Parallelizable:
   W7.1/W7.2/W7.3 can run simultaneously
   W7.10 independent
   W10 can start anytime after W7.7 (uses tier_used from W8.4 if available)
+  W11.8 ✅ shipped — runs alongside W11.7 as audit/A/B + failover
+  W11.5, W11.6 ship after W11.7 lands
+  W12 unblocks the canonical-registry feedback loop that Stage 1 reads (so W12 work
+    in parallel with W11.7 Phase A/B compounds value at default-flip time)
   W13a/b/c sub-tracks parallel after their dependencies
   W15a/b/c sub-tracks parallel after W11 lands
 
 Total elapsed if fully serialized: ~5-6 months.
-With parallelism + design-phase prep work in flight: ~3-4 months.
+With parallelism (Gemini-primary + W12 in flight + W11.7 sub-bursts) + design-phase
+prep work in flight: ~3-4 months.
 ```
 
 ## Orchestrator readiness map (updated 2026-04-27)
@@ -362,8 +391,12 @@ With parallelism + design-phase prep work in flight: ~3-4 months.
 | W7.10 / W7.12 | ✅ ready (independent) |
 | W8 | ✅ **shipped** — mig 344 + edge fns + admin UI + audit JSON schema 1.1 |
 | W10 | ✅ yes |
-| **W11** | 🛑 **design phase active** — full spec exists at `docs/design-specs/W11-universal-vision-response-schema.md`; needs Joseph's sign-off on the 22 measurement prompts before execution |
-| W12 | ⚠️ trigger threshold decisions captured in `docs/design-specs/W12-trigger-thresholds.md`; ready when W11 lands |
+| **W11** | 🛑 **design phase active** — full spec exists at `docs/design-specs/W11-universal-vision-response-schema.md`; needs Joseph's sign-off on the 22 measurement prompts + new Shape D fields (master_listing, voice_tier, canonical_id refs, appeal/concern_signals, retouch_priority, gallery_position_hint, style_archetype, embedding_anchor_text, 5-level canonical vocabulary hierarchy) before execution |
+| W11.5 | ⚙️ spec ready (terminology refreshed 2026-04-30); ships after W11 + W11.7 |
+| W11.6 | ⚙️ spec ready (Shape D widgets expanded 2026-04-30); ships after W11.7 Phase B |
+| **W11.7** | 🛑 **Shape D rewrite in progress** — primary architecture; rewritten spec replaces "single Opus call" framing with "5-call Gemini-anchored multi-stage". Sub-specs W11.7.7 / W11.7.8 / W11.7.9 being authored separately |
+| W11.8 | ✅ **shipped 2026-04-30** — audit / A/B + failover role |
+| W12 | ⚠️ trigger threshold decisions captured in `docs/design-specs/W12-trigger-thresholds.md`; ready when W11 lands. Unblocks the canonical-registry feedback loop that Shape D Stage 1 reads as prompt context |
 | W13a / W13b / W13c | ✅ yes after dependencies |
 | W14 | ✅ yes after W12 |
 | W15 | 🛑 cannot start until W11 ships |
