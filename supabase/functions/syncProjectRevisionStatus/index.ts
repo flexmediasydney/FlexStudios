@@ -38,6 +38,11 @@ serveWithAudit('syncProjectRevisionStatus', async (req) => {
     }
 
     if (Object.keys(updateData).length > 0) {
+      // Bump last_status_change so the project_stage_timer_sync trigger uses
+      // the actual transition time. Without this the trigger reads the stale
+      // value from the prior transition and back-dates the new timer's
+      // entry_time (and zero-durations the closing timer).
+      updateData.last_status_change = new Date().toISOString();
       await entities.Project.update(project_id, updateData);
       return jsonResponse({ status: 'synced', project_status: updateData.status || project.status, has_unclosed_revisions: hasUnclosedRevisions });
     }
