@@ -41,7 +41,7 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
   // `appointment_cancelled` (both appointment-level reasons that are moot
   // once Tonomo has delivered), and pre_revision_stage is set, silently
   // clear the review and restore the prior stage. Anything else
-  // (cancellation, restoration, pricing_mismatch, new_booking, tonomo_drift,
+  // (cancellation, pricing_mismatch, new_booking, tonomo_drift,
   // service_change, staff_change, products_removed) still requires human
   // review — the delivery fact doesn't dissolve those concerns.
   const APPOINTMENT_ONLY_REVIEW_TYPES = ['rescheduled', 'appointment_cancelled'];
@@ -57,6 +57,62 @@ export async function handleDelivered(entities: any, orderId: string, p: any) {
     updates.pre_revision_stage = null;
     updates.urgent_review = false;
     console.log(`[handleDelivered] Auto-resolved stale ${project.pending_review_type} pending_review for ${orderId} → ${project.pre_revision_stage}`);
+  }
+
+  // Auto-resolve `restoration` pending_reviews triggered by a Tonomo lifecycle
+  // round-trip (delivered → inProgress → delivered). Only applies when the
+  // pre-reversal stage was delivered (a cancelled→restored→delivered path
+  // still needs a human). Diff incoming services and invoice against project
+  // state — auto-resolve only if both are materially unchanged. If anything
+  // differs, keep the review but rewrite the reason to be specific.
+  if (
+    project.status === 'pending_review' &&
+    project.pending_review_type === 'restoration' &&
+    project.pre_revision_stage === 'delivered'
+  ) {
+    const overrides = safeJsonParse(project.manually_overridden_fields, [] as string[]);
+    const incomingServices = [
+      ...new Set([
+        ...(p.services_a_la_cart || p.order?.services_a_la_cart || []),
+        ...(p.services || p.order?.services || []),
+      ]),
+    ].filter(Boolean);
+    const prevServices = safeJsonParse(project.tonomo_raw_services, [] as string[]);
+    const servicesUnchanged =
+      incomingServices.length === 0 ||
+      prevServices.length === 0 ||
+      (incomingServices.length === prevServices.length &&
+        incomingServices.every((s: string) => prevServices.includes(s)));
+
+    const incomingInvoice = p.invoice_amount != null ? parseFloat(p.invoice_amount) : null;
+    const prevInvoice = project.tonomo_invoice_amount != null ? parseFloat(project.tonomo_invoice_amount) : null;
+    const invoiceUnchanged =
+      overrides.includes('tonomo_invoice_amount') ||
+      incomingInvoice == null ||
+      prevInvoice == null ||
+      Math.abs(incomingInvoice - prevInvoice) < 0.01;
+
+    if (servicesUnchanged && invoiceUnchanged) {
+      updates.status = 'delivered';
+      updates.pending_review_type = null;
+      updates.pending_review_reason = null;
+      updates.pre_revision_stage = null;
+      updates.urgent_review = false;
+      console.log(`[handleDelivered] Auto-resolved restoration pending_review for ${orderId} → delivered (services/invoice unchanged after Tonomo round-trip)`);
+    } else {
+      const diffParts: string[] = [];
+      if (!servicesUnchanged) {
+        const added = incomingServices.filter((s: string) => !prevServices.includes(s));
+        const removed = prevServices.filter((s: string) => !incomingServices.includes(s));
+        if (added.length) diffParts.push(`services added: ${added.join(', ')}`);
+        if (removed.length) diffParts.push(`services removed: ${removed.join(', ')}`);
+      }
+      if (!invoiceUnchanged) {
+        diffParts.push(`invoice $${prevInvoice ?? '?'} → $${incomingInvoice ?? '?'}`);
+      }
+      updates.pending_review_reason = `Order delivered after lifecycle reversal, but data changed during round-trip — ${diffParts.join('; ')}. Please review and re-approve.`;
+      console.log(`[handleDelivered] Restoration pending_review retained for ${orderId} — diff: ${diffParts.join('; ')}`);
+    }
   }
 
   if (p.deliveredDate) updates.tonomo_delivered_at = new Date(p.deliveredDate).toISOString();
