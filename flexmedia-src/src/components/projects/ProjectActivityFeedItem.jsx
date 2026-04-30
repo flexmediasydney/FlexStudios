@@ -11,7 +11,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { fmtTimestampCustom } from '@/components/utils/dateUtils';
+import { fmtTimestampCustom, fixTimestamp } from '@/components/utils/dateUtils';
 import { toast } from 'sonner';
 import ActivityLogItem from './ActivityLogItem';
 import EmailComposeDialog from '@/components/email/EmailComposeDialog';
