@@ -72,6 +72,10 @@ import {
   type SourceType,
 } from '../_shared/visionPrompts/blocks/sourceContextBlock.ts';
 import {
+  photographerTechniquesBlock,
+  PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/photographerTechniquesBlock.ts';
+import {
   voiceAnchorBlock,
   VOICE_ANCHOR_BLOCK_VERSION,
   SYDNEY_PRIMER_BLOCK,
@@ -526,6 +530,7 @@ async function runStage4Core(
     ].join('\n');
     const userPromptCore = buildStage4UserPrompt({
       sourceContextBlockText: sourceContextBlock(sourceType),
+      photographerTechniquesBlockText: photographerTechniquesBlock(),
       voiceBlockText: voiceAnchorBlock(voice),
       selfCritiqueBlockText: SELF_CRITIQUE_BLOCK,
       propertyFacts: ctx.property_facts,
@@ -1680,6 +1685,7 @@ function stage4PromptBlockVersions(): Record<string, string> {
   return {
     stage4_prompt: STAGE4_PROMPT_VERSION,
     source_context: SOURCE_CONTEXT_BLOCK_VERSION,
+    photographer_techniques: PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,

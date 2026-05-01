@@ -458,6 +458,14 @@ export function buildStage4SystemPrompt(): string {
 
 export interface BuildStage4UserPromptOpts {
   sourceContextBlockText: string;
+  /**
+   * Photographer-techniques preamble (W11.7.1 photographerTechniquesBlock).
+   * Tells Stage 4 to recognise deliberate craft moves (e.g. fingers blocking
+   * the sun for flare suppression) as PROTECTIVE techniques, not flaws —
+   * never emit `photographer_error` overrides for these. Optional for
+   * back-compat; production paths always supply it.
+   */
+  photographerTechniquesBlockText?: string;
   voiceBlockText: string;
   selfCritiqueBlockText: string;
   propertyFacts: PropertyFacts;
@@ -504,9 +512,14 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     zones_visible: (e.zones_visible ?? []).slice(0, 4),
   }));
 
+  const photographerTechniquesSection = opts.photographerTechniquesBlockText
+    ? [opts.photographerTechniquesBlockText, '']
+    : [];
+
   return [
     opts.sourceContextBlockText,
     '',
+    ...photographerTechniquesSection,
     opts.voiceBlockText,
     '',
     '── PROPERTY FACTS (authoritative; do NOT invent) ──',

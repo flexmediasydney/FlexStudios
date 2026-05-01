@@ -91,6 +91,10 @@ import {
   type SourceType,
 } from '../_shared/visionPrompts/blocks/sourceContextBlock.ts';
 import {
+  photographerTechniquesBlock,
+  PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/photographerTechniquesBlock.ts';
+import {
   voiceAnchorBlock,
   VOICE_ANCHOR_BLOCK_VERSION,
   SYDNEY_PRIMER_BLOCK,
@@ -572,12 +576,16 @@ async function runShapeDStage1Core(
   }
   const systemText = systemBlocks.join('\n');
 
-  // User prompt: source-context preamble TOP, then pass1 user blocks (room
-  // taxonomy, scoring anchors, vantage, clutter), then voice anchor rubric,
-  // then self-critique, then few_shot library at the END. The model sees ONE
-  // image — no stem matching needed.
+  // User prompt: source-context preamble TOP, then photographer-techniques
+  // preamble (recognise deliberate craft moves like fingers-over-sun so we
+  // don't penalise them), then pass1 user blocks (room taxonomy, scoring
+  // anchors, vantage, clutter), then voice anchor rubric, then self-critique,
+  // then few_shot library at the END. The model sees ONE image — no stem
+  // matching needed.
   const userBlocks = [
     sourceContextBlock(sourceType),
+    '',
+    photographerTechniquesBlock(),
     '',
     basePrompt.userPrefix,
     '',
@@ -1525,6 +1533,7 @@ function stage1PromptBlockVersions(): Record<string, string> {
   return {
     stage1_response_schema: STAGE1_RESPONSE_SCHEMA_VERSION,
     source_context: SOURCE_CONTEXT_BLOCK_VERSION,
+    photographer_techniques: PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,
