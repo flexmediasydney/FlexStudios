@@ -63,7 +63,10 @@ export interface FloorplanExtractRow extends FloorplanModelOutput {
   floorplan_url: string;
   floorplan_url_hash: string;
   cross_check_flags: string[];
-  vendor_used: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google' to match the simplified VisionVendor
+  // union after the Anthropic vision-adapter strip. Floorplan extraction was
+  // already Gemini-only at runtime — this is a type-only tightening.
+  vendor_used: 'google';
   model_used: string;
   cost_usd: number;
   elapsed_ms: number;
@@ -221,7 +224,8 @@ export function buildFloorplanRequest(args: {
   crm_bedrooms: number | null;
   crm_bathrooms: number | null;
   model: string;
-  vendor: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google' (Anthropic vision adapter stripped).
+  vendor: 'google';
   thinking_budget: number;
   max_output_tokens: number;
 }): VisionRequest {

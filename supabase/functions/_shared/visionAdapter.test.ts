@@ -4,16 +4,18 @@
  *
  * Run: deno test --no-check --allow-all supabase/functions/_shared/visionAdapter.test.ts
  *
- * Per-adapter unit tests (request shape, response parsing) live alongside each
- * adapter — visionAdapter.anthropic.test.ts (commit 3/7) and
- * visionAdapter.google.test.ts (commit 4/7).
+ * W11.8.1 (2026-05-01): Anthropic adapter stripped — Gemini is the sole
+ * production vision vendor. Anthropic-routing tests removed; the only routing
+ * test verifies google → Google adapter (env-var label proves dispatch).
+ *
+ * Per-adapter unit tests (request shape, response parsing) live alongside the
+ * adapter — visionAdapter.google.test.ts.
  */
 
 import {
   assert,
   assertAlmostEquals,
   assertEquals,
-  assertRejects,
   assertStrictEquals,
 } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 
@@ -31,8 +33,8 @@ import {
 
 function makeRequest(overrides: Partial<VisionRequest> = {}): VisionRequest {
   return {
-    vendor: 'anthropic',
-    model: 'claude-sonnet-4-6',
+    vendor: 'google',
+    model: 'gemini-2.0-pro',
     tool_name: 'classify',
     tool_input_schema: {
       type: 'object',
@@ -49,30 +51,6 @@ function makeRequest(overrides: Partial<VisionRequest> = {}): VisionRequest {
 
 // ─── Pricing tests ───────────────────────────────────────────────────────────
 
-Deno.test('pricing — Anthropic Sonnet rates resolve correctly', () => {
-  const rates = resolveRates('anthropic', 'claude-sonnet-4-6');
-  assertEquals(rates.inputPerMillion, 3.0);
-  assertEquals(rates.outputPerMillion, 15.0);
-});
-
-Deno.test('pricing — Anthropic Opus rates resolve correctly', () => {
-  const rates = resolveRates('anthropic', 'claude-opus-4-7');
-  assertEquals(rates.inputPerMillion, 15.0);
-  assertEquals(rates.outputPerMillion, 75.0);
-});
-
-Deno.test('pricing — Anthropic Haiku rates resolve correctly', () => {
-  const rates = resolveRates('anthropic', 'claude-haiku-4');
-  assertEquals(rates.inputPerMillion, 1.0);
-  assertEquals(rates.outputPerMillion, 5.0);
-});
-
-Deno.test('pricing — Anthropic date-suffix model strips and resolves', () => {
-  const rates = resolveRates('anthropic', 'claude-sonnet-4-6-20260101');
-  assertEquals(rates.inputPerMillion, 3.0);
-  assertEquals(rates.outputPerMillion, 15.0);
-});
-
 Deno.test('pricing — Google Gemini Pro rates resolve correctly', () => {
   const rates = resolveRates('google', 'gemini-2.0-pro');
   assertEquals(rates.inputPerMillion, 3.50);
@@ -85,29 +63,37 @@ Deno.test('pricing — Google Gemini Flash rates resolve correctly', () => {
   assertEquals(rates.outputPerMillion, 0.40);
 });
 
-Deno.test('pricing — unknown model falls back to Sonnet rates with warning', () => {
+Deno.test('pricing — Google Gemini 2.5 Pro rates resolve correctly', () => {
+  const rates = resolveRates('google', 'gemini-2.5-pro');
+  assertEquals(rates.inputPerMillion, 3.50);
+  assertEquals(rates.outputPerMillion, 10.50);
+});
+
+Deno.test('pricing — Google Gemini 2.5 Flash rates resolve correctly', () => {
+  const rates = resolveRates('google', 'gemini-2.5-flash');
+  assertEquals(rates.inputPerMillion, 0.10);
+  assertEquals(rates.outputPerMillion, 0.40);
+});
+
+Deno.test('pricing — Google date-suffix model strips and resolves', () => {
+  const rates = resolveRates('google', 'gemini-2.0-pro-20260101');
+  assertEquals(rates.inputPerMillion, 3.50);
+  assertEquals(rates.outputPerMillion, 10.50);
+});
+
+Deno.test('pricing — unknown model falls back to Gemini Pro rates with warning', () => {
   // Capture console.warn so the test output isn't cluttered.
   const origWarn = console.warn;
   let warned = false;
   console.warn = () => { warned = true; };
   try {
-    const rates = resolveRates('anthropic', 'claude-totally-fake-model');
-    assertEquals(rates.inputPerMillion, 3.0);
-    assertEquals(rates.outputPerMillion, 15.0);
+    const rates = resolveRates('google', 'gemini-totally-fake-model');
+    assertEquals(rates.inputPerMillion, 3.50);
+    assertEquals(rates.outputPerMillion, 10.50);
     assert(warned, 'expected warn-on-fallback');
   } finally {
     console.warn = origWarn;
   }
-});
-
-Deno.test('estimateCost — Sonnet 1000 in / 500 out → $0.0105', () => {
-  const cost = estimateCost('anthropic', 'claude-sonnet-4-6', {
-    input_tokens: 1000,
-    output_tokens: 500,
-    cached_input_tokens: 0,
-  });
-  // 1000*3/1M + 500*15/1M = 0.003 + 0.0075 = 0.0105
-  assertAlmostEquals(cost, 0.0105, 1e-9);
 });
 
 Deno.test('estimateCost — Gemini Pro 10000 in / 1000 out → $0.0455', () => {
@@ -131,19 +117,19 @@ Deno.test('estimateCost — Gemini Flash near-zero for tiny call', () => {
 });
 
 Deno.test('estimateCost — cached input falls back to standard input rate when no cache rate set', () => {
-  // Anthropic adapters set cachedInputPerMillion=undefined; cost should include
-  // cached tokens at standard input pricing.
-  const cost = estimateCost('anthropic', 'claude-opus-4-7', {
+  // Gemini's pricing rows don't carry cachedInputPerMillion; cost should
+  // include cached tokens at standard input pricing.
+  const cost = estimateCost('google', 'gemini-2.0-pro', {
     input_tokens: 1000,
     output_tokens: 0,
     cached_input_tokens: 1000,
   });
-  // (1000 + 1000) * 15 / 1M = 0.030
-  assertAlmostEquals(cost, 0.030, 1e-9);
+  // (1000 + 1000) * 3.5 / 1M = 0.007
+  assertAlmostEquals(cost, 0.007, 1e-9);
 });
 
 Deno.test('estimateCost — negative usage values are clamped to zero', () => {
-  const cost = estimateCost('anthropic', 'claude-sonnet-4-6', {
+  const cost = estimateCost('google', 'gemini-2.0-pro', {
     input_tokens: -1,
     output_tokens: -1,
     cached_input_tokens: -1,
@@ -152,44 +138,20 @@ Deno.test('estimateCost — negative usage values are clamped to zero', () => {
 });
 
 Deno.test('VENDOR_PRICING — has rows for every required (vendor, model)', () => {
-  // Per W11.8 spec Section 4 — these are the models the Saladine A/B test fires.
-  assert(VENDOR_PRICING.anthropic['claude-opus-4-7']);
-  assert(VENDOR_PRICING.anthropic['claude-sonnet-4-6']);
-  assert(VENDOR_PRICING.anthropic['claude-haiku-4']);
+  // Per W11.8 spec Section 4 — these are the models the production Shape D
+  // pipeline + Pulse extract use. Anthropic rows removed in W11.8.1.
   assert(VENDOR_PRICING.google['gemini-2.0-pro']);
   assert(VENDOR_PRICING.google['gemini-2.0-flash']);
+  assert(VENDOR_PRICING.google['gemini-2.5-pro']);
+  assert(VENDOR_PRICING.google['gemini-2.5-flash']);
 });
 
 // ─── Router tests ────────────────────────────────────────────────────────────
 //
-// Each adapter has its own dedicated test file (visionAdapter.anthropic.test.ts
-// + visionAdapter.google.test.ts) covering request/response shape. The router
-// tests below verify ONLY that the right adapter is dispatched — by removing
-// API-key env vars and asserting MissingVendorCredential surfaces with the
-// correct vendor + env_var labels. This proves the switch routed correctly
-// without needing to mock fetch in this file.
-
-Deno.test('router — anthropic vendor routes to Anthropic adapter (verified by env-var label)', async () => {
-  const origAnthropic = Deno.env.get('ANTHROPIC_API_KEY');
-  const origClaude = Deno.env.get('CLAUDE_API_KEY');
-  Deno.env.delete('ANTHROPIC_API_KEY');
-  Deno.env.delete('CLAUDE_API_KEY');
-  try {
-    const req = makeRequest({ vendor: 'anthropic' });
-    let captured: unknown = null;
-    try {
-      await callVisionAdapter(req);
-    } catch (err) {
-      captured = err;
-    }
-    assert(captured instanceof MissingVendorCredential);
-    assertStrictEquals(captured.vendor, 'anthropic');
-    assertStrictEquals(captured.env_var, 'ANTHROPIC_API_KEY');
-  } finally {
-    if (origAnthropic !== undefined) Deno.env.set('ANTHROPIC_API_KEY', origAnthropic);
-    if (origClaude !== undefined) Deno.env.set('CLAUDE_API_KEY', origClaude);
-  }
-});
+// Per-adapter request/response tests live in visionAdapter.google.test.ts.
+// The router test below verifies dispatch by removing the API-key env var
+// and asserting MissingVendorCredential surfaces with the correct vendor +
+// env_var labels — this proves the switch routed without needing fetch mocks.
 
 Deno.test('router — google vendor routes to Google adapter (verified by env-var label)', async () => {
   const orig = Deno.env.get('GEMINI_API_KEY');
@@ -222,7 +184,7 @@ Deno.test('MissingVendorCredential — sets vendor + env_var fields', () => {
 });
 
 Deno.test('MissingVendorCredential — instanceof Error', () => {
-  const err = new MissingVendorCredential('anthropic', 'ANTHROPIC_API_KEY');
+  const err = new MissingVendorCredential('google', 'GEMINI_API_KEY');
   assert(err instanceof Error);
   assert(err instanceof MissingVendorCredential);
 });

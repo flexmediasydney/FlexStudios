@@ -1,5 +1,5 @@
 /**
- * anthropicVision.ts — Wave 11.8 thin compatibility wrapper.
+ * anthropicVision.ts — Wave 11.8 thin compatibility wrapper for legacy passes.
  *
  * Original module preserved for backward-compat: existing Pass 0/1/2 + the
  * benchmark runner all import `callClaudeVision({model, messages, system,
@@ -7,15 +7,16 @@
  * durationMs, model}`. They emit free-form text, NOT tool-use JSON, and parse
  * the text themselves (lenient JSON extraction in pass1/pass2).
  *
- * This file therefore keeps its own POST to `/v1/messages` (free-form path)
- * but defers cost computation to the shared pricing table at
- * `_shared/visionAdapter/pricing.ts`. That keeps the W11.8 unified pricing
- * source-of-truth while leaving the legacy callers untouched.
+ * W11.8.1 (2026-05-01): Anthropic stripped from the W11.8 vision adapter.
+ * Pricing previously delegated to `visionAdapter/pricing.ts` for a single
+ * source of truth — that table no longer carries Anthropic rows. This file
+ * now carries its own internal Anthropic rate table for the legacy passes
+ * (sunset ~June 1 per W11.7.10). Once the legacy passes are deleted, this
+ * file goes with them.
  *
- * New code (W11.7 unified call, W11.8 retroactive comparison) should use
- * `_shared/visionAdapter/index.ts → callVisionAdapter` directly — that path
- * uses tool-use mode for strict-JSON output and supports both Anthropic and
- * Google.
+ * New code (Shape D Stage 1 + 4, finals-qa, pulse-listing-vision-extract,
+ * floorplan-ocr-extractor) uses `_shared/visionAdapter/index.ts →
+ * callVisionAdapter` directly — Gemini-only, tool-use mode, strict JSON.
  *
  * API key resolution: CLAUDE_API_KEY → ANTHROPIC_API_KEY (fallback).
  *
@@ -23,8 +24,6 @@
  *   - 'base64': inline image bytes (use for small/private images we already hold)
  *   - 'url':    Anthropic's hosted-image fetch — the API server fetches it.
  */
-
-import { estimateCost } from './visionAdapter/pricing.ts';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -154,22 +153,50 @@ function extractText(raw: any): string {
   return out.join('');
 }
 
+// W11.8.1: internal Anthropic rate table (USD per 1M tokens). Kept here so
+// the legacy passes don't depend on the W11.8 visionAdapter pricing table
+// (which dropped Anthropic rows when the failover was stripped). Sunset with
+// the legacy passes themselves on ~June 1 (W11.7.10).
+const ANTHROPIC_RATES: Record<string, { inputPerMillion: number; outputPerMillion: number }> = {
+  'claude-haiku-4': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
+  'claude-haiku-4-5': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
+  'claude-sonnet-4-6': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
+  'claude-opus-4-7': { inputPerMillion: 15.0, outputPerMillion: 75.0 },
+};
+// Fallback for unknown models — Sonnet rates so cost tracking errs upward.
+const ANTHROPIC_FALLBACK_RATES = { inputPerMillion: 3.0, outputPerMillion: 15.0 };
+
+function resolveAnthropicRates(model: string): { inputPerMillion: number; outputPerMillion: number } {
+  if (ANTHROPIC_RATES[model]) return ANTHROPIC_RATES[model];
+  // Strip a trailing -YYYYMMDD date suffix and retry.
+  const stripped = model.replace(/-\d{8}$/, '');
+  if (ANTHROPIC_RATES[stripped]) return ANTHROPIC_RATES[stripped];
+  console.warn(
+    `[anthropicVision/pricing] unknown model '${model}' — defaulting to Sonnet rates`,
+  );
+  return ANTHROPIC_FALLBACK_RATES;
+}
+
 /**
- * USD cost from a free-form-text call. Delegates to the shared pricing table
- * in `_shared/visionAdapter/pricing.ts` (W11.8 source of truth) so anthropic
- * + the new adapter use one rate map.
+ * USD cost from a free-form-text call. Uses the internal Anthropic rate table
+ * above. Cached-input tokens (creation + read) bill at standard input rate
+ * (no cache-read discount modelled — Anthropic's policy as of W11.8 was full
+ * input rate for creation + ~10% for reads, but the legacy passes sunset
+ * before fine-grained cache pricing matters).
  */
 function computeCost(model: string, usage: VisionUsage): number {
-  // Combine cache_creation + cache_read into the unified cached_input_tokens
-  // bucket. estimateCost falls back to standard input rate when no cached
-  // rate is configured (same behaviour as the pre-W11.8 module).
-  const cached_input_tokens =
-    (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
-  return estimateCost('anthropic', model, {
-    input_tokens: usage.input_tokens || 0,
-    output_tokens: usage.output_tokens || 0,
-    cached_input_tokens,
-  });
+  const rates = resolveAnthropicRates(model);
+  const inputTokens = Math.max(0, usage.input_tokens || 0);
+  const outputTokens = Math.max(0, usage.output_tokens || 0);
+  const cachedTokens = Math.max(
+    0,
+    (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0),
+  );
+  const cost =
+    (inputTokens * rates.inputPerMillion) / 1_000_000 +
+    (cachedTokens * rates.inputPerMillion) / 1_000_000 +
+    (outputTokens * rates.outputPerMillion) / 1_000_000;
+  return Math.round(cost * 1_000_000) / 1_000_000;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────

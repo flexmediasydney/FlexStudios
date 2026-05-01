@@ -14,8 +14,11 @@
  * timing wrapper applied: the elapsed_ms field on VisionResponse.vendor_meta
  * is set by the adapter from its own start clock; the router doesn't override.
  *
- * This file is the compile-time guarantee that adding a new vendor is one
- * place to edit (the switch below) plus one new file under `adapters/`.
+ * W11.8.1 (2026-05-01): Anthropic adapter stripped — Gemini is the sole vision
+ * vendor. The router still uses an exhaustive switch so adding a new vendor
+ * remains a single-file edit (drop adapter, wire it here, update VisionVendor
+ * union in types.ts). Future Gemini regressions fail LOUD via VendorCallError
+ * — no silent failover, no surprise cost spikes.
  */
 
 import {
@@ -24,7 +27,6 @@ import {
   type VisionVendor,
   VendorCallError,
 } from './types.ts';
-import { callAnthropicVision } from './adapters/anthropic.ts';
 import { callGoogleVision } from './adapters/google.ts';
 
 export type {
@@ -53,8 +55,6 @@ export type { ModelRates } from './pricing.ts';
  */
 export function callVisionAdapter(req: VisionRequest): Promise<VisionResponse> {
   switch (req.vendor) {
-    case 'anthropic':
-      return callAnthropicVision(req);
     case 'google':
       return callGoogleVision(req);
     default: {

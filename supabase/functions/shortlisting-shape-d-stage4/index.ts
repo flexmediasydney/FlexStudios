@@ -40,11 +40,14 @@
  * human review). Shape D matches: Stage 4 success → status='proposed' so the
  * downstream UI (swimlane, lock review) sees rounds the same way.
  *
- * ─── FAILOVER ─────────────────────────────────────────────────────────────────
+ * ─── FAILURE MODE (W11.8.1) ───────────────────────────────────────────────────
  *
- * Gemini Stage 4 fails after 3 retries → fall back to Anthropic Opus 4.7 via
- * the W11.8 adapter when engine_settings.failover_vendor='anthropic'. Cost
- * spikes ~12× but the round completes.
+ * Gemini Stage 4 fails after 3 retries → throw VendorCallError. The Anthropic
+ * Opus 4.7 failover code path was stripped in W11.8.1 (Joseph: "i don't want
+ * any automatic switches to anthropic at all"). A regression here surfaces as
+ * status='failed' on the round and a populated engine_run_audit.error_summary
+ * — no silent ~12× cost shift to Anthropic. Re-trigger the round once Gemini
+ * health is verified.
  */
 
 import {
@@ -153,11 +156,13 @@ interface RegenerateContext {
 const ALLOWED_TIERS = new Set<PropertyTier>(['premium', 'standard', 'approachable']);
 
 // Wave 11.7.1 immediate-ack contract (mirrors shortlisting-shape-d Stage 1):
-// Stage 4 is typically ~70s but worst case (3 primary retries × 240s timeout
-// + 14s backoff before Anthropic failover) can exceed the 120s gateway.
-// We adopt the same EdgeRuntime.waitUntil pattern: validate + mutex + cost
-// cap synchronously, return HTTP 200 ack with `mode: 'background'`, and
-// self-update the dispatching shortlisting_jobs row when the work completes.
+// Stage 4 is typically ~70s but worst case (3 primary retries × 240s timeout)
+// can exceed the 120s gateway. We adopt the same EdgeRuntime.waitUntil
+// pattern: validate + mutex + cost cap synchronously, return HTTP 200 ack
+// with `mode: 'background'`, and self-update the dispatching shortlisting_jobs
+// row when the work completes. W11.8.1: Anthropic failover removed — primary
+// exhaustion now throws and the round flips to 'failed' instead of silently
+// shifting ~12× cost to Anthropic.
 const BACKGROUND_MODE_RESPONSE = 'background';
 
 interface RoundContext {
@@ -173,7 +178,7 @@ interface RoundContext {
 interface EngineSettings {
   stage4_thinking_budget: number;
   stage4_max_output_tokens: number;
-  failover_vendor: 'anthropic' | null;
+  // W11.8.1: failover_vendor stripped — Anthropic failover code path removed.
   cost_cap_per_round_usd: number;
 }
 
@@ -337,11 +342,13 @@ function parseRegenerateContext(
 
 interface Stage4RunResult {
   ok: boolean;
-  vendor_used: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google'. failover_triggered always false
+  // (kept on the shape so engine_run_audit columns continue to be written).
+  vendor_used: 'google';
   model_used: string;
   cost_usd: number;
   wall_ms: number;
-  failover_triggered: boolean;
+  failover_triggered: false;
   master_listing_id: string | null;
   stage_4_overrides_count: number;
   audit_dropbox_path: string | null;
@@ -392,6 +399,10 @@ async function preflightStage4(
     .eq('id', roundId)
     .maybeSingle();
   const engineMode = (roundCheck?.engine_mode as string | null) || '';
+  // W11.8.1: 'unified_anthropic_failover' kept as a valid pass-through here
+  // for backward-compat with rounds whose engine_mode was set to that string
+  // before the failover code path was removed. They still need Stage 4 to be
+  // able to run on retry. New rounds will only ever land on 'shape_d_*'.
   if (!engineMode.startsWith('shape_d') && engineMode !== 'unified_anthropic_failover') {
     throw new Error(
       `round ${roundId} engine_mode='${engineMode}' — Stage 4 requires a shape_d round`,
@@ -503,8 +514,9 @@ async function runStage4Core(
       );
     }
 
-    // Cost cap pre-flight. Stage 4 envelope: ~$1.20 on Gemini, ~$14.40 on
-    // Anthropic failover. Always under the default $10 cap on Gemini.
+    // Cost cap pre-flight. Stage 4 envelope: ~$1.20 on Gemini. Always under
+    // the default $10 cap. (W11.8.1: Anthropic failover stripped — the prior
+    // ~$14.40 worst-case envelope no longer applies.)
     const preflightUsd = estimateCost('google', PRIMARY_MODEL, {
       input_tokens: 60_000 + stage1Merged.length * 1_500,
       output_tokens: settings.stage4_max_output_tokens,
@@ -591,9 +603,10 @@ async function runStage4Core(
         ].join('\n')
       : userPromptCore;
 
-    // Call vision adapter with retries + Anthropic failover.
+    // Call Gemini vision adapter with retries. W11.8.1: Anthropic failover
+    // stripped — exhausted retries throw and the round flips to 'failed'.
     const { resp, vendorUsed, modelUsed, costUsd, wallMs, inputTokens, outputTokens, failoverTriggered, failoverReason, error } =
-      await callStage4WithFailover({
+      await callStage4Gemini({
         systemText,
         userText,
         previews,
@@ -674,7 +687,10 @@ async function runStage4Core(
       propertyArchetypeConsensus: archetype,
       overallPropertyScore: overallScore,
       stage4CostUsd: costUsd,
-      finalEngineMode: failoverTriggered ? 'unified_anthropic_failover' : 'shape_d_full',
+      // W11.8.1: failover stripped — engine_mode is always 'shape_d_full' on
+      // successful Stage 4. Legacy rounds with engine_mode='unified_anthropic_failover'
+      // can still pass the preflight gate; this stamp overrides them on success.
+      finalEngineMode: 'shape_d_full',
       warnings,
     });
 
@@ -767,25 +783,13 @@ async function runStage4Core(
 
     // W11.6.8 W7.10 P1-9: ops-facing notifications. All non-fatal — Stage
     // 4 already succeeded by here, so a notif glitch must NOT roll back
-    // state. vendor_failover_triggered → master_admin + #engine-alerts;
-    // master_listing_regenerated → admin + #listing-review (mig 390).
+    // state. master_listing_regenerated → admin + #listing-review (mig 390).
+    //
+    // W11.8.1: vendor_failover_triggered notification removed. The Anthropic
+    // failover code path is gone — a Gemini regression now surfaces as a
+    // failed round (engine_run_audit.error_summary populated) instead of a
+    // silent 12× cost shift to Anthropic Opus.
     try {
-      if (failoverTriggered) {
-        await fireNotif({
-          type: 'vendor_failover_triggered',
-          category: 'system',
-          severity: 'critical',
-          title: `Stage 4 vendor failover (Gemini → Anthropic)`,
-          message:
-            `Round ${roundId}: primary vendor failed (${failoverReason ?? 'unknown'}). ` +
-            `Stage 4 completed via Anthropic at $${(Math.round(costUsd * 1_000_000) / 1_000_000).toFixed(4)} ` +
-            `(~12× envelope). Investigate Gemini health.`,
-          projectId: ctx.project_id,
-          ctaLabel: 'View engine logs',
-          source: GENERATOR,
-          idempotencyKey: `vendor-failover-${roundId}`,
-        });
-      }
       if (regenCtx !== null) {
         await fireNotif({
           type: 'master_listing_regenerated',
@@ -829,10 +833,11 @@ async function runStage4Core(
 async function loadEngineSettings(
   admin: ReturnType<typeof getAdminClient>,
 ): Promise<EngineSettings> {
+  // W11.8.1: failover_vendor stripped from required keys. The DB row may
+  // still exist — it's harmless and ignored.
   const keys = [
     'stage4_thinking_budget',
     'stage4_max_output_tokens',
-    'failover_vendor',
     'cost_cap_per_round_usd',
   ];
   const { data } = await admin
@@ -849,11 +854,9 @@ async function loadEngineSettings(
     if (typeof v === 'string') { const n = Number(v); return Number.isNaN(n) ? def : n; }
     return def;
   };
-  const failoverRaw = map.get('failover_vendor');
   return {
     stage4_thinking_budget: num('stage4_thinking_budget', STAGE4_DEFAULT_THINKING_BUDGET),
     stage4_max_output_tokens: num('stage4_max_output_tokens', STAGE4_DEFAULT_MAX_OUTPUT_TOKENS),
-    failover_vendor: failoverRaw === 'anthropic' ? 'anthropic' : null,
     cost_cap_per_round_usd: num('cost_cap_per_round_usd', 10),
   };
 }
@@ -1075,7 +1078,7 @@ async function fetchPreviewBase64(
   return { data, media_type: 'image/jpeg' };
 }
 
-// ─── Vision call with failover ──────────────────────────────────────────────
+// ─── Vision call (Gemini-only, W11.8.1) ─────────────────────────────────────
 
 interface CallStage4Args {
   systemText: string;
@@ -1086,7 +1089,9 @@ interface CallStage4Args {
 
 interface CallStage4Result {
   resp: VisionResponse | null;
-  vendorUsed: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google'. failoverTriggered always false on
+  // success; remains in the shape so engine_run_audit columns are preserved.
+  vendorUsed: 'google';
   modelUsed: string;
   costUsd: number;
   wallMs: number;
@@ -1094,12 +1099,22 @@ interface CallStage4Result {
   inputTokens: number;
   /** Vendor-reported output tokens for this call (0 if call failed). */
   outputTokens: number;
-  failoverTriggered: boolean;
-  failoverReason: string | null;
+  failoverTriggered: false;
+  failoverReason: null;
   error: string | null;
 }
 
-async function callStage4WithFailover(args: CallStage4Args): Promise<CallStage4Result> {
+/**
+ * Stage 4 vision call. Gemini-only post-W11.8.1: 3 retries with 2s/4s/8s
+ * backoff on retryable failures, then return error. The caller throws on
+ * `resp === null`, which flips the round to status='failed'.
+ *
+ * Previous behaviour fell back to Anthropic Opus 4.7 on primary exhaustion —
+ * that path was stripped to enforce Joseph's "no automatic switches to
+ * Anthropic" rule. A Gemini regression now fails LOUD instead of silently
+ * shifting ~12× cost to Anthropic.
+ */
+async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result> {
   const start = Date.now();
   const baseReq: VisionRequest = {
     vendor: PRIMARY_VENDOR,
@@ -1152,47 +1167,16 @@ async function callStage4WithFailover(args: CallStage4Args): Promise<CallStage4R
         lastErr = e instanceof Error ? e.message : String(e);
       }
       console.warn(`[${GENERATOR}] Stage 4 attempt ${attempt}/${STAGE4_RETRY_COUNT} failed: ${lastErr}`);
-      // Exponential back-off between primary retries (2s, 4s, 8s).
+      // Exponential back-off between retries (2s, 4s, 8s).
       if (attempt < STAGE4_RETRY_COUNT) {
         await new Promise((r) => setTimeout(r, 2_000 * Math.pow(2, attempt - 1)));
       }
     }
   }
 
-  // Primary exhausted → failover to Anthropic if configured.
-  if (args.settings.failover_vendor === 'anthropic') {
-    console.warn(`[${GENERATOR}] Stage 4 failover to Anthropic Opus 4.7 after ${STAGE4_RETRY_COUNT} primary attempts`);
-    try {
-      const failReq: VisionRequest = { ...baseReq, vendor: 'anthropic', model: 'claude-opus-4-7' };
-      const resp = await callVisionAdapter(failReq);
-      return {
-        resp,
-        vendorUsed: 'anthropic',
-        modelUsed: 'claude-opus-4-7',
-        costUsd: resp.usage.estimated_cost_usd,
-        wallMs: resp.vendor_meta.elapsed_ms || (Date.now() - start),
-        inputTokens: resp.usage.input_tokens || 0,
-        outputTokens: resp.usage.output_tokens || 0,
-        failoverTriggered: true,
-        failoverReason: lastErr,
-        error: null,
-      };
-    } catch (failErr) {
-      const fmsg = failErr instanceof Error ? failErr.message : String(failErr);
-      return {
-        resp: null,
-        vendorUsed: 'anthropic',
-        modelUsed: 'claude-opus-4-7',
-        costUsd: 0,
-        wallMs: Date.now() - start,
-        inputTokens: 0, outputTokens: 0,
-        failoverTriggered: true,
-        failoverReason: lastErr,
-        error: `primary_then_failover: primary=${lastErr} | failover=${fmsg}`,
-      };
-    }
-  }
-
+  // W11.8.1: primary exhausted — return error so the caller throws. No
+  // failover. The round flips to status='failed' with the Gemini error
+  // surfaced in engine_run_audit.error_summary.
   return {
     resp: null,
     vendorUsed: PRIMARY_VENDOR,
@@ -1214,7 +1198,9 @@ interface PersistMasterListingArgs {
   masterListing: Record<string, unknown>;
   propertyTier: PropertyTier;
   voiceAnchorUsed: 'tier_preset' | 'override' | 'master_class_enhanced';
-  vendor: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google'. shortlisting_master_listings.vendor
+  // column accepts text — narrowing here just prevents drift in the type.
+  vendor: 'google';
   modelVersion: string;
   /** Set when this Stage 4 run is a master_listing regeneration. Routes to
    *  UPDATE-in-place on the existing row (preserving the FK target for
@@ -1878,7 +1864,10 @@ export async function persistProposedSlots(args: PersistProposedSlotsArgs): Prom
 export interface UpdateEngineRunAuditArgs {
   admin: ReturnType<typeof getAdminClient>;
   roundId: string;
-  vendorUsed: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google'. failoverTriggered + failoverReason
+  // remain so engine_run_audit columns continue to be written. Both are
+  // always false/null now.
+  vendorUsed: 'google';
   modelUsed: string;
   failoverTriggered: boolean;
   failoverReason: string | null;
@@ -1917,8 +1906,9 @@ export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Prom
   const priorStage4InputTokens = (existing?.stage4_total_input_tokens as number | null) ?? 0;
   const priorStage4OutputTokens = (existing?.stage4_total_output_tokens as number | null) ?? 0;
   const priorStagesCompleted = (existing?.stages_completed as string[] | null) ?? [];
-  const priorEngineMode = (existing?.engine_mode as string | null)
-    ?? (args.failoverTriggered ? 'unified_anthropic_failover' : 'shape_d_full');
+  // W11.8.1: failover stripped — default mode for fresh-row case is
+  // 'shape_d_full'. Legacy rows with 'unified_anthropic_failover' pass through.
+  const priorEngineMode = (existing?.engine_mode as string | null) ?? 'shape_d_full';
   const priorPromptBlockVersions =
     (existing?.prompt_block_versions as Record<string, string> | null) ?? {};
 
@@ -1940,7 +1930,10 @@ export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Prom
   const totalOutputTokens = stage1OutputTokens + newStage4OutputTokens;
 
   const merged = Array.from(new Set([...priorStagesCompleted, 'stage4', 'persistence']));
-  const finalEngineMode = args.failoverTriggered ? 'unified_anthropic_failover' : priorEngineMode;
+  // W11.8.1: failover stripped — finalEngineMode is always the prior round
+  // engine_mode (typically 'shape_d_full'). Legacy rounds whose prior mode
+  // was 'unified_anthropic_failover' keep that value through Stage 4 retries.
+  const finalEngineMode = priorEngineMode;
 
   // Merge Stage 4 prompt block versions onto whatever Stage 1 wrote (Stage 1
   // only knows its own block versions; we tack stage4_prompt + Stage 4-side
@@ -1953,9 +1946,10 @@ export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Prom
   const row: Record<string, unknown> = {
     round_id: args.roundId,
     engine_mode: finalEngineMode,
-    vendor_used: args.failoverTriggered
-      ? 'anthropic'
-      : ((existing?.vendor_used as string | null) ?? args.vendorUsed),
+    // W11.8.1: vendor is always 'google' on success. We still preserve any
+    // existing vendor_used value (could be 'anthropic' on a legacy row from
+    // before the strip) — overwrite only if no prior value exists.
+    vendor_used: (existing?.vendor_used as string | null) ?? args.vendorUsed,
     model_used: args.modelUsed,
     failover_triggered: args.failoverTriggered,
     failover_reason: args.failoverReason,
@@ -1999,7 +1993,10 @@ interface UploadStage4AuditArgs {
   ctx: RoundContext;
   roundId: string;
   output: Record<string, unknown>;
-  vendorUsed: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google'. failoverTriggered/Reason kept on the
+  // shape so audit-JSON consumers (Operator UI, debugging tooling) still see
+  // those fields populated as `false` / `null`.
+  vendorUsed: 'google';
   modelUsed: string;
   costUsd: number;
   wallMs: number;
@@ -2031,7 +2028,9 @@ async function uploadStage4AuditJson(args: UploadStage4AuditArgs): Promise<strin
     settings: {
       stage4_thinking_budget: args.settings.stage4_thinking_budget,
       stage4_max_output_tokens: args.settings.stage4_max_output_tokens,
-      failover_vendor: args.settings.failover_vendor,
+      // W11.8.1: failover_vendor stripped — emitted as null for backward-compat
+      // with any audit-JSON consumer that grepped for the field.
+      failover_vendor: null,
     },
     prompt_block_versions: stage4PromptBlockVersions(),
     vendor_used: args.vendorUsed,

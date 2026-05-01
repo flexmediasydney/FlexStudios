@@ -172,10 +172,12 @@ Deno.test('updateEngineRunAudit: upsert error mirrors to BOTH args.warnings and 
     await updateEngineRunAudit({
       admin,
       roundId: ROUND_ID,
-      vendorUsed: 'anthropic',
-      modelUsed: 'claude-opus-4-7',
-      failoverTriggered: true,
-      failoverReason: 'google_429',
+      // W11.8.1: vendor narrowed to 'google'; failover stripped. Test now
+      // exercises the connection-error mirror path on a normal Gemini call.
+      vendorUsed: 'google',
+      modelUsed: 'gemini-2.5-pro',
+      failoverTriggered: false,
+      failoverReason: null,
       stage4CostUsd: 0.5,
       stage4WallMs: 30_000,
       stage4InputTokens: 1_000,

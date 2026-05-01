@@ -129,10 +129,13 @@ interface FinalsResult {
   wall_ms: number;
   input_tokens: number;
   output_tokens: number;
-  vendor_used: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google' (Anthropic vision adapter stripped).
+  // failover_triggered/Reason kept on the shape so persistence + audit row
+  // population stays unchanged. Both are always false/null now.
+  vendor_used: 'google';
   model_used: string;
-  failover_triggered: boolean;
-  failover_reason: string | null;
+  failover_triggered: false;
+  failover_reason: null;
 }
 
 // ─── Handler ────────────────────────────────────────────────────────────────
@@ -538,12 +541,15 @@ async function runFinalsPerImage(opts: RunFinalsPerImageOpts): Promise<FinalsRes
     timeout_ms: FINALS_DEFAULT_TIMEOUT_MS,
   };
 
+  // W11.8.1: Anthropic failover stripped. Gemini errors propagate as-is —
+  // the per-image error captured here flows into engine_run_audit /
+  // finals_qa_classifications rows, and an all-failure round flips to
+  // status='failed'. Previously the v2 universal schema's array-form types
+  // (type: ['string','null']) routed 100% of Stage 1 traffic through the
+  // Anthropic failover (~12× cost spike). Hotfix-3/4 made Gemini accept the
+  // schema natively, so the failover became dead code. W11.8.1 deletes it.
   let resp: VisionResponse | null = null;
   let err: string | undefined;
-  let vendorUsed: 'google' | 'anthropic' = PRIMARY_VENDOR;
-  let modelUsed = PRIMARY_MODEL;
-  let failoverTriggered = false;
-  let failoverReason: string | null = null;
 
   try {
     resp = await callVisionAdapter(baseReq);
@@ -551,30 +557,6 @@ async function runFinalsPerImage(opts: RunFinalsPerImageOpts): Promise<FinalsRes
     if (e instanceof MissingVendorCredential) err = e.message;
     else if (e instanceof VendorCallError) err = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
     else err = e instanceof Error ? e.message : String(e);
-
-    // Failover to Anthropic Opus 4.7 on vendor-side errors (not credential
-    // misses). Mirrors shortlisting-shape-d's pattern. The v2 universal schema
-    // uses JSON Schema array-form types (`type: ['string', 'null']`) which
-    // Gemini's responseSchema parser rejects — production Stage 1 traffic
-    // routes 100% of v2 emissions through this failover. Anthropic's Opus
-    // adapter accepts the schema as-is via tool_input_schema.
-    if (!(e instanceof MissingVendorCredential)) {
-      console.warn(
-        `[${GENERATOR}] ${filename} primary failed (${err}) — failing over to Anthropic`,
-      );
-      try {
-        const failReq: VisionRequest = { ...baseReq, vendor: 'anthropic', model: 'claude-opus-4-7' };
-        resp = await callVisionAdapter(failReq);
-        vendorUsed = 'anthropic';
-        modelUsed = 'claude-opus-4-7';
-        failoverTriggered = true;
-        failoverReason = err ?? 'gemini_primary_call_failed';
-        err = undefined;
-      } catch (failErr) {
-        const fmsg = failErr instanceof Error ? failErr.message : String(failErr);
-        err = `primary_then_failover_failed: ${err} | failover: ${fmsg}`;
-      }
-    }
   }
 
   if (!resp) {
@@ -588,10 +570,10 @@ async function runFinalsPerImage(opts: RunFinalsPerImageOpts): Promise<FinalsRes
       wall_ms: Date.now() - start,
       input_tokens: 0,
       output_tokens: 0,
-      vendor_used: vendorUsed,
-      model_used: modelUsed,
-      failover_triggered: failoverTriggered,
-      failover_reason: failoverReason,
+      vendor_used: PRIMARY_VENDOR,
+      model_used: PRIMARY_MODEL,
+      failover_triggered: false,
+      failover_reason: null,
     };
   }
 
@@ -607,10 +589,10 @@ async function runFinalsPerImage(opts: RunFinalsPerImageOpts): Promise<FinalsRes
     wall_ms: resp.vendor_meta.elapsed_ms,
     input_tokens: inT,
     output_tokens: outT,
-    vendor_used: vendorUsed,
-    model_used: modelUsed,
-    failover_triggered: failoverTriggered,
-    failover_reason: failoverReason,
+    vendor_used: PRIMARY_VENDOR,
+    model_used: PRIMARY_MODEL,
+    failover_triggered: false,
+    failover_reason: null,
   };
 }
 

@@ -215,8 +215,11 @@ interface RoundContext {
 
 interface EngineSettings {
   engine_mode: 'two_pass' | 'shape_d';
-  production_vendor: 'google' | 'anthropic';
-  failover_vendor: 'anthropic' | null;
+  // W11.8.1: production_vendor is hardcoded to 'google'. Anthropic failover
+  // stripped — failover_vendor field removed from this interface entirely.
+  // Future Gemini regressions fail LOUD via VendorCallError instead of
+  // silently 12×-ing the bill.
+  production_vendor: 'google';
   stage1_thinking_budget: number;
   stage1_max_output_tokens: number;
   cost_cap_per_round_usd: number;
@@ -241,10 +244,17 @@ interface PerImageResult {
   wall_ms: number;
   input_tokens: number;
   output_tokens: number;
-  vendor_used: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google' (Anthropic stripped). Kept as a
+  // literal type rather than removed so call-site code that reads .vendor_used
+  // for audit-row assembly stays type-safe.
+  vendor_used: 'google';
   model_used: string;
-  failover_triggered: boolean;
-  failover_reason: string | null;
+  // W11.8.1: failover_triggered + failover_reason are always false/null now.
+  // Kept on the result shape so engine_run_audit + shortlisting_events column
+  // population stays unchanged — admin dashboards (cost-per-round, vendor mix)
+  // read these columns and must continue to find them.
+  failover_triggered: false;
+  failover_reason: null;
 }
 
 // ─── Handler ────────────────────────────────────────────────────────────────
@@ -357,9 +367,11 @@ interface RoundResult {
   stage1_cost_usd: number;
   stage1_wall_ms: number;
   engine_mode: string;
-  vendor_used: 'google' | 'anthropic';
+  // W11.8.1: Anthropic stripped; vendor is always 'google'. failover_triggered
+  // is always false but kept for downstream audit-shape compatibility.
+  vendor_used: 'google';
   model_used: string;
-  failover_triggered: boolean;
+  failover_triggered: false;
   stage4_dispatched: boolean;
   stage4_job_id: string | null;
   canonical_rollup_dispatched: boolean;
@@ -817,8 +829,11 @@ async function runShapeDStage1Core(
   // cost/perf rollup); operator-visible wall is in shortlisting_events.
   const totalApiWallMs = allResults.reduce((sum, r) => sum + r.wall_ms, 0);
   const operatorWallMs = Date.now() - startedAt;
-  const failoverTriggered = allResults.some((r) => r.failover_triggered);
-  const failoverReason = allResults.find((r) => r.failover_reason)?.failover_reason ?? null;
+  // W11.8.1: failover stripped — these are constants now. Kept named so the
+  // audit + events writes below don't need to be threaded through new
+  // signatures, and so the engine_run_audit columns continue to be written.
+  const failoverTriggered = false;
+  const failoverReason: string | null = null;
 
   // ── Determine round engine_mode result ───────────────────────────────────
   const totalGroupsTouched = groupsToRun.length;
@@ -826,9 +841,7 @@ async function runShapeDStage1Core(
   const allFailed = totalGroupsTouched > 0 && allSuccesses.length === 0;
   const finalEngineMode = allFailed
     ? 'two_pass' /* leave it for retry */
-    : failoverTriggered
-      ? 'unified_anthropic_failover'
-      : (partial ? 'shape_d_partial' : 'shape_d_full');
+    : (partial ? 'shape_d_partial' : 'shape_d_full');
 
   if (allFailed) {
     throw new Error(
@@ -871,8 +884,9 @@ async function runShapeDStage1Core(
     admin,
     roundId,
     engineMode: finalEngineMode,
-    vendorUsed: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
-    modelUsed: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
+    // W11.8.1: vendor + model are always Gemini now (Anthropic failover gone).
+    vendorUsed: PRIMARY_VENDOR,
+    modelUsed: PRIMARY_MODEL,
     failoverTriggered,
     failoverReason,
     stage1CallCount: allResults.length,
@@ -955,7 +969,8 @@ async function runShapeDStage1Core(
       cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
       wall_ms: operatorWallMs,
       api_wall_ms_sum: totalApiWallMs,
-      vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
+      // W11.8.1: vendor always 'google' post-failover-strip.
+      vendor_used: PRIMARY_VENDOR,
       failover_triggered: failoverTriggered,
       stage4_job_id: stage4JobId,
       canonical_rollup_job_id: canonicalRollupJobId,
@@ -971,8 +986,9 @@ async function runShapeDStage1Core(
     stage1_cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
     stage1_wall_ms: operatorWallMs,
     engine_mode: finalEngineMode,
-    vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
-    model_used: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
+    // W11.8.1: vendor + model always Gemini Pro post-failover-strip.
+    vendor_used: PRIMARY_VENDOR,
+    model_used: PRIMARY_MODEL,
     failover_triggered: failoverTriggered,
     stage4_dispatched: !!stage4JobId,
     stage4_job_id: stage4JobId,
@@ -988,10 +1004,11 @@ async function runShapeDStage1Core(
 async function loadEngineSettings(
   admin: ReturnType<typeof getAdminClient>,
 ): Promise<EngineSettings> {
+  // W11.8.1: production_vendor + failover_vendor stripped from required keys.
+  // production_vendor is hardcoded to 'google' since Anthropic vision is gone.
+  // The DB rows for those keys may still exist — they're harmless and ignored.
   const keys = [
     'engine_mode',
-    'production_vendor',
-    'failover_vendor',
     'stage1_thinking_budget',
     'stage1_max_output_tokens',
     'cost_cap_per_round_usd',
@@ -1026,16 +1043,10 @@ async function loadEngineSettings(
   };
 
   const engine_mode = (str('engine_mode', 'two_pass') as 'two_pass' | 'shape_d');
-  const production_vendor = (str('production_vendor', 'google') as 'google' | 'anthropic');
-  const failover_vendor_raw = map.get('failover_vendor');
-  const failover_vendor: 'anthropic' | null = failover_vendor_raw === null
-    ? null
-    : (str('failover_vendor', 'anthropic') as 'anthropic');
 
   return {
     engine_mode,
-    production_vendor,
-    failover_vendor,
+    production_vendor: 'google',
     stage1_thinking_budget: num('stage1_thinking_budget', STAGE1_DEFAULT_THINKING_BUDGET),
     stage1_max_output_tokens: num('stage1_max_output_tokens', STAGE1_DEFAULT_MAX_OUTPUT_TOKENS),
     cost_cap_per_round_usd: num('cost_cap_per_round_usd', DEFAULT_COST_CAP_USD),
@@ -1291,12 +1302,14 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     timeout_ms: STAGE1_DEFAULT_TIMEOUT_MS,
   };
 
+  // W11.8.1: Anthropic failover removed. Gemini errors fail LOUD — the
+  // per-image error string is captured + propagated to engine_run_audit and
+  // the audit JSON. If all images fail, runShapeDStage1Core throws and the
+  // round status flips to 'failed' (engine_run_audit.error_summary populated).
+  // Future Gemini regressions surface as a real failure instead of a silent
+  // 12× cost spike on Anthropic Opus 4.7 (W15a smoke prior to hotfix-3/4).
   let resp: VisionResponse | null = null;
   let err: string | undefined;
-  let vendorUsed: 'google' | 'anthropic' = PRIMARY_VENDOR;
-  let modelUsed = PRIMARY_MODEL;
-  let failoverTriggered = false;
-  let failoverReason: string | null = null;
 
   try {
     resp = await callVisionAdapter(baseReq);
@@ -1304,25 +1317,6 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     if (e instanceof MissingVendorCredential) err = e.message;
     else if (e instanceof VendorCallError) err = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
     else err = e instanceof Error ? e.message : String(e);
-
-    // Failover to Anthropic Opus 4.7 if configured + vendor-side error.
-    if (settings.failover_vendor === 'anthropic' && !(e instanceof MissingVendorCredential)) {
-      console.warn(
-        `[${GENERATOR}] per-image ${composition.stem} primary failed (${err}) — failing over to Anthropic`,
-      );
-      try {
-        const failReq: VisionRequest = { ...baseReq, vendor: 'anthropic', model: 'claude-opus-4-7' };
-        resp = await callVisionAdapter(failReq);
-        vendorUsed = 'anthropic';
-        modelUsed = 'claude-opus-4-7';
-        failoverTriggered = true;
-        failoverReason = err ?? 'gemini_primary_call_failed';
-        err = undefined;
-      } catch (failErr) {
-        const fmsg = failErr instanceof Error ? failErr.message : String(failErr);
-        err = `primary_then_failover_failed: ${err} | failover: ${fmsg}`;
-      }
-    }
   }
 
   if (!resp) {
@@ -1335,17 +1329,16 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
       wall_ms: Date.now() - start,
       input_tokens: 0,
       output_tokens: 0,
-      vendor_used: vendorUsed,
-      model_used: modelUsed,
-      failover_triggered: failoverTriggered,
-      failover_reason: failoverReason,
+      vendor_used: PRIMARY_VENDOR,
+      model_used: PRIMARY_MODEL,
+      failover_triggered: false,
+      failover_reason: null,
     };
   }
 
   // resp.output IS the per-image classification — no per_image[] unwrap.
   // Token attribution: pull straight from the adapter's usage envelope.
-  // Both Gemini + Anthropic adapters populate input_tokens/output_tokens.
-  // Defensive coercion in case any future adapter omits the fields.
+  // Defensive coercion in case the adapter omits the fields.
   const inT = typeof resp.usage.input_tokens === 'number' ? resp.usage.input_tokens : 0;
   const outT = typeof resp.usage.output_tokens === 'number' ? resp.usage.output_tokens : 0;
   return {
@@ -1357,10 +1350,10 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     wall_ms: resp.vendor_meta.elapsed_ms,
     input_tokens: inT,
     output_tokens: outT,
-    vendor_used: vendorUsed,
-    model_used: modelUsed,
-    failover_triggered: failoverTriggered,
-    failover_reason: failoverReason,
+    vendor_used: PRIMARY_VENDOR,
+    model_used: PRIMARY_MODEL,
+    failover_triggered: false,
+    failover_reason: null,
   };
 }
 
@@ -1744,7 +1737,10 @@ export interface UpsertEngineRunAuditArgs {
   admin: ReturnType<typeof getAdminClient>;
   roundId: string;
   engineMode: string;
-  vendorUsed: 'google' | 'anthropic';
+  // W11.8.1: vendor narrowed to 'google'. failoverTriggered + failoverReason
+  // remain on the args shape so engine_run_audit columns continue to be
+  // written (admin dashboards read them). Both are always false/null now.
+  vendorUsed: 'google';
   modelUsed: string;
   failoverTriggered: boolean;
   failoverReason: string | null;
@@ -1887,7 +1883,9 @@ async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null
       stage1_thinking_budget: args.settings.stage1_thinking_budget,
       stage1_max_output_tokens: args.settings.stage1_max_output_tokens,
       production_vendor: args.settings.production_vendor,
-      failover_vendor: args.settings.failover_vendor,
+      // W11.8.1: failover_vendor stripped — emitted as null for backward-compat
+      // with any audit-JSON consumer that grepped for the field.
+      failover_vendor: null,
     },
     prompt_block_versions: stage1PromptBlockVersions(),
     compositions_total: args.compositions.length,

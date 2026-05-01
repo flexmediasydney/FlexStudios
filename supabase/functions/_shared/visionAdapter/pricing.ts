@@ -5,8 +5,10 @@
  *   - Cost gates in the retroactive-comparison fn (pre-flight estimate vs cap).
  *   - VisionUsage.estimated_cost_usd on every adapter response.
  *
- * Anthropic rates are a superset of `_shared/anthropicVision.ts`'s table, so
- * the wrapper continues to report identical costs after the W11.8 migration.
+ * W11.8.1 (2026-05-01): Anthropic rows removed. The `_shared/anthropicVision.ts`
+ * legacy helper still has its own internal table for sunset (June 1) legacy
+ * passes (pass0/pass1/pass2) and `vendor-retroactive-compare` keeps its own
+ * Anthropic pricing for A/B benchmarks — neither shares this table.
  *
  * Google (Gemini) rates per https://ai.google.dev/gemini-api/docs/pricing as
  * of 2026-04-29. Rates are model-tier flat per spec — context-length tiers
@@ -14,8 +16,8 @@
  * choice is to bill at the higher long-context rate so the cost cap fires
  * earlier rather than later.
  *
- * Unknown models fall back to the most expensive Anthropic Sonnet rate so
- * cost tracking never silently undercounts.
+ * Unknown models fall back to a defensive higher rate (Gemini 2.0 Pro)
+ * so cost tracking never silently undercounts.
  */
 
 import type { VisionUsage, VisionVendor } from './types.ts';
@@ -35,12 +37,6 @@ export interface ModelRates {
 // ─── Pricing rows ────────────────────────────────────────────────────────────
 
 export const VENDOR_PRICING: Record<VisionVendor, Record<string, ModelRates>> = {
-  anthropic: {
-    'claude-haiku-4': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
-    'claude-haiku-4-5': { inputPerMillion: 1.0, outputPerMillion: 5.0 },
-    'claude-sonnet-4-6': { inputPerMillion: 3.0, outputPerMillion: 15.0 },
-    'claude-opus-4-7': { inputPerMillion: 15.0, outputPerMillion: 75.0 },
-  },
   google: {
     // Gemini 2.0 Pro: $3.50 / $10.50 per 1M tokens (long-context tier; spec
     // intentionally bills at the higher tier to keep the cost gate
@@ -48,19 +44,23 @@ export const VENDOR_PRICING: Record<VisionVendor, Record<string, ModelRates>> = 
     'gemini-2.0-pro': { inputPerMillion: 3.50, outputPerMillion: 10.50 },
     // Gemini 2.0 Flash: $0.10 / $0.40 per 1M tokens.
     'gemini-2.0-flash': { inputPerMillion: 0.10, outputPerMillion: 0.40 },
+    // Gemini 2.5 Pro: $3.50 / $10.50 per 1M tokens (production Stage 1 + 4
+    // model since W11.7.17 keystone cutover).
+    'gemini-2.5-pro': { inputPerMillion: 3.50, outputPerMillion: 10.50 },
+    // Gemini 2.5 Flash: $0.10 / $0.40 per 1M tokens (Pulse listing extract).
+    'gemini-2.5-flash': { inputPerMillion: 0.10, outputPerMillion: 0.40 },
   },
 };
 
-// Fallback for unknown models — Sonnet rates so cost tracking errs upward.
-const FALLBACK_RATES: ModelRates = { inputPerMillion: 3.0, outputPerMillion: 15.0 };
+// Fallback for unknown models — Gemini Pro rates so cost tracking errs upward.
+const FALLBACK_RATES: ModelRates = { inputPerMillion: 3.50, outputPerMillion: 10.50 };
 
 // ─── Resolution ──────────────────────────────────────────────────────────────
 
 /**
- * Look up rates for a (vendor, model) pair. Anthropic models can carry a date
- * suffix (`claude-sonnet-4-6-20260101`) — strip a trailing `-YYYYMMDD` and
- * retry the lookup before falling back. Logs a warning on fallback so the
- * pricing table can be updated.
+ * Look up rates for a (vendor, model) pair. Models can carry a date suffix —
+ * strip a trailing `-YYYYMMDD` and retry the lookup before falling back. Logs
+ * a warning on fallback so the pricing table can be updated.
  */
 export function resolveRates(vendor: VisionVendor, model: string): ModelRates {
   const table = VENDOR_PRICING[vendor];
@@ -70,7 +70,7 @@ export function resolveRates(vendor: VisionVendor, model: string): ModelRates {
     if (table[stripped]) return table[stripped];
   }
   console.warn(
-    `[visionAdapter/pricing] unknown model '${model}' for vendor '${vendor}' — defaulting to Sonnet rates`,
+    `[visionAdapter/pricing] unknown model '${model}' for vendor '${vendor}' — defaulting to Gemini Pro rates`,
   );
   return FALLBACK_RATES;
 }

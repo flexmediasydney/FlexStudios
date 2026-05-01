@@ -368,33 +368,14 @@ Deno.test('W15a — model omits flag_for_retouching: clutter heuristic fills it 
   assertStrictEquals(captured.row!.flag_for_retouching, true);
 });
 
-// ─── Test 9b: persisted model_version reflects vendor failover ────────────
-
-Deno.test('W15a — persisted model_version reflects actual vendor used (Anthropic on failover)', async () => {
-  const captured: Captured = { table: null, row: null, conflict: null };
-  const result = {
-    ...baseFinalsResult(FINALS_OUTPUT_GOOD),
-    vendor_used: 'anthropic' as const,
-    model_used: 'claude-opus-4-7',
-    failover_triggered: true,
-    failover_reason: 'gemini_schema_400',
-  };
-  await persistFinalsClassification({
-    // deno-lint-ignore no-explicit-any
-    admin: makeFakeAdmin(captured) as any,
-    projectId: PROJECT_ID,
-    // deno-lint-ignore no-explicit-any
-    result: result as any,
-    warnings: [],
-  });
-
-  // The persisted model_version threads through from the per-image result —
-  // critical for replay/debug when failover took over for an image.
-  assertStrictEquals(captured.row!.model_version, 'claude-opus-4-7');
-  // source_type stays internal_finals regardless of which vendor served the
-  // emission (caller-controlled, not vendor-derived).
-  assertStrictEquals(captured.row!.source_type, 'internal_finals');
-});
+// ─── Test 9b removed (W11.8.1) ────────────────────────────────────────────
+//
+// The "model_version reflects Anthropic failover" test was deleted in W11.8.1
+// when the Anthropic vision adapter was stripped. The per-image result type
+// no longer carries 'anthropic' as a possible vendor_used literal — there is
+// no failover code path left to assert on. Replay/debug for legacy rows
+// (created before W11.8.1) still works: the `model_version` column is plain
+// text and persistence threads `result.model_used` through verbatim.
 
 // ─── Test 9: signal_scores normalisation graceful on missing keys ─────────
 

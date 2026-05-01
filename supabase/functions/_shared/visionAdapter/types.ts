@@ -2,24 +2,28 @@
  * visionAdapter/types.ts — Wave 11.8 unified vision-call interface.
  *
  * Vendor-agnostic shapes consumed by `_shared/visionAdapter/index.ts` (router)
- * and produced by `_shared/visionAdapter/adapters/{anthropic,google}.ts`.
+ * and produced by `_shared/visionAdapter/adapters/google.ts`.
  *
- * Joseph 2026-04-29: OpenAI dropped from v1 scope. The `VisionVendor` enum is
- * intentionally narrow — adding OpenAI later is a single-file addition (one
- * new adapter file + one new pricing row + one new vendor enum value).
+ * W11.8.1 (2026-05-01): Anthropic stripped from the vision adapter. Gemini is
+ * the sole production vision vendor for Shape D. The Anthropic failover code
+ * path (W15a smoke ran ~12× over budget at $3.16 vs $0.07 due to silent
+ * Gemini→Opus-4.7 fallback) has been removed entirely. Future Gemini
+ * regressions now fail LOUD via VendorCallError instead of silently shifting
+ * cost to Anthropic. Adding another vendor later remains a single-file edit
+ * (one new adapter file + one new pricing row + add the literal here).
  */
 
 // ─── Vendor enum ─────────────────────────────────────────────────────────────
 
 /**
- * Allowed vision vendors. v1 scope: anthropic + google.
+ * Allowed vision vendors. Post-W11.8.1: google is the only one.
  * To add a new vendor:
- *   1. Add the literal here.
+ *   1. Add the literal to the union here.
  *   2. Add a row in `pricing.ts` for each model.
  *   3. Drop a new file under `adapters/<vendor>.ts` exporting `callXxx(req)`.
  *   4. Wire it into the switch in `index.ts`.
  */
-export type VisionVendor = 'anthropic' | 'google';
+export type VisionVendor = 'google';
 
 // ─── Image input ─────────────────────────────────────────────────────────────
 
@@ -30,9 +34,9 @@ export type VisionVendor = 'anthropic' | 'google';
  * has already fetched the image as Uint8Array — saves a vendor-side round-trip
  * and keeps URL secrets out of vendor logs).
  *
- * `source_type='url'` lets the vendor's server fetch the URL itself. Only
- * supported by Anthropic today; the Google adapter throws on URL inputs (the
- * Gemini REST endpoint requires inline_data).
+ * `source_type='url'` was supported by the Anthropic adapter (now removed in
+ * W11.8.1). The Google adapter throws on URL inputs (the Gemini REST endpoint
+ * requires inline_data). The literal is kept for future vendor support.
  */
 export interface VisionImage {
   source_type: 'base64' | 'url';
@@ -58,7 +62,7 @@ export interface VisionTurn {
 
 export interface VisionRequest {
   vendor: VisionVendor;
-  /** Vendor-specific model id e.g. 'claude-opus-4-7' | 'gemini-2.0-pro'. */
+  /** Vendor-specific model id e.g. 'gemini-2.5-pro' | 'gemini-2.0-flash'. */
   model: string;
   /** Tool / function name for strict-JSON output mode. */
   tool_name: string;
@@ -79,7 +83,8 @@ export interface VisionRequest {
   max_output_tokens: number;
   /** Temperature 0-1. Defaults to 0 in adapters when omitted. */
   temperature?: number;
-  /** Whether to enable prompt caching (Anthropic ephemeral / Gemini implicit). */
+  /** Whether to enable prompt caching (Gemini implicit). Retained for future
+   *  vendor support; no-op on the Google adapter. */
   enable_prompt_cache?: boolean;
   /** Hard timeout in ms. Defaults to 90s in adapters when omitted. */
   timeout_ms?: number;
