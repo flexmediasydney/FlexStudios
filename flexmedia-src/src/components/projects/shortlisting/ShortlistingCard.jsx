@@ -36,6 +36,12 @@ import { useQuery } from "@tanstack/react-query";
 import { api, supabase } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ChevronDown, ChevronUp, HelpCircle, Sparkles } from "lucide-react";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { cn } from "@/lib/utils";
@@ -91,6 +97,15 @@ function shortFilename(s, max = 32) {
   if (!s) return "—";
   if (s.length <= max) return s;
   return `${s.slice(0, max - 3)}...`;
+}
+
+// W11.6.2 P3 #2: hard truncate to N chars with ellipsis. Used for the
+// alternative-card rationale badge under each thumbnail (spec asks for
+// max 60 chars).
+function truncate(s, max) {
+  if (!s) return "";
+  if (s.length <= max) return s;
+  return `${s.slice(0, max - 1)}…`;
 }
 
 // ── Singleton "expanded card" store ──────────────────────────────────────────
@@ -158,6 +173,9 @@ export default function ShortlistingCard({
   onAltsDrawerOpen,
 }) {
   const [altsExpanded, setAltsExpanded] = useState(false);
+  // W11.6.2 P3 #2: which alt is "expanded in place" inside the tray.
+  // First click on a thumb sets this; second click commits the swap.
+  const [activeAltGroupId, setActiveAltGroupId] = useState(null);
 
   const c = composition || {};
   const cls = c.classification || {};
@@ -242,6 +260,31 @@ export default function ShortlistingCard({
     enabled: Boolean(roundId && whyExpanded),
     staleTime: 30_000,
   });
+
+  // composition_groups for the round — keyed identically to the swimlane's
+  // own groups query so we hit the cache rather than re-fetch. Used by the
+  // alternatives tray (W11.6.2 P3 #2) to look up dropbox_preview_path for
+  // each alt: the swimlane decorates alts with {group_id, stem, score,
+  // analysis} but doesn't include preview path. Resolving here keeps the
+  // swimlane file untouched.
+  const groupsQuery = useQuery({
+    queryKey: ["composition_groups", roundId],
+    queryFn: async () => {
+      const rows = await api.entities.CompositionGroup.filter(
+        { round_id: roundId },
+        "group_index",
+        2000,
+      );
+      return rows || [];
+    },
+    enabled: Boolean(roundId && altsExpanded),
+    staleTime: 15_000,
+  });
+  const groupById = (() => {
+    const m = new Map();
+    for (const g of groupsQuery.data || []) m.set(g.id, g);
+    return m;
+  })();
 
 
   // Resolve Stage 4 winner rationale for this card's slot. Match by
@@ -540,10 +583,13 @@ export default function ShortlistingCard({
           </div>
         )}
 
-        {/* Alternatives tray (only on proposed/approved cards with alts).
-            W11.6.2 commit 3 will rebuild this with a collapsed-card design;
-            kept here as the linear list for now so commit 2 only changes
-            "Why?" surfaces. */}
+        {/* Alternatives tray — W11.6.2 P3 #2 collapsed-card design.
+            Each alt: 96px square thumb + 60-char rationale badge below.
+            Tooltip on hover surfaces full rationale + score. Click expands
+            the alt to full card size in place (transition); a SECOND click
+            commits the swap. The two-step protects against accidental
+            slot reassignment when the editor is just inspecting alts.
+            Only on proposed/approved cards with alts. */}
         {alternatives.length > 0 && column !== "rejected" && (
           <div className="border-t pt-1.5 mt-1">
             <button
@@ -561,6 +607,8 @@ export default function ShortlistingCard({
                   if (next && onAltsDrawerOpen && slot?.slot_id) {
                     onAltsDrawerOpen(slot.slot_id);
                   }
+                  // Collapse any in-place alt expansion when the tray closes.
+                  if (!next) setActiveAltGroupId(null);
                   return next;
                 });
               }}
@@ -574,34 +622,97 @@ export default function ShortlistingCard({
               {alternatives.length} alternative{alternatives.length === 1 ? "" : "s"}
             </button>
             {altsExpanded && (
-              <div className="space-y-1 mt-1">
-                {alternatives.map((alt) => (
-                  <button
-                    key={alt.group_id}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (onSwapAlternative) onSwapAlternative(alt.group_id);
-                    }}
-                    className="w-full text-left rounded-sm bg-muted/50 hover:bg-muted px-1.5 py-1 text-[10px] flex items-center justify-between gap-1"
-                    title="Click to swap into this slot"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="font-mono truncate">
-                        {shortFilename(alt.stem || alt.delivery_reference_stem || "—", 24)}
-                      </div>
-                      {alt.analysis && (
-                        <div className="text-muted-foreground truncate text-[9px]">
-                          {alt.analysis}
-                        </div>
-                      )}
-                    </div>
-                    <span className="text-[9px] font-mono text-muted-foreground whitespace-nowrap">
-                      avg={formatScore(alt.combined_score)}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <TooltipProvider delayDuration={150}>
+                <div
+                  className="mt-1.5 grid grid-cols-2 gap-1.5"
+                  // Click inside the tray must not bubble up to the
+                  // draggable wrapper (otherwise selecting the alt
+                  // triggers a phantom drag start).
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {alternatives.map((alt) => {
+                    const isActive = activeAltGroupId === alt.group_id;
+                    const altStem = alt.stem || alt.delivery_reference_stem || "—";
+                    const rationale = alt.analysis || "";
+                    // Cache hit: same query key as the swimlane already uses.
+                    const altGroup = groupById.get(alt.group_id) || null;
+                    const altPreviewPath = altGroup?.dropbox_preview_path || null;
+                    return (
+                      <Tooltip key={alt.group_id}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!isActive) {
+                                // First click → preview in place.
+                                setActiveAltGroupId(alt.group_id);
+                              } else if (onSwapAlternative) {
+                                // Second click on the active alt → commit swap.
+                                onSwapAlternative(alt.group_id);
+                              }
+                            }}
+                            className={cn(
+                              "rounded-sm border bg-muted/30 hover:bg-muted/50 transition-all overflow-hidden text-left",
+                              "focus:outline-none focus:ring-2 focus:ring-primary/40",
+                              isActive && "col-span-2 border-primary bg-primary/5 ring-2 ring-primary/40",
+                            )}
+                            title={
+                              isActive
+                                ? "Click again to swap into this slot"
+                                : "Click to preview, click again to swap"
+                            }
+                          >
+                            <DroneThumbnail
+                              dropboxPath={altPreviewPath}
+                              mode="thumb"
+                              aspectRatio={
+                                isActive ? "aspect-[3/2]" : "aspect-square"
+                              }
+                              alt={altStem}
+                            />
+                            <div className="p-1 space-y-0.5">
+                              <div className="font-mono text-[9px] truncate">
+                                {shortFilename(altStem, 18)}
+                              </div>
+                              {/* Spec asks for "max 60 chars truncated".
+                                  Anything longer goes into the tooltip. */}
+                              {rationale ? (
+                                <div className="text-[8px] text-muted-foreground line-clamp-2 leading-tight">
+                                  {truncate(rationale, 60)}
+                                </div>
+                              ) : null}
+                              <div className="text-[8px] font-mono text-muted-foreground">
+                                avg={formatScore(alt.combined_score)}
+                              </div>
+                            </div>
+                          </button>
+                        </TooltipTrigger>
+                        {(rationale || alt.combined_score != null) && (
+                          <TooltipContent
+                            side="top"
+                            className="max-w-[280px] text-[11px]"
+                          >
+                            <div className="font-mono text-[10px] mb-1">
+                              {altStem} · avg={formatScore(alt.combined_score)}
+                            </div>
+                            {rationale ? (
+                              <div className="leading-snug whitespace-pre-wrap">
+                                {rationale}
+                              </div>
+                            ) : (
+                              <div className="italic opacity-70">
+                                No rationale available.
+                              </div>
+                            )}
+                          </TooltipContent>
+                        )}
+                      </Tooltip>
+                    );
+                  })}
+                </div>
+              </TooltipProvider>
             )}
           </div>
         )}
