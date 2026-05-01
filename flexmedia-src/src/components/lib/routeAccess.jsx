@@ -150,6 +150,10 @@ export const ROUTE_ACCESS = {
   NotificationsPulse: OWNER_ONLY,
   AdminTodoList: OWNER_ONLY,
   AIAuditLog: OWNER_ONLY,
+  // Wave 15b.9 — missed-opportunity quoting engine command center.
+  // master_admin only because it exposes manual override of customer-facing
+  // quotes + a queue-pause control that affects production cost.
+  PulseMissedOpportunityCommandCenter: OWNER_ONLY,
 };
 
 /**

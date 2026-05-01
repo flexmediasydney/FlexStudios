@@ -157,6 +157,8 @@ const TonomoIntegrationDashboard = React.lazy(() => import('./pages/TonomoIntegr
 const TonomoPulse = React.lazy(() => import('./pages/TonomoPulse'));
 const TalentPulse = React.lazy(() => import('./pages/TalentPulse'));
 const Users = React.lazy(() => import('./pages/Users'));
+// Wave 15b.9 — Pulse Missed-Opportunity Command Center (master_admin only).
+const PulseMissedOpportunityCommandCenter = React.lazy(() => import('./pages/PulseMissedOpportunityCommandCenter'));
 
 
 export const PAGES = {
@@ -259,6 +261,7 @@ export const PAGES = {
     "TonomoPulse": TonomoPulse,
     "UserSettings": UserSettings,
     "Users": Users,
+    "PulseMissedOpportunityCommandCenter": PulseMissedOpportunityCommandCenter,
 }
 
 export const pagesConfig = {
