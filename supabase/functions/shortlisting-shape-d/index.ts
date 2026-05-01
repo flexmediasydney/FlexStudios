@@ -114,6 +114,7 @@ import {
   STAGE1_RESPONSE_SCHEMA_VERSION,
   STAGE1_RESPONSE_TOOL_NAME,
 } from '../_shared/visionPrompts/blocks/stage1ResponseSchema.ts';
+import { normaliseSignalScores } from '../_shared/visionPrompts/blocks/normaliseSignalScores.ts';
 import {
   projectMemoryBlock,
   PROJECT_MEMORY_BLOCK_VERSION,
@@ -1399,6 +1400,21 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
         ? parseInt(spaceZoneCountRaw, 10)
         : null);
 
+  // W11.2 — per-signal 0-10 scores. The 22 canonical keys live in
+  // STAGE1_SIGNAL_KEYS (stage1ResponseSchema.ts); the schema requires the
+  // model emits all 22, but persistence is graceful — missing/malformed
+  // signal_scores land as null and the W8 tier-config formula falls back to
+  // the aggregate axis score. Old engine_modes pre-W11.2 didn't emit it,
+  // so the persist must NOT fail on legacy traffic.
+  const sigNormResult = normaliseSignalScores(out.signal_scores, {
+    groupId: args.result.group_id,
+    stem: args.result.stem,
+  });
+  const signalScores = sigNormResult.signalScores;
+  if (sigNormResult.warning) {
+    args.warnings.push(sigNormResult.warning);
+  }
+
   const row: Record<string, unknown> = {
     group_id: args.result.group_id,
     round_id: args.roundId,
@@ -1430,6 +1446,10 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     composition_score: compScore,
     aesthetic_score: aesScore,
     combined_score: combined,
+    // W11.2 — 22-key per-signal granularity. The 4 aggregate axis scores
+    // above remain authoritative; signal_scores is additional granularity
+    // for the W8 tier-config tuning UI + W11.6 dashboard.
+    signal_scores: signalScores,
     eligible_for_exterior_rear: eligibleExtRear,
     is_near_duplicate_candidate: false,
     lens_class: lensClass, // W11.6.7 P1-4
