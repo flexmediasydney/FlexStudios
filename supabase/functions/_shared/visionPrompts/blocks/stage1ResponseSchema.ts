@@ -32,8 +32,52 @@
 // W11.6.13 — bumped from v1.0 to v1.1 for space_type / zone_focus /
 // space_zone_count additions. The room_type field is preserved as a
 // compatibility alias (legacy consumers + admin-curated taxonomy table).
-export const STAGE1_RESPONSE_SCHEMA_VERSION = 'v1.1';
+// W11.2 — bumped from v1.1 to v1.2 for the 22-key signal_scores object;
+// each property's description doubles as the per-signal measurement prompt.
+export const STAGE1_RESPONSE_SCHEMA_VERSION = 'v1.2';
 export const STAGE1_RESPONSE_TOOL_NAME = 'classify_image';
+
+/**
+ * W11.2 — 22 per-signal measurement keys (0-10 scale).
+ * Exported separately so unit tests + tier-config wiring can reference the
+ * canonical key list without parsing the schema object.
+ *
+ * Scoring rubric (applies to every signal):
+ *   10  = exemplary (top 5% of professional output)
+ *   7-9 = strong (publishable as-is)
+ *   4-6 = competent (acceptable with minor remediation)
+ *   1-3 = weak (needs significant rework)
+ *   0   = catastrophic (unrecoverable / unusable)
+ *
+ * Each key's description in STAGE1_RESPONSE_SCHEMA below is read by the model
+ * as inline per-signal measurement instruction.
+ */
+export const STAGE1_SIGNAL_KEYS = [
+  'exposure_balance',
+  'color_cast',
+  'sharpness_subject',
+  'sharpness_corners',
+  'depth_layering',
+  'composition_geometry',
+  'vantage_quality',
+  'framing_quality',
+  'leading_lines',
+  'negative_space',
+  'symmetry_quality',
+  'perspective_distortion',
+  'plumb_verticals',
+  'material_specificity',
+  'period_reading',
+  'styling_quality',
+  'distraction_freeness',
+  'retouch_debt',
+  'gallery_arc_position',
+  'social_crop_survival',
+  'brochure_print_survival',
+  'reading_grade_match',
+] as const;
+
+export type Stage1SignalKey = typeof STAGE1_SIGNAL_KEYS[number];
 
 export const STAGE1_RESPONSE_SCHEMA: Record<string, unknown> = {
   type: 'object',
@@ -156,6 +200,212 @@ export const STAGE1_RESPONSE_SCHEMA: Record<string, unknown> = {
     lighting_score: { type: 'number' },
     composition_score: { type: 'number' },
     aesthetic_score: { type: 'number' },
+
+    // ─── W11.2 per-signal granularity ───────────────────────────────────────
+    // 22 underlying signals that ROLL UP into the 4 aggregate axis scores.
+    // Tier configs (W8) can weight per-signal once we capture the data.
+    // Scoring rubric (every signal): 10=exemplary, 7-9=strong, 4-6=competent,
+    // 1-3=weak, 0=catastrophic. Score what you ACTUALLY observe, not the
+    // platonic ideal of what the image could be.
+    signal_scores: {
+      type: 'object',
+      description:
+        'W11.2: per-signal 0-10 scores. 10=exemplary; 7-9=strong; 4-6=competent; ' +
+        '1-3=weak; 0=catastrophic. Score what you actually observe in this image, ' +
+        'not the platonic ideal. The 4 aggregate scores ' +
+        '(technical/lighting/composition/aesthetic) are weighted rollups of these — ' +
+        'be internally consistent (e.g. exposure_balance and sharpness_subject ' +
+        'should track technical_score; composition_geometry and framing_quality ' +
+        'should track composition_score).',
+      properties: {
+        exposure_balance: {
+          type: 'number',
+          description:
+            '0-10: highlights AND shadows held without clipping. 10 = both ends ' +
+            'preserved with detail; 5 = one end clips; 0 = both ends blow out. ' +
+            'Under RAW source: score the FINAL HDR-merged result implied, not the ' +
+            'individual bracket frame.',
+        },
+        color_cast: {
+          type: 'number',
+          description:
+            '0-10: white balance neutrality. 10 = neutral whites and skin tones; ' +
+            'lower as cast strengthens (warm orange, cool blue, magenta/green). ' +
+            'Mixed-light scenes get partial credit for hero-zone neutrality.',
+        },
+        sharpness_subject: {
+          type: 'number',
+          description:
+            '0-10: focus accuracy on the hero subject. 10 = razor-crisp on the ' +
+            'intended hero zone; 5 = soft but recognisable; 0 = motion-blurred or ' +
+            'mis-focused beyond recovery.',
+        },
+        sharpness_corners: {
+          type: 'number',
+          description:
+            '0-10: lens corner sharpness. 10 = uniformly crisp edge-to-edge; ' +
+            '5 = visible corner softness expected of a wide-aperture wide-angle; ' +
+            '0 = corners smeared or coma-distorted to the point of unusability.',
+        },
+        depth_layering: {
+          type: 'number',
+          description:
+            '0-10: foreground / middleground / background separation. 10 = three ' +
+            'distinct planes drawing the eye through the frame; 5 = two planes ' +
+            'present; 0 = flat, no depth cues.',
+        },
+        composition_geometry: {
+          type: 'number',
+          description:
+            '0-10: rule of thirds, leading lines, symmetry — geometric strength ' +
+            'of the frame. 10 = textbook geometric balance; 5 = adequate but ' +
+            'unremarkable; 0 = chaotic, no structure.',
+        },
+        vantage_quality: {
+          type: 'number',
+          description:
+            '0-10: camera position appropriateness for the subject. 10 = ideal ' +
+            'vantage that flatters the architecture; 5 = workable but not optimal; ' +
+            '0 = wrong vantage (e.g. shooting up at a ceiling-heavy room from low).',
+        },
+        framing_quality: {
+          type: 'number',
+          description:
+            '0-10: subject placement and breathing room. 10 = generous, intentional ' +
+            'framing; 5 = subject placed but cramped or floating; 0 = subject ' +
+            'amputated by the frame edge or lost in dead space.',
+        },
+        leading_lines: {
+          type: 'number',
+          description:
+            '0-10: do lines in the frame pull the eye toward the subject? 10 = ' +
+            'strong convergence on hero; 5 = lines present but neutral; 0 = lines ' +
+            'lead the eye AWAY from the subject. Score 5 if no lines are present.',
+        },
+        negative_space: {
+          type: 'number',
+          description:
+            '0-10: intentional vs accidental negative space. 10 = negative space ' +
+            'amplifies the subject; 5 = neutral; 0 = empty space feels like ' +
+            'unfinished framing or dead air.',
+        },
+        symmetry_quality: {
+          type: 'number',
+          description:
+            '0-10: when symmetry is the intent, how well executed? 10 = pixel-' +
+            'perfect symmetry; 5 = near-symmetric but visibly off; 0 = symmetry ' +
+            'attempted and badly broken. Score 7 if symmetry is clearly NOT the ' +
+            'intent (e.g. a documentary corner shot).',
+        },
+        perspective_distortion: {
+          type: 'number',
+          description:
+            '0-10: wide-angle stretch — appropriate or excessive? 10 = no visible ' +
+            'distortion or distortion used intentionally; 5 = mild stretch typical ' +
+            'of a 16-24mm wide; 0 = severe barrel/pincushion that warps the ' +
+            'architecture.',
+        },
+        plumb_verticals: {
+          type: 'number',
+          description:
+            '0-10: vertical lines vertical or converging? 10 = walls plumb, no ' +
+            'keystoning; 5 = mild lean correctable in post; 0 = severe converging ' +
+            'verticals that read as amateur (camera tilted up).',
+        },
+        material_specificity: {
+          type: 'number',
+          description:
+            '0-10: how specifically can materials be identified from this image? ' +
+            '10 = "Caesarstone with veined Calacatta pattern" identifiable; ' +
+            '5 = "stone benchtop" identifiable but not the specific stone; ' +
+            '0 = materials unreadable (under-lit, over-styled, blurred).',
+        },
+        period_reading: {
+          type: 'number',
+          description:
+            '0-10: era / architectural style legibility. 10 = period unambiguous ' +
+            '(e.g. clearly Federation, clearly post-war fibro, clearly ' +
+            'contemporary); 5 = era ambiguous; 0 = period unreadable from this ' +
+            'frame.',
+        },
+        styling_quality: {
+          type: 'number',
+          description:
+            '0-10: intentional vs neglected styling. 10 = thoughtful, magazine-' +
+            'level styling; 5 = lived-in but not staged; 0 = visibly cluttered, ' +
+            'mismatched, or pre-styling state.',
+        },
+        distraction_freeness: {
+          type: 'number',
+          description:
+            '0-10: clutter, power lines, neighbouring properties, errant objects. ' +
+            '10 = clean frame, no distractions; 5 = minor distractions ' +
+            'photoshoppable; 0 = major distractions that reject the image.',
+        },
+        retouch_debt: {
+          type: 'number',
+          description:
+            '0-10: how much post-processing work does this image need? 10 = ' +
+            'publish-ready as-is; 5 = standard 5-10 min retouch (clone garbage ' +
+            'bins, level horizons); 0 = >30 min of retouch or unrecoverable ' +
+            '(e.g. moiré on screens, deep noise).',
+        },
+        gallery_arc_position: {
+          type: 'number',
+          description:
+            '0-10: how well does this image fit a marketing-gallery arc? ' +
+            '10 = lead-image candidate (position 1); 7-9 = early gallery ' +
+            '(positions 2-6); 4-6 = late/supporting; 0-3 = archive only. Score ' +
+            "the image's role in the SEQUENCE, not its standalone quality.",
+        },
+        social_crop_survival: {
+          type: 'number',
+          description:
+            '0-10: does a 1:1 Instagram crop preserve the subject? 10 = centre ' +
+            'square keeps hero feature intact; 5 = crop loses some context but ' +
+            'subject survives; 0 = subject is amputated or lost in 1:1 crop.',
+        },
+        brochure_print_survival: {
+          type: 'number',
+          description:
+            '0-10: print-quality at A4 brochure size. 10 = sharp, vibrant, ' +
+            'tonally rich at full-page A4; 5 = passable at quarter-page; 0 = ' +
+            'too soft / noisy / under-resolved for any print use.',
+        },
+        reading_grade_match: {
+          type: 'number',
+          description:
+            '0-10: does the image match the reading grade / property tier the ' +
+            'listing copy will target? 10 = image quality matches premium-tier ' +
+            'voice; 5 = image fits standard tier; 0 = image quality contradicts ' +
+            'the implied tier (e.g. luxury copy paired with bargain-tier shot).',
+        },
+      },
+      required: [
+        'exposure_balance',
+        'color_cast',
+        'sharpness_subject',
+        'sharpness_corners',
+        'depth_layering',
+        'composition_geometry',
+        'vantage_quality',
+        'framing_quality',
+        'leading_lines',
+        'negative_space',
+        'symmetry_quality',
+        'perspective_distortion',
+        'plumb_verticals',
+        'material_specificity',
+        'period_reading',
+        'styling_quality',
+        'distraction_freeness',
+        'retouch_debt',
+        'gallery_arc_position',
+        'social_crop_survival',
+        'brochure_print_survival',
+        'reading_grade_match',
+      ],
+    },
 
     // ─── iter-5 enrichments ─────────────────────────────────────────────────
     listing_copy: {
@@ -341,6 +591,9 @@ export const STAGE1_RESPONSE_SCHEMA: Record<string, unknown> = {
     'aesthetic_score',
     'key_elements',
     'zones_visible',
+    // W11.2 — per-signal granularity. The 22-key signal_scores object lets
+    // tier_configs (W8) weight per-signal in addition to per-axis.
+    'signal_scores',
     'listing_copy',
     'appeal_signals',
     'concern_signals',
