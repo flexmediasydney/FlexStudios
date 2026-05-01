@@ -1554,7 +1554,7 @@ interface PersistSlotDecisionsArgs {
  * (project_tier is nullable so we could leave it NULL too, but the legacy
  * swimlane filters on it; populating preserves filter behaviour.)
  */
-async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<number> {
+export async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<number> {
   if (args.slotDecisions.length === 0) return 0;
 
   // Resolve stem → group_id from composition_groups.
@@ -1700,6 +1700,17 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
     const rationale = typeof winner.rationale === 'string' ? winner.rationale : null;
     const score = groupToScore.get(winnerGroupId) ?? null;
 
+    // W11.6.15: Stage 4's self-reported slot-fit score (0-10). Distinct
+    // from per-image quality scores — surfaces the slot-vs-quality
+    // trade-off so operators can see WHEN slot-fit reasoning overrode raw
+    // quality and disagree if it's bogus. Tolerated as null when an older
+    // Stage 4 model run omits the field (back-compat for in-flight rounds);
+    // post-W11.6.15 prompt declares it required so production always emits.
+    const rawSlotFit = winner.slot_fit_score;
+    const slotFitScore = typeof rawSlotFit === 'number' && Number.isFinite(rawSlotFit)
+      ? rawSlotFit
+      : null;
+
     rowsToInsert.push({
       project_id: args.projectId,
       round_id: args.roundId,
@@ -1707,6 +1718,8 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
       ai_proposed_slot_id: slotId, // canonical form
       ai_proposed_score: score,
       ai_proposed_analysis: rationale,
+      // W11.6.15: separate dimension; null when Stage 4 didn't emit it.
+      slot_fit_score: slotFitScore,
       // REGRESSION FIX 2026-05-01: was 'approved_as_proposed' which the
       // swimlane interprets as "human approved" and auto-moved cards to the
       // APPROVED column without operator interaction. 'ai_proposed' is the

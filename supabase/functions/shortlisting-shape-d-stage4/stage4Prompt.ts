@@ -127,10 +127,34 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
                 description:
                   '2-4 sentences citing specific visual evidence: lighting, ' +
                   'vantage, styling, distinguishing material, why this beats the ' +
-                  'alternatives. Refer to other stems by name when comparing.',
+                  'alternatives. Refer to other stems by name when comparing. ' +
+                  'CRITICAL FIDELITY RULE: when this winner has LOWER per-image ' +
+                  'quality scores than a rejected alternative, the rationale MUST ' +
+                  'acknowledge this explicitly with the phrase "Despite ' +
+                  '[winner_stem]\'s lower quality (X vs alternative\'s Y), it ' +
+                  'better fits the slot because…". NEVER claim the winner is ' +
+                  '"strongest" if its combined score is lower than rejected ' +
+                  'alternatives — that contradicts the stored data.',
+              },
+              // W11.6.15: separate slot-fit dimension. Stage 4 frequently picks
+              // a lower-scored image because of compositional intent (e.g. an
+              // entry-hero that captures the foyer-as-subject vs a higher-
+              // quality threshold shot). Without this, operators cannot tell
+              // whether a slot decision was a deliberate slot-fit override of
+              // raw quality or a reasoning error.
+              slot_fit_score: {
+                type: 'number',
+                description:
+                  '0-10 — how strongly this image fits the slot\'s compositional ' +
+                  'intent, INDEPENDENT of per-image quality scores. ' +
+                  'A 7/10 quality shot may be a 9/10 slot-fit if it captures the ' +
+                  'slot\'s defining compositional move (e.g. a wide-angle corner ' +
+                  'shot of the foyer for entry_hero beats a higher-quality ' +
+                  'threshold shot looking through the screen). ' +
+                  'Required to be transparent about slot-vs-quality trade-offs.',
               },
             },
-            required: ['stem', 'rationale'],
+            required: ['stem', 'rationale', 'slot_fit_score'],
           },
           alternatives: {
             type: 'array',
