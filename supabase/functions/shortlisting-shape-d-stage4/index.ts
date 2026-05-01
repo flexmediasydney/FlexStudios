@@ -78,6 +78,11 @@ import {
   PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/photographerTechniquesBlock.ts';
 import {
+  exifContextTable,
+  EXIF_CONTEXT_BLOCK_VERSION,
+  type ExifTableRow,
+} from '../_shared/visionPrompts/blocks/exifContextBlock.ts';
+import {
   voiceAnchorBlock,
   VOICE_ANCHOR_BLOCK_VERSION,
   SYDNEY_PRIMER_BLOCK,
@@ -491,7 +496,7 @@ async function runStage4Core(
 
   {
     // Load Stage 1 merged JSON from composition_classifications + groups.
-    const stage1Merged = await loadStage1Merged(admin, roundId);
+    const { entries: stage1Merged, exifRows: stage1ExifRows } = await loadStage1Merged(admin, roundId);
     if (stage1Merged.length === 0) {
       throw new Error(
         `round ${roundId} has no composition_classifications — Stage 1 must succeed first`,
@@ -556,9 +561,17 @@ async function runStage4Core(
       '',
       SYDNEY_PRIMER_BLOCK,
     ].join('\n');
+    // W11.6.14: filter exif rows to those whose stem actually arrived
+    // as a preview, then render the compact table. Empty when no rows
+    // (the table itself renders a graceful fallback in that case).
+    const previewStemSet = new Set(previews.map((p) => p.stem));
+    const exifRowsForPreviews = stage1ExifRows.filter((r) => previewStemSet.has(r.stem));
+    const exifContextTableText = exifContextTable(exifRowsForPreviews);
+
     const userPromptCore = buildStage4UserPrompt({
       sourceContextBlockText: sourceContextBlock(sourceType),
       photographerTechniquesBlockText: photographerTechniquesBlock(),
+      exifContextTableText,
       voiceBlockText: voiceAnchorBlock(voice),
       selfCritiqueBlockText: SELF_CRITIQUE_BLOCK,
       propertyFacts: ctx.property_facts,
@@ -904,7 +917,7 @@ async function loadRoundContext(
 async function loadStage1Merged(
   admin: ReturnType<typeof getAdminClient>,
   roundId: string,
-): Promise<Stage1MergedEntry[]> {
+): Promise<{ entries: Stage1MergedEntry[]; exifRows: ExifTableRow[] }> {
   const { data, error } = await admin
     .from('composition_classifications')
     .select(`
@@ -929,7 +942,8 @@ async function loadStage1Merged(
       composition_groups!composition_classifications_group_id_fkey(
         group_index,
         delivery_reference_stem,
-        best_bracket_stem
+        best_bracket_stem,
+        exif_metadata
       )
     `)
     .eq('round_id', roundId)
@@ -937,6 +951,10 @@ async function loadStage1Merged(
   if (error) throw new Error(`composition_classifications load failed: ${error.message}`);
 
   const out: Stage1MergedEntry[] = [];
+  // W11.6.14: gather per-image EXIF rows alongside the Stage 1 merged
+  // entries so Stage 4 can render the compact PER-IMAGE METADATA table.
+  // Each row is keyed by the same stem that appears in stage1Merged.
+  const exifRows: ExifTableRow[] = [];
   for (const row of (data || []) as Array<Record<string, unknown>>) {
     const grp = (row.composition_groups as Record<string, unknown> | null) || null;
     const stem = (grp?.delivery_reference_stem as string | null)
@@ -964,10 +982,40 @@ async function loadStage1Merged(
       key_elements: (row.key_elements as string[] | null) ?? null,
       zones_visible: (row.zones_visible as string[] | null) ?? null,
     });
+
+    // W11.6.14: pull per-image EXIF for THIS stem from the linked
+    // composition_groups.exif_metadata JSONB (keyed by stem). Defensive
+    // null handling — exifContextTable renders "?" for missing fields.
+    const exifMap = (grp?.exif_metadata as Record<string, unknown> | null) ?? null;
+    const perImage = exifMap && typeof exifMap === 'object'
+      ? (exifMap[stem] as Record<string, unknown> | undefined) ?? null
+      : null;
+    exifRows.push({
+      stem,
+      cameraModel: perImage && typeof perImage.cameraModel === 'string' ? perImage.cameraModel : null,
+      focalLengthMm: perImage && typeof perImage.focalLength === 'number' ? perImage.focalLength : null,
+      aperture: perImage && typeof perImage.aperture === 'number' ? perImage.aperture : null,
+      shutterSpeed: perImage && typeof perImage.shutterSpeed === 'string' ? perImage.shutterSpeed : null,
+      iso: perImage && typeof perImage.iso === 'number' ? perImage.iso : null,
+      aebBracketValue: perImage && typeof perImage.aebBracketValue === 'number'
+        ? perImage.aebBracketValue
+        : null,
+      motionBlurRisk: !!(perImage && perImage.motionBlurRisk === true),
+      highIsoRisk: !!(perImage && perImage.highIsoRisk === true),
+    });
   }
   // Sort by group_index for stable Stage 4 ordering.
   out.sort((a, b) => a.group_index - b.group_index);
-  return out;
+  // Mirror the sort on exifRows so they line up with the entries above.
+  const orderedStems = out.map((e) => e.stem);
+  const exifByStem = new Map<string, ExifTableRow>();
+  for (const r of exifRows) exifByStem.set(r.stem, r);
+  const sortedExifRows: ExifTableRow[] = [];
+  for (const stem of orderedStems) {
+    const r = exifByStem.get(stem);
+    if (r) sortedExifRows.push(r);
+  }
+  return { entries: out, exifRows: sortedExifRows };
 }
 
 // ─── Preview fetcher ────────────────────────────────────────────────────────
@@ -1984,6 +2032,7 @@ function stage4PromptBlockVersions(): Record<string, string> {
     stage4_prompt: STAGE4_PROMPT_VERSION,
     source_context: SOURCE_CONTEXT_BLOCK_VERSION,
     photographer_techniques: PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
+    exif_context: EXIF_CONTEXT_BLOCK_VERSION,
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,
