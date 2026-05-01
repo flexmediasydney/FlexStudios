@@ -300,6 +300,39 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
       ],
     },
 
+    // ─── Slot taxonomy proposals (W11.6.1-followup / W11.7 hook) ─────────
+    // Optional surface so Gemini can flag patterns it sees REPEATEDLY across
+    // a round that don't fit any of the canonical slot_ids. Empty array when
+    // nothing warrants a new slot. The persistence layer (W11.6.6) writes
+    // each entry to `shortlisting_events.event_type='pass2_slot_suggestion'`
+    // for downstream operator review and (eventually) auto-promotion via the
+    // SettingsObjectRegistryDiscovery admin surface (W12).
+    proposed_slots: {
+      type: 'array',
+      description:
+        'Suggested NEW slot taxonomy entries when Stage 4 sees a recurring ' +
+        "composition pattern that doesn't fit any canonical slot. Empty array " +
+        'when no proposals.',
+      items: {
+        type: 'object',
+        properties: {
+          proposed_slot_id: {
+            type: 'string',
+            description: 'snake_case lowercase, e.g. "cellar_hero", "wine_room"',
+          },
+          candidate_stems: {
+            type: 'array',
+            items: { type: 'string' },
+          },
+          reasoning: {
+            type: 'string',
+            description: '1-3 sentences why this should be a canonical slot',
+          },
+        },
+        required: ['proposed_slot_id', 'candidate_stems', 'reasoning'],
+      },
+    },
+
     // ─── Cross-image fields ──────────────────────────────────────────────
     gallery_sequence: {
       type: 'array',
@@ -462,6 +495,10 @@ export function buildStage4SystemPrompt(): string {
     '- Voice anchor rubric is law — if it says "no exclamation marks" or "no',
     '  stunning", do not slip those in.',
     '- Apply the Sydney typology primer when naming style_archetype + period.',
+    "- If you see a recurring composition pattern that doesn't fit any of the",
+    '  canonical slot_ids, surface it via `proposed_slots[]` rather than silently',
+    "  picking the closest fit. Empty array when nothing warrants a new slot —",
+    "  don't manufacture proposals.",
     '',
     'Return ONE JSON object matching the schema in the user prompt.',
   ].join('\n');
