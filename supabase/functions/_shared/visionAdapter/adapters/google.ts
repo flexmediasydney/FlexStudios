@@ -137,15 +137,21 @@ export function buildGeminiBody(req: VisionRequest): Record<string, unknown> {
   //   - 2nd pass: thinkingBudget=0 → 400 INVALID_ARGUMENT, Pro requires non-zero
   //   - 3rd pass: thinkingBudget=128 (floor) → 42/42 ok but terse output (avg
   //     692 chars analysis vs Opus 1358; 4.5 objects vs 7.8)
-  //   - 4th pass (here): thinkingBudget=1024 for Pro → enough headroom to
-  //     enumerate architectural detail under the iter-4 minItems=8 schema
-  //     and the master-architectural-photographer granularity directive.
-  //     With max_output_tokens=4000, ~2976 tokens remain for output —
-  //     plenty for ~250-word analysis + 8–12 multi-noun key_elements.
+  //   - 4th pass: thinkingBudget=1024 for Pro → headroom for iter-4 minItems=8
+  //     schema + master-architectural-photographer granularity directive.
+  //   - 5th pass (here, default for Stage 1): thinkingBudget=2048. The richer
+  //     iter-5 schema (per-image listing_copy, appeal/concern signals, retouch
+  //     priority, gallery_position_hint, style_archetype, embedding_anchor_text,
+  //     shot_intent, confidence_per_field) needs more reasoning headroom.
+  //   - Stage 4 (visual master synthesis on all images): thinkingBudget=16384
+  //     via explicit `thinking_budget` request override — the cross-image
+  //     reasoning + master_listing synthesis needs the budget.
   //
   // Pro requires a non-zero budget. Flash and Lite tolerate 0.
   const isProModel = /gemini-2\.5-pro/i.test(req.model);
-  const thinkingBudget = isProModel ? 1024 : 0;
+  const thinkingBudget = typeof req.thinking_budget === 'number'
+    ? req.thinking_budget
+    : (isProModel ? 2048 : 0);
   const body: Record<string, unknown> = {
     systemInstruction: { parts: [{ text: req.system }] },
     contents,

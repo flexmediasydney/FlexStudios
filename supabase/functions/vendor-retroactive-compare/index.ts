@@ -78,6 +78,24 @@ import {
   generateMarkdownReport,
   type VendorRunSummary,
 } from '../_shared/vendorComparisonMetrics.ts';
+import {
+  voiceAnchorBlock,
+  SYDNEY_PRIMER_BLOCK,
+  SELF_CRITIQUE_BLOCK,
+} from './iter5VoiceAnchor.ts';
+import {
+  COMPARISON_TOOL_NAME_ITER5,
+  COMPARISON_TOOL_SCHEMA_ITER5,
+} from './iter5Schema.ts';
+import {
+  STAGE4_TOOL_NAME,
+  STAGE4_TOOL_SCHEMA,
+  buildStage4SystemPrompt,
+  buildStage4UserPrompt,
+  stage4PromptVersions,
+  type PropertyFacts,
+  type Stage1MergedEntry,
+} from './iter5Stage4.ts';
 
 const GENERATOR = 'vendor-retroactive-compare';
 
@@ -100,6 +118,37 @@ interface RetroactiveCompareRequest {
    * tests. Defaults to all groups in the round.
    */
   max_groups?: number;
+  /**
+   * iter-5: voice tier for listing copy. Drives both per-image listing_copy
+   * and Stage 4 master_listing voice. Default 'standard'.
+   */
+  property_tier?: 'premium' | 'standard' | 'approachable';
+  /**
+   * iter-5: free-text override of the tier rubric (operator-supplied voice
+   * direction). Forbidden patterns from standard tier still apply.
+   */
+  property_voice_anchor_override?: string;
+  /**
+   * iter-5: when any label includes "iter5", we activate iter-5 mode:
+   *   - schema swapped to iter-5 enriched (per-image listing_copy etc)
+   *   - voice anchor + Sydney primer + self-critique injected
+   *   - Stage 1 thinkingBudget bumped to 2048
+   *   - Stage 4 visual master synthesis call fired after Stage 1 completes
+   * Set explicitly via this flag to force iter-5 mode regardless of label.
+   */
+  force_iter5?: boolean;
+  /**
+   * iter-5: skip the Stage 4 visual master synthesis (smoke testing only).
+   * Default false.
+   */
+  skip_stage4?: boolean;
+  /**
+   * iter-5: when true, skip Stage 1 entirely and run ONLY Stage 4 against
+   * already-primed shadow_runs for this (round, label). Used when Stage 1
+   * completed previously but Stage 4 hit the edge runtime wall time, so we
+   * re-invoke just Stage 4 with a fresh worker budget.
+   */
+  stage4_only?: boolean;
 }
 
 interface CompositionRow {
@@ -169,6 +218,25 @@ function validateBody(body: unknown): { ok: true; req: RetroactiveCompareRequest
   if (b.max_groups !== undefined && (typeof b.max_groups !== 'number' || b.max_groups <= 0)) {
     return { ok: false, error: 'max_groups must be a positive number when present' };
   }
+  if (b.property_tier !== undefined &&
+      b.property_tier !== 'premium' &&
+      b.property_tier !== 'standard' &&
+      b.property_tier !== 'approachable') {
+    return { ok: false, error: "property_tier must be 'premium' | 'standard' | 'approachable'" };
+  }
+  if (b.property_voice_anchor_override !== undefined &&
+      typeof b.property_voice_anchor_override !== 'string') {
+    return { ok: false, error: 'property_voice_anchor_override must be string when present' };
+  }
+  if (b.force_iter5 !== undefined && typeof b.force_iter5 !== 'boolean') {
+    return { ok: false, error: 'force_iter5 must be boolean when present' };
+  }
+  if (b.skip_stage4 !== undefined && typeof b.skip_stage4 !== 'boolean') {
+    return { ok: false, error: 'skip_stage4 must be boolean when present' };
+  }
+  if (b.stage4_only !== undefined && typeof b.stage4_only !== 'boolean') {
+    return { ok: false, error: 'stage4_only must be boolean when present' };
+  }
   return { ok: true, req: b as unknown as RetroactiveCompareRequest };
 }
 
@@ -176,7 +244,11 @@ function validateBody(body: unknown): { ok: true; req: RetroactiveCompareRequest
 
 async function loadRoundContext(roundId: string): Promise<{
   round: { project_id: string };
-  project: { dropbox_root_path: string | null };
+  project: {
+    dropbox_root_path: string | null;
+    property_facts: PropertyFacts;
+    pricing_tier: string | null;
+  };
   compositions: CompositionRow[];
 }> {
   const admin = getAdminClient();
@@ -187,12 +259,19 @@ async function loadRoundContext(roundId: string): Promise<{
     .single();
   if (rErr || !round) throw new Error(`round ${roundId} not found: ${rErr?.message || 'no row'}`);
 
-  const { data: proj, error: pErr } = await admin
+  // iter-5: pull CRM-side property facts for the Stage 4 master_listing
+  // synthesis. We use existing `projects` columns; missing CRM fields appear
+  // as null and the Stage 4 prompt explicitly omits them from copy.
+  const { data: projRaw, error: pErr } = await admin
     .from('projects')
-    .select('id, dropbox_root_path')
+    .select(
+      'id, dropbox_root_path, property_address, property_suburb, pricing_tier, ' +
+      'property_type',
+    )
     .eq('id', round.project_id)
     .single();
-  if (pErr || !proj) throw new Error(`project ${round.project_id} not found: ${pErr?.message || 'no row'}`);
+  if (pErr || !projRaw) throw new Error(`project ${round.project_id} not found: ${pErr?.message || 'no row'}`);
+  const proj = projRaw as unknown as Record<string, unknown>;
 
   const { data: groups, error: gErr } = await admin
     .from('composition_groups')
@@ -213,9 +292,26 @@ async function loadRoundContext(roundId: string): Promise<{
     };
   });
 
+  const property_facts: PropertyFacts = {
+    address_line: (proj.property_address as string | null) ?? null,
+    suburb: (proj.property_suburb as string | null) ?? null,
+    state: 'NSW', // Sydney CRM is single-state for now
+    bedrooms: null,
+    bathrooms: null,
+    car_spaces: null,
+    land_size_sqm: null,
+    internal_size_sqm: null,
+    price_guide_band: null,
+    auction_or_private_treaty: null,
+  };
+
   return {
     round: { project_id: round.project_id as string },
-    project: { dropbox_root_path: (proj.dropbox_root_path as string | null) ?? null },
+    project: {
+      dropbox_root_path: (proj.dropbox_root_path as string | null) ?? null,
+      property_facts,
+      pricing_tier: (proj.pricing_tier as string | null) ?? null,
+    },
     compositions,
   };
 }
@@ -477,23 +573,33 @@ interface ShadowRunRecord {
   error_message: string | null;
 }
 
+interface Stage1CallSpec {
+  iter5: boolean;
+  toolName: string;
+  toolSchema: Record<string, unknown>;
+  thinkingBudget: number; // gemini-only override; ignored on Anthropic
+  maxOutputTokens: number;
+}
+
 async function runVendorOnComposition(
   cfg: VendorConfig,
   comp: CompositionRow,
   preview: { data: string; media_type: string },
   promptSystem: string,
   promptUser: string,
+  spec: Stage1CallSpec,
 ): Promise<{ resp: VisionResponse | null; error?: string }> {
   const req: VisionRequest = {
     vendor: cfg.vendor,
     model: cfg.model,
-    tool_name: COMPARISON_TOOL_NAME,
-    tool_input_schema: COMPARISON_TOOL_SCHEMA,
+    tool_name: spec.toolName,
+    tool_input_schema: spec.toolSchema,
     system: promptSystem,
     user_text: promptUser,
     images: [{ source_type: 'base64', media_type: preview.media_type, data: preview.data }],
-    max_output_tokens: 4000,
+    max_output_tokens: spec.maxOutputTokens,
     temperature: 0,
+    thinking_budget: spec.thinkingBudget,
   };
   try {
     const resp = await callVisionAdapter(req);
@@ -591,6 +697,15 @@ interface ProcessComparisonArgs {
   vendors_to_compare: VendorConfig[];
   pass_kinds: ('unified' | 'description_backfill')[];
   prompt: { system: string; userPrefix: string };
+  spec: Stage1CallSpec;
+  /** iter-5: voice tier + override + Stage 4 toggle */
+  iter5_voice?: {
+    tier: 'premium' | 'standard' | 'approachable';
+    override: string | null;
+  };
+  iter5_run_stage4?: boolean;
+  /** iter-5: skip Stage 1 entirely (rely on primed runs), run only Stage 4. */
+  iter5_stage4_only?: boolean;
 }
 
 interface PrimedRun {
@@ -658,6 +773,7 @@ async function processOneComposition(
   round_id: string,
   dropboxRoot: string,
   primed: Map<string, PrimedRun>,
+  spec: Stage1CallSpec,
 ): Promise<Array<{
   cfg: VendorConfig;
   group_id: string;
@@ -735,15 +851,16 @@ async function processOneComposition(
       request_payload = {
         vendor: cfg.vendor,
         model: cfg.model,
-        tool_name: COMPARISON_TOOL_NAME,
-        tool_input_schema: COMPARISON_TOOL_SCHEMA,
+        tool_name: spec.toolName,
+        tool_input_schema: spec.toolSchema,
         system: prompt.system,
         user_text: prompt.userPrefix,
         images: [{ source_type: 'base64', media_type: preview.media_type, data: preview.data }],
-        max_output_tokens: 4000,
+        max_output_tokens: spec.maxOutputTokens,
         temperature: 0,
+        thinking_budget: spec.thinkingBudget,
       };
-      const r = await runVendorOnComposition(cfg, comp, preview, prompt.system, prompt.userPrefix);
+      const r = await runVendorOnComposition(cfg, comp, preview, prompt.system, prompt.userPrefix, spec);
       resp = r.resp;
       err = r.error;
     } else {
@@ -751,13 +868,14 @@ async function processOneComposition(
       request_payload = {
         vendor: cfg.vendor,
         model: cfg.model,
-        tool_name: COMPARISON_TOOL_NAME,
-        tool_input_schema: COMPARISON_TOOL_SCHEMA,
+        tool_name: spec.toolName,
+        tool_input_schema: spec.toolSchema,
         system: prompt.system,
         user_text: prompt.userPrefix,
         images: [],
-        max_output_tokens: 4000,
+        max_output_tokens: spec.maxOutputTokens,
         temperature: 0,
+        thinking_budget: spec.thinkingBudget,
       };
     }
 
@@ -793,8 +911,228 @@ async function processOneComposition(
  * On completion, vendor_comparison_results gets one row per (primary, shadow)
  * pair.
  */
+// ─── iter-5 Stage 4: visual master synthesis ─────────────────────────────────
+
+/**
+ * Build the merged Stage 1 entries the Stage 4 prompt needs as text context.
+ * Pulls per-image classification + iter-5 enrichments from the Stage 1
+ * `results` array (which holds the parsed tool output per composition).
+ */
+function buildStage1Merged(
+  comps: CompositionRow[],
+  stage1Results: Array<{ group_id: string; stem: string; output: Record<string, unknown> }>,
+): Stage1MergedEntry[] {
+  // Map by group_id so we can preserve composition order from `comps`.
+  const byGroup: Map<string, Record<string, unknown>> = new Map();
+  for (const r of stage1Results) byGroup.set(r.group_id, r.output);
+
+  const merged: Stage1MergedEntry[] = [];
+  for (const c of comps) {
+    const out = byGroup.get(c.group_id);
+    if (!out) continue;
+    const lc = (out.listing_copy as Record<string, unknown> | null) ?? null;
+    const cpf = (out.confidence_per_field as Record<string, unknown> | null) ?? null;
+    merged.push({
+      stem: c.stem,
+      group_id: c.group_id,
+      group_index: c.group_index,
+      room_type: typeof out.room_type === 'string' ? (out.room_type as string) : null,
+      composition_type: typeof out.composition_type === 'string' ? (out.composition_type as string) : null,
+      vantage_point: typeof out.vantage_point === 'string' ? (out.vantage_point as string) : null,
+      technical_score: typeof out.technical_score === 'number' ? (out.technical_score as number) : null,
+      lighting_score: typeof out.lighting_score === 'number' ? (out.lighting_score as number) : null,
+      composition_score: typeof out.composition_score === 'number' ? (out.composition_score as number) : null,
+      aesthetic_score: typeof out.aesthetic_score === 'number' ? (out.aesthetic_score as number) : null,
+      is_styled: typeof out.is_styled === 'boolean' ? (out.is_styled as boolean) : null,
+      indoor_outdoor_visible: typeof out.indoor_outdoor_visible === 'boolean'
+        ? (out.indoor_outdoor_visible as boolean) : null,
+      clutter_severity: typeof out.clutter_severity === 'string' ? (out.clutter_severity as string) : null,
+      flag_for_retouching: typeof out.flag_for_retouching === 'boolean'
+        ? (out.flag_for_retouching as boolean) : null,
+      appeal_signals: Array.isArray(out.appeal_signals) ? (out.appeal_signals as string[]) : null,
+      concern_signals: Array.isArray(out.concern_signals) ? (out.concern_signals as string[]) : null,
+      retouch_priority: typeof out.retouch_priority === 'string' ? (out.retouch_priority as string) : null,
+      gallery_position_hint: typeof out.gallery_position_hint === 'string'
+        ? (out.gallery_position_hint as string) : null,
+      shot_intent: typeof out.shot_intent === 'string' ? (out.shot_intent as string) : null,
+      style_archetype: typeof out.style_archetype === 'string' ? (out.style_archetype as string) : null,
+      era_hint: typeof out.era_hint === 'string' ? (out.era_hint as string) : null,
+      material_palette_summary: Array.isArray(out.material_palette_summary)
+        ? (out.material_palette_summary as string[]) : null,
+      embedding_anchor_text: typeof out.embedding_anchor_text === 'string'
+        ? (out.embedding_anchor_text as string) : null,
+      key_elements: Array.isArray(out.key_elements) ? (out.key_elements as string[]) : null,
+      zones_visible: Array.isArray(out.zones_visible) ? (out.zones_visible as string[]) : null,
+      listing_copy: lc ? {
+        headline: typeof lc.headline === 'string' ? (lc.headline as string) : '',
+        paragraphs: typeof lc.paragraphs === 'string' ? (lc.paragraphs as string) : '',
+      } : null,
+      social_first_friendly: typeof out.social_first_friendly === 'boolean'
+        ? (out.social_first_friendly as boolean) : null,
+      requires_human_review: typeof out.requires_human_review === 'boolean'
+        ? (out.requires_human_review as boolean) : null,
+      confidence_per_field: cpf ? {
+        room_type: typeof cpf.room_type === 'number' ? (cpf.room_type as number) : undefined,
+        scoring: typeof cpf.scoring === 'number' ? (cpf.scoring as number) : undefined,
+        classification: typeof cpf.classification === 'number' ? (cpf.classification as number) : undefined,
+      } : null,
+    });
+  }
+  return merged;
+}
+
+/**
+ * Run Stage 4 visual master synthesis for a single vendor.
+ *
+ * Inputs:
+ *   - All Stage 1 successful results (text context)
+ *   - All preview images (visual context)
+ *   - Property facts + voice anchor + Sydney primer
+ *
+ * Persists the response to `vendor_shadow_runs` with pass_kind='stage4'
+ * and group_id=NULL (round-level emission, not per-composition).
+ *
+ * Returns cost + elapsed for cost-rollup. Full output stays in DB.
+ */
+async function runStage4(
+  cfg: VendorConfig,
+  ctx: Awaited<ReturnType<typeof loadRoundContext>>,
+  comps: CompositionRow[],
+  stage1Results: Array<{ group_id: string; stem: string; output: Record<string, unknown> }>,
+  voice: { tier: 'premium' | 'standard' | 'approachable'; override: string | null },
+  dropboxRoot: string,
+  round_id: string,
+): Promise<{ ok: boolean; cost_usd: number; elapsed_ms: number; error?: string }> {
+  const start = Date.now();
+
+  // Skip Anthropic for Stage 4 in iter-5 — Stage 4 is Gemini-anchored per
+  // W11.7 (cheaper, multi-image-friendly, higher output ceiling). When the
+  // operator wires Anthropic into the harness for an audit run, we just log
+  // and skip — they can use force_iter5 + a separate label.
+  if (cfg.vendor !== 'google') {
+    console.log(
+      `[${GENERATOR}] Stage 4 skipped for ${cfg.label} — Stage 4 is Gemini-only ` +
+      'in iter-5 harness (Anthropic failover via W11.8 not yet wired)',
+    );
+    return { ok: false, cost_usd: 0, elapsed_ms: 0, error: 'stage4_anthropic_not_wired' };
+  }
+
+  // Build merged Stage 1 entries (compact per-image text context).
+  const stage1Merged = buildStage1Merged(comps, stage1Results);
+
+  // Fetch ALL preview images. Do this in parallel with reasonable
+  // concurrency — Dropbox tolerates ~10 simultaneous downloads.
+  const stems: string[] = stage1Merged.map((m) => m.stem);
+  const PREVIEW_CONCURRENCY = 8;
+  const previews: Array<{ stem: string; data: string; media_type: string } | null> = [];
+  for (let i = 0; i < stems.length; i += PREVIEW_CONCURRENCY) {
+    const slice = stems.slice(i, i + PREVIEW_CONCURRENCY);
+    const fetched = await Promise.all(slice.map(async (stem) => {
+      const path = `${dropboxRoot.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews/${stem}.jpg`;
+      try {
+        const p = await fetchPreviewBase64(path);
+        return { stem, data: p.data, media_type: p.media_type };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] Stage 4 preview ${stem} fetch failed: ${msg}`);
+        return null;
+      }
+    }));
+    previews.push(...fetched);
+  }
+  const validPreviews = previews.filter((p): p is { stem: string; data: string; media_type: string } => p !== null);
+  if (validPreviews.length === 0) {
+    return { ok: false, cost_usd: 0, elapsed_ms: Date.now() - start, error: 'no_previews_fetched' };
+  }
+
+  const userText = buildStage4UserPrompt({
+    voice,
+    propertyFacts: ctx.project.property_facts,
+    stage1Merged,
+    imageStemsInBatchOrder: validPreviews.map((p) => p.stem),
+    totalImages: validPreviews.length,
+  });
+
+  const sysText = [
+    buildStage4SystemPrompt(),
+    '',
+    SYDNEY_PRIMER_BLOCK,
+  ].join('\n');
+
+  // Stage 4 budget: thinkingBudget=16384 + max_output_tokens=16000.
+  // Cost-cap-friendly even at $1.20-ish per call.
+  const req: VisionRequest = {
+    vendor: cfg.vendor,
+    model: cfg.model,
+    tool_name: STAGE4_TOOL_NAME,
+    tool_input_schema: STAGE4_TOOL_SCHEMA,
+    system: sysText,
+    user_text: userText,
+    images: validPreviews.map((p) => ({
+      source_type: 'base64',
+      media_type: p.media_type,
+      data: p.data,
+    })),
+    max_output_tokens: 16000,
+    temperature: 0,
+    thinking_budget: 16384,
+    timeout_ms: 240_000, // 4 min — Stage 4 takes 60-90s on Gemini Pro
+  };
+
+  let resp: VisionResponse | null = null;
+  let err: string | undefined;
+  try {
+    resp = await callVisionAdapter(req);
+  } catch (e) {
+    if (e instanceof MissingVendorCredential) err = e.message;
+    else if (e instanceof VendorCallError) err = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
+    else err = e instanceof Error ? e.message : String(e);
+  }
+
+  // Persist to vendor_shadow_runs with pass_kind='stage4', group_id=NULL.
+  // Strip base64 from the persisted request_payload — same pattern as Stage 1.
+  const safe_request: Record<string, unknown> = {
+    ...req,
+    images: req.images.map((i) => ({
+      source_type: i.source_type,
+      media_type: i.media_type,
+      data_length: i.data?.length ?? 0,
+    })),
+  };
+  // Tag the prompt versions in the response for replay reproducibility.
+  const enrichedOutput = resp
+    ? { ...resp.output, _harness_meta: { ...stage4PromptVersions(), images_sent: validPreviews.length } }
+    : null;
+
+  const admin = getAdminClient();
+  const insertRow: Record<string, unknown> = {
+    round_id,
+    pass_kind: 'stage4',
+    vendor: cfg.vendor,
+    model: cfg.model,
+    label: cfg.label,
+    group_id: null,
+    request_payload: safe_request,
+    response_output: enrichedOutput,
+    response_usage: resp?.usage ?? null,
+    vendor_meta: resp?.vendor_meta ?? null,
+    error_message: err ?? null,
+  };
+  const { error: insErr } = await admin.from('vendor_shadow_runs').insert(insertRow);
+  if (insErr) {
+    console.warn(`[${GENERATOR}] Stage 4 vendor_shadow_runs insert failed: ${insErr.message}`);
+  }
+
+  return {
+    ok: !!resp && !err,
+    cost_usd: resp?.usage.estimated_cost_usd ?? 0,
+    elapsed_ms: resp?.vendor_meta.elapsed_ms ?? (Date.now() - start),
+    error: err,
+  };
+}
+
 async function processComparison(args: ProcessComparisonArgs): Promise<void> {
-  const { round_id, ctx, compositionsToRun, vendors_to_compare, pass_kinds, prompt } = args;
+  const { round_id, ctx, compositionsToRun, vendors_to_compare, pass_kinds, prompt, spec } = args;
   const startedAt = Date.now();
 
   const runs: Map<string, VendorRunSummary> = new Map();
@@ -826,12 +1164,36 @@ async function processComparison(args: ProcessComparisonArgs): Promise<void> {
     console.log(`[${GENERATOR}] primed ${primed.size} cached results from prior shadow_runs (skipping those API calls)`);
   }
 
+  // iter-5 stage4_only: skip Stage 1 entirely. Pre-populate `runs` with the
+  // primed (already-completed) Stage 1 outputs so Stage 4 can run against them
+  // directly. Used to recover from edge runtime wall-time deaths during the
+  // long-running Stage 1 + Stage 4 chain.
+  if (args.iter5_stage4_only) {
+    console.log(`[${GENERATOR}] stage4_only mode: skipping Stage 1, using ${primed.size} primed results`);
+    for (const cfg of vendors_to_compare) {
+      const summary = runs.get(cfg.label);
+      if (!summary) continue;
+      for (const comp of compositionsToRun) {
+        const key = `${comp.group_id}::${cfg.label}`;
+        const p = primed.get(key);
+        if (p) {
+          summary.results.push({ group_id: comp.group_id, stem: comp.stem, output: p.output });
+          summary.composition_count += 1;
+          summary.total_cost_usd += p.cost_usd;
+          summary.total_elapsed_ms += p.elapsed_ms;
+        }
+      }
+      console.log(
+        `[${GENERATOR}] stage4_only: ${cfg.label} loaded ${summary.results.length} primed Stage 1 results`,
+      );
+    }
+  } else {
   // Process compositions in batches, fanning out vendors per composition.
   for (let i = 0; i < compositionsToRun.length; i += BATCH_SIZE) {
     const batch = compositionsToRun.slice(i, i + BATCH_SIZE);
     console.log(`[${GENERATOR}] batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(compositionsToRun.length / BATCH_SIZE)} (compositions ${i + 1}..${Math.min(i + BATCH_SIZE, compositionsToRun.length)})`);
     const batchResults = await Promise.all(batch.map((comp) =>
-      processOneComposition(comp, vendors_to_compare, prompt, pass_kinds, round_id, dropboxRoot, primed)
+      processOneComposition(comp, vendors_to_compare, prompt, pass_kinds, round_id, dropboxRoot, primed, spec)
         .catch((err) => {
           console.error(`[${GENERATOR}] composition ${comp.stem} failed: ${err instanceof Error ? err.message : String(err)}`);
           return [] as Array<{
@@ -857,6 +1219,50 @@ async function processComparison(args: ProcessComparisonArgs): Promise<void> {
         } else {
           summary.failure_count += 1;
         }
+      }
+    }
+  }
+  } // close stage4_only-or-stage1-sweep else
+
+  // ─── iter-5 Stage 4: visual master synthesis ─────────────────────────────
+  // Sequential after all Stage 1 batches complete. One call per vendor that
+  // has a successful Stage 1 result set. Sees ALL preview images at once +
+  // merged Stage 1 JSON as text context. Produces slot_decisions, master
+  // listing, gallery_sequence, dedup_groups, missing_shot_recommendations,
+  // narrative_arc_score, property_archetype_consensus, overall_property_score,
+  // stage_4_overrides[], coverage_notes, quality_outliers.
+  if (args.iter5_run_stage4 && args.iter5_voice) {
+    for (const cfg of vendors_to_compare) {
+      const stage1Summary = runs.get(cfg.label);
+      if (!stage1Summary) continue;
+      if (stage1Summary.results.length < 5) {
+        console.warn(
+          `[${GENERATOR}] Stage 4 skipped for ${cfg.label} — only ` +
+          `${stage1Summary.results.length} successful Stage 1 results (need >=5)`,
+        );
+        continue;
+      }
+      try {
+        const stage4Result = await runStage4(
+          cfg,
+          ctx,
+          compositionsToRun,
+          stage1Summary.results,
+          args.iter5_voice,
+          dropboxRoot,
+          round_id,
+        );
+        // Roll Stage 4 cost + elapsed into the summary so the final report
+        // surfaces the total bill correctly.
+        stage1Summary.total_cost_usd += stage4Result.cost_usd;
+        stage1Summary.total_elapsed_ms += stage4Result.elapsed_ms;
+        console.log(
+          `[${GENERATOR}] Stage 4 ${cfg.label}: $${stage4Result.cost_usd.toFixed(4)}, ` +
+          `${stage4Result.elapsed_ms}ms, output=${stage4Result.ok ? 'ok' : 'fail'}`,
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[${GENERATOR}] Stage 4 ${cfg.label} failed: ${msg}`);
       }
     }
   }
@@ -934,7 +1340,29 @@ async function handler(req: Request): Promise<Response> {
   }
   const v = validateBody(body);
   if (!v.ok) return errorResponse(v.error, 400);
-  const { round_id, vendors_to_compare, pass_kinds, cost_cap_usd, dry_run, max_groups } = v.req;
+  const {
+    round_id,
+    vendors_to_compare,
+    pass_kinds,
+    cost_cap_usd,
+    dry_run,
+    max_groups,
+    property_tier,
+    property_voice_anchor_override,
+    force_iter5,
+    skip_stage4,
+    stage4_only,
+  } = v.req;
+
+  // iter-5 mode activates when force_iter5=true OR any vendor label includes
+  // "iter5". This keeps iter-4 the default path so legacy callers (e.g.
+  // existing dashboards) continue to work unchanged.
+  const iter5Active = !!force_iter5 || vendors_to_compare.some((cfg) => /iter5/i.test(cfg.label));
+  const tier: 'premium' | 'standard' | 'approachable' = property_tier ?? 'standard';
+  const voice = {
+    tier,
+    override: property_voice_anchor_override ?? null,
+  };
 
   // Load round + project + composition_groups.
   let ctx: Awaited<ReturnType<typeof loadRoundContext>>;
@@ -955,7 +1383,15 @@ async function handler(req: Request): Promise<Response> {
   const preflight: Array<{ label: string; estimated_usd: number }> = [];
   let total_estimated = 0;
   for (const cfg of vendors_to_compare) {
-    const usd = preflightCost(cfg.vendor, cfg.model, total_compositions);
+    // stage4_only mode skips Stage 1 entirely → preflight only the single
+    // Stage 4 call (~$1.50 envelope, conservative).
+    const usd = stage4_only
+      ? estimateCost(cfg.vendor, cfg.model, {
+          input_tokens: 60_000,    // ~42 images * ~1.5K + prompt
+          output_tokens: 16_000,   // master_listing + slot_decisions verbose
+          cached_input_tokens: 0,
+        })
+      : preflightCost(cfg.vendor, cfg.model, total_compositions);
     preflight.push({ label: cfg.label, estimated_usd: Number(usd.toFixed(4)) });
     total_estimated += usd;
   }
@@ -992,6 +1428,55 @@ async function handler(req: Request): Promise<Response> {
   const prompt = buildPass1Prompt(anchors);
   const compositionsToRun = ctx.compositions.slice(0, total_compositions);
 
+  // Spec selection — iter-5 when active, iter-4 default.
+  // iter-5 differences:
+  //   - schema enriched (per-image listing_copy, appeal/concern, retouch_priority,
+  //     gallery_position_hint, style_archetype, era_hint, embedding_anchor_text,
+  //     shot_intent, confidence_per_field, material_palette_summary)
+  //   - thinkingBudget bumped to 2048 (Pro Stage 1)
+  //   - max_output_tokens bumped to 6000 (more headroom for richer schema)
+  //   - voice anchor + Sydney primer + self-critique injected into user_text
+  //   - Stage 4 visual master synthesis fires after Stage 1 completes
+  const spec: Stage1CallSpec = iter5Active
+    ? {
+        iter5: true,
+        toolName: COMPARISON_TOOL_NAME_ITER5,
+        toolSchema: COMPARISON_TOOL_SCHEMA_ITER5,
+        thinkingBudget: 2048,
+        maxOutputTokens: 6000,
+      }
+    : {
+        iter5: false,
+        toolName: COMPARISON_TOOL_NAME,
+        toolSchema: COMPARISON_TOOL_SCHEMA,
+        thinkingBudget: 1024,
+        maxOutputTokens: 4000,
+      };
+
+  // Build the per-image (Stage 1) user prompt. iter-4 baseline = pass1
+  // userPrefix + V2 taxonomy. iter-5 also injects voice anchor + Sydney
+  // primer + self-critique block, all consistent with the W11.7 spec.
+  const userPrefixBase = prompt.userPrefix + V2_TAXONOMY_AND_GRANULARITY_INSTRUCTION;
+  const userPrefix = iter5Active
+    ? [
+        userPrefixBase,
+        '',
+        '── VOICE ANCHOR (drives per-image listing_copy register) ──',
+        voiceAnchorBlock(voice),
+        '',
+        '── SELF-CRITIQUE ──',
+        SELF_CRITIQUE_BLOCK,
+      ].join('\n')
+    : userPrefixBase;
+
+  // System prompt: iter-5 layers the Sydney typology primer onto the iter-4
+  // pass1 system prompt. Stage 4 receives the same primer — but Stage 1's
+  // style_archetype + era_hint emissions come from each per-image call so the
+  // primer goes into Stage 1 system text directly.
+  const systemText = iter5Active
+    ? [prompt.system, '', '', SYDNEY_PRIMER_BLOCK].join('\n')
+    : prompt.system;
+
   // Kick off the heavy work in the background. The request returns
   // immediately with a "started" ack so the gateway doesn't time out.
   // Progress is observable via vendor_shadow_runs row count for round_id.
@@ -1001,13 +1486,11 @@ async function handler(req: Request): Promise<Response> {
     compositionsToRun,
     vendors_to_compare,
     pass_kinds,
-    // Iter 4: append V2 taxonomy + granularity directive to userPrefix.
-    // Prompt-only addition — schema room_type stays free-form so models
-    // emit any value without erroring, but they're guided to the V2 set.
-    prompt: {
-      system: prompt.system,
-      userPrefix: prompt.userPrefix + V2_TAXONOMY_AND_GRANULARITY_INSTRUCTION,
-    },
+    prompt: { system: systemText, userPrefix },
+    spec,
+    iter5_voice: iter5Active ? voice : undefined,
+    iter5_run_stage4: iter5Active && !skip_stage4,
+    iter5_stage4_only: iter5Active && !!stage4_only,
   }).catch((err) => {
     console.error(`[${GENERATOR}] background sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   });
@@ -1023,8 +1506,14 @@ async function handler(req: Request): Promise<Response> {
     preflight,
     total_estimated_usd: total_estimated,
     cost_cap_usd,
-    progress_query: `SELECT vendor, label, count(*) FROM vendor_shadow_runs WHERE round_id = '${round_id}' GROUP BY vendor, label`,
-    note: `Sweep running in background. Expect ~${Math.ceil(total_compositions / BATCH_SIZE) * 30}s wall time at ${BATCH_SIZE}-composition batches × parallel vendors. Report will appear at Photos/_AUDIT/vendor_comparison_${round_id}.md`,
+    iter5_active: iter5Active,
+    property_tier: tier,
+    will_run_stage4: iter5Active && !skip_stage4,
+    progress_query: `SELECT vendor, label, pass_kind, count(*) FROM vendor_shadow_runs WHERE round_id = '${round_id}' GROUP BY vendor, label, pass_kind`,
+    note: iter5Active
+      ? `iter-5 sweep running in background. Stage 1: ${total_compositions} compositions × ${vendors_to_compare.length} vendors @ thinkingBudget=2048. ` +
+        (skip_stage4 ? 'Stage 4 SKIPPED.' : `Stage 4 visual master synthesis follows (1 call/vendor seeing all ${total_compositions} images at thinkingBudget=16384).`)
+      : `Sweep running in background. Expect ~${Math.ceil(total_compositions / BATCH_SIZE) * 30}s wall time at ${BATCH_SIZE}-composition batches × parallel vendors. Report will appear at Photos/_AUDIT/vendor_comparison_${round_id}.md`,
   });
 }
 

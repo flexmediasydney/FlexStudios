@@ -83,6 +83,14 @@ export interface VisionRequest {
   enable_prompt_cache?: boolean;
   /** Hard timeout in ms. Defaults to 90s in adapters when omitted. */
   timeout_ms?: number;
+  /**
+   * Gemini-only: explicit thinkingBudget override (tokens). When set, the
+   * Google adapter uses this verbatim instead of the per-model default.
+   *   - Pro models default 1024 (iter-4); iter-5 uses 2048 for Stage 1.
+   *   - Stage 4 (multi-image visual master synthesis) needs 16384.
+   *   - Flash / Lite default 0; Pro requires non-zero.
+   */
+  thinking_budget?: number;
 }
 
 // ─── Vision response ─────────────────────────────────────────────────────────
