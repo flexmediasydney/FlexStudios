@@ -23,6 +23,13 @@
  *                                     // slot-aware nav via filterStems
  *                                     // (W11.6.3 P3 #8). Drone callers may
  *                                     // omit.
+ *     observed_objects: Array | null, // OPTIONAL — W11.6.20 bbox overlay data.
+ *                                     // Populated by W11.7.17 universal vision
+ *                                     // schema v2. When present and the
+ *                                     // operator has annotations enabled, an
+ *                                     // SVG overlay paints the boxes over the
+ *                                     // image with click-through to the
+ *                                     // canonical-object side panel.
  *   }
  *
  * Props:
@@ -37,6 +44,12 @@
  *   filterLabel   - OPTIONAL string. Pretty label rendered in the slot pill
  *                   (e.g. "kitchen_hero"). Only shown when filterStems is
  *                   active.
+ *   allClassificationsInRound
+ *                 - OPTIONAL Array<CompositionClassification>. W11.6.20: the
+ *                   round's full classification set so the side panel can
+ *                   show "other instances on round" without an extra fetch.
+ *                   Pass `null`/omit when annotations aren't relevant
+ *                   (drone subtab callers).
  *
  * Slot-aware nav (W11.6.3 P3 #8):
  *   When `filterStems` is provided we precompute a list of indices into
@@ -44,6 +57,13 @@
  *   wrap-around. The original `items` array is left intact so the
  *   per-instance blob cache + neighbour preload still benefit from the full
  *   set. When `filterStems` is null/undefined, behaviour is unchanged.
+ *
+ * Annotations overlay (W11.6.20):
+ *   The lightbox header now hosts an Eye/EyeOff toggle (right of the slot
+ *   pill, before the close X). Toggle is disabled when the current image
+ *   has no observed_objects[]. When enabled, BoundingBoxOverlay paints the
+ *   boxes over the image; clicking a box opens CanonicalObjectPanel —
+ *   neither component touches the W11.6.3 slot-pill DOM.
  *
  * Graceful degradation: callers walk the DOM via
  *   `event.target.closest('[data-slot-id]')`
@@ -64,14 +84,87 @@ import {
   Loader2,
   Image as ImageIcon,
   Filter,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { enqueueFetch } from "@/utils/mediaPerf";
 import { cn } from "@/lib/utils";
+import BoundingBoxOverlay, {
+  colorForCanonicalId,
+} from "@/components/projects/shortlisting/BoundingBoxOverlay";
+import CanonicalObjectPanel from "@/components/projects/shortlisting/CanonicalObjectPanel";
+import useLightboxAnnotations from "@/hooks/useLightboxAnnotations";
 
 const SWIPE_THRESHOLD_PX = 50;
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
 const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+
+// ── W11.6.20: dev-only mock fixture ────────────────────────────────────────
+// W11.7.17 hasn't landed yet, so the live observed_objects[] is empty in
+// production. To verify the overlay during local development, opt IN by
+// adding ?devmock=annotations to the URL. The fixture is hardcoded (no
+// fetch) so it's effectively zero-cost. Production users never see it —
+// the import.meta.env.DEV gate is statically dead-code-eliminated by Vite
+// in prod builds.
+const DEV_MOCK_OBSERVED_OBJECTS = [
+  {
+    raw_label: "white shaker cabinets",
+    proposed_canonical_id: "obj_arch_kitchen_cab_001",
+    confidence: 0.92,
+    bounding_box: { x_pct: 0.05, y_pct: 0.45, w_pct: 0.4, h_pct: 0.35 },
+    attributes: { color: "white", style: "shaker", handle_type: "cup_pull" },
+  },
+  {
+    raw_label: "marble splashback",
+    proposed_canonical_id: "obj_material_marble_007",
+    confidence: 0.78,
+    bounding_box: { x_pct: 0.15, y_pct: 0.25, w_pct: 0.3, h_pct: 0.18 },
+    attributes: { material: "carrara_marble", finish: "polished" },
+  },
+  {
+    raw_label: "dated pendant lamp",
+    proposed_canonical_id: "concern_dated_finishes",
+    confidence: 0.41,
+    bounding_box: { x_pct: 0.55, y_pct: 0.1, w_pct: 0.15, h_pct: 0.2 },
+    attributes: { era: "early_2000s" },
+  },
+];
+
+function isDevMockEnabled() {
+  // import.meta.env.DEV is a Vite compile-time flag — false in prod builds,
+  // so this entire branch dead-code-eliminates and the operator never sees
+  // the mock toggle in production.
+  if (!import.meta.env.DEV) return false;
+  if (typeof window === "undefined") return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("devmock") === "annotations";
+  } catch {
+    return false;
+  }
+}
+
+// canonical-id → category bucket, used to evaluate the operator's
+// categoryFilter[] from useLightboxAnnotations. Mirrors the colour buckets
+// in BoundingBoxOverlay 1:1 — same prefixes, different output type.
+function categoryForCanonicalId(canonicalId) {
+  const c = colorForCanonicalId(canonicalId);
+  switch (c.name) {
+    case "blue":
+      return "arch";
+    case "green":
+      return "material";
+    case "amber":
+      return "styling";
+    case "purple":
+      return "fixture";
+    case "red":
+      return "concern";
+    default:
+      return "unknown";
+  }
+}
 
 // ── Isolated lightbox blob cache ───────────────────────────────────────────
 // The lightbox fetches FULL-RESOLUTION proxy blobs (4–8MB each). If we wrote
@@ -137,12 +230,60 @@ export default function DroneLightbox({
   onClose,
   filterStems = null,
   filterLabel = "",
+  allClassificationsInRound = null,
 }) {
   const total = items?.length || 0;
   const safeInitial = Math.max(0, Math.min(initialIndex, Math.max(0, total - 1)));
   const [index, setIndex] = useState(safeInitial);
   const safeIndex = total > 0 ? Math.max(0, Math.min(index, total - 1)) : 0;
   const item = total > 0 ? items[safeIndex] : null;
+
+  // ── W11.6.20: annotations state + per-image data resolution ────────────
+  const annotations = useLightboxAnnotations();
+  // Selected object — opens the side panel. Reset on image change.
+  const [selectedObject, setSelectedObject] = useState(null);
+  // Image-container ref for the SVG overlay's coordinate math.
+  const imageContainerRef = useRef(null);
+
+  // Effective observed_objects for the current image.
+  //   1. Dev mock (?devmock=annotations) wins — for local dev only.
+  //   2. Otherwise read item.observed_objects (populated by W11.7.17).
+  // Then: filter through the operator's annotation prefs (confidence floor +
+  // category filter) — this is the array we hand to BoundingBoxOverlay.
+  const devMockOn = useMemo(() => isDevMockEnabled(), []);
+  const rawObserved = useMemo(() => {
+    if (devMockOn) return DEV_MOCK_OBSERVED_OBJECTS;
+    return Array.isArray(item?.observed_objects) ? item.observed_objects : [];
+  }, [item, devMockOn]);
+
+  const observedForOverlay = useMemo(() => {
+    if (!annotations.settings.enabled) return [];
+    const threshold = annotations.settings.confidenceThreshold;
+    const catFilter = annotations.settings.categoryFilter;
+    return rawObserved.filter((o) => {
+      const conf = typeof o?.confidence === "number" ? o.confidence : 0;
+      if (conf < threshold) return false;
+      // Empty filter = show all categories
+      if (Array.isArray(catFilter) && catFilter.length > 0) {
+        const cat = categoryForCanonicalId(o?.proposed_canonical_id);
+        if (!catFilter.includes(cat)) return false;
+      }
+      return true;
+    });
+  }, [
+    rawObserved,
+    annotations.settings.enabled,
+    annotations.settings.confidenceThreshold,
+    annotations.settings.categoryFilter,
+  ]);
+
+  const annotationsAvailable = rawObserved.length > 0;
+
+  // Reset side panel when image changes — operator wouldn't expect a panel
+  // about image #1 to persist when they ←/→ to image #2.
+  useEffect(() => {
+    setSelectedObject(null);
+  }, [safeIndex]);
 
   // ── Slot-aware filter (W11.6.3 P3 #8) ──────────────────────────────────
   // Normalise filterStems → Set for O(1) lookups, then precompute the list
@@ -521,7 +662,7 @@ export default function DroneLightbox({
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Top bar — counter + slot pill (W11.6.3 P3 #8) + close */}
+      {/* Top bar — counter + slot pill (W11.6.3 P3 #8) + W11.6.20 toggle + close */}
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 z-10 gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <div className="text-white/80 text-xs sm:text-sm tabular-nums whitespace-nowrap">
@@ -548,16 +689,67 @@ export default function DroneLightbox({
             </span>
           )}
         </div>
-        <button
-          ref={closeButtonRef}
-          type="button"
-          onClick={onClose}
-          className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors shrink-0"
-          title="Close (Esc)"
-          aria-label="Close lightbox"
-        >
-          <X className="h-5 w-5" />
-        </button>
+        {/* W11.6.20: Right-side header controls — annotation toggle ▏close.
+            Sits as a single flex group so the original justify-between
+            layout pushes us cleanly to the right. The W11.6.3 slot pill
+            lives in the LEFT block above; we leave its DOM untouched. The
+            annotation toggle renders whenever the lightbox is open so the
+            affordance is discoverable; it visually disables itself (greyed
+            + disabled attr) when the current image has no observed_objects
+            to display. */}
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            data-testid="lightbox-annotations-toggle"
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!annotationsAvailable) return;
+              annotations.setEnabled(!annotations.settings.enabled);
+            }}
+            disabled={!annotationsAvailable}
+            className={cn(
+              "p-2 rounded-lg transition-colors",
+              annotationsAvailable
+                ? annotations.settings.enabled
+                  ? "text-emerald-300 hover:text-emerald-200 hover:bg-white/10 ring-1 ring-emerald-400/30"
+                  : "text-white/70 hover:text-white hover:bg-white/10"
+                : "text-white/30 cursor-not-allowed",
+            )}
+            aria-pressed={annotations.settings.enabled}
+            aria-label={
+              annotationsAvailable
+                ? annotations.settings.enabled
+                  ? "Hide annotations"
+                  : "Show annotations"
+                : "No annotations available for this image"
+            }
+            title={
+              annotationsAvailable
+                ? annotations.settings.enabled
+                  ? "Hide annotations"
+                  : "Show annotations"
+                : "No annotations available — Stage 1 has not yet detected objects on this image"
+            }
+          >
+            {annotations.settings.enabled ? (
+              <Eye className="h-5 w-5" />
+            ) : (
+              <EyeOff className="h-5 w-5" />
+            )}
+          </button>
+          {/* Visual separator between the W11.6.20 toggle and close button. */}
+          <span aria-hidden="true" className="h-5 w-px bg-white/15" />
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+            title="Close (Esc)"
+            aria-label="Close lightbox"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
       </div>
 
       {/* Nav arrows. Hidden when nav scope has only one element — for the
@@ -593,20 +785,48 @@ export default function DroneLightbox({
         </>
       )}
 
-      {/* Image area — flex-1, centred. Click image: no-op (avoid accidental close). */}
+      {/* Image area — flex-1, centred. Click image: no-op (avoid accidental close).
+          W11.6.20: when annotations are enabled and the current image has
+          observed_objects, we wrap the <img> in a relative container that
+          BoundingBoxOverlay anchors to via its ref. The overlay is
+          pointer-events-none on its wrapper but pointer-events-auto on each
+          rect, so clicks on a rect open the side panel and clicks on the
+          background fall through to the image's own no-op handler. */}
       <div
         className="flex-1 flex items-center justify-center w-full px-4 sm:px-16 py-14"
         onClick={handleOverlayClick}
       >
         {imageUrl ? (
-          <img
-            src={imageUrl}
-            alt={item.filename || "drone media"}
-            draggable={false}
+          <div
+            ref={imageContainerRef}
+            data-testid="lightbox-image-frame"
+            className="relative max-w-full max-h-full inline-flex"
             onClick={(e) => e.stopPropagation()}
-            onError={() => setErrored(true)}
-            className="max-w-full max-h-full object-contain rounded shadow-lg"
-          />
+          >
+            <img
+              src={imageUrl}
+              alt={item.filename || "drone media"}
+              draggable={false}
+              onError={() => setErrored(true)}
+              className="max-w-full max-h-full object-contain rounded shadow-lg"
+            />
+            {/* SVG bounding-box overlay — renders nothing when
+                observedForOverlay is empty (so disabled / no-data → no
+                DOM impact on the underlying <img>). */}
+            <BoundingBoxOverlay
+              observedObjects={observedForOverlay}
+              imageContainerRef={imageContainerRef}
+              onObjectClick={(obj) => setSelectedObject(obj)}
+            />
+            {/* Side panel — slides in when a box is clicked. Anchors to
+                the image frame, NOT the lightbox dialog, so the operator
+                can still see the image while reading the panel. */}
+            <CanonicalObjectPanel
+              object={selectedObject}
+              allClassificationsInRound={allClassificationsInRound || []}
+              onClose={() => setSelectedObject(null)}
+            />
+          </div>
         ) : isFetching ? (
           <div className="flex flex-col items-center gap-2 text-white/70">
             <Loader2 className="h-8 w-8 animate-spin" />
