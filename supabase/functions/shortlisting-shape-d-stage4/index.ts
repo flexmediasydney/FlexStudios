@@ -413,7 +413,7 @@ async function runStage4Core(
     });
 
     // Call vision adapter with retries + Anthropic failover.
-    const { resp, vendorUsed, modelUsed, costUsd, wallMs, failoverTriggered, failoverReason, error } =
+    const { resp, vendorUsed, modelUsed, costUsd, wallMs, inputTokens, outputTokens, failoverTriggered, failoverReason, error } =
       await callStage4WithFailover({
         systemText,
         userText,
@@ -482,7 +482,7 @@ async function runStage4Core(
       warnings,
     });
 
-    // Update engine_run_audit
+    // Update engine_run_audit (incl. token attribution + prompt block versions)
     await updateEngineRunAudit({
       admin,
       roundId,
@@ -492,6 +492,9 @@ async function runStage4Core(
       failoverReason,
       stage4CostUsd: costUsd,
       stage4WallMs: wallMs,
+      stage4InputTokens: inputTokens,
+      stage4OutputTokens: outputTokens,
+      promptBlockVersions: stage4PromptBlockVersions(),
       warnings,
     });
 
@@ -775,6 +778,10 @@ interface CallStage4Result {
   modelUsed: string;
   costUsd: number;
   wallMs: number;
+  /** Vendor-reported input tokens for this call (0 if call failed). */
+  inputTokens: number;
+  /** Vendor-reported output tokens for this call (0 if call failed). */
+  outputTokens: number;
   failoverTriggered: boolean;
   failoverReason: string | null;
   error: string | null;
@@ -810,6 +817,8 @@ async function callStage4WithFailover(args: CallStage4Args): Promise<CallStage4R
         modelUsed: PRIMARY_MODEL,
         costUsd: resp.usage.estimated_cost_usd,
         wallMs: resp.vendor_meta.elapsed_ms || (Date.now() - start),
+        inputTokens: resp.usage.input_tokens || 0,
+        outputTokens: resp.usage.output_tokens || 0,
         failoverTriggered: false,
         failoverReason: null,
         error: null,
@@ -820,6 +829,7 @@ async function callStage4WithFailover(args: CallStage4Args): Promise<CallStage4R
         return {
           resp: null, vendorUsed: PRIMARY_VENDOR, modelUsed: PRIMARY_MODEL,
           costUsd: 0, wallMs: Date.now() - start,
+          inputTokens: 0, outputTokens: 0,
           failoverTriggered: false, failoverReason: null,
           error: e.message,
         };
@@ -849,6 +859,8 @@ async function callStage4WithFailover(args: CallStage4Args): Promise<CallStage4R
         modelUsed: 'claude-opus-4-7',
         costUsd: resp.usage.estimated_cost_usd,
         wallMs: resp.vendor_meta.elapsed_ms || (Date.now() - start),
+        inputTokens: resp.usage.input_tokens || 0,
+        outputTokens: resp.usage.output_tokens || 0,
         failoverTriggered: true,
         failoverReason: lastErr,
         error: null,
@@ -861,6 +873,7 @@ async function callStage4WithFailover(args: CallStage4Args): Promise<CallStage4R
         modelUsed: 'claude-opus-4-7',
         costUsd: 0,
         wallMs: Date.now() - start,
+        inputTokens: 0, outputTokens: 0,
         failoverTriggered: true,
         failoverReason: lastErr,
         error: `primary_then_failover: primary=${lastErr} | failover=${fmsg}`,
@@ -874,6 +887,7 @@ async function callStage4WithFailover(args: CallStage4Args): Promise<CallStage4R
     modelUsed: PRIMARY_MODEL,
     costUsd: 0,
     wallMs: Date.now() - start,
+    inputTokens: 0, outputTokens: 0,
     failoverTriggered: false,
     failoverReason: null,
     error: lastErr,
@@ -1048,6 +1062,17 @@ async function persistStage4Overrides(args: PersistStage4OverridesArgs): Promise
   // Skip rows where the field isn't one we know how to translate to the
   // overrides table; for v1, room_type / composition_type / vantage_point /
   // combined_score map cleanly.
+  //
+  // Author attribution: Stage 4 is a SYSTEM actor (the W11.7 visual master
+  // synthesis engine), not a human. Per W11.7 cleanup mig 379_2, this table
+  // now allows actor_user_id = NULL for override_source='stage4_visual_
+  // override' rows. Previously, the code looked up the first master_admin
+  // from public.users to satisfy the NOT NULL constraint — but that user's
+  // id may not exist in auth.users (FK target), and the upsert would fail
+  // silently with a swallowed warning, leaving 0 mirror rows even when
+  // shortlisting_stage4_overrides had successful audit entries (Saladine
+  // round 3ed54b53 — 1 audit row, 0 mirror rows). The fix: write NULL and
+  // let the CHECK constraint that's keyed on override_source allow it.
   const supportedFields = new Set(['room_type', 'composition_type', 'vantage_point', 'combined_score']);
   let mirroredCount = 0;
   for (const o of args.stage4Overrides) {
@@ -1057,33 +1082,16 @@ async function persistStage4Overrides(args: PersistStage4OverridesArgs): Promise
     if (!supportedFields.has(field)) continue;
 
     // Build the per-field row. Only the corrected field is set; others null.
+    // actor_user_id is intentionally NULL — engine-authored rows have no
+    // human attribution. Authoritative audit lives in
+    // shortlisting_stage4_overrides (which doesn't require actor_user_id).
     const overrideRow: Record<string, unknown> = {
       group_id: groupId,
       round_id: args.roundId,
       override_source: 'stage4_visual_override',
       override_reason: String(o.reason ?? ''),
-      // actor_user_id is required NOT NULL on this table — but Stage 4 is a
-      // system actor, not a human. Use the round's owner project's
-      // creator/master_admin where available; otherwise we skip mirroring
-      // (audit row in shortlisting_stage4_overrides preserves the truth).
+      actor_user_id: null,
     };
-    // The W11.5 table requires actor_user_id NOT NULL. For system-source
-    // rows we look up the project's primary master_admin if any. Failing
-    // that, we skip — the W11.5 spec doesn't formally allow system-actor
-    // rows yet. The shortlisting_stage4_overrides row above is the
-    // authoritative audit trail; this mirror is an optimisation for the
-    // project_memory prompt loader.
-    const { data: anyMaster } = await args.admin
-      .from('users')
-      .select('id')
-      .eq('role', 'master_admin')
-      .limit(1)
-      .maybeSingle();
-    if (!anyMaster?.id) {
-      // No master_admin to attribute to — skip mirror, audit row already set.
-      continue;
-    }
-    overrideRow.actor_user_id = anyMaster.id;
 
     if (field === 'room_type') {
       overrideRow.ai_room_type = o.stage_1_value;
@@ -1113,6 +1121,14 @@ async function persistStage4Overrides(args: PersistStage4OverridesArgs): Promise
     mirroredCount++;
   }
 
+  // Observability — surface the mirror coverage so a regression (e.g. Saladine
+  // smoke at 1/1 audit but 0/1 mirror) is visible in logs without grepping
+  // for warnings.
+  console.log(
+    `[${GENERATOR}] persistStage4Overrides round=${args.roundId} ` +
+    `audit=${auditRows.length} mirror=${mirroredCount}`,
+  );
+
   return auditRows.length;
 }
 
@@ -1125,6 +1141,9 @@ interface UpdateEngineRunAuditArgs {
   failoverReason: string | null;
   stage4CostUsd: number;
   stage4WallMs: number;
+  stage4InputTokens: number;
+  stage4OutputTokens: number;
+  promptBlockVersions: Record<string, string>;
   warnings: string[];
 }
 
@@ -1133,8 +1152,11 @@ async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Promise<voi
     .from('engine_run_audit')
     .select(
       'engine_mode, vendor_used, stage1_total_cost_usd, stage1_total_wall_ms, ' +
+      'stage1_total_input_tokens, stage1_total_output_tokens, ' +
       'stage4_total_cost_usd, stage4_total_wall_ms, stage4_call_count, ' +
-      'stages_completed, total_cost_usd, total_wall_ms',
+      'stage4_total_input_tokens, stage4_total_output_tokens, ' +
+      'stages_completed, total_cost_usd, total_wall_ms, ' +
+      'total_input_tokens, total_output_tokens, prompt_block_versions',
     )
     .eq('round_id', args.roundId)
     .maybeSingle();
@@ -1144,22 +1166,46 @@ async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Promise<voi
 
   const stage1Cost = (existing?.stage1_total_cost_usd as number | null) ?? 0;
   const stage1Wall = (existing?.stage1_total_wall_ms as number | null) ?? 0;
+  const stage1InputTokens = (existing?.stage1_total_input_tokens as number | null) ?? 0;
+  const stage1OutputTokens = (existing?.stage1_total_output_tokens as number | null) ?? 0;
   const priorStage4Cost = (existing?.stage4_total_cost_usd as number | null) ?? 0;
   const priorStage4Wall = (existing?.stage4_total_wall_ms as number | null) ?? 0;
   const priorStage4Calls = (existing?.stage4_call_count as number | null) ?? 0;
+  const priorStage4InputTokens = (existing?.stage4_total_input_tokens as number | null) ?? 0;
+  const priorStage4OutputTokens = (existing?.stage4_total_output_tokens as number | null) ?? 0;
   const priorStagesCompleted = (existing?.stages_completed as string[] | null) ?? [];
   const priorEngineMode = (existing?.engine_mode as string | null)
     ?? (args.failoverTriggered ? 'unified_anthropic_failover' : 'shape_d_full');
+  const priorPromptBlockVersions =
+    (existing?.prompt_block_versions as Record<string, string> | null) ?? {};
 
   const newStage4Cost = priorStage4Cost + args.stage4CostUsd;
   const newStage4Wall = Math.max(priorStage4Wall, args.stage4WallMs);
   const newStage4CostRounded = Math.round(newStage4Cost * 1_000_000) / 1_000_000;
+  // Token attribution: accumulate across re-runs (W11.7 cleanup defect #4 fix).
+  // Previously stage4_total_input_tokens / stage4_total_output_tokens were
+  // never written here; callers saw NULL on the audit row even though the
+  // vendor adapter returned the usage breakdown. Now we plumb resp.usage.*
+  // through and accumulate. Stage 1 token totals come from the prior row
+  // (Agent 2 owns shortlisting-shape-d Stage 1 token plumbing follow-up).
+  const newStage4InputTokens = priorStage4InputTokens + args.stage4InputTokens;
+  const newStage4OutputTokens = priorStage4OutputTokens + args.stage4OutputTokens;
   const totalCost = stage1Cost + newStage4Cost;
   const totalCostRounded = Math.round(totalCost * 1_000_000) / 1_000_000;
   const totalWall = stage1Wall + newStage4Wall;
+  const totalInputTokens = stage1InputTokens + newStage4InputTokens;
+  const totalOutputTokens = stage1OutputTokens + newStage4OutputTokens;
 
   const merged = Array.from(new Set([...priorStagesCompleted, 'stage4', 'persistence']));
   const finalEngineMode = args.failoverTriggered ? 'unified_anthropic_failover' : priorEngineMode;
+
+  // Merge Stage 4 prompt block versions onto whatever Stage 1 wrote (Stage 1
+  // only knows its own block versions; we tack stage4_prompt + Stage 4-side
+  // refresh of shared blocks on top, with Stage 4's value winning on conflict).
+  const mergedPromptBlockVersions: Record<string, string> = {
+    ...priorPromptBlockVersions,
+    ...args.promptBlockVersions,
+  };
 
   const row: Record<string, unknown> = {
     round_id: args.roundId,
@@ -1175,8 +1221,13 @@ async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Promise<voi
     stage4_call_count: priorStage4Calls + 1,
     stage4_total_cost_usd: newStage4CostRounded,
     stage4_total_wall_ms: newStage4Wall,
+    stage4_total_input_tokens: newStage4InputTokens,
+    stage4_total_output_tokens: newStage4OutputTokens,
     total_cost_usd: totalCostRounded,
     total_wall_ms: totalWall,
+    total_input_tokens: totalInputTokens,
+    total_output_tokens: totalOutputTokens,
+    prompt_block_versions: mergedPromptBlockVersions,
     completed_at: new Date().toISOString(),
   };
   const { error } = await args.admin

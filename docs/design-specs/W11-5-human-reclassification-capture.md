@@ -66,9 +66,21 @@ CREATE TABLE composition_classification_overrides (
   human_eligible_slot_ids TEXT[],   -- explicit slot eligibility override (e.g. add 'exterior_rear' to a slot list)
   override_reason TEXT,              -- free-text capture of WHY (consumed by W11.6 dashboard)
   override_notes TEXT,               -- internal notes
-  actor_user_id UUID NOT NULL REFERENCES auth.users(id),
+  -- actor_user_id: human author of the override.
+  -- W11.7 cleanup (mig 379_2) relaxed this to NULLABLE specifically for
+  -- override_source='stage4_visual_override' rows — those are authored by
+  -- the W11.7 Stage 4 visual master synthesis engine, not a human. A CHECK
+  -- constraint enforces NOT NULL when override_source IN ('stage1_correction',
+  -- 'master_admin_correction'). The authoritative audit trail for stage4
+  -- engine overrides lives in shortlisting_stage4_overrides.
+  actor_user_id UUID REFERENCES auth.users(id),
   actor_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT actor_required_chk CHECK (
+    (override_source IN ('stage1_correction', 'master_admin_correction')
+       AND actor_user_id IS NOT NULL)
+    OR (override_source = 'stage4_visual_override')
+  ),
   UNIQUE (group_id, round_id, override_source)  -- one override per group per round per stage
 );
 
