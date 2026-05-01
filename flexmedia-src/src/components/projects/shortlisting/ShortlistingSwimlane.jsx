@@ -258,6 +258,8 @@ export default function ShortlistingSwimlane({
     setGroupBySlot,
     filter,
     setFilter,
+    searchQuery, // W11.6.16
+    setSearchQuery, // W11.6.16
   } = useSwimlaneSettings({ userId, roundId });
 
   // Track when the reviewer landed on this page so we can compute review_duration_seconds.
@@ -783,6 +785,35 @@ export default function ShortlistingSwimlane({
     return [...set].sort();
   }, [classifications]);
 
+  // W11.6.16 — distinct iter-5 filter values present on this round, so the
+  // toolbar's filter dropdown only shows axes that yield at least one card
+  // (matches the existing pattern for slot/room).
+  const availableShotIntents = useMemo(() => {
+    const set = new Set();
+    for (const c of classifications) {
+      if (c?.shot_intent) set.add(c.shot_intent);
+    }
+    return [...set].sort();
+  }, [classifications]);
+  const availableAppealSignals = useMemo(() => {
+    const set = new Set();
+    for (const c of classifications) {
+      if (Array.isArray(c?.appeal_signals)) {
+        for (const v of c.appeal_signals) if (v) set.add(v);
+      }
+    }
+    return [...set].sort();
+  }, [classifications]);
+  const availableConcernSignals = useMemo(() => {
+    const set = new Set();
+    for (const c of classifications) {
+      if (Array.isArray(c?.concern_signals)) {
+        for (const v of c.concern_signals) if (v) set.add(v);
+      }
+    }
+    return [...set].sort();
+  }, [classifications]);
+
   // W11.6.1 — sub-feature 4 input. Set of slot_ids actively counted as
   // filled (cards in PROPOSED + APPROVED columns). Phase 3 sentinel is
   // counted via the SwimlaneSlotCounter component itself.
@@ -809,6 +840,21 @@ export default function ShortlistingSwimlane({
     const out = { rejected: [], proposed: [], approved: [] };
     const slotFilterActive = filter.slotIds.size > 0;
     const roomFilterActive = filter.roomTypes.size > 0;
+    // W11.6.16 — iter-5 filter axes. Each is independent and AND-combined
+    // with the existing slot/room filters; within an axis (e.g. appeal_signals)
+    // we use any-of (Set.intersection) for the marketing-signal taxonomy.
+    const intentSet = filter.shotIntents instanceof Set ? filter.shotIntents : new Set();
+    const appealSet = filter.appealSignals instanceof Set ? filter.appealSignals : new Set();
+    const concernSet = filter.concernSignals instanceof Set ? filter.concernSignals : new Set();
+    const intentFilterActive = intentSet.size > 0;
+    const appealFilterActive = appealSet.size > 0;
+    const concernFilterActive = concernSet.size > 0;
+    const requiresHumanReviewFilterActive = filter.requiresHumanReview === true;
+    // Free-text search — case-insensitive substring match against
+    // embedding_anchor_text + searchable_keywords (joined). Empty string =
+    // disabled. Trim+lowercase so "  Federation  " matches "federation".
+    const queryNorm = typeof searchQuery === "string" ? searchQuery.trim().toLowerCase() : "";
+    const searchActive = queryNorm.length > 0;
     for (const g of groups) {
       const cls = classByGroupId.get(g.id) || null;
       const slotInfo = slotByGroupId.get(g.id) || null;
@@ -822,6 +868,36 @@ export default function ShortlistingSwimlane({
       }
       if (roomFilterActive) {
         if (!cls?.room_type || !filter.roomTypes.has(cls.room_type)) {
+          continue;
+        }
+      }
+      // W11.6.16 — iter-5 filters
+      if (intentFilterActive) {
+        if (!cls?.shot_intent || !intentSet.has(cls.shot_intent)) {
+          continue;
+        }
+      }
+      if (appealFilterActive) {
+        const a = Array.isArray(cls?.appeal_signals) ? cls.appeal_signals : [];
+        if (!a.some((v) => appealSet.has(v))) continue;
+      }
+      if (concernFilterActive) {
+        const c = Array.isArray(cls?.concern_signals) ? cls.concern_signals : [];
+        if (!c.some((v) => concernSet.has(v))) continue;
+      }
+      if (requiresHumanReviewFilterActive) {
+        if (cls?.requires_human_review !== true) continue;
+      }
+      if (searchActive) {
+        // Match against embedding_anchor_text + searchable_keywords[]
+        // (joined into one searchable haystack, lowercased once per card).
+        const anchor = typeof cls?.embedding_anchor_text === "string"
+          ? cls.embedding_anchor_text.toLowerCase()
+          : "";
+        const keywords = Array.isArray(cls?.searchable_keywords)
+          ? cls.searchable_keywords.join(" ").toLowerCase()
+          : "";
+        if (!anchor.includes(queryNorm) && !keywords.includes(queryNorm)) {
           continue;
         }
       }
@@ -848,7 +924,7 @@ export default function ShortlistingSwimlane({
       out.rejected.sort(cmp);
     }
     return out;
-  }, [groups, classByGroupId, slotByGroupId, computedColumns, sort, filter]);
+  }, [groups, classByGroupId, slotByGroupId, computedColumns, sort, filter, searchQuery]);
 
   // W11.6.1 — group-by-slot grouping for the AI PROPOSED column. Keyed by
   // slot_id; a card with no slot lands under a synthetic "no slot" bucket
@@ -1255,6 +1331,11 @@ export default function ShortlistingSwimlane({
         onGroupBySlotChange={setGroupBySlot}
         availableSlotIds={availableSlotIds}
         availableRoomTypes={availableRoomTypes}
+        availableShotIntents={availableShotIntents}
+        availableAppealSignals={availableAppealSignals}
+        availableConcernSignals={availableConcernSignals}
+        searchQuery={searchQuery}
+        onSearchQueryChange={setSearchQuery}
         roundId={roundId}
         isProcessing={isProcessing}
       />
@@ -1532,6 +1613,12 @@ function SwimlaneToolbarController({
   onGroupBySlotChange,
   availableSlotIds,
   availableRoomTypes,
+  // W11.6.16
+  availableShotIntents = [],
+  availableAppealSignals = [],
+  availableConcernSignals = [],
+  searchQuery,
+  onSearchQueryChange,
   roundId,
   isProcessing,
 }) {
@@ -1551,6 +1638,11 @@ function SwimlaneToolbarController({
       onGroupBySlotChange={onGroupBySlotChange}
       availableSlotIds={availableSlotIds}
       availableRoomTypes={availableRoomTypes}
+      availableShotIntents={availableShotIntents}
+      availableAppealSignals={availableAppealSignals}
+      availableConcernSignals={availableConcernSignals}
+      searchQuery={searchQuery}
+      onSearchQueryChange={onSearchQueryChange}
       timerLabel={timerLabel}
     />
   );

@@ -40,9 +40,11 @@ import {
   Filter,
   ImageIcon,
   Layers,
+  Search,
   Timer,
   X,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   CANONICAL_SLOT_IDS,
@@ -74,8 +76,26 @@ export default function SwimlaneToolbar({
   onGroupBySlotChange,
   availableSlotIds = [],
   availableRoomTypes = [],
+  // W11.6.16: iter-5 filter axes — derived in the swimlane parent from the
+  // round's classifications. `availableShotIntents` is the union of all
+  // shot_intent values present this round; appeal/concern signals likewise.
+  availableShotIntents = [],
+  availableAppealSignals = [],
+  availableConcernSignals = [],
+  // W11.6.16: free-text search bound to ?q=... in the URL. Searches against
+  // embedding_anchor_text + searchable_keywords downstream (case-insensitive).
+  searchQuery = "",
+  onSearchQueryChange,
   timerLabel = null,
 }) {
+  // W11.6.16: tolerate legacy callers and parents missing the iter-5
+  // filter fields — read with safe defaults so toggles can no-op without
+  // throwing on Set methods. Keeps the component drop-in compatible.
+  const safeShotIntents = filter?.shotIntents instanceof Set ? filter.shotIntents : new Set();
+  const safeAppealSignals = filter?.appealSignals instanceof Set ? filter.appealSignals : new Set();
+  const safeConcernSignals = filter?.concernSignals instanceof Set ? filter.concernSignals : new Set();
+  const safeRequiresHumanReview = filter?.requiresHumanReview === true;
+
   const slotChips = useMemo(() => {
     return [...filter.slotIds].sort().map((slotId) => ({
       key: `slot:${slotId}`,
@@ -92,24 +112,86 @@ export default function SwimlaneToolbar({
       label: rt.replace(/_/g, " "),
     }));
   }, [filter.roomTypes]);
+  // W11.6.16 — iter-5 chips. shot_intent is single-select but we render
+  // identically to the multi-select chips for visual consistency.
+  const intentChips = useMemo(() => {
+    return [...safeShotIntents].sort().map((v) => ({
+      key: `intent:${v}`,
+      kind: "intent",
+      value: v,
+      label: v.replace(/_/g, " "),
+    }));
+  }, [safeShotIntents]);
+  const appealChips = useMemo(() => {
+    return [...safeAppealSignals].sort().map((v) => ({
+      key: `appeal:${v}`,
+      kind: "appeal",
+      value: v,
+      label: v.replace(/_/g, " "),
+    }));
+  }, [safeAppealSignals]);
+  const concernChips = useMemo(() => {
+    return [...safeConcernSignals].sort().map((v) => ({
+      key: `concern:${v}`,
+      kind: "concern",
+      value: v,
+      label: v.replace(/_/g, " "),
+    }));
+  }, [safeConcernSignals]);
 
   const toggleSlot = (slotId) => {
     const next = new Set(filter.slotIds);
     if (next.has(slotId)) next.delete(slotId);
     else next.add(slotId);
-    onFilterChange({ slotIds: next, roomTypes: filter.roomTypes });
+    onFilterChange({ ...filter, slotIds: next });
   };
   const toggleRoom = (roomType) => {
     const next = new Set(filter.roomTypes);
     if (next.has(roomType)) next.delete(roomType);
     else next.add(roomType);
-    onFilterChange({ slotIds: filter.slotIds, roomTypes: next });
+    onFilterChange({ ...filter, roomTypes: next });
+  };
+  // W11.6.16 — toggle helpers for new axes. Spread filter so untouched axes
+  // ride through unchanged.
+  const toggleIntent = (v) => {
+    const next = new Set(safeShotIntents);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    onFilterChange({ ...filter, shotIntents: next });
+  };
+  const toggleAppeal = (v) => {
+    const next = new Set(safeAppealSignals);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    onFilterChange({ ...filter, appealSignals: next });
+  };
+  const toggleConcern = (v) => {
+    const next = new Set(safeConcernSignals);
+    if (next.has(v)) next.delete(v);
+    else next.add(v);
+    onFilterChange({ ...filter, concernSignals: next });
+  };
+  const toggleRequiresHumanReview = () => {
+    onFilterChange({ ...filter, requiresHumanReview: !safeRequiresHumanReview });
   };
   const clearFilters = () => {
-    onFilterChange({ slotIds: new Set(), roomTypes: new Set() });
+    onFilterChange({
+      slotIds: new Set(),
+      roomTypes: new Set(),
+      shotIntents: new Set(),
+      appealSignals: new Set(),
+      concernSignals: new Set(),
+      requiresHumanReview: false,
+    });
   };
 
-  const activeFilterCount = filter.slotIds.size + filter.roomTypes.size;
+  const activeFilterCount =
+    filter.slotIds.size
+    + filter.roomTypes.size
+    + safeShotIntents.size
+    + safeAppealSignals.size
+    + safeConcernSignals.size
+    + (safeRequiresHumanReview ? 1 : 0);
 
   return (
     <div
@@ -199,6 +281,80 @@ export default function SwimlaneToolbar({
                 </DropdownMenuCheckboxItem>
               ))
             )}
+            {/* W11.6.16 — Shot intent (single-select per Stage 1 schema). */}
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs">Shot intent</DropdownMenuLabel>
+            {availableShotIntents.length === 0 ? (
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                No shot intents on this round
+              </div>
+            ) : (
+              availableShotIntents.map((v) => (
+                <DropdownMenuCheckboxItem
+                  key={v}
+                  checked={safeShotIntents.has(v)}
+                  onCheckedChange={() => toggleIntent(v)}
+                  className="text-xs"
+                  onSelect={(e) => e.preventDefault()}
+                  data-testid={`swimlane-filter-intent-${v}`}
+                >
+                  {v.replace(/_/g, " ")}
+                </DropdownMenuCheckboxItem>
+              ))
+            )}
+            {/* W11.6.16 — Appeal signals (any-of). */}
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs">Appeal signals (any of)</DropdownMenuLabel>
+            {availableAppealSignals.length === 0 ? (
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                No appeal signals on this round
+              </div>
+            ) : (
+              availableAppealSignals.map((v) => (
+                <DropdownMenuCheckboxItem
+                  key={v}
+                  checked={safeAppealSignals.has(v)}
+                  onCheckedChange={() => toggleAppeal(v)}
+                  className="text-xs"
+                  onSelect={(e) => e.preventDefault()}
+                  data-testid={`swimlane-filter-appeal-${v}`}
+                >
+                  {v.replace(/_/g, " ")}
+                </DropdownMenuCheckboxItem>
+              ))
+            )}
+            {/* W11.6.16 — Concern signals (any-of). */}
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs">Concern signals (any of)</DropdownMenuLabel>
+            {availableConcernSignals.length === 0 ? (
+              <div className="px-2 py-1 text-[11px] text-muted-foreground">
+                No concern signals on this round
+              </div>
+            ) : (
+              availableConcernSignals.map((v) => (
+                <DropdownMenuCheckboxItem
+                  key={v}
+                  checked={safeConcernSignals.has(v)}
+                  onCheckedChange={() => toggleConcern(v)}
+                  className="text-xs"
+                  onSelect={(e) => e.preventDefault()}
+                  data-testid={`swimlane-filter-concern-${v}`}
+                >
+                  {v.replace(/_/g, " ")}
+                </DropdownMenuCheckboxItem>
+              ))
+            )}
+            {/* W11.6.16 — Needs review (boolean toggle). */}
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem
+              checked={safeRequiresHumanReview}
+              onCheckedChange={toggleRequiresHumanReview}
+              className="text-xs"
+              onSelect={(e) => e.preventDefault()}
+              data-testid="swimlane-filter-requires-human-review"
+            >
+              Needs review (Stage 1 self-flagged)
+            </DropdownMenuCheckboxItem>
             {activeFilterCount > 0 && (
               <>
                 <DropdownMenuSeparator />
@@ -213,6 +369,35 @@ export default function SwimlaneToolbar({
             )}
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {/* W11.6.16 — Free-text search. Matches embedding_anchor_text +
+            searchable_keywords case-insensitively in the parent's
+            columnItems filter. Persists in URL ?q=... so a copy-paste of
+            the link reproduces the exact view. */}
+        {onSearchQueryChange ? (
+          <div className="flex items-center gap-1">
+            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => onSearchQueryChange(e.target.value)}
+              placeholder="Search keywords or anchor text"
+              className="h-8 text-xs w-[220px]"
+              data-testid="swimlane-search-input"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => onSearchQueryChange("")}
+                className="text-muted-foreground hover:text-red-500"
+                aria-label="Clear search"
+                data-testid="swimlane-search-clear"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        ) : null}
 
         {/* Preview size */}
         <div className="flex items-center gap-1">
@@ -316,6 +501,81 @@ export default function SwimlaneToolbar({
               </button>
             </Badge>
           ))}
+          {/* W11.6.16 — iter-5 chips. Each axis renders alongside slot/room
+              with the same dismissable shape. Toggle handlers spread the
+              full filter so untouched axes ride through unchanged. */}
+          {intentChips.map((chip) => (
+            <Badge
+              key={chip.key}
+              variant="secondary"
+              className="text-[10px] gap-1 pr-1 border border-blue-300/60"
+            >
+              <span className="text-muted-foreground">intent:</span>
+              {chip.label}
+              <button
+                type="button"
+                onClick={() => toggleIntent(chip.value)}
+                className="ml-0.5 hover:text-red-500"
+                aria-label={`Remove shot-intent filter ${chip.label}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+          {appealChips.map((chip) => (
+            <Badge
+              key={chip.key}
+              variant="secondary"
+              className="text-[10px] gap-1 pr-1 border border-emerald-300/60"
+            >
+              <span className="text-muted-foreground">appeal:</span>
+              {chip.label}
+              <button
+                type="button"
+                onClick={() => toggleAppeal(chip.value)}
+                className="ml-0.5 hover:text-red-500"
+                aria-label={`Remove appeal-signal filter ${chip.label}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+          {concernChips.map((chip) => (
+            <Badge
+              key={chip.key}
+              variant="secondary"
+              className="text-[10px] gap-1 pr-1 border border-amber-300/60"
+            >
+              <span className="text-muted-foreground">concern:</span>
+              {chip.label}
+              <button
+                type="button"
+                onClick={() => toggleConcern(chip.value)}
+                className="ml-0.5 hover:text-red-500"
+                aria-label={`Remove concern-signal filter ${chip.label}`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          ))}
+          {safeRequiresHumanReview && (
+            <Badge
+              key="needs-review"
+              variant="secondary"
+              className="text-[10px] gap-1 pr-1 border border-amber-400 text-amber-800 dark:text-amber-200"
+            >
+              <span className="text-muted-foreground">needs:</span>
+              review
+              <button
+                type="button"
+                onClick={toggleRequiresHumanReview}
+                className="ml-0.5 hover:text-red-500"
+                aria-label="Remove needs-review filter"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </Badge>
+          )}
         </div>
       )}
     </div>

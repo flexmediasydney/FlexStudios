@@ -66,11 +66,25 @@ function safeWriteLocal(key, value) {
 }
 
 /**
- * Parse the current URL's `filter` param into { slotIds:Set, roomTypes:Set }.
+ * Parse the current URL's `filter` param into the operator-filter shape.
  * Tolerant of malformed input — returns empty sets rather than throwing.
+ *
+ * URL syntax:
+ *   ?filter=slot:a,b;room:c,d;intent:hero_establishing;appeal:natural_light;
+ *           concern:dated_finishes;review:1
+ *
+ * W11.6.16 added: intent (single), appeal (any-of), concern (any-of),
+ * review (boolean) — alongside the original slot + room.
  */
 export function parseFilterParam(searchString) {
-  const out = { slotIds: new Set(), roomTypes: new Set() };
+  const out = {
+    slotIds: new Set(),
+    roomTypes: new Set(),
+    shotIntents: new Set(),
+    appealSignals: new Set(),
+    concernSignals: new Set(),
+    requiresHumanReview: false,
+  };
   if (typeof searchString !== "string" || searchString.length === 0) return out;
   let raw;
   try {
@@ -89,12 +103,23 @@ export function parseFilterParam(searchString) {
       .filter(Boolean);
     if (key === "slot") values.forEach((v) => out.slotIds.add(v));
     else if (key === "room") values.forEach((v) => out.roomTypes.add(v));
+    else if (key === "intent") values.forEach((v) => out.shotIntents.add(v));
+    else if (key === "appeal") values.forEach((v) => out.appealSignals.add(v));
+    else if (key === "concern") values.forEach((v) => out.concernSignals.add(v));
+    else if (key === "review") out.requiresHumanReview = values.includes("1") || values.includes("true");
   }
   return out;
 }
 
 /** Inverse of parseFilterParam — Set → compact "slot:a,b;room:c". */
-export function serializeFilter({ slotIds, roomTypes }) {
+export function serializeFilter({
+  slotIds,
+  roomTypes,
+  shotIntents,
+  appealSignals,
+  concernSignals,
+  requiresHumanReview,
+} = {}) {
   const segments = [];
   if (slotIds && slotIds.size > 0) {
     segments.push("slot:" + [...slotIds].sort().join(","));
@@ -102,7 +127,50 @@ export function serializeFilter({ slotIds, roomTypes }) {
   if (roomTypes && roomTypes.size > 0) {
     segments.push("room:" + [...roomTypes].sort().join(","));
   }
+  if (shotIntents && shotIntents.size > 0) {
+    segments.push("intent:" + [...shotIntents].sort().join(","));
+  }
+  if (appealSignals && appealSignals.size > 0) {
+    segments.push("appeal:" + [...appealSignals].sort().join(","));
+  }
+  if (concernSignals && concernSignals.size > 0) {
+    segments.push("concern:" + [...concernSignals].sort().join(","));
+  }
+  if (requiresHumanReview === true) {
+    segments.push("review:1");
+  }
   return segments.join(";");
+}
+
+/**
+ * W11.6.16: parse the URL's `q` param (free-text keyword search). Stripped
+ * to <=120 chars so a runaway paste doesn't bloat the query string. Lower-
+ * cased on read for case-insensitive ILIKE matching downstream.
+ */
+export function parseQueryParam(searchString) {
+  if (typeof searchString !== "string" || searchString.length === 0) return "";
+  try {
+    const q = new URLSearchParams(searchString).get("q");
+    return (q || "").trim().slice(0, 120);
+  } catch {
+    return "";
+  }
+}
+
+/** Replace the URL's `q` param without router navigation. */
+function writeQueryToUrl(q) {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    if (q && q.length > 0) {
+      url.searchParams.set("q", q);
+    } else {
+      url.searchParams.delete("q");
+    }
+    window.history.replaceState({}, "", url.toString());
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -166,9 +234,19 @@ export function useSwimlaneSettings({ userId, roundId } = {}) {
   }, []);
 
   // Filter — per round, lives in URL. Initial read from window.location.
+  // W11.6.16: shape extended with shotIntents (Set), appealSignals (Set),
+  // concernSignals (Set), requiresHumanReview (bool). Defaults are empty
+  // sets / false so the existing slot+room logic is undisturbed.
   const [filter, setFilterState] = useState(() =>
     typeof window === "undefined"
-      ? { slotIds: new Set(), roomTypes: new Set() }
+      ? {
+          slotIds: new Set(),
+          roomTypes: new Set(),
+          shotIntents: new Set(),
+          appealSignals: new Set(),
+          concernSignals: new Set(),
+          requiresHumanReview: false,
+        }
       : parseFilterParam(window.location.search),
   );
   // Re-parse on round switch — same URL, same router instance, but the
@@ -184,9 +262,34 @@ export function useSwimlaneSettings({ userId, roundId } = {}) {
       next?.roomTypes instanceof Set
         ? next.roomTypes
         : new Set(next?.roomTypes || []);
-    const safe = { slotIds, roomTypes };
+    // W11.6.16: tolerate missing fields (legacy callers passing only
+    // {slotIds, roomTypes}). Each new field defaults to its empty form so
+    // the URL drops the segment entirely on roundtrip.
+    const shotIntents =
+      next?.shotIntents instanceof Set ? next.shotIntents : new Set(next?.shotIntents || []);
+    const appealSignals =
+      next?.appealSignals instanceof Set ? next.appealSignals : new Set(next?.appealSignals || []);
+    const concernSignals =
+      next?.concernSignals instanceof Set ? next.concernSignals : new Set(next?.concernSignals || []);
+    const requiresHumanReview = next?.requiresHumanReview === true;
+    const safe = { slotIds, roomTypes, shotIntents, appealSignals, concernSignals, requiresHumanReview };
     setFilterState(safe);
     writeFilterToUrl(serializeFilter(safe));
+  }, []);
+
+  // W11.6.16: free-text keyword search — per round, lives in URL ?q=...
+  // Matches against embedding_anchor_text + searchable_keywords downstream.
+  const [searchQuery, setSearchQueryState] = useState(() =>
+    typeof window === "undefined" ? "" : parseQueryParam(window.location.search),
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setSearchQueryState(parseQueryParam(window.location.search));
+  }, [roundId]);
+  const setSearchQuery = useCallback((value) => {
+    const safe = typeof value === "string" ? value.trim().slice(0, 120) : "";
+    setSearchQueryState(safe);
+    writeQueryToUrl(safe);
   }, []);
 
   return {
@@ -198,5 +301,7 @@ export function useSwimlaneSettings({ userId, roundId } = {}) {
     setGroupBySlot,
     filter,
     setFilter,
+    searchQuery, // W11.6.16
+    setSearchQuery, // W11.6.16
   };
 }
