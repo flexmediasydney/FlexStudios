@@ -1,6 +1,6 @@
 # W11.7 — Multi-Stage Vision Engine Architecture (Shape D) — Design Spec
 
-**Status:** Architectural keystone for the next-generation engine. Current revision authored 2026-04-30 / 2026-05-01 after 4 iterations of A/B testing on a 42-group Saladine round.
+**Status:** 🚀 **In production as of 2026-05-01.** Default `engine_settings.engine_mode = "shape_d"`. Saladine smoke validated end-to-end (commit `6d117d9`, $1.31 / 5m 16s / 42 classifications / master_listing emitted / `engine_run_audit` row complete). Pass1+Pass2 retained as 30-day kill-switch fallback; **W11.7.10** schedules deprecation cleanup ~2026-06-01. Current revision authored 2026-04-30 / 2026-05-01 after 4 iterations of A/B testing on a 42-group Saladine round; cutover plan simplified 2026-05-01 (see Cutover section).
 **Backlog ref:** P1-25 (rebadged from "unified single call" to "multi-stage Shape D")
 **Wave plan ref:** W11.7 — collapse Pass 1 + Pass 2 into a 5-call Shape D pipeline (Stage 1 batched per-image enrichment + Stage 4 visual master synthesis), Gemini-anchored
 **Vendor primary:** Gemini 2.5 Pro (`thinkingBudget=2048` for Stage 1, `=16384` for Stage 4)
@@ -677,68 +677,54 @@ When `W11.8` routes to Anthropic Opus 4.7 due to Gemini outage, costs roughly mu
 
 ---
 
-## Migration plan (existing pass1+pass2 → Shape D)
+## Cutover (existing pass1+pass2 → Shape D)
 
-### Phase A — coexistence (~2 weeks)
+> **Historical note:** earlier revisions of this spec described an 8-10 week phased rollout (Phase A coexistence → Phase B 4-week pilot → Phase C default flip → Phase D deprecation). That plan was designed for a world where customer rounds had real data tied to the pass1+pass2 engine. In reality, every round run through pass1+pass2 was internal testing (Saladine + 2 throwaway test rounds). With no customer data at risk, the phased rollout was over-engineering. After Saladine smoke validation on 2026-05-01 the cutover was simplified to immediate.
 
-Both `shortlisting-pass1` + `shortlisting-pass2` AND `shortlisting-shape-d-stage1` + `shortlisting-shape-d-stage4` deployed. `engine_settings.engine_mode` toggles per-round:
+### What happened on 2026-05-01
 
-```sql
-INSERT INTO engine_settings (key, value, description) VALUES
-  ('engine_mode', '"two_pass"'::jsonb, 'two_pass | shape_d');
-```
+- Saladine smoke validated the production Shape D pipeline end-to-end (commit `6d117d9`): $1.31 total cost, 5m 16s wall, 42/42 classifications persisted, `master_listing` emitted, `engine_run_audit` row complete, zero `stages_failed`.
+- Default flipped: `engine_settings.engine_mode = "shape_d"` set globally.
+- Every new round from this moment forward routes automatically to Shape D.
 
-Default: `'two_pass'`. master_admin flips per-project to `'shape_d'` for pilot.
+### What that means for existing rounds
 
-### Phase B — pilot (~4 weeks)
+- Existing rounds keep their stamped `engine_mode` value (`'two_pass'` for the 3 historical test rounds, `'shape_d_full'` for Saladine and everything after). The stamp is immutable history; no migration runs against past rounds.
+- The 3 historical `engine_mode = 'two_pass'` rounds (Saladine pre-cutover, plus 2 throwaway tests) remain queryable in their original output shape. Audit-trail integrity is preserved.
 
-Selected projects (master_admin opt-in) run in Shape D. Side-by-side with two-pass on similar properties. Compare:
+### Kill-switch fallback (30-day window)
 
-| Metric | Target |
-|---|---|
-| Slot decision agreement rate vs two-pass | ≥85% on same input set |
-| Override rate (post-operator review) | ≤ two_pass override rate |
-| Operator review duration per card | ≤ two_pass (richer rationale should help) |
-| Cost per round | within published envelope (±20%) |
-| Wall-time | ≤ 10 min p95 |
-| Stage 4 override rate (Stage 1 corrections) | 2-8% of images is healthy; >15% means Stage 1 prompt needs work |
-| Anthropic failover rate | <2% of rounds |
+The old `shortlisting-pass1` and `shortlisting-pass2` edge functions and their `pass1` / `pass2` dispatcher kinds **remain deployed for 30 days** as an operator-controlled fallback. If Shape D shows an unforeseen edge case in production, master_admin can manually flip a single round to `engine_mode = 'two_pass'` to fall back to the legacy engine for that round only. After 30 days of clean Shape D operation, **W11.7.10** runs the deprecation cleanup (delete edge fns, prune dispatcher kinds, drop `'two_pass'` from the engine_mode CHECK constraint).
 
-### Phase C — default flip (~2 weeks)
-
-`engine_settings.engine_mode = 'shape_d'` becomes default. New rounds use Shape D by default; legacy rounds remain queryable in their original two-pass output shape (audit-trail integrity).
-
-### Phase D — Pass 1/Pass 2 deprecation (~4 weeks)
-
-`shortlisting-pass1` + `shortlisting-pass2` deleted. Their dispatcher chain entries (`pass1`, `pass2` job kinds) marked legacy in the dispatcher. Job replays of historical rounds use a compatibility shim that re-runs Shape D against the historical inputs (Pass 0 outputs untouched).
-
-Total timeline: ~12 weeks. Coexistence shape lets us roll back at any point if quality regresses.
+Target W11.7.10 ship date: **~2026-06-01**.
 
 ---
 
 ## Sub-burst structure (delivery breakdown)
 
-| Sub | Title | Scope |
-|---|---|---|
-| **W11.7.1** | shortlisting-shape-d edge fn build | Top-level orchestrator. Stage 1 partition + parallel dispatch + merge. Stage 4 invocation. Persistence. Failure isolation. |
-| **W11.7.2** | Stage 1 batch handler | `shortlisting-shape-d-stage1` edge fn. Prompt assembly (W7.6 blocks + new Stage 1 blocks). Vendor adapter call (W11.8). Per-image schema validation. |
-| **W11.7.3** | Stage 4 visual master synthesis handler | `shortlisting-shape-d-stage4` edge fn. ALL-images prompt assembly + Stage 1 JSON injection. Master listing extraction. Override emission. |
-| **W11.7.4** | Phase A coexistence | engine_mode setting + admin UI. Round-level engine_mode stamp. Backwards-compat shim. |
-| **W11.7.5** | Phase B 4-week pilot | A/B harness via W11.8. W11.6 dashboard panels for Shape D vs two-pass. Daily summary email to Joseph. |
-| **W11.7.6** | Phase C default flip + Phase D deprecation | engine_mode default flip. Pass 1/Pass 2 edge fn deletion. Dispatcher cleanup. Replay-shim build. |
-| **W11.7.7** | Master listing copy synthesis | Separate spec (link). Stage 4 prompt block. SEO/social/brochure derivative outputs. |
-| **W11.7.8** | Voice tier modulation | Separate spec (link). property_tier input. Voice anchor block (premium/standard/approachable). Override mechanism. |
-| **W11.7.9** | Master-class prompt enrichment | Separate spec (link). Reference excerpts library. Tier-aware injection. Curation workflow. |
+> **Historical note:** the previously planned W11.7.4 / .5 / .6 sub-bursts described the 4-phase rollout (coexistence, 4-week pilot, default flip + deprecation). They were collapsed on 2026-05-01 after Saladine smoke validation — no customer data was tied to pass1+pass2, so the phased migration had nothing to protect. The work that *did* ship from those bursts (the `engine_mode` router that lets a round be routed per-engine) stays in production as the kill-switch substrate; the rest is replaced by a single deprecation sub-burst (W11.7.10).
+
+| Sub | Title | Scope | Status |
+|---|---|---|---|
+| **W11.7.1** | shortlisting-shape-d edge fn build | Top-level orchestrator. Stage 1 partition + parallel dispatch + merge. Stage 4 invocation. Persistence. Failure isolation. | ✅ shipped |
+| **W11.7.2** | Stage 1 batch handler | `shortlisting-shape-d-stage1` edge fn. Prompt assembly (W7.6 blocks + new Stage 1 blocks). Vendor adapter call (W11.8). Per-image schema validation. | ✅ shipped |
+| **W11.7.3** | Stage 4 visual master synthesis handler | `shortlisting-shape-d-stage4` edge fn. ALL-images prompt assembly + Stage 1 JSON injection. Master listing extraction. Override emission. | ✅ shipped |
+| **W11.7.7** | Master listing copy synthesis | Stage 4 `master_listing` schema + synthesis prompt. SEO/social/brochure derivative outputs. | ✅ shipped (Saladine smoke validated 612 words / FK 9.5) |
+| **W11.7.8** | Voice tier modulation | `property_tier` input. Voice anchor block (premium/standard/approachable). 3 rubric blocks. Override mechanism. | ✅ shipped (standard tier validated on Saladine; premium + approachable wired and ready) |
+| **W11.7.9** | Master-class prompt enrichment | Reference excerpts library. Tier-aware injection. Curation workflow. | ⚙️ partially shipped — the **lite version** (Sydney market primer + self-critique block + failure-mode block) is in production and validated by the Saladine smoke run. The **full master-class enrichment** (9 hand-curated voice exemplars across the 3 tiers, with Joseph's editorial pass on each) is still pending Joseph's hand-curation pass. The lite vs full distinction matters: lite gives Stage 4 a prompt scaffold; full gives it a calibrated voice library to imitate. |
+| **W11.7.10** | pass1+pass2 deprecation (30-day kill-switch cleanup) | After 30 days of clean Shape D operation, sunset the legacy engine. Tasks: (1) verify zero traffic to `pass1` / `pass2` job kinds across the 30-day window via `shortlisting_jobs.kind` audit; (2) delete `shortlisting-pass1` + `shortlisting-pass2` edge functions; (3) remove `pass1` + `pass2` from `KIND_TO_FUNCTION` in the dispatcher; (4) remove the pass1→pass2 chain coordination logic; (5) drop `'two_pass'` from the `engine_settings.engine_mode` CHECK constraint allowed values; (6) audit the existing 2 test rounds with `engine_mode = 'two_pass'` — they're immutable history, leave alone (don't migrate, don't re-run); (7) sunset migration: tentatively `380_sunset_two_pass_engine.sql`. | ⚙️ scheduled ~2026-06-01 (30-day window from cutover) |
 
 ---
 
 ## Migration
 
-Reserve mig **349** (after W7.7=339, W10.1=340, W7.13=341, W10.3=342, W13b=343, W8=344, W12=345, W14=346, W11.5=347, W11.6=348).
+Mig **349** ✅ applied (after W7.7=339, W10.1=340, W7.13=341, W10.3=342, W13b=343, W8=344, W12=345, W14=346, W11.5=347, W11.6=348). Mig **380** reserved for the W11.7.10 sunset (~2026-06-01).
+
+> The mig 349 SQL below is preserved as the historical record of what shipped. The `engine_settings.engine_mode` default was originally inserted as `"two_pass"` (legacy default-safe behaviour). On 2026-05-01 the production value was flipped to `"shape_d"` via an out-of-band UPDATE — the mig 349 INSERT remains the canonical default for fresh deployments. W11.7.10 will rewrite this entry to default to `"shape_d"` and drop `"two_pass"` from the allowed values.
 
 ```sql
 -- 349_shape_d_shortlisting_engine.sql
--- W11.7: schema additions to support Shape D coexistence.
+-- W11.7: schema additions to support Shape D engine + 30-day kill-switch fallback to two_pass.
 
 -- 1. Engine mode setting
 INSERT INTO engine_settings (key, value, description) VALUES
@@ -834,26 +820,41 @@ NOTIFY pgrst, 'reload schema';
 | Single Stage 1 batch failure tanks the round | Low | Failure isolation: 1 failed batch → degraded mode, others succeed. >1 failure → round marked failed, easy retry. |
 | Output schema mismatch between Stage 1 and Stage 4 overrides | Medium | Strict TS types on adapter boundary. Schema mismatch → automatic Stage 4 retry once, then dump payloads to W11.6 for triage. |
 | Gemini's 65K output cap drops in a future model rev | Low | Stage 1 monitors per-batch output token count; alarms at >55K. We always have headroom to drop batch_size to 40. |
-| Operator confusion during Phase A coexistence | Medium | Settings → Engine Settings shows current `engine_mode`. Round metadata pages show which mode produced each historical round. |
-| Master listing quality varies by tier/property | Medium | Pilot includes editorial review of every master_listing for the first 200 rounds. Calibration loop adjusts prompts. |
+| Operator confusion during the 30-day kill-switch window | Low | Settings → Engine Settings shows current `engine_mode`. Round metadata pages show which mode produced each historical round. Manual flip to `'two_pass'` is admin-only. |
+| Master listing quality varies by tier/property | Medium | Spot-check master_listing output for tone/voice fidelity over the first 30 rounds post-cutover. Calibration loop adjusts prompts. |
 | W11.8 adapter latency adds overhead | Low | Adapter is thin (HTTP shim). Measured overhead <250ms / call. |
-| Stage 4 override rate too high (Stage 1 prompt unstable) | Medium | Pilot threshold: if >15% of images get Stage 4-overridden, freeze Phase B and tune Stage 1 prompt blocks (W14 candidate examples). |
+| Stage 4 override rate too high (Stage 1 prompt unstable) | Medium | Post-cutover monitoring threshold: if >7% of images get Stage 4-overridden across 5 consecutive rounds, defer W11.7.10 deprecation and tune Stage 1 prompt blocks (W14 candidate examples). |
 
 ---
 
-## Open questions for sign-off
+## Open questions
 
-**Q1.** Stage 4 split for >250 angle shoots? **Recommendation:** ship Shape D as single-Stage 4. Add Stage 4a/4b split as a deferred sub-burst (W11.7.10) only if pilot data shows degradation past 250.
+> The original sign-off questions about pilot length, default flip cadence, and Pass 1/Pass 2 deprecation timeline were resolved on 2026-05-01 via the simplified cutover (no customer data at risk → no phased rollout needed). Remaining open questions:
 
-**Q2.** Pilot project selection? **Recommendation:** master_admin opt-in per-project. Allows controlled comparison vs fresh two-pass rounds on similar properties. Target 10-20 projects across S/P/A tiers.
+**Q1.** Stage 4 split for >250 angle shoots? **Recommendation:** ship Shape D as single-Stage 4. Re-evaluate only if production data shows degradation past 250 angles (track via `engine_run_audit.stage4_overrides_count` vs angle count).
 
-**Q3.** Gemini context cache vs Anthropic prompt cache? **Recommendation:** use whichever the active vendor offers. W11.8 handles cache key construction abstractly. Document the cache TTL per vendor in W11.8 spec.
+**Q2.** Gemini context cache vs Anthropic prompt cache? **Recommendation:** use whichever the active vendor offers. W11.8 handles cache key construction abstractly.
 
-**Q4.** Master listing quality gate before publishing? **Recommendation:** pilot phase requires human editorial review of every master_listing. Phase C onwards: spot-check 1-in-10. Phase D onwards: trust the model + W11.6 sentiment-monitoring dashboard.
+**Q3.** Master listing quality gate? **Recommendation:** for the first 30 rounds post-cutover, spot-check master_listing output for tone/voice fidelity. After 30 clean rounds, trust the model + W11.6 dashboard.
 
-**Q5.** Failover round audit visibility? **Recommendation:** Anthropic-failover rounds are flagged in W11.6 with a vendor badge so operators see they were produced by the audit fork. Cost dashboard separates Gemini and Anthropic spend.
+**Q4.** Failover round audit visibility? **Recommendation:** Anthropic-failover rounds get a vendor badge in W11.6. Cost dashboard separates Gemini and Anthropic spend.
 
-**Q6.** Backwards-compat for legacy rounds? **Recommendation:** `shortlisting_rounds.engine_mode` stamp per round + audit JSON includes the stamp. Replay paths read the stamp and route to the right engine version.
+---
+
+## Post-cutover monitoring (first 30 days)
+
+The 30-day kill-switch window is also the monitoring window before W11.7.10 deletes the legacy engine. Watch for:
+
+| Signal | Threshold | Action |
+|---|---|---|
+| Shape D rounds with `stages_failed != []` | Any occurrence | Triage immediately — root-cause + patch before next round |
+| Stage 4 override rate | >7% sustained over 5 consecutive rounds | Prompt-audit cycle: review `stage_4_overrides[]` rows; tighten Stage 1 prompt blocks |
+| Anthropic failover hits | >5% of rounds in any 24h | Vendor escalation to Google + temporary toggle of `vision.shape_d.primary_vendor` if sustained |
+| Cost drift from Saladine baseline | >50% above $1.31/round (i.e. >$1.97) on a comparable shoot size | Cost-cap alarm; investigate Stage 1 batch sizing or thinking budgets |
+| `engine_run_audit` row missing for any successful round | Any occurrence | Audit-trail bug — block W11.7.10 deprecation until resolved |
+| Manual flip to `engine_mode = 'two_pass'` (kill-switch use) | Any occurrence | Capture the round's failure mode → defer W11.7.10 ship date until root-caused |
+
+If all five signals stay clean for 30 days, W11.7.10 ships ~2026-06-01.
 
 ---
 
@@ -867,23 +868,24 @@ NOTIFY pgrst, 'reload schema';
 - [x] W11.5 reclassification spec exists (this wave consumes the override data as project_memory)
 - [x] W11.6 rejection dashboard spec exists (this wave's outputs feed it)
 - [x] W12 canonical objects registry spec exists (this wave's `observed_objects` feeds it; rollup pass populates `canonical_object_ids`)
-- [ ] **W11 must ship before W11.7 implementation begins** (universal schema + iter-5 additions are the input shape)
-- [ ] W11.8 multi-vendor adapter must ship before W11.7.1 dispatch
-- [ ] Joseph signs off on coexistence period (Q2) + master_listing quality gate (Q4)
-- [ ] Migration 349 reserved at integration time
-- [ ] Cost-model agreement: Joseph confirms ~$3.84/200-shoot is acceptable
-- [ ] Voice anchor library (W11.7.8) curated for premium/standard/approachable tiers
-- [ ] Master-class prompt enrichment library (W11.7.9) curated
+- [x] W11 ships before W11.7 implementation
+- [x] W11.8 multi-vendor adapter shipped before W11.7.1 dispatch
+- [x] Migration 349 reserved + applied
+- [x] Cost-model validated: Saladine smoke @ $1.31/round well inside the published envelope
+- [x] Voice anchor library (W11.7.8) curated for premium/standard/approachable tiers
+- [ ] Master-class prompt enrichment **lite** library (W11.7.9, partial) — shipped
+- [ ] Master-class prompt enrichment **full** library (W11.7.9, remaining) — pending Joseph's hand-curation of 9 voice exemplars
 
 ---
 
 ## What this wave kills
 
-- `shortlisting-pass1` edge fn (deleted Phase D)
-- `shortlisting-pass2` edge fn (deleted Phase D)
+- `shortlisting-pass1` edge fn (scheduled for deletion via W11.7.10 ~2026-06-01 after the 30-day kill-switch window)
+- `shortlisting-pass2` edge fn (same)
 - `shortlisting-description-backfill` edge fn (was iter-2 spec; never shipped — Stage 1 produces verbose descriptions inline)
-- `pass1` and `pass2` job kinds in dispatcher (legacy-tagged Phase C, removed Phase D)
-- Pass 1 → Pass 2 chain coordination logic
+- `pass1` and `pass2` job kinds in dispatcher (removed via W11.7.10)
+- Pass 1 → Pass 2 chain coordination logic (removed via W11.7.10)
+- `'two_pass'` from `engine_settings.engine_mode` allowed values (CHECK constraint update via W11.7.10)
 - The Pass 1 trust assumption that caused IMG_6195's mislabel
 
 ## What this wave preserves (unchanged)
@@ -920,21 +922,19 @@ NOTIFY pgrst, 'reload schema';
 
 ## Effort estimate
 
-| Sub | Description | Days |
-|---|---|---|
-| Spec finalisation + Joseph sign-off | This doc + W11.7.7/8/9 sub-specs | 2 |
-| W11.7.1: shortlisting-shape-d orchestrator | Top-level edge fn build | 2 |
-| W11.7.2: Stage 1 batch handler | Edge fn + prompt assembly + W11.8 wiring | 2 |
-| W11.7.3: Stage 4 visual synthesis handler | Edge fn + multi-image prompt + override extraction | 2 |
-| W11.7.4: Phase A coexistence | engine_mode toggle + round stamp + backwards-compat shim | 1 |
-| Migration 349 + admin UI | Engine settings UI for Shape D toggles | 1 |
-| Tests | Unit (prompt assembly), integration (multi-batch), smoke (Stage 4 against fixtures) | 2 |
-| W11.6 dashboard panels for Shape D | Per-round cost, override rate, vendor breakdown | 1 |
-| Docs | Deployment runbook, replay paths, rollback procedure | 1 |
-| **Implementation total** | | **~14 days** |
-| W11.7.5: Phase B 4-week pilot | Live A/B run with master_admin opt-in projects | 4 weeks (calendar) |
-| W11.7.6: Phase C/D deprecation | Default flip + Pass 1/Pass 2 deletion + replay shim | ~3 days work spread over 6 weeks |
-| **Grand total** | | **~14 days build + 12 weeks calendar to full deprecation** |
+| Sub | Description | Days | Status |
+|---|---|---|---|
+| Spec finalisation + Joseph sign-off | This doc + W11.7.7/8/9 sub-specs | 2 | ✅ |
+| W11.7.1: shortlisting-shape-d orchestrator | Top-level edge fn build | 2 | ✅ |
+| W11.7.2: Stage 1 batch handler | Edge fn + prompt assembly + W11.8 wiring | 2 | ✅ |
+| W11.7.3: Stage 4 visual synthesis handler | Edge fn + multi-image prompt + override extraction | 2 | ✅ |
+| Migration 349 + admin UI | Engine settings UI for Shape D toggles + engine_mode router | 1 | ✅ |
+| Tests | Unit (prompt assembly), integration (multi-batch), smoke (Stage 4 against fixtures) | 2 | ✅ |
+| W11.6 dashboard panels for Shape D | Per-round cost, override rate, vendor breakdown | 1 | ⚙️ in flight |
+| Docs | Deployment runbook, replay paths, rollback procedure | 1 | ⚙️ in flight |
+| **Implementation total** | | **~13 days** | mostly shipped |
+| W11.7.10: pass1+pass2 deprecation | After 30-day kill-switch window: delete legacy edge fns + dispatcher chain + CHECK constraint cleanup. Sunset migration `380_sunset_two_pass_engine.sql` | 1 | ⚙️ scheduled ~2026-06-01 |
+| **Grand total** | | **~14 days build + 30 days calendar to full deprecation** | |
 
 This is the largest single wave of work since W7.7 + W11. Justified by the architectural compounding it unlocks for every downstream wave (W11.13 pgvector similarity uses `embedding_anchor_text`, W12 canonical rollup uses `observed_objects`, W14 grad-quality few-shots use `stage_4_overrides`, W15a/b reuse the same Shape D pattern across internal-finals + external-listings).
 
