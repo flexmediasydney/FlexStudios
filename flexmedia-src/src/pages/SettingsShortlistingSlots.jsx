@@ -13,18 +13,23 @@
  *   - phase ∈ {1, 2}  (3 is "free" / unbounded — not represented in the
  *     slot definitions table; we only allow 1 or 2 here).
  *   - max_images >= min_images >= 0
- *   - package_types non-empty
+ *   - eligible_when_engine_roles non-empty (the sole eligibility key)
  *   - eligible_room_types non-empty
  *   - display_name non-empty
  *
- * Filters: phase (1 / 2 / all), package (Gold / Day to Dusk / Premium /
- * all), is_active toggle.
+ * Filters: phase (1 / 2 / all), is_active toggle.
+ *
+ * W11.6.5 (W7.11 cleanup): the legacy `package_types[]` array on slot rows
+ * was the eligibility fallback during W7.7's transition window. Mig 339
+ * dropped the column after W7.8 backfilled every active slot with
+ * `eligible_when_engine_roles`. The form field, list filter, and table
+ * column have been retired here so the admin UI mirrors the schema —
+ * eligibility now flows exclusively through engine roles.
  */
 
 import { useMemo, useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { useActivePackages } from "@/hooks/useActivePackages";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import {
   Card,
@@ -67,16 +72,12 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 // ── Constants ───────────────────────────────────────────────────────────────
-// Wave 7 P1-11: package options now come from the live `packages` table via
-// useActivePackages(). Previously: const PACKAGE_OPTIONS = ["Gold", "Day to
-// Dusk", "Premium"]. Joseph's architectural correction (2026-04-27): packages
-// must NOT be hardcoded anywhere in the frontend — they live in the DB.
-
 // Wave 7 P1-8: shortlisting engine roles. MUST match the migration 337
 // backfill rules and supabase/functions/_shared/slotEligibility.ts ENGINE_ROLES.
-// Used for the new "Eligible when engine roles" multiselect — the resolver
-// filters slots whose eligible_when_engine_roles overlaps the project's
-// products' engine_role union.
+// Drives the "Eligible when engine roles" multiselect — the resolver filters
+// slots whose eligible_when_engine_roles overlaps the project's products'
+// engine_role union. W11.6.5: this is the SOLE eligibility input — the
+// legacy `package_types[]` fallback was retired with mig 339.
 const ENGINE_ROLE_OPTIONS = [
   "photo_day_shortlist",
   "photo_dusk_shortlist",
@@ -113,18 +114,17 @@ const PHASE_LABELS = {
 };
 
 // ── Form helpers ────────────────────────────────────────────────────────────
-// Wave 7 P1-11: defaultPackageNames flows in from useActivePackages so a
-// fresh slot defaults to "applies to every active package". Empty array is
-// a valid resting state until the live list resolves.
-function emptyForm(defaultPackageNames = []) {
+// W11.6.5: a fresh slot defaults to NO engine roles selected — the admin
+// must explicitly pick at least one (validation enforces non-empty). The
+// legacy `package_types` default has been removed along with the column.
+function emptyForm() {
   return {
     slot_id: "",
     display_name: "",
     phase: 2,
-    package_types: [...defaultPackageNames],
-    // W7.8: which product engine roles trigger this slot. Empty array =
-    // fall back to package_types substring match (legacy path during the
-    // transition window).
+    // W7.8 / W11.6.5: engine roles are now the sole eligibility input.
+    // The slot is included for a round when ANY selected role overlaps the
+    // project's products' engine roles. Validation requires at least one.
     eligible_when_engine_roles: [],
     eligible_room_types: [],
     max_images: 1,
@@ -146,8 +146,16 @@ function validateForm(form, isNew, existingSlotIds) {
   if (![1, 2].includes(Number(form.phase))) {
     errors.phase = "Phase must be 1 (mandatory) or 2 (conditional).";
   }
-  if (!Array.isArray(form.package_types) || form.package_types.length === 0) {
-    errors.package_types = "Pick at least one package type.";
+  // W11.6.5: engine roles are the sole eligibility input. A slot row with
+  // is_active=true AND eligible_when_engine_roles=[] is considered
+  // misconfigured by `_shared/slotEligibility.ts` and dropped at runtime —
+  // enforce it here so the admin can't ship an unreachable slot.
+  if (
+    !Array.isArray(form.eligible_when_engine_roles) ||
+    form.eligible_when_engine_roles.length === 0
+  ) {
+    errors.eligible_when_engine_roles =
+      "Pick at least one engine role — this is the slot's eligibility key.";
   }
   if (
     !Array.isArray(form.eligible_room_types) ||
@@ -262,60 +270,10 @@ function ChipMultiselect({ value, onChange, options, placeholder }) {
   );
 }
 
-function PackageMultiselect({ value, onChange, options }) {
-  const arr = Array.isArray(value) ? value : [];
-  const opts = Array.isArray(options) ? options : [];
-  const toggle = (p) => {
-    if (arr.includes(p)) onChange(arr.filter((x) => x !== p));
-    else onChange([...arr, p]);
-  };
-  // Surface any legacy values that aren't in the live `packages` list so the
-  // admin can see + remove them. Otherwise an old slot tagged "Gold" while
-  // the marketing team renamed it to "Gold Package" would silently lose its
-  // chip rendering.
-  const legacy = arr.filter((p) => !opts.includes(p));
-  const renderable = [...opts, ...legacy];
-  if (renderable.length === 0) {
-    return (
-      <p className="text-[10px] text-muted-foreground italic">
-        No active packages defined yet — visit Settings · Packages to add one.
-      </p>
-    );
-  }
-  return (
-    <div className="flex flex-wrap gap-2">
-      {renderable.map((p) => {
-        const on = arr.includes(p);
-        const isLegacy = !opts.includes(p);
-        return (
-          <button
-            key={p}
-            type="button"
-            onClick={() => toggle(p)}
-            className={cn(
-              "text-xs rounded-md border px-2.5 py-1 transition-colors",
-              on
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-background hover:bg-muted/40 border-border",
-              isLegacy && "border-dashed",
-            )}
-            title={isLegacy ? "Legacy package — no longer in the live list" : undefined}
-          >
-            {p}
-            {isLegacy && (
-              <span className="ml-1 text-[9px] opacity-70">(legacy)</span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// W7.8: identical UX to PackageMultiselect, scoped to the engine_role enum.
-// Empty selection means "fall back to package_types substring match" — this
-// is intentional, the slot keeps working under the legacy rule until it's
-// explicitly assigned engine roles.
+// W7.8 / W11.6.5: chip multiselect over the engine_role enum. This is the
+// sole eligibility input — selecting at least one role is mandatory (see
+// validateForm). A slot whose roles overlap the round's resolved engine
+// roles is included for that round.
 function EngineRoleMultiselect({ value, onChange }) {
   const arr = Array.isArray(value) ? value : [];
   const toggle = (r) => {
@@ -356,7 +314,6 @@ function EditSlotDialog({
   onSave,
   isSaving,
   currentVersion,
-  packageOptions,
 }) {
   const [form, setForm] = useState(initialForm);
   const errors = useMemo(
@@ -477,32 +434,21 @@ function EditSlotDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs">Package types (legacy fallback)</Label>
-            <PackageMultiselect
-              value={form.package_types}
-              onChange={(v) => update("package_types", v)}
-              options={packageOptions}
-            />
-            <p className="text-[10px] text-muted-foreground">
-              Used as the fallback rule when "Eligible when engine roles" is empty. Once every
-              slot has explicit engine roles, this field can be retired.
-            </p>
-            {errors.package_types && (
-              <p className="text-[10px] text-red-600">{errors.package_types}</p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
             <Label className="text-xs">Eligible when engine roles</Label>
             <EngineRoleMultiselect
               value={form.eligible_when_engine_roles}
               onChange={(v) => update("eligible_when_engine_roles", v)}
             />
             <p className="text-[10px] text-muted-foreground">
-              W7.8: select all engine roles that should trigger this slot. Slot is included for
-              a round when ANY selected role overlaps the project's products' engine roles. Leave
-              empty to fall back to the legacy package_types match above.
+              Pick the engine roles that should trigger this slot. The slot is included for a
+              round when ANY selected role overlaps the project's products' engine roles. At
+              least one role is required — empty selections leave the slot unreachable.
             </p>
+            {errors.eligible_when_engine_roles && (
+              <p className="text-[10px] text-red-600">
+                {errors.eligible_when_engine_roles}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -562,11 +508,10 @@ function EditSlotDialog({
 // ── Page ────────────────────────────────────────────────────────────────────
 export default function SettingsShortlistingSlots() {
   const queryClient = useQueryClient();
-  // Wave 7 P1-11: live list of active packages drives the dropdowns + the
-  // multiselect default. No more hardcoded ["Gold", "Day to Dusk", "Premium"].
-  const { names: packageNames } = useActivePackages();
+  // W11.6.5: package filter retired — slot eligibility is now an
+  // engine-role concern, not a package-name concern. Phase + active-only
+  // are the only relevant filters.
   const [phaseFilter, setPhaseFilter] = useState("all");
-  const [packageFilter, setPackageFilter] = useState("all");
   const [activeOnly, setActiveOnly] = useState(true);
   const [editorState, setEditorState] = useState({
     open: false,
@@ -612,15 +557,14 @@ export default function SettingsShortlistingSlots() {
     const baseRows = activeOnly ? activeRows : allRows;
     return baseRows.filter((r) => {
       if (phaseFilter !== "all" && String(r.phase) !== phaseFilter) return false;
-      if (packageFilter !== "all") {
-        const pkgs = Array.isArray(r.package_types) ? r.package_types : [];
-        if (!pkgs.includes(packageFilter)) return false;
-      }
       return true;
     });
-  }, [activeRows, allRows, phaseFilter, packageFilter, activeOnly]);
+  }, [activeRows, allRows, phaseFilter, activeOnly]);
 
   // ── Save mutation: insert new + deactivate old (atomic-ish) ─────────────
+  // W11.6.5: `package_types` removed from the write payload — the column was
+  // dropped in mig 339 and validation now requires a non-empty
+  // `eligible_when_engine_roles` array.
   const saveMutation = useMutation({
     mutationFn: async ({ form, isNew, currentRow }) => {
       if (isNew) {
@@ -628,9 +572,6 @@ export default function SettingsShortlistingSlots() {
           slot_id: form.slot_id,
           display_name: form.display_name.trim(),
           phase: Number(form.phase),
-          package_types: form.package_types,
-          // W7.8: persist the new engine-role list. Empty array is fine —
-          // resolver falls back to package_types substring match.
           eligible_when_engine_roles: Array.isArray(form.eligible_when_engine_roles)
             ? form.eligible_when_engine_roles
             : [],
@@ -649,8 +590,6 @@ export default function SettingsShortlistingSlots() {
         slot_id: form.slot_id,
         display_name: form.display_name.trim(),
         phase: Number(form.phase),
-        package_types: form.package_types,
-        // W7.8: persist the new engine-role list on the new version.
         eligible_when_engine_roles: Array.isArray(form.eligible_when_engine_roles)
           ? form.eligible_when_engine_roles
           : [],
@@ -738,13 +677,6 @@ export default function SettingsShortlistingSlots() {
           slot_id: row.slot_id,
           display_name: row.display_name || "",
           phase: row.phase || 2,
-          package_types: Array.isArray(row.package_types)
-            ? [...row.package_types]
-            : [],
-          // W7.8: pre-fill with the existing engine roles (or [] for legacy
-          // rows that haven't been edited yet — saving will then write the
-          // value chosen here, leaving the legacy package_types fallback
-          // intact for any unsaved sibling rows).
           eligible_when_engine_roles: Array.isArray(row.eligible_when_engine_roles)
             ? [...row.eligible_when_engine_roles]
             : [],
@@ -766,13 +698,11 @@ export default function SettingsShortlistingSlots() {
     setEditorState({
       open: true,
       isNew: true,
-      // Wave 7 P1-11: default a brand-new slot to "applies to every active
-      // package" — the admin can deselect any they don't want.
-      initialForm: emptyForm(packageNames),
+      initialForm: emptyForm(),
       currentVersion: 0,
       editingSlotId: null,
     });
-  }, [packageNames]);
+  }, []);
 
   return (
     <PermissionGuard require={["master_admin"]}>
@@ -813,24 +743,6 @@ export default function SettingsShortlistingSlots() {
                     <SelectItem value="all">All phases</SelectItem>
                     <SelectItem value="1">P1 mandatory</SelectItem>
                     <SelectItem value="2">P2 conditional</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1">
-                <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Package
-                </Label>
-                <Select value={packageFilter} onValueChange={setPackageFilter}>
-                  <SelectTrigger className="h-9 w-[180px] text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All packages</SelectItem>
-                    {packageNames.map((p) => (
-                      <SelectItem key={p} value={p}>
-                        {p}
-                      </SelectItem>
-                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -884,7 +796,6 @@ export default function SettingsShortlistingSlots() {
                       <th className="px-3 py-2 font-medium">Name</th>
                       <th className="px-3 py-2 font-medium">Phase</th>
                       <th className="px-3 py-2 font-medium">Engine roles</th>
-                      <th className="px-3 py-2 font-medium">Packages</th>
                       <th className="px-3 py-2 font-medium">Room types</th>
                       <th className="px-3 py-2 font-medium tabular-nums">Min/Max</th>
                       <th className="px-3 py-2 font-medium tabular-nums">v</th>
@@ -898,9 +809,6 @@ export default function SettingsShortlistingSlots() {
                         PHASE_LABELS[row.phase] || { label: `P${row.phase}`, tone: "" };
                       const rooms = Array.isArray(row.eligible_room_types)
                         ? row.eligible_room_types
-                        : [];
-                      const pkgs = Array.isArray(row.package_types)
-                        ? row.package_types
                         : [];
                       const engineRoles = Array.isArray(row.eligible_when_engine_roles)
                         ? row.eligible_when_engine_roles
@@ -928,7 +836,7 @@ export default function SettingsShortlistingSlots() {
                           <td className="px-3 py-2 max-w-[220px]">
                             {engineRoles.length === 0 ? (
                               <span className="text-[10px] text-muted-foreground italic">
-                                (legacy fallback)
+                                (misconfigured — engine roles required)
                               </span>
                             ) : (
                               <div className="flex flex-wrap gap-1">
@@ -943,19 +851,6 @@ export default function SettingsShortlistingSlots() {
                                 ))}
                               </div>
                             )}
-                          </td>
-                          <td className="px-3 py-2">
-                            <div className="flex flex-wrap gap-1">
-                              {pkgs.map((p) => (
-                                <Badge
-                                  key={p}
-                                  variant="outline"
-                                  className="text-[9px]"
-                                >
-                                  {p}
-                                </Badge>
-                              ))}
-                            </div>
                           </td>
                           <td
                             className="px-3 py-2 max-w-[260px]"
@@ -1020,7 +915,6 @@ export default function SettingsShortlistingSlots() {
             existingSlotIds={existingSlotIds}
             currentVersion={editorState.currentVersion}
             isSaving={saveMutation.isPending}
-            packageOptions={packageNames}
             onSave={(form) => {
               const currentRow = editorState.editingSlotId
                 ? (bySlotId.get(editorState.editingSlotId) || []).find(
