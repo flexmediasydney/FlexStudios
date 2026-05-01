@@ -68,6 +68,7 @@ import ShortlistingCard from "./ShortlistingCard";
 import LockProgressDialog from "./LockProgressDialog";
 import SignalAttributionModal from "./SignalAttributionModal";
 import ShapeDEngineBanner from "./ShapeDEngineBanner";
+import DispatcherPanel from "./DispatcherPanel";
 
 // Column definitions
 const COLUMNS = [
@@ -974,6 +975,14 @@ export default function ShortlistingSwimlane({
           Renders only when the round is shape_d_* OR has an engine_run_audit
           row; legacy two-pass rounds keep the original UI clean. */}
       <ShapeDEngineBanner round={round} projectId={projectId} />
+
+      {/* W11.6 Wave 2B — Dispatcher visibility panel.
+          Live countdown to the next cron tick + active jobs for the round +
+          recent terminal rows + Shape D timeline mini-viz. master_admin gets
+          a "Force run now" button per pending job. Sits below the engine
+          banner so the operator sees both engine state and dispatcher state
+          before the swimlane itself. */}
+      <DispatcherPanel projectId={projectId} roundId={round?.id} />
 
       {/* Round metadata strip */}
       <Card>

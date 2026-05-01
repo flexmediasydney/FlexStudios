@@ -521,6 +521,9 @@ verify_jwt = false
 [functions.fixOrphanedPriceMatrices]
 verify_jwt = false
 
+[functions.force-run-now]
+verify_jwt = false
+
 [functions.fixOrphanedTasksAndEfforts]
 verify_jwt = false
 
@@ -573,6 +576,9 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.initializeGmail]
+verify_jwt = false
+
+[functions.list-project-jobs]
 verify_jwt = false
 
 [functions.listDropboxFiles]
