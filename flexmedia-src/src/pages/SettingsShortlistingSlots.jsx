@@ -132,6 +132,77 @@ const ROOM_TYPE_SUGGESTIONS = [
   "laundry",
 ];
 
+// W11.6.13 — orthogonal SPACE/ZONE taxonomies. Mirror the canonical
+// taxonomies in supabase/functions/_shared/visionPrompts/blocks/
+// spaceZoneTaxonomy.ts. Suggestion-only — admins can type any value;
+// the engine resolver (slotEligibility.ts imageMatchesSlot) does
+// case-sensitive includes() against whatever Stage 1 emits.
+const SPACE_TYPE_SUGGESTIONS = [
+  "master_bedroom",
+  "bedroom_secondary",
+  "bedroom_third",
+  "living_dining_combined",
+  "living_room_dedicated",
+  "dining_room_dedicated",
+  "kitchen_dining_living_combined",
+  "kitchen_dedicated",
+  "studio_open_plan",
+  "bathroom",
+  "ensuite",
+  "powder_room",
+  "entry_foyer",
+  "hallway",
+  "study",
+  "media_room",
+  "rumpus",
+  "laundry",
+  "mudroom",
+  "garage",
+  "alfresco_undercover",
+  "alfresco_open",
+  "balcony",
+  "terrace",
+  "exterior_facade",
+  "exterior_rear",
+  "exterior_side",
+  "pool_area",
+  "garden",
+  "streetscape",
+  "aerial_oblique",
+  "aerial_nadir",
+];
+const ZONE_FOCUS_SUGGESTIONS = [
+  "bed_focal",
+  "wardrobe_built_in",
+  "dining_table",
+  "kitchen_island",
+  "kitchen_appliance_wall",
+  "kitchen_pantry",
+  "lounge_seating",
+  "fireplace_focal",
+  "study_desk",
+  "tv_media_wall",
+  "bath_focal",
+  "shower_focal",
+  "vanity_detail",
+  "toilet_visible",
+  "window_view",
+  "door_threshold",
+  "stair_focal",
+  "feature_wall",
+  "ceiling_detail",
+  "floor_detail",
+  "material_proof",
+  "landscape_overview",
+  "full_facade",
+  "pool_focal",
+  "outdoor_dining",
+  "outdoor_kitchen",
+  "bbq_zone",
+  "drying_zone",
+  "parking_zone",
+];
+
 const PHASE_LABELS = {
   1: { label: "P1 mandatory", tone: "bg-red-100 text-red-700 dark:bg-red-950/60 dark:text-red-300" },
   2: { label: "P2 conditional", tone: "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300" },
@@ -151,6 +222,12 @@ function emptyForm() {
     // project's products' engine roles. Validation requires at least one.
     eligible_when_engine_roles: [],
     eligible_room_types: [],
+    // W11.6.13 — orthogonal SPACE/ZONE eligibility arrays. Empty defaults
+    // (legacy slots fall back to eligible_room_types matching). Validation
+    // does NOT require these — populating them is encouraged but optional
+    // so existing rows continue to work without forced edits.
+    eligible_space_types: [],
+    eligible_zone_focuses: [],
     max_images: 1,
     min_images: 0,
     // W11.6.7 P1-4: optional lens_class constraint. Values: 'wide_angle' |
@@ -486,18 +563,55 @@ function EditSlotDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label className="text-xs">Eligible room types</Label>
+            <Label className="text-xs">Eligible room types <span className="text-muted-foreground">(legacy)</span></Label>
             <ChipMultiselect
               value={form.eligible_room_types}
               onChange={(v) => update("eligible_room_types", v)}
               options={ROOM_TYPE_SUGGESTIONS}
               placeholder="e.g. kitchen_main"
             />
+            <p className="text-[10px] text-muted-foreground">
+              Legacy compatibility field. The resolver falls back to this when both
+              of the new SPACE/ZONE arrays below are empty.
+            </p>
             {errors.eligible_room_types && (
               <p className="text-[10px] text-red-600">
                 {errors.eligible_room_types}
               </p>
             )}
+          </div>
+
+          {/* W11.6.13 — orthogonal SPACE/ZONE eligibility arrays. */}
+          <div className="space-y-1.5">
+            <Label className="text-xs">Eligible space types <span className="text-muted-foreground">(architectural enclosure)</span></Label>
+            <ChipMultiselect
+              value={form.eligible_space_types}
+              onChange={(v) => update("eligible_space_types", v)}
+              options={SPACE_TYPE_SUGGESTIONS}
+              placeholder="e.g. entry_foyer"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              W11.6.13: which architectural enclosures (4 walls) this slot accepts.
+              Combined with eligible zone focuses below: if BOTH are populated, the
+              resolver applies AND-intersection (image must match both axes). If
+              only this is set, space-only matching. If neither is set, falls back
+              to legacy room types above.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Eligible zone focuses <span className="text-muted-foreground">(compositional subject)</span></Label>
+            <ChipMultiselect
+              value={form.eligible_zone_focuses}
+              onChange={(v) => update("eligible_zone_focuses", v)}
+              options={ZONE_FOCUS_SUGGESTIONS}
+              placeholder="e.g. door_threshold"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              W11.6.13: what the photographer is actually showing in the frame. For
+              an entry hero use [door_threshold, full_facade] so a corner shot
+              showing the facade gets a clean preference signal.
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -673,6 +787,11 @@ export default function SettingsShortlistingSlots() {
             ? form.eligible_when_engine_roles
             : [],
           eligible_room_types: form.eligible_room_types,
+          // W11.6.13 — orthogonal SPACE/ZONE eligibility arrays.
+          eligible_space_types: Array.isArray(form.eligible_space_types)
+            ? form.eligible_space_types : [],
+          eligible_zone_focuses: Array.isArray(form.eligible_zone_focuses)
+            ? form.eligible_zone_focuses : [],
           max_images: Number(form.max_images),
           min_images: Number(form.min_images),
           // W11.6.7 P1-4 / P1-5: new constraint fields.
@@ -697,6 +816,11 @@ export default function SettingsShortlistingSlots() {
           ? form.eligible_when_engine_roles
           : [],
         eligible_room_types: form.eligible_room_types,
+        // W11.6.13 — orthogonal SPACE/ZONE eligibility arrays.
+        eligible_space_types: Array.isArray(form.eligible_space_types)
+          ? form.eligible_space_types : [],
+        eligible_zone_focuses: Array.isArray(form.eligible_zone_focuses)
+          ? form.eligible_zone_focuses : [],
         max_images: Number(form.max_images),
         min_images: Number(form.min_images),
         // W11.6.7 P1-4 / P1-5: new constraint fields.
@@ -792,6 +916,11 @@ export default function SettingsShortlistingSlots() {
           eligible_room_types: Array.isArray(row.eligible_room_types)
             ? [...row.eligible_room_types]
             : [],
+          // W11.6.13 — orthogonal SPACE/ZONE eligibility arrays.
+          eligible_space_types: Array.isArray(row.eligible_space_types)
+            ? [...row.eligible_space_types] : [],
+          eligible_zone_focuses: Array.isArray(row.eligible_zone_focuses)
+            ? [...row.eligible_zone_focuses] : [],
           max_images: row.max_images ?? 1,
           min_images: row.min_images ?? 0,
           lens_class_constraint: row.lens_class_constraint ?? null,

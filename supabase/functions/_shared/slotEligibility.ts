@@ -60,13 +60,19 @@ export interface PackageProductEntry {
 }
 
 /** Subset of `shortlisting_slot_definitions` columns the resolver needs.
- *  W7.7: package_types column dropped from the table; field removed here. */
+ *  W7.7: package_types column dropped from the table; field removed here.
+ *  W11.6.13: eligible_space_types[] + eligible_zone_focuses[] added — the
+ *  resolver prefers these new arrays to the legacy room_type matching path
+ *  (see `imageMatchesSlot` for the precedence rules). */
 export interface SlotDefinitionRow {
   slot_id: string;
   display_name?: string | null;
   phase?: number | null;
   eligible_when_engine_roles?: string[] | null;
   eligible_room_types?: string[] | null;
+  // W11.6.13 — orthogonal SPACE/ZONE eligibility arrays.
+  eligible_space_types?: string[] | null;
+  eligible_zone_focuses?: string[] | null;
   max_images?: number | null;
   min_images?: number | null;
   notes?: string | null;
@@ -215,4 +221,98 @@ export function isContentInScope(
     return true;
   }
   return projectEngineRoles.includes(detectedRole as EngineRole);
+}
+
+// ─── W11.6.13 — SPACE/ZONE tuple matching ────────────────────────────────────
+
+/**
+ * Subset of a composition_classifications row the slot-vs-image matcher needs.
+ * W11.6.13 — we read the new orthogonal pair (space_type + zone_focus) PLUS
+ * the legacy room_type compatibility alias so we can fall back gracefully.
+ */
+export interface ImageClassification {
+  /** W11.6.13: architectural enclosure (4 walls). */
+  space_type?: string | null;
+  /** W11.6.13: compositional subject of the shot. */
+  zone_focus?: string | null;
+  /** Legacy compatibility alias — kept until W11.6.13 deprecation wave. */
+  room_type?: string | null;
+}
+
+/**
+ * Decide whether a single image's classification matches a slot's eligibility
+ * arrays. Three precedence tiers (W11.6.13 spec):
+ *
+ *   Tier 1 — both new arrays populated: AND-intersection. Image must have
+ *            space_type ∈ slot.eligible_space_types AND
+ *            zone_focus  ∈ slot.eligible_zone_focuses. Strongest gate.
+ *
+ *   Tier 2 — only eligible_space_types populated: space-only match. Image
+ *            must have space_type ∈ slot.eligible_space_types. Useful for
+ *            slots where the zone is "anywhere in the space" (e.g. master
+ *            bedroom hero).
+ *
+ *   Tier 3 — neither new array populated: legacy fallback. Image must have
+ *            room_type ∈ slot.eligible_room_types. Preserves behaviour for
+ *            slot rows that haven't yet been migrated to the new axes.
+ *
+ * Defensive: when the slot has NO eligibility constraints in any tier
+ * (eligible_room_types also empty), the function returns false — a slot row
+ * with no spatial gate is a misconfiguration and should not match anything.
+ *
+ * Pure: takes already-fetched rows; no DB calls. Same purity contract as
+ * filterSlotsForRound — the engine-role gate runs first (Pass 2), then
+ * per-image space/zone matching runs against the surviving slot set.
+ */
+export function imageMatchesSlot(
+  image: ImageClassification | null | undefined,
+  slot: SlotDefinitionRow,
+): boolean {
+  if (!image) return false;
+  const spaceTypes = Array.isArray(slot.eligible_space_types) ? slot.eligible_space_types : [];
+  const zoneFocuses = Array.isArray(slot.eligible_zone_focuses) ? slot.eligible_zone_focuses : [];
+  const roomTypes = Array.isArray(slot.eligible_room_types) ? slot.eligible_room_types : [];
+
+  // Tier 1 — both new arrays populated → AND-intersection.
+  if (spaceTypes.length > 0 && zoneFocuses.length > 0) {
+    if (!image.space_type || !image.zone_focus) return false;
+    return spaceTypes.includes(image.space_type) && zoneFocuses.includes(image.zone_focus);
+  }
+
+  // Tier 2 — only space populated → space-only match.
+  if (spaceTypes.length > 0) {
+    return image.space_type != null && spaceTypes.includes(image.space_type);
+  }
+
+  // Tier 2b — only zone populated. Less common but symmetric: zone-only match.
+  if (zoneFocuses.length > 0) {
+    return image.zone_focus != null && zoneFocuses.includes(image.zone_focus);
+  }
+
+  // Tier 3 — legacy fallback to eligible_room_types vs image.room_type.
+  if (roomTypes.length > 0) {
+    return image.room_type != null && roomTypes.includes(image.room_type);
+  }
+
+  // Defensive: slot has no spatial constraints in any tier — treat as
+  // misconfigured and refuse to match.
+  return false;
+}
+
+/**
+ * Filter a list of (image, classification) pairs against a single slot
+ * definition's space/zone/room eligibility. Convenience wrapper used by Pass
+ * 2's hero-pick algorithm.
+ *
+ * Pure: takes already-fetched pairs; no DB calls.
+ */
+export function filterImagesForSlot<T>(
+  images: Array<{ image: T; classification: ImageClassification | null | undefined }>,
+  slot: SlotDefinitionRow,
+): T[] {
+  const out: T[] = [];
+  for (const { image, classification } of images) {
+    if (imageMatchesSlot(classification, slot)) out.push(image);
+  }
+  return out;
 }

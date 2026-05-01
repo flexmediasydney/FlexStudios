@@ -56,6 +56,12 @@ export interface Stage1MergedEntry {
   group_id: string;
   group_index: number;
   room_type?: string | null;
+  // W11.6.13 — orthogonal SPACE/ZONE pair. Stage 4 reads both alongside the
+  // legacy room_type so visual cross-comparison can correct any axis
+  // independently (e.g. space wrong but zone right, or vice-versa).
+  space_type?: string | null;
+  zone_focus?: string | null;
+  space_zone_count?: number | null;
   composition_type?: string | null;
   vantage_point?: string | null;
   technical_score?: number | null;
@@ -398,16 +404,26 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
       description:
         'Audit trail for visual cross-comparison corrections of Stage 1. ' +
         'When Stage 4\'s view of all images shows that Stage 1 was wrong on a ' +
-        'per-image field (e.g. room_type), emit a row here rather than silently ' +
-        'changing the answer. Healthy override rate: 2-8% of images. Empty ' +
-        'array when no corrections needed.',
+        'per-image field (e.g. space_type, zone_focus, room_type, vantage_point), ' +
+        'emit a row here rather than silently changing the answer. Healthy ' +
+        'override rate: 2-8% of images. Empty array when no corrections needed. ' +
+        'W11.6.13: when correcting space_type OR zone_focus the rationale MUST ' +
+        'reference BOTH axes explicitly — distinguish "wrong space" (architectural ' +
+        'enclosure misread) from "wrong zone" (compositional subject misread). ' +
+        'Same applies when correcting one axis: explain why the OTHER axis stayed ' +
+        'the same so the operator review surface understands the distinction.',
       items: {
         type: 'object',
         properties: {
           stem: { type: 'string' },
           field: {
             type: 'string',
-            description: 'Stage 1 field that needs correction e.g. "room_type" or "vantage_point".',
+            description:
+              'Stage 1 field that needs correction. W11.6.13: prefer the new ' +
+              'orthogonal axes "space_type" or "zone_focus" over the legacy ' +
+              '"room_type" when both are wrong. Other supported fields: ' +
+              'composition_type, vantage_point, time_of_day, is_drone, ' +
+              'is_exterior, clutter_severity.',
           },
           stage_1_value: { type: 'string' },
           stage_4_value: { type: 'string' },
@@ -415,7 +431,10 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
             type: 'string',
             description:
               '1-2 sentences citing the visual cross-comparison evidence ' +
-              '(reference other stems by name).',
+              '(reference other stems by name). W11.6.13: when the field is ' +
+              'space_type or zone_focus, the rationale MUST address BOTH axes — ' +
+              'name the architectural enclosure AND the compositional subject ' +
+              'so the override is interpretable without reloading Stage 1 context.',
           },
         },
         required: ['stem', 'field', 'stage_1_value', 'stage_4_value', 'reason'],
@@ -499,6 +518,12 @@ export function buildStage4SystemPrompt(): string {
     '  canonical slot_ids, surface it via `proposed_slots[]` rather than silently',
     "  picking the closest fit. Empty array when nothing warrants a new slot —",
     "  don't manufacture proposals.",
+    '- W11.6.13: when emitting stage_4_overrides[] entries that correct',
+    '  space_type or zone_focus, the rationale MUST address BOTH axes. Name',
+    '  the architectural enclosure (space) AND the compositional subject (zone)',
+    '  — distinguish "wrong space, right zone" from "right space, wrong zone"',
+    '  from "both wrong". The override entries are first-class training data;',
+    '  ambiguous rationale dilutes the signal.',
     '',
     'Return ONE JSON object matching the schema in the user prompt.',
   ].join('\n');
@@ -541,9 +566,15 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
 
   // Compact Stage 1 JSON to keep prompt under budget. Drop large prose
   // (analysis full text), keep load-bearing classification + scores.
+  // W11.6.13 — surface space_type / zone_focus / space_zone_count next to
+  // the legacy room_type so Stage 4 can reason about both axes when emitting
+  // overrides.
   const compactStage1 = opts.stage1Merged.map((e) => ({
     stem: e.stem,
     room_type: e.room_type ?? null,
+    space_type: e.space_type ?? null,
+    zone_focus: e.zone_focus ?? null,
+    space_zone_count: e.space_zone_count ?? null,
     composition_type: e.composition_type ?? null,
     vantage: e.vantage_point ?? null,
     scores: {
