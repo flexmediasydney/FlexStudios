@@ -56,6 +56,8 @@ export const ROUTE_ACCESS = {
   EngineDashboard: ADMIN_AND_ABOVE,
   // Wave 14 — engine calibration runner / drift dashboard.
   CalibrationDashboard: OWNER_ONLY,
+  // Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
+  SettingsObjectRegistryDiscovery: OWNER_ONLY,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,
