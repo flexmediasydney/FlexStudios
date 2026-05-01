@@ -1,15 +1,42 @@
 /**
  * ShortlistingCoverageMap — Wave 6 Phase 6 SHORTLIST
+ *                          + W11.6.1-hotfix BUG #2 (Shape D plumbing)
  *
  * Visual coverage map for a round.
  *
  * For each active slot definition (filtered by round.package_type), show:
  *   - filled / unfilled (color-coded)
  *   - winner thumbnail (if filled)
- *   - alternatives count (rank=2,3 events)
+ *   - alternatives count (legacy pass2 only — Shape D doesn't surface alts
+ *     in shortlisting_overrides; the swimlane's altsBySlotId carries the
+ *     per-slot rank-2/3 alternatives separately)
  *   - gap severity if unfilled
  * Mandatory slots highlighted; gaps in red.
  * Coverage % at top.
+ *
+ * Data source — Shape D plumbing fix (W11.6.1-hotfix):
+ *   PRIMARY:   shortlisting_overrides rows where human_action IN
+ *              ('ai_proposed','approved_as_proposed','swapped',
+ *               'added_from_rejects')
+ *              The Shape D engine writes one override row per slot decision
+ *              with human_action='ai_proposed'. Operators upgrade to
+ *              'approved_as_proposed' / 'swapped' / 'added_from_rejects'
+ *              from the swimlane. We resolve the active slot+group from:
+ *                slot_id  = human_selected_slot_id ?? ai_proposed_slot_id
+ *                group_id = human_selected_group_id ?? ai_proposed_group_id
+ *              and record one winner per slot.
+ *
+ *   FALLBACK:  shortlisting_events rows where event_type IN
+ *              ('pass2_slot_assigned','pass2_phase3_recommendation')
+ *              Pre-Shape-D rounds (Wave 6 / pass-based engine) don't have
+ *              shortlisting_overrides ai_proposed rows. We fall back to
+ *              the legacy event-based reader so historical coverage maps
+ *              still render. The legacy reader is also the source of the
+ *              `alternativesCount` chip (rank=2,3 events).
+ *
+ *   Both readers map into the same slotState shape:
+ *     Map<slot_id, { winner: { groupId }, alts: [{ groupId, payload }...] }>
+ *   so the render path is unchanged.
  */
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -50,7 +77,39 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
     staleTime: 60_000,
   });
 
-  // Pass 2 winner events (rank=1) for the round.
+  // W11.6.1-hotfix BUG #2 — PRIMARY reader: Shape D writes slot decisions
+  // to shortlisting_overrides with human_action='ai_proposed' (and operators
+  // upgrade to approved_as_proposed/swapped/added_from_rejects in the
+  // swimlane). The map row records ai_proposed_* + the post-action
+  // human_selected_*; we resolve to whichever pair has the live values.
+  const overridesQuery = useQuery({
+    queryKey: ["shortlisting_overrides_coverage", roundId],
+    queryFn: async () => {
+      const rows = await api.entities.ShortlistingOverride.filter(
+        {
+          round_id: roundId,
+          human_action: {
+            $in: [
+              "ai_proposed",
+              "approved_as_proposed",
+              "swapped",
+              "added_from_rejects",
+            ],
+          },
+        },
+        "created_at",
+        2000,
+      );
+      return rows || [];
+    },
+    enabled: Boolean(roundId),
+    staleTime: 15_000,
+  });
+
+  // W11.6.1-hotfix BUG #2 — FALLBACK reader: pre-Shape-D rounds had pass-2
+  // events for slot assignment. We KEEP this reader so historical rounds
+  // still render a coverage grid, AND so we can still surface the rank-2/3
+  // `alternativesCount` chip (Shape D doesn't store alts on overrides).
   const eventsQuery = useQuery({
     queryKey: ["shortlisting_events_coverage", roundId],
     queryFn: async () => {
@@ -84,6 +143,7 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
 
   const slots = slotsQuery.data || [];
   const events = eventsQuery.data || [];
+  const overrides = overridesQuery.data || [];
   const groups = groupsQuery.data || [];
 
   const groupById = useMemo(() => {
@@ -92,9 +152,41 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
     return m;
   }, [groups]);
 
-  // Group events by slot_id; track winners (rank=1) + alternatives (rank>=2).
+  // W11.6.1-hotfix BUG #2 — build slotState from BOTH sources.
+  //   1. Shape D `shortlisting_overrides` rows are the PRIMARY source of
+  //      truth on Shape D rounds. We resolve the live (slot_id, group_id)
+  //      pair as `human_selected_* ?? ai_proposed_*` so swaps land on the
+  //      operator's pick rather than the engine's original.
+  //   2. Legacy `shortlisting_events` (pass2_*) is the FALLBACK source for
+  //      pre-Shape-D rounds. We only fill from events when the override
+  //      reader didn't already record a winner for that slot — overrides
+  //      win when both readers see the same slot. Events also continue to
+  //      feed the `alternativesCount` chip since Shape D doesn't surface
+  //      rank-2/3 picks on shortlisting_overrides.
   const slotState = useMemo(() => {
     const m = new Map();
+
+    // PASS 1 — Shape D overrides (primary on modern rounds)
+    for (const ov of overrides) {
+      const slotId = ov.human_selected_slot_id ?? ov.ai_proposed_slot_id;
+      if (!slotId) continue;
+      const groupId = ov.human_selected_group_id ?? ov.ai_proposed_group_id;
+      if (!groupId) continue;
+      if (!m.has(slotId)) m.set(slotId, { winner: null, alts: [] });
+      // Most recent override wins (we ordered the query by created_at asc,
+      // so just keep overwriting). Swap → human_selected_* takes over from
+      // an earlier ai_proposed row for the same slot.
+      m.get(slotId).winner = {
+        groupId,
+        payload: {
+          source: "shortlisting_overrides",
+          human_action: ov.human_action,
+        },
+      };
+    }
+
+    // PASS 2 — legacy events (fallback for pre-Shape-D rounds; also
+    // populates alts for any round that has them).
     for (const ev of events) {
       const slotId = ev.payload?.slot_id;
       if (!slotId) continue;
@@ -103,16 +195,23 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
       if (ev.event_type === "pass2_slot_assigned") {
         const rank = ev.payload?.rank;
         if (rank === 1) {
-          entry.winner = { groupId: ev.group_id, payload: ev.payload };
+          // Only set the winner from a legacy event if the override reader
+          // didn't already supply one. Override-source-of-truth wins on
+          // hybrid rounds.
+          if (!entry.winner) {
+            entry.winner = { groupId: ev.group_id, payload: ev.payload };
+          }
         } else {
           entry.alts.push({ groupId: ev.group_id, payload: ev.payload });
         }
       } else if (ev.event_type === "pass2_phase3_recommendation") {
-        entry.winner = { groupId: ev.group_id, payload: ev.payload };
+        if (!entry.winner) {
+          entry.winner = { groupId: ev.group_id, payload: ev.payload };
+        }
       }
     }
     return m;
-  }, [events]);
+  }, [overrides, events]);
 
   // Filter slots to this round's package (or treat empty as universal).
   //
@@ -173,7 +272,12 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
     };
   }, [eligibleSlots, slotState]);
 
-  if (slotsQuery.isLoading || eventsQuery.isLoading || groupsQuery.isLoading) {
+  if (
+    slotsQuery.isLoading ||
+    eventsQuery.isLoading ||
+    overridesQuery.isLoading ||
+    groupsQuery.isLoading
+  ) {
     return (
       <div className="space-y-3 animate-pulse">
         <div className="h-12 bg-muted rounded" />

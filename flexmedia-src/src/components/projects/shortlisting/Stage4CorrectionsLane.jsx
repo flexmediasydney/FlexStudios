@@ -1,6 +1,7 @@
 /**
  * Stage4CorrectionsLane — W11.6.x in-context review of Stage 4 visual
- * cross-corrections.
+ *                         cross-corrections.
+ *                         + W11.6.1-hotfix BUG #1 (group + optimistic UX)
  *
  * Renders a full-width strip BELOW the 3-column shortlisting swimlane so
  * Joseph can review Stage 4's per-image corrections IN CONTEXT of the
@@ -16,6 +17,32 @@
  *     edge fn (W11.6.x — accepts shortlisting_stage4_overrides.id, not
  *     just composition_classification_overrides.id).
  *
+ * W11.6.1-hotfix BUG #1 — operator perception fixes:
+ *   1. "Doubles" — when an image has 2 valid corrections (e.g. one for
+ *      `field='clutter'`, one for `field='room_type'`) the per-row card
+ *      layout looked like dupes because the unique index is
+ *      (round_id, stem, field) — two valid rows for the same stem render
+ *      two visually-similar cards. We now GROUP BY stem and render ONE
+ *      card per stem with all field corrections nested inside. The
+ *      Approve / Reject / Defer buttons act on ALL pending corrections
+ *      for that stem in parallel (Promise.all). Operator's mental model
+ *      becomes "I trust this image's Stage 4 corrections" / "I don't" —
+ *      which matches how operators actually think about retouch.
+ *
+ *   2. "Approve / Reject not reactive in real time" — the previous
+ *      mutations called `invalidateQueries` only, which kicks off a
+ *      ~200-800ms refetch round-trip. During that window the card stays
+ *      on screen and the operator clicks again, thinking nothing
+ *      happened. We now run OPTIMISTIC UI: onMutate removes the targeted
+ *      stem rows from the cache immediately and snapshots the prior
+ *      data; onError restores the snapshot. Card vanishes the instant
+ *      the button is pressed, success toast lands ~ms later.
+ *
+ *   3. Fresh data on mount — staleTime is now 0 + refetchOnMount:
+ *      'always'. Re-entering the swimlane after a regen always sees the
+ *      latest pending set; the previous 15s stale window left stale data
+ *      visible after a backend run.
+ *
  * Default filter: review_status='pending_review' for THIS round only.
  * "Show all" toggle surfaces previously-resolved corrections inline.
  *
@@ -24,7 +51,7 @@
  * roles don't see the lane (the parent swimlane already gates by route).
  */
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
@@ -84,33 +111,47 @@ function fmtTime(iso) {
   }
 }
 
-// ── Single override card ────────────────────────────────────────────────────
-function CorrectionCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }) {
-  const [showReason, setShowReason] = useState(false);
+// ── Per-stem grouped card ────────────────────────────────────────────────
+// W11.6.1-hotfix BUG #1: ONE card per stem, all field corrections nested.
+// onApprove / onReject / onDefer act on the full pending-rows array for the
+// stem so the parent mutation can parallelise via Promise.all.
+function GroupedCorrectionCard({
+  stem,
+  rows,
+  onApprove,
+  onReject,
+  onDefer,
+  busy,
+  isMasterAdmin,
+}) {
+  const [expanded, setExpanded] = useState(false);
   const [actionDialogOpen, setActionDialogOpen] = useState(null); // 'reject' | 'defer'
   const [actionNote, setActionNote] = useState("");
 
-  const isPending = row.review_status === "pending_review";
-  const stage1Display = row.stage_1_value ?? "—";
-  const stage4Display = row.stage_4_value ?? "—";
+  const pendingRows = rows.filter((r) => r.review_status === "pending_review");
+  const anyPending = pendingRows.length > 0;
+  // Pull a representative thumbnail path. Every row for the same stem points
+  // at the same composition group, so any preview_path is fine.
+  const previewPath = rows.find((r) => r.preview_path)?.preview_path || null;
+  const fieldCount = rows.length;
+  // Most-recent timestamp for the header chip.
+  const latestCreatedAt = rows.reduce((acc, r) => {
+    if (!r.created_at) return acc;
+    if (!acc) return r.created_at;
+    return r.created_at > acc ? r.created_at : acc;
+  }, null);
 
   return (
-    <Card
-      className={cn(
-        "transition-colors",
-        row.review_status === "rejected" && "opacity-70",
-        row.review_status === "approved" && "border-emerald-200 dark:border-emerald-900",
-      )}
-    >
+    <Card className="transition-colors">
       <CardContent className="p-3">
         <div className="flex items-start gap-3">
-          {/* Real Dropbox thumbnail (W11.6.x bug fix — was static placeholder) */}
+          {/* Real Dropbox thumbnail (single per stem). */}
           <div className="w-20 h-20 flex-shrink-0 rounded border overflow-hidden">
-            {row.preview_path ? (
+            {previewPath ? (
               <DroneThumbnail
-                dropboxPath={row.preview_path}
+                dropboxPath={previewPath}
                 mode="thumb"
-                alt={row.stem || "preview"}
+                alt={stem || "preview"}
                 aspectRatio="aspect-square"
               />
             ) : (
@@ -121,91 +162,129 @@ function CorrectionCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin
           </div>
 
           <div className="flex-1 min-w-0">
-            {/* Header line */}
+            {/* Header */}
             <div className="flex items-center gap-2 flex-wrap mb-1">
-              <Badge
-                className={cn(
-                  "text-[10px] h-4 px-1.5",
-                  STATUS_TONE[row.review_status] || STATUS_TONE.pending_review,
-                )}
-              >
-                {STATUS_LABEL[row.review_status] || row.review_status}
-              </Badge>
-              <span className="font-mono text-[11px] text-muted-foreground truncate">
-                {row.stem}
+              <span className="font-mono text-[12px] text-foreground truncate">
+                {stem}
               </span>
-              <span className="text-[11px] text-muted-foreground">·</span>
-              <Badge variant="outline" className="text-[10px] h-4 px-1.5 font-mono">
-                {row.field}
+              <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+                {fieldCount} correction{fieldCount === 1 ? "" : "s"}
               </Badge>
-              {row.created_at && (
+              {pendingRows.length > 0 && (
+                <Badge
+                  className={cn(
+                    "text-[10px] h-4 px-1.5",
+                    STATUS_TONE.pending_review,
+                  )}
+                >
+                  {pendingRows.length} pending
+                </Badge>
+              )}
+              {!anyPending && (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] h-4 px-1.5 text-muted-foreground"
+                >
+                  resolved
+                </Badge>
+              )}
+              {latestCreatedAt && (
                 <span className="text-[10px] text-muted-foreground">
-                  {fmtTime(row.created_at)}
+                  {fmtTime(latestCreatedAt)}
                 </span>
               )}
             </div>
 
-            {/* Stage 1 → Stage 4 transition */}
-            <div className="flex items-center gap-2 text-sm mb-2 flex-wrap">
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                was
-              </span>
-              <div className="font-mono text-xs px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">
-                {stage1Display}
-              </div>
-              <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                now
-              </span>
-              <div className="font-mono text-xs px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300">
-                {stage4Display}
-              </div>
+            {/* Per-field summary — compact vertical list of "field: was → now" */}
+            <div className="space-y-1 mb-2">
+              {rows.map((row) => (
+                <div
+                  key={row.id}
+                  className="flex items-center gap-2 text-sm flex-wrap"
+                >
+                  <Badge
+                    className={cn(
+                      "text-[9px] h-4 px-1",
+                      STATUS_TONE[row.review_status] ||
+                        STATUS_TONE.pending_review,
+                    )}
+                    title={STATUS_LABEL[row.review_status] || row.review_status}
+                  >
+                    {STATUS_LABEL[row.review_status] || row.review_status}
+                  </Badge>
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] h-4 px-1.5 font-mono"
+                  >
+                    {row.field}
+                  </Badge>
+                  <div className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">
+                    {row.stage_1_value ?? "—"}
+                  </div>
+                  <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                  <div className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300">
+                    {row.stage_4_value ?? "—"}
+                  </div>
+                </div>
+              ))}
             </div>
 
-            {/* Reason — collapsible */}
-            {row.reason && (
+            {/* Expand for per-field reasons */}
+            {rows.some((r) => r.reason) && (
               <div className="text-xs">
                 <button
                   type="button"
-                  onClick={() => setShowReason((s) => !s)}
+                  onClick={() => setExpanded((s) => !s)}
                   className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
                 >
-                  {showReason ? "Hide" : "Show"} Stage 4 reasoning
-                  {showReason ? (
+                  {expanded ? "Hide" : "Show"} Stage 4 reasoning
+                  {expanded ? (
                     <ChevronUp className="h-3 w-3" />
                   ) : (
                     <ChevronDown className="h-3 w-3" />
                   )}
                 </button>
-                {showReason && (
-                  <p className="mt-1 italic border-l-2 pl-2 leading-relaxed text-foreground">
-                    {row.reason}
-                  </p>
+                {expanded && (
+                  <div className="mt-1 space-y-1.5">
+                    {rows
+                      .filter((r) => r.reason)
+                      .map((row) => (
+                        <div key={row.id} className="space-y-0.5">
+                          <div className="text-[10px] uppercase tracking-wide text-muted-foreground font-mono">
+                            {row.field}
+                          </div>
+                          <p className="italic border-l-2 pl-2 leading-relaxed text-foreground">
+                            {row.reason}
+                          </p>
+                          {row.reviewed_at && (
+                            <div className="text-[10px] text-muted-foreground">
+                              Reviewed {fmtTime(row.reviewed_at)}
+                              {row.review_notes
+                                ? ` — ${row.review_notes}`
+                                : ""}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                  </div>
                 )}
               </div>
             )}
 
-            {/* Reviewed metadata (resolved rows) */}
-            {row.reviewed_at && (
-              <div className="text-[10px] text-muted-foreground mt-1">
-                Reviewed {fmtTime(row.reviewed_at)}
-                {row.review_notes ? ` — ${row.review_notes}` : ""}
-              </div>
-            )}
-
-            {/* Inline actions (only for pending) */}
-            {isPending && (
+            {/* Stem-level actions — apply to ALL pending rows for this stem */}
+            {anyPending && (
               <div className="flex items-center gap-1 mt-2">
                 {isMasterAdmin && (
                   <Button
                     size="sm"
                     variant="default"
                     className="h-7 text-xs"
-                    onClick={() => onApprove(row)}
+                    onClick={() => onApprove(stem, pendingRows)}
                     disabled={busy}
                   >
                     <Check className="h-3 w-3 mr-1" />
                     Approve
+                    {pendingRows.length > 1 ? ` ×${pendingRows.length}` : ""}
                   </Button>
                 )}
                 <Button
@@ -220,6 +299,7 @@ function CorrectionCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin
                 >
                   <ThumbsDown className="h-3 w-3 mr-1" />
                   Reject
+                  {pendingRows.length > 1 ? ` ×${pendingRows.length}` : ""}
                 </Button>
                 <Button
                   size="sm"
@@ -239,7 +319,7 @@ function CorrectionCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin
           </div>
         </div>
 
-        {/* Reject / Defer dialog */}
+        {/* Reject / Defer dialog (acts on every pending row for this stem) */}
         <Dialog
           open={actionDialogOpen != null}
           onOpenChange={(o) => !o && setActionDialogOpen(null)}
@@ -247,16 +327,26 @@ function CorrectionCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle>
-                {actionDialogOpen === "reject" ? "Reject" : "Defer"} Stage 4 correction
+                {actionDialogOpen === "reject" ? "Reject" : "Defer"} Stage 4
+                corrections
               </DialogTitle>
               <DialogDescription>
                 {actionDialogOpen === "reject"
-                  ? "Stage 4 over-corrected — Stage 1 was actually right. The override stays in the audit trail."
-                  : "Skip for now. The row stays in the queue under the deferred filter."}
+                  ? "Stage 4 over-corrected this image — Stage 1 was actually right. The overrides stay in the audit trail."
+                  : "Skip for now. The rows stay in the queue under the deferred filter."}
+                {pendingRows.length > 1 && (
+                  <span className="block mt-1 text-xs">
+                    {pendingRows.length} corrections will be{" "}
+                    {actionDialogOpen === "reject" ? "rejected" : "deferred"}.
+                  </span>
+                )}
+                <span className="block mt-1 text-xs font-mono">{stem}</span>
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Notes (optional)</label>
+              <label className="text-xs text-muted-foreground">
+                Notes (optional)
+              </label>
               <Textarea
                 value={actionNote}
                 onChange={(e) => setActionNote(e.target.value)}
@@ -265,15 +355,19 @@ function CorrectionCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin
               />
             </div>
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setActionDialogOpen(null)}>
+              <Button
+                variant="ghost"
+                onClick={() => setActionDialogOpen(null)}
+              >
                 Cancel
               </Button>
               <Button
                 onClick={() => {
+                  const note = actionNote.trim() || null;
                   if (actionDialogOpen === "reject") {
-                    onReject(row, actionNote.trim() || null);
+                    onReject(stem, pendingRows, note);
                   } else if (actionDialogOpen === "defer") {
-                    onDefer(row, actionNote.trim() || null);
+                    onDefer(stem, pendingRows, note);
                   }
                   setActionDialogOpen(null);
                 }}
@@ -289,6 +383,19 @@ function CorrectionCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin
   );
 }
 
+// Parallel-call helper for stem-level actions: fires all per-row edge fn
+// invocations and surfaces the first failure so the UI rollback (onError)
+// reflects the worst case. Promise.allSettled lets us still await every
+// call before deciding rollback (vs. Promise.all bailing on first reject).
+async function invokeAll(calls) {
+  const results = await Promise.allSettled(calls);
+  const firstFailure = results.find((r) => r.status === "rejected");
+  if (firstFailure) {
+    throw firstFailure.reason || new Error("Stage 4 override action failed");
+  }
+  return results.map((r) => r.value);
+}
+
 // ── Main lane component ────────────────────────────────────────────────────
 export default function Stage4CorrectionsLane({ roundId }) {
   const queryClient = useQueryClient();
@@ -298,8 +405,14 @@ export default function Stage4CorrectionsLane({ roundId }) {
   // Status filter — default 'pending_review', toggle surfaces 'all'.
   const status = showAll ? "all" : "pending_review";
 
-  const queryKey = ["stage4_overrides_lane", roundId, status];
+  const queryKey = useMemo(
+    () => ["stage4_overrides_lane", roundId, status],
+    [roundId, status],
+  );
 
+  // W11.6.1-hotfix BUG #1 fix #3: staleTime: 0 + refetchOnMount: 'always'
+  // so re-entering the swimlane after a regen always sees the latest
+  // pending set.
   const queueQuery = useQuery({
     queryKey,
     queryFn: async () => {
@@ -316,76 +429,196 @@ export default function Stage4CorrectionsLane({ roundId }) {
       return data;
     },
     enabled: Boolean(roundId) && isAdminOrAbove,
-    staleTime: 15_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
-  // Approve mutation — calls fixed approve-stage4-override (W11.6.x).
+  const rows = queueQuery.data?.rows || [];
+
+  // W11.6.1-hotfix BUG #1 fix #1: GROUP BY stem so doubles (same image, two
+  // valid field corrections) render as ONE card with both corrections nested.
+  const groupedByStem = useMemo(() => {
+    const m = new Map();
+    for (const r of rows) {
+      const key = r.stem;
+      if (!key) continue;
+      if (!m.has(key)) m.set(key, []);
+      m.get(key).push(r);
+    }
+    const out = [];
+    for (const [stem, list] of m.entries()) {
+      list.sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+      out.push({ stem, rows: list });
+    }
+    out.sort((a, b) => {
+      const aT = a.rows[0]?.created_at || "";
+      const bT = b.rows[0]?.created_at || "";
+      return aT < bT ? -1 : 1;
+    });
+    return out;
+  }, [rows]);
+
+  // ── Optimistic UI helpers ──────────────────────────────────────────────
+  // W11.6.1-hotfix BUG #1 fix #2: every mutation removes the targeted rows
+  // from cache on mutate, snapshots prior data, and rolls back onError.
+  // The `data` shape here is { rows, total, status_counts } from the
+  // list-stage4-overrides edge fn — we strip targeted ids out of `rows`
+  // and adjust the counts so the header chip is correct mid-flight.
+  const stripIdsFromCache = useCallback(
+    (ids) => {
+      const prior = queryClient.getQueryData(queryKey);
+      if (!prior) return null;
+      const idSet = new Set(ids);
+      const nextRows = (prior.rows || []).filter((r) => !idSet.has(r.id));
+      const next = {
+        ...prior,
+        rows: nextRows,
+        total: Math.max(0, (prior.total || 0) - ids.length),
+      };
+      queryClient.setQueryData(queryKey, next);
+      return prior;
+    },
+    [queryClient, queryKey],
+  );
+
+  const restoreCache = useCallback(
+    (snapshot) => {
+      if (snapshot) queryClient.setQueryData(queryKey, snapshot);
+    },
+    [queryClient, queryKey],
+  );
+
+  const invalidateAll = useCallback(() => {
+    queryClient.invalidateQueries({
+      queryKey: ["stage4_overrides_lane", roundId],
+    });
+    // Also bust the master listing page's queue counts so the nav badge
+    // in /Stage4Overrides reflects the action without a hard refresh.
+    queryClient.invalidateQueries({ queryKey: ["stage4_overrides"] });
+    queryClient.invalidateQueries({ queryKey: ["stage4_override_counts"] });
+  }, [queryClient, roundId]);
+
+  // Approve — parallel calls to approve-stage4-override (one per row).
   const approveMutation = useMutation({
-    mutationFn: async (row) => {
-      const result = await api.functions.invoke("approve-stage4-override", {
-        override_id: row.id,
-      });
-      const data = result?.data ?? result;
-      if (data?.error) {
-        throw new Error(data.error.message || JSON.stringify(data.error));
-      }
-      if (data?.ok === false) {
-        throw new Error(data?.error || "Approve failed");
-      }
-      return data;
+    mutationFn: async ({ applicableRows }) => {
+      const calls = applicableRows.map((row) =>
+        api.functions
+          .invoke("approve-stage4-override", { override_id: row.id })
+          .then((result) => {
+            const data = result?.data ?? result;
+            if (data?.error) {
+              throw new Error(
+                data.error.message || JSON.stringify(data.error),
+              );
+            }
+            if (data?.ok === false) {
+              throw new Error(data?.error || "Approve failed");
+            }
+            return data;
+          }),
+      );
+      return invokeAll(calls);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["stage4_overrides_lane", roundId] });
-      queryClient.invalidateQueries({ queryKey: ["stage4_overrides"] });
-      queryClient.invalidateQueries({ queryKey: ["stage4_override_counts"] });
-      toast.success("Correction approved — graduated to few-shot library.");
+    onMutate: async ({ applicableRows }) => {
+      await queryClient.cancelQueries({ queryKey });
+      const ids = applicableRows.map((r) => r.id);
+      const snapshot = stripIdsFromCache(ids);
+      return { snapshot };
     },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
+      restoreCache(ctx?.snapshot);
       const msg = err?.message || String(err);
       toast.error(`Approve failed: ${msg}`);
     },
+    onSuccess: (_data, vars) => {
+      const n = vars.applicableRows.length;
+      toast.success(
+        n === 1
+          ? "Correction approved — graduated to few-shot library."
+          : `Approved ${n} corrections — graduated to few-shot library.`,
+      );
+    },
+    onSettled: invalidateAll,
   });
 
   const rejectMutation = useMutation({
-    mutationFn: async ({ row, note }) => {
-      const result = await api.functions.invoke("update-stage4-override-review", {
-        override_id: row.id,
-        action: "reject",
-        review_notes: note,
-      });
-      const data = result?.data ?? result;
-      if (data?.error) {
-        throw new Error(data.error.message || JSON.stringify(data.error));
-      }
-      return data;
+    mutationFn: async ({ applicableRows, note }) => {
+      const calls = applicableRows.map((row) =>
+        api.functions
+          .invoke("update-stage4-override-review", {
+            override_id: row.id,
+            action: "reject",
+            review_notes: note,
+          })
+          .then((result) => {
+            const data = result?.data ?? result;
+            if (data?.error) {
+              throw new Error(
+                data.error.message || JSON.stringify(data.error),
+              );
+            }
+            return data;
+          }),
+      );
+      return invokeAll(calls);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["stage4_overrides_lane", roundId] });
-      queryClient.invalidateQueries({ queryKey: ["stage4_overrides"] });
-      toast.success("Correction rejected.");
+    onMutate: async ({ applicableRows }) => {
+      await queryClient.cancelQueries({ queryKey });
+      const ids = applicableRows.map((r) => r.id);
+      const snapshot = stripIdsFromCache(ids);
+      return { snapshot };
     },
-    onError: (err) => toast.error(`Reject failed: ${err?.message || err}`),
+    onError: (err, _vars, ctx) => {
+      restoreCache(ctx?.snapshot);
+      toast.error(`Reject failed: ${err?.message || err}`);
+    },
+    onSuccess: (_data, vars) => {
+      const n = vars.applicableRows.length;
+      toast.success(
+        n === 1 ? "Correction rejected." : `Rejected ${n} corrections.`,
+      );
+    },
+    onSettled: invalidateAll,
   });
 
   const deferMutation = useMutation({
-    mutationFn: async ({ row, note }) => {
-      const result = await api.functions.invoke("update-stage4-override-review", {
-        override_id: row.id,
-        action: "defer",
-        review_notes: note,
-      });
-      const data = result?.data ?? result;
-      if (data?.error) {
-        throw new Error(data.error.message || JSON.stringify(data.error));
-      }
-      return data;
+    mutationFn: async ({ applicableRows, note }) => {
+      const calls = applicableRows.map((row) =>
+        api.functions
+          .invoke("update-stage4-override-review", {
+            override_id: row.id,
+            action: "defer",
+            review_notes: note,
+          })
+          .then((result) => {
+            const data = result?.data ?? result;
+            if (data?.error) {
+              throw new Error(
+                data.error.message || JSON.stringify(data.error),
+              );
+            }
+            return data;
+          }),
+      );
+      return invokeAll(calls);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["stage4_overrides_lane", roundId] });
-      queryClient.invalidateQueries({ queryKey: ["stage4_overrides"] });
-      toast.success("Correction deferred.");
+    onMutate: async ({ applicableRows }) => {
+      await queryClient.cancelQueries({ queryKey });
+      const ids = applicableRows.map((r) => r.id);
+      const snapshot = stripIdsFromCache(ids);
+      return { snapshot };
     },
-    onError: (err) => toast.error(`Defer failed: ${err?.message || err}`),
+    onError: (err, _vars, ctx) => {
+      restoreCache(ctx?.snapshot);
+      toast.error(`Defer failed: ${err?.message || err}`);
+    },
+    onSuccess: (_data, vars) => {
+      const n = vars.applicableRows.length;
+      toast.success(
+        n === 1 ? "Correction deferred." : `Deferred ${n} corrections.`,
+      );
+    },
+    onSettled: invalidateAll,
   });
 
   // Non-eligible roles: render nothing. The parent shortlisting page already
@@ -394,14 +627,23 @@ export default function Stage4CorrectionsLane({ roundId }) {
   if (!isAdminOrAbove) return null;
   if (!roundId) return null;
 
-  const rows = queueQuery.data?.rows || [];
-  const pendingCount = rows.filter((r) => r.review_status === "pending_review").length;
+  const pendingCount = rows.filter(
+    (r) => r.review_status === "pending_review",
+  ).length;
   const totalCount = rows.length;
 
   const busy =
     approveMutation.isPending ||
     rejectMutation.isPending ||
     deferMutation.isPending;
+
+  // Stem-level handlers — bind closures the GroupedCorrectionCard can fire.
+  const handleApprove = (_stem, applicableRows) =>
+    approveMutation.mutate({ applicableRows });
+  const handleReject = (_stem, applicableRows, note) =>
+    rejectMutation.mutate({ applicableRows, note });
+  const handleDefer = (_stem, applicableRows, note) =>
+    deferMutation.mutate({ applicableRows, note });
 
   return (
     <Card className="border-amber-200/60 dark:border-amber-900/40">
@@ -425,6 +667,9 @@ export default function Stage4CorrectionsLane({ roundId }) {
                 {showAll && totalCount !== pendingCount
                   ? ` · ${totalCount} total`
                   : ""}
+                {" · "}
+                {groupedByStem.length} image
+                {groupedByStem.length === 1 ? "" : "s"}
               </Badge>
             )}
           </div>
@@ -453,7 +698,8 @@ export default function Stage4CorrectionsLane({ roundId }) {
           Stage 4's visual cross-comparison disagreed with Stage 1's per-image
           labels. Approve corrections you trust (graduates them to the
           cross-project few-shot library); reject over-corrections; defer when
-          you need more context.
+          you need more context. One card per image — each card shows every
+          field correction Stage 4 emitted for that stem.
         </p>
 
         {/* Loading */}
@@ -475,25 +721,29 @@ export default function Stage4CorrectionsLane({ roundId }) {
         )}
 
         {/* Empty */}
-        {!queueQuery.isLoading && !queueQuery.error && rows.length === 0 && (
-          <div className="rounded-md border bg-muted/20 p-4 text-center">
-            <CheckCircle2 className="h-5 w-5 text-emerald-600 mx-auto mb-1" />
-            <p className="text-xs text-foreground">
-              No Stage 4 visual corrections {showAll ? "" : "pending review "}for this round.
-            </p>
-          </div>
-        )}
+        {!queueQuery.isLoading &&
+          !queueQuery.error &&
+          groupedByStem.length === 0 && (
+            <div className="rounded-md border bg-muted/20 p-4 text-center">
+              <CheckCircle2 className="h-5 w-5 text-emerald-600 mx-auto mb-1" />
+              <p className="text-xs text-foreground">
+                No Stage 4 visual corrections{" "}
+                {showAll ? "" : "pending review "}for this round.
+              </p>
+            </div>
+          )}
 
-        {/* Cards */}
-        {rows.length > 0 && (
+        {/* Per-stem cards (W11.6.1-hotfix grouping) */}
+        {groupedByStem.length > 0 && (
           <div className="space-y-2">
-            {rows.map((row) => (
-              <CorrectionCard
-                key={row.id}
-                row={row}
-                onApprove={(r) => approveMutation.mutate(r)}
-                onReject={(r, note) => rejectMutation.mutate({ row: r, note })}
-                onDefer={(r, note) => deferMutation.mutate({ row: r, note })}
+            {groupedByStem.map(({ stem, rows: stemRows }) => (
+              <GroupedCorrectionCard
+                key={stem}
+                stem={stem}
+                rows={stemRows}
+                onApprove={handleApprove}
+                onReject={handleReject}
+                onDefer={handleDefer}
                 busy={busy}
                 isMasterAdmin={isMasterAdmin}
               />
