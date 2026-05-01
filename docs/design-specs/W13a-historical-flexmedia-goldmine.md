@@ -1,6 +1,34 @@
 # W13a — Historical FlexMedia Delivery Goldmine — Design Spec
 
-**Status:** ⚙️ Ready to dispatch (awaiting Joseph sign-off on Q1-Q4 below).
+**Status:** Infrastructure ready 2026-05-01 — manual-trigger only, no autonomous backfills fired.
+
+- Migration **382** (`382_w13a_backfill_metadata.sql`) applied: `shortlisting_rounds.is_synthetic_backfill`, `backfill_source_paths`, status enum extension to `backfilled`, `composition_groups.synthetic_finals_match_stem`, and the new `shortlisting_backfill_log` table with full RLS.
+- Edge function `shortlisting-historical-backfill` deployed: master_admin-only POST endpoint that bootstraps the synthetic round + extract jobs, then leaves the existing dispatcher chain (extract → pass0 → shape_d_stage1 → stage4_synthesis) to do the actual processing. Cost cap enforced at three layers (caller-supplied `cost_cap_usd`, `engine_settings.cost_cap_per_round_usd`, runtime watchdog at 1.5× estimate).
+- **No autonomous trigger.** No cron, no batch runner, no auto-queue. Joseph fires the endpoint per project, reviews, decides whether to fire again. The system never processes more than one project per human invocation.
+
+### Invocation example
+
+```bash
+curl -X POST https://rjzdznwkxnzfekgcdkei.supabase.co/functions/v1/shortlisting-historical-backfill \
+  -H "Authorization: Bearer <master_admin_jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_id": "<delivered-project-uuid>",
+    "raws_dropbox_path": "/Flex Media Team Folder/.../Photos/Raws",
+    "finals_dropbox_path": "/Flex Media Team Folder/.../Photos/Finals",
+    "cost_cap_usd": 5
+  }'
+```
+
+The endpoint returns immediately with `mode: 'background'` and the `round_id` + `log_id`. The dispatcher chain processes the synthetic round in the background; `shortlisting_backfill_log.status` walks `queued → running → succeeded|failed` over the next 5-30 minutes depending on project size. Final `cost_usd` populates from `engine_run_audit.total_cost_usd` once Stage 4 completes; the matched-finals enrichment fires post-Stage 4 to populate `composition_groups.synthetic_finals_match_stem` (the W14 calibration ground-truth signal).
+
+A separate W13a follow-up task (out of scope for this infrastructure burst) extracts `shortlisting_training_examples` rows from the synthetic round.
+
+---
+
+## Original spec body (sign-off questions Q1-Q4 self-resolved per orchestrator + Joseph 2026-04-27)
+
+
 **Backlog ref:** P2-4
 **Wave plan ref:** W13a — synthetic-round creator + Pass 1 over RAW + finals + enriched `shortlisting_training_examples` per W13a.1/.2/.3
 **Dependencies:**
