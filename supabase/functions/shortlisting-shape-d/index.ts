@@ -9,17 +9,28 @@
  *
  * Spec: docs/design-specs/W11-7-unified-shortlisting-architecture.md
  *
- * ─── ARCHITECTURE ────────────────────────────────────────────────────────────
+ * ─── ARCHITECTURE (post-W11.7.1 fix) ─────────────────────────────────────────
  *
- * 5 calls per shoot for ≤200 angles:
- *   - Stage 1: 3-4 batched Gemini 2.5 Pro calls × 50 images = full per-image
- *              enrichment (analysis, scores, classification, key_elements,
- *              listing_copy, appeal_signals, concern_signals, retouch_priority,
- *              etc.). thinkingBudget=2048, max_output_tokens=6000.
+ * PER-IMAGE Stage 1 + 1 cross-image Stage 4 = N+1 calls per shoot:
+ *   - Stage 1: ONE Gemini 2.5 Pro call per image (1 call = 1 image, no stem
+ *              echo needed). Emits the full per-image enrichment object
+ *              directly: analysis, scores, classification, key_elements,
+ *              listing_copy, appeal_signals, concern_signals,
+ *              retouch_priority, etc. thinkingBudget=2048,
+ *              max_output_tokens=6000. Calls are processed in parallel batches
+ *              of N (concurrency control, NOT batched API calls) — matching
+ *              the validated `vendor-retroactive-compare` harness pattern.
  *   - Stage 4: 1 visual master synthesis call (sees all images + Stage 1 JSON)
  *              dispatched as a SEPARATE edge job (production lesson from
  *              iter-5a wall-time issue: combined Stage 1 + Stage 4 chain hit
  *              the worker wall budget).
+ *
+ * Why per-image and not batched: Gemini's stem-echo isn't reliable. The prior
+ * batched-mode `per_image[]` schema with stem keys failed 42/42 on the
+ * Saladine smoke test ("stem missing from per_image response"). The harness's
+ * 1-image-per-call pattern ran 42/42 perfect across iter-1 through iter-5b.
+ * Per-image is also cheaper (smaller individual calls, no batched-output
+ * token bloat) and has implicit identity (1 call = 1 image).
  *
  * THIS edge fn is the Stage 1 orchestrator. Stage 4 lives in its own edge fn
  * (`shortlisting-shape-d-stage4`), dispatched via `shortlisting_jobs` of kind
@@ -32,13 +43,13 @@
  *  3. Round bootstrap: load shortlisting_rounds + projects + composition_groups.
  *  4. Property tier resolution: round.property_tier (default 'standard').
  *  5. Source type: defaults to 'internal_raw' for the production RAW workflow.
- *  6. Stage 1 batched execution: 3-4 batches of ≤50 images, parallel Gemini.
+ *  6. Stage 1 per-image execution: parallel batches of N single-image calls.
  *  7. Stage 4 dispatch: insert shortlisting_jobs row of kind 'stage4_synthesis'.
  *  8. Audit JSON to Dropbox at Photos/_AUDIT/round_<id>_stage1_<ts>.json.
  *  9. engine_run_audit upsert: stages_completed=['pass0','stage1'], cost, wall.
  * 10. Stamp shortlisting_rounds.engine_mode = 'shape_d_full' | 'shape_d_partial'.
  * 11. Mutex via dispatcher_locks (W7.5 pattern) per round.
- * 12. Idempotent retry: prime from existing composition_classifications.
+ * 12. Idempotent retry: skip compositions that already have a classification row.
  * 13. Cost cap from engine_settings.cost_cap_per_round_usd (default $10).
  *
  * ─── INPUT MODES ──────────────────────────────────────────────────────────────
@@ -49,9 +60,10 @@
  *
  * ─── EDGE-RUNTIME WALL-TIME ───────────────────────────────────────────────────
  *
- * Stage 1 only. Even with 4 parallel batches (~50s each at 200 angles), the
- * orchestrator returns within ~70s. Stage 4 is dispatched as a follow-up job
- * so its 60-90s thinking + 240s timeout doesn't stack.
+ * Stage 1 only. Even with per-image calls processed in parallel batches of 8,
+ * the orchestrator returns within ~70s ack and the background worker finishes
+ * the round in ~3-4 min for 42 images. Stage 4 is dispatched as a follow-up
+ * job so its 60-90s thinking + 240s timeout doesn't stack.
  */
 
 import {
@@ -89,12 +101,12 @@ import {
   type VoiceAnchorOpts,
 } from '../_shared/visionPrompts/blocks/voiceAnchorBlock.ts';
 import {
-  buildStage1SystemPrompt,
-  buildStage1UserPrompt,
-  STAGE1_TOOL_NAME,
-  STAGE1_TOOL_SCHEMA,
-  STAGE1_PROMPT_VERSION,
-} from './stage1Prompt.ts';
+  STAGE1_RESPONSE_SCHEMA,
+  STAGE1_RESPONSE_SCHEMA_VERSION,
+  STAGE1_RESPONSE_TOOL_NAME,
+} from '../_shared/visionPrompts/blocks/stage1ResponseSchema.ts';
+import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
+import { getActiveStreamBAnchors } from '../_shared/streamBInjector.ts';
 
 const GENERATOR = 'shortlisting-shape-d';
 
@@ -102,11 +114,14 @@ const GENERATOR = 'shortlisting-shape-d';
 
 const PRIMARY_VENDOR = 'google' as const;
 const PRIMARY_MODEL = 'gemini-2.5-pro';
-const STAGE1_DEFAULT_BATCH_SIZE = 50;
 const STAGE1_DEFAULT_THINKING_BUDGET = 2048;
 const STAGE1_DEFAULT_MAX_OUTPUT_TOKENS = 6000;
-const STAGE1_DEFAULT_TIMEOUT_MS = 180_000; // 3 min per batch — 50 imgs at high thinking budget
-const STAGE1_BATCH_CONCURRENCY = 4; // Promise.all all 4 typical batches in parallel
+const STAGE1_DEFAULT_TIMEOUT_MS = 90_000; // 90s per image — matches harness adapter timeout
+// Concurrency control for per-image calls. The harness uses BATCH_SIZE=4 for
+// composition-batches × per-vendor fan-out; we go a bit wider here because
+// we have one vendor (Gemini) and Gemini Pro pay-as-you-go tolerates 60 RPM.
+// With 8 in flight at ~10-15s each, 42 images finishes in ~3-4 min.
+const STAGE1_PER_IMAGE_CONCURRENCY = 8;
 const DEFAULT_COST_CAP_USD = 10;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -118,15 +133,15 @@ interface RequestBody {
 }
 
 // Wave 11.7.1 immediate-ack contract:
-// The dispatcher's invokeFunction has a 120s AbortSignal timeout. Stage 1 with
-// 4 parallel batches × 50 imgs takes 3-5 min wall, so a synchronous return
-// blows the gateway. We adopt the same `EdgeRuntime.waitUntil` pattern as
-// `shortlist-lock` and `vendor-retroactive-compare`: validate + mutex + cost
-// cap synchronously, kick the heavy work into a background promise, return
-// HTTP 200 immediately with `mode: 'background'`. The background work then
-// self-updates `shortlisting_jobs.status='succeeded'|'failed'` when it
-// finishes — the dispatcher MUST NOT auto-mark on the HTTP 200 ack (it
-// honors the `mode === 'background'` flag in the response body, see
+// The dispatcher's invokeFunction has a 120s AbortSignal timeout. Stage 1
+// per-image with 42 images at concurrency=8 takes ~3-4 min wall, so a
+// synchronous return blows the gateway. We adopt the same `EdgeRuntime.waitUntil`
+// pattern as `shortlist-lock` and `vendor-retroactive-compare`: validate +
+// mutex + cost cap synchronously, kick the heavy work into a background
+// promise, return HTTP 200 immediately with `mode: 'background'`. The
+// background work then self-updates `shortlisting_jobs.status='succeeded'|'failed'`
+// when it finishes — the dispatcher MUST NOT auto-mark on the HTTP 200 ack
+// (it honors the `mode === 'background'` flag in the response body, see
 // shortlisting-job-dispatcher::callEdgeFunction).
 const BACKGROUND_MODE_RESPONSE = 'background';
 
@@ -159,15 +174,18 @@ interface EngineSettings {
   failover_vendor: 'anthropic' | null;
   stage1_thinking_budget: number;
   stage1_max_output_tokens: number;
-  stage1_batch_size: number;
   cost_cap_per_round_usd: number;
 }
 
-interface Stage1BatchResult {
-  batch_index: number;
-  group_count: number;
-  successes: Array<{ group_id: string; stem: string; output: Record<string, unknown> }>;
-  failures: Array<{ group_id: string; stem: string; error: string }>;
+/**
+ * Per-image call result: either a successful classified output, or an error
+ * captured per-image (the round still completes; failed images get audit rows).
+ */
+interface PerImageResult {
+  group_id: string;
+  stem: string;
+  output: Record<string, unknown> | null;
+  error: string | null;
   cost_usd: number;
   wall_ms: number;
   vendor_used: 'google' | 'anthropic';
@@ -201,7 +219,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     /* empty body OK */
   }
   if (body._health_check) {
-    return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
+    return jsonResponse({ _version: 'v1.1-per-image', _fn: GENERATOR }, 200, req);
   }
 
   // Resolve round_id from job_id if dispatcher invoked us. We capture the
@@ -240,7 +258,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // We do everything that can fail fast (auth, mode gate, cost cap, mutex
   // acquisition) BEFORE returning the immediate-ack so the dispatcher can
   // surface those failures via the standard HTTP error path. Only after these
-  // succeed do we kick the long-running Stage 1 batches into the background.
+  // succeed do we kick the long-running Stage 1 work into the background.
   let preflight: PreflightOk;
   try {
     preflight = await preflightShapeDStage1(roundId);
@@ -282,7 +300,7 @@ interface RoundResult {
   total_compositions: number;
   successes: number;
   failures: number;
-  batches_run: number;
+  per_image_calls_run: number;
   stage1_cost_usd: number;
   stage1_wall_ms: number;
   engine_mode: string;
@@ -303,7 +321,6 @@ interface PreflightOk {
   settings: EngineSettings;
   compositions: CompositionRow[];
   groupsToRun: CompositionRow[];
-  batches: CompositionRow[][];
   primedGroupIds: Set<string>;
   voice: VoiceAnchorOpts;
   sourceType: SourceType;
@@ -369,13 +386,13 @@ async function preflightShapeDStage1(roundId: string): Promise<PreflightOk> {
   }
 
   // 6. Cost cap pre-flight (BEFORE we acquire the mutex — no need to hold
-  // the lock if we're going to bail).
-  const batches = partitionBatches(groupsToRun, settings.stage1_batch_size);
-  const preflightUsd = estimateStage1Cost(batches.length);
+  // the lock if we're going to bail). Per-image envelope: ~$0.012/call on
+  // Gemini 2.5 Pro at thinkingBudget=2048 + max_output=6000. 42 images = ~$0.50.
+  const preflightUsd = estimateStage1Cost(groupsToRun.length);
   if (preflightUsd > settings.cost_cap_per_round_usd) {
     throw new Error(
       `Stage 1 pre-flight cost $${preflightUsd.toFixed(4)} exceeds cap ` +
-      `$${settings.cost_cap_per_round_usd.toFixed(4)} (${batches.length} batches at ~$0.66 each). ` +
+      `$${settings.cost_cap_per_round_usd.toFixed(4)} (${groupsToRun.length} per-image calls). ` +
       `Increase engine_settings.cost_cap_per_round_usd to override.`,
     );
   }
@@ -403,7 +420,6 @@ async function preflightShapeDStage1(roundId: string): Promise<PreflightOk> {
     settings,
     compositions,
     groupsToRun,
-    batches,
     primedGroupIds,
     voice,
     sourceType,
@@ -421,7 +437,7 @@ interface BackgroundArgs {
 }
 
 /**
- * Background worker: runs Stage 1 batches, persists results, dispatches
+ * Background worker: runs Stage 1 per-image calls, persists results, dispatches
  * Stage 4 chain row, and self-updates the dispatching shortlisting_jobs row
  * (when invoked via dispatcher). Always releases the mutex in its finally.
  *
@@ -488,32 +504,66 @@ async function runShapeDStage1Core(
   preflight: PreflightOk,
 ): Promise<RoundResult> {
   const admin = getAdminClient();
-  const { ctx, settings, compositions, groupsToRun, batches, primedGroupIds, voice, sourceType, startedAt } = preflight;
+  const { ctx, settings, compositions, groupsToRun, primedGroupIds, voice, sourceType, startedAt } = preflight;
   const warnings: string[] = [...preflight.preflightWarnings];
 
-  // Run Stage 1 batches in parallel
+  // Build the prompt ONCE — identical across all per-image calls. Same
+  // composition pattern as the harness's `userPrefix`: pass1 system + Sydney
+  // primer in system; source-context + voice anchor + self-critique +
+  // per-image task instructions in user_text.
+  const anchors = await getActiveStreamBAnchors();
+  const basePrompt = buildPass1Prompt(anchors);
+
+  // System prompt: pass1 system blocks + Sydney primer (anchor style_archetype
+  // + era_hint to Sydney typology).
+  const systemText = [basePrompt.system, '', '', SYDNEY_PRIMER_BLOCK].join('\n');
+
+  // User prompt: source-context preamble TOP, then pass1 user blocks (room
+  // taxonomy, scoring anchors, vantage, clutter), then voice anchor rubric,
+  // then self-critique. The model sees ONE image — no stem matching needed.
+  const userText = [
+    sourceContextBlock(sourceType),
+    '',
+    basePrompt.userPrefix,
+    '',
+    '── VOICE ANCHOR (drives per-image listing_copy register) ──',
+    voiceAnchorBlock(voice),
+    '',
+    '── SELF-CRITIQUE ──',
+    SELF_CRITIQUE_BLOCK,
+  ].join('\n');
+
+  // Run per-image calls in parallel batches of STAGE1_PER_IMAGE_CONCURRENCY.
+  // Persist each successful classification to composition_classifications
+  // immediately as it completes (don't wait for batch closure).
   const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
-    const batchResults: Stage1BatchResult[] = [];
-    if (batches.length > 0) {
-      const promises = batches.map((batch, idx) =>
-        runStage1Batch({
-          batch_index: idx,
-          batch,
+  const allResults: PerImageResult[] = [];
+
+  if (groupsToRun.length > 0) {
+    const sortedGroups = [...groupsToRun].sort((a, b) => {
+      const sec = (a.is_secondary_camera ? 1 : 0) - (b.is_secondary_camera ? 1 : 0);
+      if (sec !== 0) return sec;
+      return a.group_index - b.group_index;
+    });
+
+    for (let i = 0; i < sortedGroups.length; i += STAGE1_PER_IMAGE_CONCURRENCY) {
+      const batch = sortedGroups.slice(i, i + STAGE1_PER_IMAGE_CONCURRENCY);
+      const batchResults = await Promise.all(batch.map((c) =>
+        runStage1PerImage({
+          composition: c,
           ctx,
-          voice,
-          sourceType,
+          systemText,
+          userText,
           settings,
           previewsBase,
-        }).catch((err): Stage1BatchResult => {
+        }).catch((err): PerImageResult => {
           const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[${GENERATOR}] batch ${idx} failed wholesale: ${msg}`);
+          console.error(`[${GENERATOR}] per-image ${c.stem} failed wholesale: ${msg}`);
           return {
-            batch_index: idx,
-            group_count: batch.length,
-            successes: [],
-            failures: batch.map((c) => ({
-              group_id: c.group_id, stem: c.stem, error: `batch_failed: ${msg}`,
-            })),
+            group_id: c.group_id,
+            stem: c.stem,
+            output: null,
+            error: `wholesale_failed: ${msg}`,
             cost_usd: 0,
             wall_ms: 0,
             vendor_used: PRIMARY_VENDOR,
@@ -522,165 +572,174 @@ async function runShapeDStage1Core(
             failover_reason: null,
           };
         })
-      );
-      // Run all batches in parallel up to STAGE1_BATCH_CONCURRENCY. For ≤4
-      // batches (typical 200-angle shoot) this is just Promise.all. For bigger
-      // shoots we chunk so we don't fire 8 simultaneous Gemini calls.
-      for (let i = 0; i < promises.length; i += STAGE1_BATCH_CONCURRENCY) {
-        const slice = await Promise.all(promises.slice(i, i + STAGE1_BATCH_CONCURRENCY));
-        batchResults.push(...slice);
+      ));
+
+      // Persist successes in this slice immediately (matches per-image
+      // harness pattern — no batch-end barrier).
+      for (const r of batchResults) {
+        if (r.output) {
+          await persistOneClassification({
+            admin,
+            roundId,
+            projectId: ctx.project_id,
+            result: r,
+            promptBlockVersions: stage1PromptBlockVersions(),
+            modelVersion: r.model_used,
+            warnings,
+          });
+        }
       }
-    }
 
-    // ── 9. Persist successes to composition_classifications ──────────────────
-    const allSuccesses = batchResults.flatMap((r) => r.successes);
-    const allFailures = batchResults.flatMap((r) => r.failures);
-    const persisted = await persistClassifications({
-      admin,
-      roundId,
-      projectId: ctx.project_id,
-      successes: allSuccesses,
-      compositions,
-      promptBlockVersions: stage1PromptBlockVersions(),
-      modelVersion: PRIMARY_MODEL,
-      warnings,
-    });
-
-    // ── 10. Aggregate cost + wall ────────────────────────────────────────────
-    const totalCostUsd = batchResults.reduce((sum, r) => sum + r.cost_usd, 0);
-    const stage1WallMs = batchResults.length > 0
-      ? Math.max(...batchResults.map((r) => r.wall_ms))
-      : 0;
-    const failoverTriggered = batchResults.some((r) => r.failover_triggered);
-    const failoverReason = batchResults.find((r) => r.failover_reason)?.failover_reason ?? null;
-
-    // ── 11. Determine round engine_mode result ───────────────────────────────
-    const totalGroupsTouched = groupsToRun.length;
-    const partial = allFailures.length > 0 && allSuccesses.length > 0;
-    const allFailed = totalGroupsTouched > 0 && allSuccesses.length === 0;
-    const finalEngineMode = allFailed
-      ? 'two_pass' /* leave it for retry */
-      : failoverTriggered
-        ? 'unified_anthropic_failover'
-        : (partial ? 'shape_d_partial' : 'shape_d_full');
-
-    if (allFailed) {
-      throw new Error(
-        `Stage 1 failed for all ${totalGroupsTouched} compositions. Sample errors: ` +
-        allFailures.slice(0, 3).map((f) => `${f.stem}: ${f.error}`).join(' | '),
+      allResults.push(...batchResults);
+      console.log(
+        `[${GENERATOR}] batch ${Math.floor(i / STAGE1_PER_IMAGE_CONCURRENCY) + 1}/` +
+        `${Math.ceil(sortedGroups.length / STAGE1_PER_IMAGE_CONCURRENCY)} ` +
+        `(${batchResults.filter((r) => r.output).length}/${batch.length} succeeded)`,
       );
     }
+  }
 
-    // ── 12. Stamp engine_mode + cost on shortlisting_rounds ──────────────────
-    {
-      // Accumulate cost across retries (matches pass1 audit defect #5 pattern).
-      const { data: priorRound } = await admin
-        .from('shortlisting_rounds')
-        .select('stage_1_total_cost_usd')
-        .eq('id', roundId)
-        .maybeSingle();
-      const priorCost = typeof priorRound?.stage_1_total_cost_usd === 'number'
-        ? priorRound.stage_1_total_cost_usd
-        : 0;
-      const accumulated = priorCost + totalCostUsd;
-      const rounded = Math.round(accumulated * 1_000_000) / 1_000_000;
-      const { error: updErr } = await admin
-        .from('shortlisting_rounds')
-        .update({
-          engine_mode: finalEngineMode,
-          stage_1_total_cost_usd: rounded,
-        })
-        .eq('id', roundId);
-      if (updErr) warnings.push(`round update failed: ${updErr.message}`);
-    }
+  // ── Aggregate cost + wall ────────────────────────────────────────────────
+  const allSuccesses = allResults.filter((r) => r.output);
+  const allFailures = allResults.filter((r) => !r.output);
+  const totalCostUsd = allResults.reduce((sum, r) => sum + r.cost_usd, 0);
+  // Wall time for per-image is harder than batched: we ran in parallel, so
+  // the actual wall is roughly (ceil(N/concurrency) × max_per_image_wall).
+  // We use sum of all per-image walls as the API-time aggregate (useful for
+  // cost/perf rollup); operator-visible wall is in shortlisting_events.
+  const totalApiWallMs = allResults.reduce((sum, r) => sum + r.wall_ms, 0);
+  const operatorWallMs = Date.now() - startedAt;
+  const failoverTriggered = allResults.some((r) => r.failover_triggered);
+  const failoverReason = allResults.find((r) => r.failover_reason)?.failover_reason ?? null;
 
-    // ── 13. engine_run_audit upsert (Stage 1 stage_complete) ─────────────────
-    await upsertEngineRunAudit({
-      admin,
-      roundId,
-      engineMode: finalEngineMode,
-      vendorUsed: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
-      modelUsed: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
-      failoverTriggered,
-      failoverReason,
-      stage1CallCount: batches.length,
-      stage1TotalCostUsd: totalCostUsd,
-      stage1TotalWallMs: stage1WallMs,
-      stage1TotalInputTokens: 0,  // Vendor adapter usage_metrics aggregation deferred
-      stage1TotalOutputTokens: 0,
-      stages_completed: ['stage1'],
-      stages_failed: partial ? ['stage1_partial'] : [],
-      retry_count: 0,
-      warnings,
-    });
+  // ── Determine round engine_mode result ───────────────────────────────────
+  const totalGroupsTouched = groupsToRun.length;
+  const partial = allFailures.length > 0 && allSuccesses.length > 0;
+  const allFailed = totalGroupsTouched > 0 && allSuccesses.length === 0;
+  const finalEngineMode = allFailed
+    ? 'two_pass' /* leave it for retry */
+    : failoverTriggered
+      ? 'unified_anthropic_failover'
+      : (partial ? 'shape_d_partial' : 'shape_d_full');
 
-    // ── 14. Audit JSON to Dropbox ────────────────────────────────────────────
-    const auditPath = await uploadStage1AuditJson({
-      ctx,
-      roundId,
-      finalEngineMode,
-      batchResults,
-      compositions,
-      groupsToRun,
-      persisted,
-      voice,
-      sourceType,
-      settings,
-      startedAt,
-      warnings,
-    });
+  if (allFailed) {
+    throw new Error(
+      `Stage 1 failed for all ${totalGroupsTouched} compositions. Sample errors: ` +
+      allFailures.slice(0, 3).map((f) => `${f.stem}: ${f.error}`).join(' | '),
+    );
+  }
 
-    // ── 15. Dispatch Stage 4 as a separate edge job ──────────────────────────
-    // Important production lesson from iter-5a: Stage 4 must NOT chain in this
-    // same worker. Stage 1 (4 batches × ~50s) + Stage 4 (60-90s + 16k thinking)
-    // hit the edge-runtime wall budget. Insert a `stage4_synthesis` job; the
-    // dispatcher (mig 377 extends the kind enum) routes it to
-    // shortlisting-shape-d-stage4 next tick.
-    const stage4JobId = await dispatchStage4Job({
-      admin,
-      projectId: ctx.project_id,
-      roundId,
-      warnings,
-    });
-
-    // ── 16. Append shortlisting_events ───────────────────────────────────────
-    await admin.from('shortlisting_events').insert({
-      project_id: ctx.project_id,
-      round_id: roundId,
-      event_type: 'shape_d_stage1_complete',
-      actor_type: 'system',
-      payload: {
+  // ── Stamp engine_mode + cost on shortlisting_rounds ──────────────────────
+  {
+    // Accumulate cost across retries (matches pass1 audit defect #5 pattern).
+    const { data: priorRound } = await admin
+      .from('shortlisting_rounds')
+      .select('stage_1_total_cost_usd')
+      .eq('id', roundId)
+      .maybeSingle();
+    const priorCost = typeof priorRound?.stage_1_total_cost_usd === 'number'
+      ? priorRound.stage_1_total_cost_usd
+      : 0;
+    const accumulated = priorCost + totalCostUsd;
+    const rounded = Math.round(accumulated * 1_000_000) / 1_000_000;
+    const { error: updErr } = await admin
+      .from('shortlisting_rounds')
+      .update({
         engine_mode: finalEngineMode,
-        batches_run: batches.length,
-        successes: allSuccesses.length,
-        failures: allFailures.length,
-        compositions_total: compositions.length,
-        compositions_primed: primedGroupIds.size,
-        cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
-        wall_ms: stage1WallMs,
-        vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
-        failover_triggered: failoverTriggered,
-        stage4_job_id: stage4JobId,
-        audit_dropbox_path: auditPath,
-      },
-    });
+        stage_1_total_cost_usd: rounded,
+      })
+      .eq('id', roundId);
+    if (updErr) warnings.push(`round update failed: ${updErr.message}`);
+  }
 
-    return {
-      total_compositions: compositions.length,
+  // ── engine_run_audit upsert (Stage 1 stage_complete) ─────────────────────
+  await upsertEngineRunAudit({
+    admin,
+    roundId,
+    engineMode: finalEngineMode,
+    vendorUsed: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
+    modelUsed: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
+    failoverTriggered,
+    failoverReason,
+    stage1CallCount: allResults.length,
+    stage1TotalCostUsd: totalCostUsd,
+    stage1TotalWallMs: operatorWallMs,
+    stage1TotalInputTokens: 0,  // Vendor adapter usage_metrics aggregation deferred
+    stage1TotalOutputTokens: 0,
+    stages_completed: ['stage1'],
+    stages_failed: partial ? ['stage1_partial'] : [],
+    retry_count: 0,
+    warnings,
+  });
+
+  // ── Audit JSON to Dropbox ────────────────────────────────────────────────
+  const auditPath = await uploadStage1AuditJson({
+    ctx,
+    roundId,
+    finalEngineMode,
+    perImageResults: allResults,
+    compositions,
+    groupsToRun,
+    persisted: allSuccesses.length,
+    voice,
+    sourceType,
+    settings,
+    startedAt,
+    warnings,
+  });
+
+  // ── Dispatch Stage 4 as a separate edge job ──────────────────────────────
+  // Important production lesson from iter-5a: Stage 4 must NOT chain in this
+  // same worker. Stage 1 (per-image parallel, ~3-4 min) + Stage 4 (60-90s +
+  // 16k thinking) hit the edge-runtime wall budget. Insert a
+  // `stage4_synthesis` job; the dispatcher (mig 377 extends the kind enum)
+  // routes it to shortlisting-shape-d-stage4 next tick.
+  const stage4JobId = await dispatchStage4Job({
+    admin,
+    projectId: ctx.project_id,
+    roundId,
+    warnings,
+  });
+
+  // ── Append shortlisting_events ───────────────────────────────────────────
+  await admin.from('shortlisting_events').insert({
+    project_id: ctx.project_id,
+    round_id: roundId,
+    event_type: 'shape_d_stage1_complete',
+    actor_type: 'system',
+    payload: {
+      engine_mode: finalEngineMode,
+      per_image_calls_run: allResults.length,
       successes: allSuccesses.length,
       failures: allFailures.length,
-      batches_run: batches.length,
-      stage1_cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
-      stage1_wall_ms: stage1WallMs,
-      engine_mode: finalEngineMode,
+      compositions_total: compositions.length,
+      compositions_primed: primedGroupIds.size,
+      cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
+      wall_ms: operatorWallMs,
+      api_wall_ms_sum: totalApiWallMs,
       vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
-      model_used: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
       failover_triggered: failoverTriggered,
-      stage4_dispatched: !!stage4JobId,
       stage4_job_id: stage4JobId,
       audit_dropbox_path: auditPath,
-      warnings,
-    };
+    },
+  });
+
+  return {
+    total_compositions: compositions.length,
+    successes: allSuccesses.length,
+    failures: allFailures.length,
+    per_image_calls_run: allResults.length,
+    stage1_cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
+    stage1_wall_ms: operatorWallMs,
+    engine_mode: finalEngineMode,
+    vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
+    model_used: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
+    failover_triggered: failoverTriggered,
+    stage4_dispatched: !!stage4JobId,
+    stage4_job_id: stage4JobId,
+    audit_dropbox_path: auditPath,
+    warnings,
+  };
 }
 
 // ─── Engine settings loader ──────────────────────────────────────────────────
@@ -694,7 +753,6 @@ async function loadEngineSettings(
     'failover_vendor',
     'stage1_thinking_budget',
     'stage1_max_output_tokens',
-    'stage1_batch_size',
     'cost_cap_per_round_usd',
   ];
   const { data, error } = await admin
@@ -739,7 +797,6 @@ async function loadEngineSettings(
     failover_vendor,
     stage1_thinking_budget: num('stage1_thinking_budget', STAGE1_DEFAULT_THINKING_BUDGET),
     stage1_max_output_tokens: num('stage1_max_output_tokens', STAGE1_DEFAULT_MAX_OUTPUT_TOKENS),
-    stage1_batch_size: num('stage1_batch_size', STAGE1_DEFAULT_BATCH_SIZE),
     cost_cap_per_round_usd: num('cost_cap_per_round_usd', DEFAULT_COST_CAP_USD),
   };
 }
@@ -853,103 +910,87 @@ async function loadPrimedGroupIds(
   return new Set((data || []).map((r) => r.group_id as string));
 }
 
-// ─── Batch partitioning ──────────────────────────────────────────────────────
-
-function partitionBatches(groups: CompositionRow[], batchSize: number): CompositionRow[][] {
-  // Stable order: secondary-camera groups last, primary by capture order
-  // (group_index already in capture_timestamp order from Pass 0).
-  const sorted = [...groups].sort((a, b) => {
-    const sec = (a.is_secondary_camera ? 1 : 0) - (b.is_secondary_camera ? 1 : 0);
-    if (sec !== 0) return sec;
-    return a.group_index - b.group_index;
-  });
-  const out: CompositionRow[][] = [];
-  for (let i = 0; i < sorted.length; i += batchSize) {
-    out.push(sorted.slice(i, i + batchSize));
-  }
-  return out;
-}
-
 // ─── Cost preflight ──────────────────────────────────────────────────────────
 
-function estimateStage1Cost(batchCount: number): number {
-  // Conservative envelope per W11.7 spec: ~$0.66/batch on Gemini 2.5 Pro at
-  // thinkingBudget=2048 + max_output_tokens=6000 + 50 imgs. We use the pricing
-  // adapter for the actual numbers but fall back to envelope arithmetic.
-  const inputTokensPerBatch = 90_000; // 50 imgs × ~1.5K + ~15K prompt
-  const outputTokensPerBatch = 6_000;
-  const perBatch = estimateCost('google', PRIMARY_MODEL, {
-    input_tokens: inputTokensPerBatch,
-    output_tokens: outputTokensPerBatch,
+function estimateStage1Cost(imageCount: number): number {
+  // Per-image envelope on Gemini 2.5 Pro at thinkingBudget=2048 +
+  // max_output_tokens=6000:
+  //   - prompt: ~3K input tokens (system + user, including voice anchor +
+  //     source-context preamble)
+  //   - image: ~1.5K input tokens (typical 1MP preview after Gemini downsize)
+  //   - thinking: ~2K (counted as input on Gemini Pro accounting)
+  //   - output: ~2-4K (verbose enrichment)
+  // Round to ~$0.012/call observed in iter-5b harness traces.
+  const inputTokensPerImage = 6_500;
+  const outputTokensPerImage = 3_500;
+  const perImage = estimateCost('google', PRIMARY_MODEL, {
+    input_tokens: inputTokensPerImage,
+    output_tokens: outputTokensPerImage,
     cached_input_tokens: 0,
   });
-  return perBatch * batchCount;
+  return perImage * imageCount;
 }
 
-// ─── Stage 1 batch runner ───────────────────────────────────────────────────
+// ─── Stage 1 per-image runner ────────────────────────────────────────────────
 
-interface RunStage1BatchOpts {
-  batch_index: number;
-  batch: CompositionRow[];
+interface RunStage1PerImageOpts {
+  composition: CompositionRow;
   ctx: RoundContext;
-  voice: VoiceAnchorOpts;
-  sourceType: SourceType;
+  systemText: string;
+  userText: string;
   settings: EngineSettings;
   previewsBase: string;
 }
 
-async function runStage1Batch(opts: RunStage1BatchOpts): Promise<Stage1BatchResult> {
+/**
+ * Run ONE Gemini 2.5 Pro call against ONE image. Identity is implicit (1 call
+ * = 1 image, no stem matching). Returns either a successful classified output
+ * or a per-image error captured for the audit JSON. Failover to Anthropic
+ * Opus 4.7 if configured + primary fails (vendor-side error, not a credential
+ * issue).
+ *
+ * This matches `vendor-retroactive-compare.runVendorOnComposition` verbatim
+ * — that pattern has shipped 42/42 perfect Saladine results across iter-1
+ * through iter-5b.
+ */
+async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageResult> {
   const start = Date.now();
-  const { batch, ctx, voice, sourceType, settings, previewsBase, batch_index } = opts;
+  const { composition, settings, previewsBase } = opts;
 
-  // Fetch previews in parallel (Dropbox tolerates ~10 simultaneous downloads).
-  const PREVIEW_CONCURRENCY = 8;
-  const previews: Array<{ stem: string; group_id: string; data: string; media_type: string } | null> = [];
-  const stems = batch.map((c) => c.stem);
-  for (let i = 0; i < batch.length; i += PREVIEW_CONCURRENCY) {
-    const slice = batch.slice(i, i + PREVIEW_CONCURRENCY);
-    const fetched = await Promise.all(slice.map(async (c) => {
-      const path = `${previewsBase}/${c.stem}.jpg`;
-      try {
-        const p = await fetchPreviewBase64(path);
-        return { stem: c.stem, group_id: c.group_id, data: p.data, media_type: p.media_type };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[${GENERATOR}] batch ${batch_index} preview ${c.stem} fetch failed: ${msg}`);
-        return null;
-      }
-    }));
-    previews.push(...fetched);
+  // Fetch the single preview.
+  const path = `${previewsBase}/${composition.stem}.jpg`;
+  let preview: { data: string; media_type: string };
+  try {
+    preview = await fetchPreviewBase64(path);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      group_id: composition.group_id,
+      stem: composition.stem,
+      output: null,
+      error: `preview_fetch_failed: ${msg}`,
+      cost_usd: 0,
+      wall_ms: Date.now() - start,
+      vendor_used: PRIMARY_VENDOR,
+      model_used: PRIMARY_MODEL,
+      failover_triggered: false,
+      failover_reason: null,
+    };
   }
-  const validPreviews = previews.filter(
-    (p): p is { stem: string; group_id: string; data: string; media_type: string } => p !== null,
-  );
 
-  // Build the prompt (single batched call covers all 50 images).
-  const systemText = buildStage1SystemPrompt({
-    voice,
-    sydneyPrimer: SYDNEY_PRIMER_BLOCK,
-  });
-  const userText = buildStage1UserPrompt({
-    sourceContextBlockText: sourceContextBlock(sourceType),
-    voiceBlockText: voiceAnchorBlock(voice),
-    selfCritiqueBlockText: SELF_CRITIQUE_BLOCK,
-    imageStems: validPreviews.map((p) => p.stem),
-  });
-
-  // Vision call. Stage 1 emits one structured response per image keyed by stem.
-  const req: VisionRequest = {
+  // Single-image vision call. Schema returns the per-image object directly.
+  const baseReq: VisionRequest = {
     vendor: PRIMARY_VENDOR,
     model: PRIMARY_MODEL,
-    tool_name: STAGE1_TOOL_NAME,
-    tool_input_schema: STAGE1_TOOL_SCHEMA,
-    system: systemText,
-    user_text: userText,
-    images: validPreviews.map((p) => ({
+    tool_name: STAGE1_RESPONSE_TOOL_NAME,
+    tool_input_schema: STAGE1_RESPONSE_SCHEMA,
+    system: opts.systemText,
+    user_text: opts.userText,
+    images: [{
       source_type: 'base64',
-      media_type: p.media_type,
-      data: p.data,
-    })),
+      media_type: preview.media_type,
+      data: preview.data,
+    }],
     max_output_tokens: settings.stage1_max_output_tokens,
     temperature: 0,
     thinking_budget: settings.stage1_thinking_budget,
@@ -964,18 +1005,19 @@ async function runStage1Batch(opts: RunStage1BatchOpts): Promise<Stage1BatchResu
   let failoverReason: string | null = null;
 
   try {
-    resp = await callVisionAdapter(req);
+    resp = await callVisionAdapter(baseReq);
   } catch (e) {
     if (e instanceof MissingVendorCredential) err = e.message;
     else if (e instanceof VendorCallError) err = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
     else err = e instanceof Error ? e.message : String(e);
 
-    // Failover to Anthropic Opus 4.7 if configured + vendor side error
-    // (not a credential issue). Stage 1 fall-back: keep schema identical.
+    // Failover to Anthropic Opus 4.7 if configured + vendor-side error.
     if (settings.failover_vendor === 'anthropic' && !(e instanceof MissingVendorCredential)) {
-      console.warn(`[${GENERATOR}] batch ${batch_index} primary failed (${err}) — failing over to Anthropic`);
+      console.warn(
+        `[${GENERATOR}] per-image ${composition.stem} primary failed (${err}) — failing over to Anthropic`,
+      );
       try {
-        const failReq: VisionRequest = { ...req, vendor: 'anthropic', model: 'claude-opus-4-7' };
+        const failReq: VisionRequest = { ...baseReq, vendor: 'anthropic', model: 'claude-opus-4-7' };
         resp = await callVisionAdapter(failReq);
         vendorUsed = 'anthropic';
         modelUsed = 'claude-opus-4-7';
@@ -991,10 +1033,10 @@ async function runStage1Batch(opts: RunStage1BatchOpts): Promise<Stage1BatchResu
 
   if (!resp) {
     return {
-      batch_index,
-      group_count: batch.length,
-      successes: [],
-      failures: batch.map((c) => ({ group_id: c.group_id, stem: c.stem, error: err ?? 'no_response' })),
+      group_id: composition.group_id,
+      stem: composition.stem,
+      output: null,
+      error: err ?? 'no_response',
       cost_usd: 0,
       wall_ms: Date.now() - start,
       vendor_used: vendorUsed,
@@ -1004,35 +1046,12 @@ async function runStage1Batch(opts: RunStage1BatchOpts): Promise<Stage1BatchResu
     };
   }
 
-  // Parse response. The schema requires `per_image: [{ stem, ... }]` with
-  // length matching the input images, indexed by stem.
-  const successes: Array<{ group_id: string; stem: string; output: Record<string, unknown> }> = [];
-  const failures: Array<{ group_id: string; stem: string; error: string }> = [];
-  const perImage = (resp.output.per_image as Array<Record<string, unknown>> | undefined) || [];
-  const stemMap = new Map<string, Record<string, unknown>>();
-  for (const entry of perImage) {
-    const stem = (entry.stem as string | undefined) || '';
-    if (stem) stemMap.set(stem, entry);
-  }
-
-  for (const c of batch) {
-    const out = stemMap.get(c.stem);
-    if (out) {
-      successes.push({ group_id: c.group_id, stem: c.stem, output: out });
-    } else {
-      failures.push({
-        group_id: c.group_id,
-        stem: c.stem,
-        error: 'stem missing from per_image response',
-      });
-    }
-  }
-
+  // resp.output IS the per-image classification — no per_image[] unwrap.
   return {
-    batch_index,
-    group_count: batch.length,
-    successes,
-    failures,
+    group_id: composition.group_id,
+    stem: composition.stem,
+    output: resp.output as Record<string, unknown>,
+    error: null,
     cost_usd: resp.usage.estimated_cost_usd,
     wall_ms: resp.vendor_meta.elapsed_ms,
     vendor_used: vendorUsed,
@@ -1044,119 +1063,119 @@ async function runStage1Batch(opts: RunStage1BatchOpts): Promise<Stage1BatchResu
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
-interface PersistArgs {
+interface PersistOneArgs {
   admin: ReturnType<typeof getAdminClient>;
   roundId: string;
   projectId: string;
-  successes: Array<{ group_id: string; stem: string; output: Record<string, unknown> }>;
-  compositions: CompositionRow[];
+  result: PerImageResult;
   promptBlockVersions: Record<string, string>;
   modelVersion: string;
   warnings: string[];
 }
 
-async function persistClassifications(args: PersistArgs): Promise<number> {
-  let inserted = 0;
-  for (const s of args.successes) {
-    const out = s.output;
-    const num = (v: unknown): number | null => {
-      if (typeof v === 'number') return v;
-      if (typeof v === 'string') {
-        const n = Number(v);
-        return Number.isNaN(n) ? null : n;
-      }
-      return null;
-    };
-    const bool = (v: unknown): boolean => {
-      if (v === true) return true;
-      if (v === false || v == null) return false;
-      if (typeof v === 'string') {
-        const t = v.toLowerCase();
-        return t === 'true' || t === 'yes' || t === '1';
-      }
-      return false;
-    };
-    const arr = (v: unknown): string[] => Array.isArray(v) ? v.map(String) : [];
-    const str = (v: unknown): string | null => {
-      if (v == null) return null;
-      if (typeof v === 'string') return v.length === 0 ? null : v;
-      return String(v);
-    };
-
-    // Combined score: weighted blend of 4 dimensions. Stage 1 emits dim scores
-    // directly. Combined score derived here uses spec defaults — Pass 3 / W8
-    // tier-config can override at validation time.
-    const techScore = num(out.technical_score);
-    const lightScore = num(out.lighting_score);
-    const compScore = num(out.composition_score);
-    const aesScore = num(out.aesthetic_score);
-    const combined = (techScore != null && lightScore != null && compScore != null && aesScore != null)
-      ? Math.round(
-          (techScore * 0.25 + lightScore * 0.30 + compScore * 0.25 + aesScore * 0.20) * 100,
-        ) / 100
-      : null;
-
-    const roomType = str(out.room_type);
-    const vantage = str(out.vantage_point);
-    const eligibleExtRear = roomType === 'alfresco' && vantage === 'exterior_looking_in';
-
-    // clutter_severity must be one of the 4 enum values; coerce defensively.
-    const clutterRaw = str(out.clutter_severity);
-    const clutter = clutterRaw && ['none', 'minor_photoshoppable', 'moderate_retouch', 'major_reject']
-      .includes(clutterRaw)
-      ? clutterRaw
-      : null;
-    const flagForRetouching = clutter === 'minor_photoshoppable' || clutter === 'moderate_retouch';
-
-    // vantage_point CHECK constraint accepts only 3 values; coerce others to null.
-    const vantageColumn = vantage && ['interior_looking_out', 'exterior_looking_in', 'neutral']
-      .includes(vantage)
-      ? vantage
-      : null;
-
-    const row: Record<string, unknown> = {
-      group_id: s.group_id,
-      round_id: args.roundId,
-      project_id: args.projectId,
-      analysis: str(out.analysis),
-      room_type: roomType,
-      room_type_confidence: num(out.room_type_confidence),
-      composition_type: str(out.composition_type),
-      vantage_point: vantageColumn,
-      time_of_day: str(out.time_of_day),
-      is_drone: bool(out.is_drone),
-      is_exterior: bool(out.is_exterior),
-      is_detail_shot: bool(out.is_detail_shot),
-      zones_visible: arr(out.zones_visible),
-      key_elements: arr(out.key_elements),
-      is_styled: bool(out.is_styled),
-      indoor_outdoor_visible: bool(out.indoor_outdoor_visible),
-      clutter_severity: clutter,
-      clutter_detail: str(out.clutter_detail),
-      flag_for_retouching: flagForRetouching,
-      technical_score: techScore,
-      lighting_score: lightScore,
-      composition_score: compScore,
-      aesthetic_score: aesScore,
-      combined_score: combined,
-      eligible_for_exterior_rear: eligibleExtRear,
-      is_near_duplicate_candidate: false,
-      model_version: args.modelVersion,
-      prompt_block_versions: args.promptBlockVersions,
-    };
-
-    // Use upsert on the unique (group_id) constraint so retries replace rather
-    // than fail.
-    const { error: insErr } = await args.admin
-      .from('composition_classifications')
-      .upsert(row, { onConflict: 'group_id' });
-    if (insErr) {
-      args.warnings.push(`classification upsert failed for ${s.group_id}: ${insErr.message}`);
-      continue;
+/**
+ * Persist ONE successful per-image classification immediately on completion.
+ * No batch barrier — successes land in the DB as soon as they arrive. This
+ * matches the harness pattern and means a partial round still surfaces real
+ * data to the swimlane UI.
+ */
+async function persistOneClassification(args: PersistOneArgs): Promise<void> {
+  const out = args.result.output;
+  if (!out) return;
+  const num = (v: unknown): number | null => {
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      const n = Number(v);
+      return Number.isNaN(n) ? null : n;
     }
-    inserted++;
+    return null;
+  };
+  const bool = (v: unknown): boolean => {
+    if (v === true) return true;
+    if (v === false || v == null) return false;
+    if (typeof v === 'string') {
+      const t = v.toLowerCase();
+      return t === 'true' || t === 'yes' || t === '1';
+    }
+    return false;
+  };
+  const arr = (v: unknown): string[] => Array.isArray(v) ? v.map(String) : [];
+  const str = (v: unknown): string | null => {
+    if (v == null) return null;
+    if (typeof v === 'string') return v.length === 0 ? null : v;
+    return String(v);
+  };
+
+  // Combined score: weighted blend of 4 dimensions. Stage 1 emits dim scores
+  // directly. Combined score derived here uses spec defaults — Pass 3 / W8
+  // tier-config can override at validation time.
+  const techScore = num(out.technical_score);
+  const lightScore = num(out.lighting_score);
+  const compScore = num(out.composition_score);
+  const aesScore = num(out.aesthetic_score);
+  const combined = (techScore != null && lightScore != null && compScore != null && aesScore != null)
+    ? Math.round(
+        (techScore * 0.25 + lightScore * 0.30 + compScore * 0.25 + aesScore * 0.20) * 100,
+      ) / 100
+    : null;
+
+  const roomType = str(out.room_type);
+  const vantage = str(out.vantage_point);
+  const eligibleExtRear = roomType === 'alfresco' && vantage === 'exterior_looking_in';
+
+  // clutter_severity must be one of the 4 enum values; coerce defensively.
+  const clutterRaw = str(out.clutter_severity);
+  const clutter = clutterRaw && ['none', 'minor_photoshoppable', 'moderate_retouch', 'major_reject']
+    .includes(clutterRaw)
+    ? clutterRaw
+    : null;
+  const flagForRetouching = clutter === 'minor_photoshoppable' || clutter === 'moderate_retouch';
+
+  // vantage_point CHECK constraint accepts only 3 values; coerce others to null.
+  const vantageColumn = vantage && ['interior_looking_out', 'exterior_looking_in', 'neutral']
+    .includes(vantage)
+    ? vantage
+    : null;
+
+  const row: Record<string, unknown> = {
+    group_id: args.result.group_id,
+    round_id: args.roundId,
+    project_id: args.projectId,
+    analysis: str(out.analysis),
+    room_type: roomType,
+    room_type_confidence: num(out.room_type_confidence),
+    composition_type: str(out.composition_type),
+    vantage_point: vantageColumn,
+    time_of_day: str(out.time_of_day),
+    is_drone: bool(out.is_drone),
+    is_exterior: bool(out.is_exterior),
+    is_detail_shot: bool(out.is_detail_shot),
+    zones_visible: arr(out.zones_visible),
+    key_elements: arr(out.key_elements),
+    is_styled: bool(out.is_styled),
+    indoor_outdoor_visible: bool(out.indoor_outdoor_visible),
+    clutter_severity: clutter,
+    clutter_detail: str(out.clutter_detail),
+    flag_for_retouching: flagForRetouching,
+    technical_score: techScore,
+    lighting_score: lightScore,
+    composition_score: compScore,
+    aesthetic_score: aesScore,
+    combined_score: combined,
+    eligible_for_exterior_rear: eligibleExtRear,
+    is_near_duplicate_candidate: false,
+    model_version: args.modelVersion,
+    prompt_block_versions: args.promptBlockVersions,
+  };
+
+  // Use upsert on the unique (group_id) constraint so retries replace rather
+  // than fail.
+  const { error: insErr } = await args.admin
+    .from('composition_classifications')
+    .upsert(row, { onConflict: 'group_id' });
+  if (insErr) {
+    args.warnings.push(`classification upsert failed for ${args.result.group_id}: ${insErr.message}`);
   }
-  return inserted;
 }
 
 // ─── engine_run_audit upsert ─────────────────────────────────────────────────
@@ -1181,12 +1200,11 @@ interface UpsertEngineRunAuditArgs {
 }
 
 async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<void> {
-  const round = Math.round(args.stage1TotalCostUsd * 1_000_000) / 1_000_000;
   // Read existing row for cost accumulation across retries.
   const { data: existing } = await args.admin
     .from('engine_run_audit')
     .select(
-      'stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stages_completed, stages_failed, retry_count',
+      'stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stages_completed, stages_failed, retry_count, failover_triggered',
     )
     .eq('round_id', args.roundId)
     .maybeSingle();
@@ -1206,7 +1224,7 @@ async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<voi
     engine_mode: args.engineMode,
     vendor_used: args.vendorUsed,
     model_used: args.modelUsed,
-    failover_triggered: args.failoverTriggered || (existing as Record<string, unknown> | null)?.failover_triggered === true,
+    failover_triggered: args.failoverTriggered || (existing?.failover_triggered === true),
     failover_reason: args.failoverReason ?? null,
     stages_completed: merged,
     stages_failed: args.stages_failed,
@@ -1235,7 +1253,7 @@ interface AuditJsonArgs {
   ctx: RoundContext;
   roundId: string;
   finalEngineMode: string;
-  batchResults: Stage1BatchResult[];
+  perImageResults: PerImageResult[];
   compositions: CompositionRow[];
   groupsToRun: CompositionRow[];
   persisted: number;
@@ -1249,8 +1267,10 @@ interface AuditJsonArgs {
 async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null> {
   const ts = new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').replace('Z', '');
   const path = `${args.ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/_AUDIT/round_${args.roundId}_stage1_${ts}.json`;
+  const successes = args.perImageResults.filter((r) => r.output);
+  const failures = args.perImageResults.filter((r) => !r.output);
   const audit = {
-    version: 'v1.0',
+    version: 'v1.1-per-image',
     generator: GENERATOR,
     round_id: args.roundId,
     project_id: args.ctx.project_id,
@@ -1263,7 +1283,6 @@ async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null
     settings: {
       stage1_thinking_budget: args.settings.stage1_thinking_budget,
       stage1_max_output_tokens: args.settings.stage1_max_output_tokens,
-      stage1_batch_size: args.settings.stage1_batch_size,
       production_vendor: args.settings.production_vendor,
       failover_vendor: args.settings.failover_vendor,
     },
@@ -1271,18 +1290,21 @@ async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null
     compositions_total: args.compositions.length,
     compositions_persisted: args.persisted,
     compositions_run_this_invocation: args.groupsToRun.length,
-    batches: args.batchResults.map((b) => ({
-      batch_index: b.batch_index,
-      group_count: b.group_count,
-      success_count: b.successes.length,
-      failure_count: b.failures.length,
-      cost_usd: Number(b.cost_usd.toFixed(6)),
-      wall_ms: b.wall_ms,
-      vendor_used: b.vendor_used,
-      model_used: b.model_used,
-      failover_triggered: b.failover_triggered,
-      failover_reason: b.failover_reason,
-      failures: b.failures,
+    per_image_calls_run: args.perImageResults.length,
+    success_count: successes.length,
+    failure_count: failures.length,
+    failover_triggered: args.perImageResults.some((r) => r.failover_triggered),
+    total_cost_usd: Number(
+      args.perImageResults.reduce((sum, r) => sum + r.cost_usd, 0).toFixed(6),
+    ),
+    total_api_wall_ms: args.perImageResults.reduce((sum, r) => sum + r.wall_ms, 0),
+    operator_wall_ms: Date.now() - args.startedAt,
+    failures: failures.map((f) => ({
+      stem: f.stem,
+      group_id: f.group_id,
+      error: f.error,
+      vendor_used: f.vendor_used,
+      model_used: f.model_used,
     })),
     warnings: args.warnings,
   };
@@ -1401,7 +1423,7 @@ async function fetchPreviewBase64(
 
 function stage1PromptBlockVersions(): Record<string, string> {
   return {
-    stage1_prompt: STAGE1_PROMPT_VERSION,
+    stage1_response_schema: STAGE1_RESPONSE_SCHEMA_VERSION,
     source_context: SOURCE_CONTEXT_BLOCK_VERSION,
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
