@@ -124,6 +124,26 @@ function useDiscoveryQueue({ project_id, status, source, search, page, limit }) 
   });
 }
 
+// W12.6: companion query for auto-promoted canonical rows. Used to decorate
+// queue rows + drive the auto_promoted / manually_promoted filter views.
+// We read directly from object_registry (master_admin RLS allows SELECT) so
+// we don't have to extend the canonical-discovery-queue payload.
+function useAutoPromotedCanonicalIds() {
+  return useQuery({
+    queryKey: ["w12_6_auto_promoted_ids"],
+    queryFn: async () => {
+      const { data, error } = await api.supabase
+        .from("object_registry")
+        .select("id, auto_promoted_at")
+        .eq("auto_promoted", true)
+        .limit(2000);
+      if (error) throw new Error(error.message);
+      return new Set((data || []).map((r) => r.id));
+    },
+    staleTime: 30_000,
+  });
+}
+
 function useProjectsList() {
   return useQuery({
     queryKey: ["w12_projects_dropdown"],
@@ -202,8 +222,10 @@ function FiltersBar({ filters, projects, onFilterChange }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="pending" className="text-xs">Pending</SelectItem>
-                <SelectItem value="promoted" className="text-xs">Promoted</SelectItem>
+                <SelectItem value="pending" className="text-xs">Pending review</SelectItem>
+                <SelectItem value="promoted" className="text-xs">Promoted (any)</SelectItem>
+                <SelectItem value="auto_promoted" className="text-xs">AI auto-promoted</SelectItem>
+                <SelectItem value="manually_promoted" className="text-xs">Manually promoted</SelectItem>
                 <SelectItem value="rejected" className="text-xs">Rejected</SelectItem>
                 <SelectItem value="deferred" className="text-xs">Deferred</SelectItem>
                 <SelectItem value="all" className="text-xs">All</SelectItem>
@@ -251,7 +273,20 @@ function FiltersBar({ filters, projects, onFilterChange }) {
   );
 }
 
-function StatusBadge({ status }) {
+function StatusBadge({ status, auto_promoted }) {
+  if (status === "promoted" && auto_promoted) {
+    // W12.6: AI auto-promoted gets a sparkles icon + faded green background
+    // so operators can spot machine decisions at a glance.
+    return (
+      <Badge
+        className="text-[10px] h-5 bg-emerald-50/60 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300 border border-emerald-300/40 dark:border-emerald-700/40 flex items-center gap-1"
+        title="AI auto-promoted (cosine >= 0.92)"
+      >
+        <Sparkles className="h-2.5 w-2.5" />
+        AI auto-promoted
+      </Badge>
+    );
+  }
   if (status === "promoted") {
     return (
       <Badge className="text-[10px] h-5 bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
@@ -562,7 +597,7 @@ function DiscoveryCard({ row, onPromote, onReject, onDefer, busy }) {
               {row.round_id ? ` · round ${row.round_id.slice(0, 8)}` : ""}
             </CardDescription>
           </div>
-          <StatusBadge status={row.status} />
+          <StatusBadge status={row.status} auto_promoted={row.auto_promoted === true} />
         </div>
       </CardHeader>
       <CardContent className="space-y-2 pb-3">
@@ -767,7 +802,14 @@ export default function SettingsObjectRegistryDiscovery() {
   };
 
   const queryClient = useQueryClient();
-  const queueQuery = useDiscoveryQueue({ ...filters, page, limit });
+  // W12.6: 'auto_promoted' / 'manually_promoted' are client-side filters
+  // applied to rows where backend.status='promoted'. Translate before fetch.
+  const backendStatus =
+    filters.status === "auto_promoted" || filters.status === "manually_promoted"
+      ? "promoted"
+      : filters.status;
+  const queueQuery = useDiscoveryQueue({ ...filters, status: backendStatus, page, limit });
+  const autoPromotedIdsQuery = useAutoPromotedCanonicalIds();
   const projectsQuery = useProjectsList();
 
   const promoteMutation = useMutation({
@@ -834,8 +876,76 @@ export default function SettingsObjectRegistryDiscovery() {
     onError: (err) => toast.error(`Defer failed: ${err?.message || err}`),
   });
 
+  // W12.6: AI auto-suggest mutation. Two-phase: dry_run preview then live run
+  // confirmed by operator. The button click wires up to autoSuggestRun() helper
+  // which sequences the two calls.
+  const autoSuggestMutation = useMutation({
+    mutationFn: async ({ dry_run }) => {
+      const result = await api.functions.invoke("canonical-auto-suggest", {
+        dry_run: dry_run === true,
+      });
+      if (result?.error) {
+        throw new Error(result.error.message || result.error.body?.error || "auto-suggest failed");
+      }
+      return result?.data ?? result;
+    },
+    onSuccess: (data) => {
+      if (data?.dry_run) {
+        // Preview returned — caller decides whether to commit.
+        return;
+      }
+      toast.success(
+        `AI auto-suggest done — ${data?.auto_promoted_count ?? 0} promoted, ${data?.flagged_for_review_count ?? 0} flagged for review`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["w12_discovery_queue"] });
+    },
+    onError: (err) => toast.error(`Auto-suggest failed: ${err?.message || err}`),
+  });
+
+  // Helper: dryFirst=true does dry_run preview, asks operator to confirm, then
+  // runs live. dryFirst=false skips straight to live (used by the cron path).
+  const autoSuggestRun = async ({ dryFirst = true } = {}) => {
+    if (!dryFirst) {
+      autoSuggestMutation.mutate({ dry_run: false });
+      return;
+    }
+    try {
+      const preview = await autoSuggestMutation.mutateAsync({ dry_run: true });
+      const a = preview?.auto_promoted_count ?? 0;
+      const f = preview?.flagged_for_review_count ?? 0;
+      const l = preview?.left_as_candidate_count ?? 0;
+      const ok = window.confirm(
+        `AI auto-suggest preview:\n\n` +
+        `  • ${a} candidate(s) ready for AI auto-promotion (cosine >= 0.92)\n` +
+        `  • ${f} candidate(s) flagged for operator review (0.75-0.92)\n` +
+        `  • ${l} candidate(s) below review threshold (<0.75)\n\n` +
+        `Proceed with live run? Auto-promotions cannot be undone in bulk.`,
+      );
+      if (ok) autoSuggestMutation.mutate({ dry_run: false });
+    } catch (err) {
+      // Already toasted by onError.
+    }
+  };
+
   const data = queueQuery.data;
-  const rows = data?.rows ?? [];
+  const rawRows = data?.rows ?? [];
+  const autoIds = autoPromotedIdsQuery.data || new Set();
+  // W12.6: decorate each row with auto_promoted derived from the companion
+  // object_registry query. promoted_into_id points at the canonical row id;
+  // if it's in the auto_promoted set we mark the row.
+  const decoratedRows = rawRows.map((r) => ({
+    ...r,
+    auto_promoted: r.auto_promoted === true
+      || (r.operator_history?.promoted_into_id && autoIds.has(r.operator_history.promoted_into_id))
+      || false,
+  }));
+  // Client-side narrowing for auto_promoted / manually_promoted views.
+  const rows =
+    filters.status === "auto_promoted"
+      ? decoratedRows.filter((r) => r.auto_promoted === true)
+      : filters.status === "manually_promoted"
+      ? decoratedRows.filter((r) => r.status === "promoted" && r.auto_promoted !== true)
+      : decoratedRows;
   const counts = data?.counts;
   const totalRows = data?.total;
   const hasMore = !!data?.has_more;
@@ -854,6 +964,23 @@ export default function SettingsObjectRegistryDiscovery() {
             <h1 className="text-xl font-bold flex items-center gap-2">
               <Sparkles className="h-5 w-5 text-violet-600" />
               Object registry — Discovery queue
+              {/* W12.6: AI auto-suggest trigger */}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs ml-2"
+                onClick={() => autoSuggestRun({ dryFirst: true })}
+                disabled={autoSuggestMutation.isPending}
+                data-testid="run-ai-auto-suggest"
+                title="Walks pending candidates and auto-promotes those with cosine >= 0.92"
+              >
+                {autoSuggestMutation.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5 mr-1" />
+                )}
+                Run AI Auto-Suggest
+              </Button>
             </h1>
             <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
               Wave 12 / W11.6.11 — review Gemini's slot suggestions and the canonical-rollup
