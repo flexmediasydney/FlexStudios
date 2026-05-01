@@ -32,7 +32,7 @@
  * Draggable from @hello-pangea/dnd.
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, supabase } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -42,9 +42,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronUp, HelpCircle, Sparkles } from "lucide-react";
+import { ChevronDown, ChevronUp, HelpCircle, Pencil, Sparkles } from "lucide-react";
+import { toast } from "sonner";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { cn } from "@/lib/utils";
+import ReclassifyDialog from "./ReclassifyDialog";
 
 // Human-readable room type labels — consistent with Pass 1 prompt taxonomy.
 const ROOM_TYPE_LABEL = {
@@ -176,6 +178,10 @@ export default function ShortlistingCard({
   // W11.6.2 P3 #2: which alt is "expanded in place" inside the tray.
   // First click on a thumb sets this; second click commits the swap.
   const [activeAltGroupId, setActiveAltGroupId] = useState(null);
+  // W11.6.9: which field the reclassify dialog is currently editing.
+  const [reclassifyField, setReclassifyField] = useState(null);
+
+  const queryClient = useQueryClient();
 
   const c = composition || {};
   const cls = c.classification || {};
@@ -264,6 +270,46 @@ export default function ShortlistingCard({
     staleTime: 30_000,
   });
 
+  // W11.6.9: existing operator override for THIS group/round (if any).
+  // Surfaces the "Corrected by you · 3 minutes ago" footer + the effective
+  // value pills above. Round-level cache key so all cards on the round share
+  // one fetch.
+  const classOverridesQuery = useQuery({
+    queryKey: ["composition_classification_overrides", roundId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("composition_classification_overrides")
+        .select(
+          "id, group_id, round_id, override_source, ai_room_type, human_room_type, " +
+            "ai_composition_type, human_composition_type, ai_vantage_point, " +
+            "human_vantage_point, ai_combined_score, human_combined_score, " +
+            "human_eligible_slot_ids, override_reason, actor_user_id, actor_at",
+        )
+        .eq("round_id", roundId);
+      if (error) throw new Error(error.message);
+      return data || [];
+    },
+    enabled: Boolean(roundId && whyExpanded),
+    staleTime: 15_000,
+  });
+
+  const myOverride = (() => {
+    const rows = classOverridesQuery.data || [];
+    return (
+      rows.find(
+        (ov) =>
+          ov.group_id === cardId
+          && ov.override_source === "stage1_correction",
+      ) || null
+    );
+  })();
+
+  const effectiveRoomType = myOverride?.human_room_type ?? cls.room_type;
+  const effectiveCompositionType = myOverride?.human_composition_type ?? cls.composition_type;
+  const effectiveVantagePoint = myOverride?.human_vantage_point ?? cls.vantage_point;
+  const effectiveCombinedScore = myOverride?.human_combined_score ?? cls.combined_score ?? null;
+  const effectiveEligibleSlotIds = myOverride?.human_eligible_slot_ids ?? cls.eligible_slot_ids ?? null;
+
   // composition_groups for the round — keyed identically to the swimlane's
   // own groups query so we hit the cache rather than re-fetch. Used by the
   // alternatives tray (W11.6.2 P3 #2) to look up dropbox_preview_path for
@@ -348,14 +394,15 @@ export default function ShortlistingCard({
   })();
 
   const filename = stem || "—";
-  const roomType = humanRoomType(cls.room_type);
+  // W11.6.9: room_type label honours operator overrides.
+  const roomType = humanRoomType(effectiveRoomType);
   const tScore = cls.technical_score;
   const lScore = cls.lighting_score;
   const compScore = cls.composition_score;
   const aScore = cls.aesthetic_score;
   const avgScore =
-    cls.combined_score != null
-      ? cls.combined_score
+    effectiveCombinedScore != null
+      ? effectiveCombinedScore
       : tScore != null && lScore != null && compScore != null && aScore != null
         ? (Number(tScore) + Number(lScore) + Number(compScore) + Number(aScore)) / 4
         : null;
@@ -401,6 +448,59 @@ export default function ShortlistingCard({
     e.stopPropagation();
     if (!cardId) return;
     setExpandedCardId(whyExpanded ? null : cardId);
+  };
+
+  // ── W11.6.9: reclassify submit handler ────────────────────────────────────
+  const handleReclassifySubmit = async ({ field, humanValue, aiValue, overrideReason }) => {
+    if (!roundId || !cardId) {
+      throw new Error("Missing round_id or group_id — cannot save override.");
+    }
+    const reclassify = {
+      group_id: cardId,
+      round_id: roundId,
+      override_source: "stage1_correction",
+      override_reason: overrideReason,
+    };
+    if (field === "room_type") {
+      reclassify.ai_room_type = aiValue ?? null;
+      reclassify.human_room_type = humanValue;
+    } else if (field === "composition_type") {
+      reclassify.ai_composition_type = aiValue ?? null;
+      reclassify.human_composition_type = humanValue;
+    } else if (field === "vantage_point") {
+      reclassify.ai_vantage_point = aiValue ?? null;
+      reclassify.human_vantage_point = humanValue;
+    } else if (field === "combined_score") {
+      reclassify.ai_combined_score = typeof aiValue === "number" ? aiValue : null;
+      reclassify.human_combined_score = humanValue;
+    } else if (field === "eligible_slot_ids") {
+      reclassify.human_eligible_slot_ids = humanValue;
+    }
+    const resp = await api.functions.invoke("shortlisting-overrides", { reclassify });
+    const result = resp?.data ?? resp ?? {};
+    if (result?.ok === false) {
+      throw new Error(result?.error || "Reclassify failed");
+    }
+    const savedRow = result?.override || null;
+    if (savedRow) {
+      queryClient.setQueryData(
+        ["composition_classification_overrides", roundId],
+        (prev) => {
+          const rows = Array.isArray(prev) ? prev.slice() : [];
+          const idx = rows.findIndex(
+            (r) =>
+              r.group_id === savedRow.group_id
+              && r.round_id === savedRow.round_id
+              && r.override_source === savedRow.override_source,
+          );
+          if (idx >= 0) rows[idx] = savedRow;
+          else rows.push(savedRow);
+          return rows;
+        },
+      );
+    }
+    queryClient.invalidateQueries({ queryKey: ["composition_classification_overrides", roundId] });
+    toast.success("Reclassification saved");
   };
 
   return (
@@ -600,6 +700,31 @@ export default function ShortlistingCard({
               </div>
             ) : null}
 
+            {/* W11.6.9 — reclassify form. Pencil-edit each correctable field. */}
+            <div className="border-t pt-1.5">
+              <div className="font-semibold text-foreground text-[10px] uppercase tracking-wide mb-1">
+                Reclassify
+              </div>
+              <ReclassifyRow label="Room type" value={effectiveRoomType} isOverridden={!!myOverride?.human_room_type} format={humanRoomType} onEdit={() => setReclassifyField("room_type")} />
+              <ReclassifyRow label="Composition type" value={effectiveCompositionType} isOverridden={!!myOverride?.human_composition_type} format={(v) => v ?? "—"} onEdit={() => setReclassifyField("composition_type")} />
+              <ReclassifyRow label="Vantage point" value={effectiveVantagePoint} isOverridden={!!myOverride?.human_vantage_point} format={(v) => v ?? "—"} onEdit={() => setReclassifyField("vantage_point")} />
+              <ReclassifyRow label="Combined score" value={effectiveCombinedScore} isOverridden={myOverride?.human_combined_score != null} format={(v) => (v != null ? Number(v).toFixed(1) : "—")} onEdit={() => setReclassifyField("combined_score")} />
+              <ReclassifyRow label="Slot eligibility" value={effectiveEligibleSlotIds} isOverridden={Array.isArray(myOverride?.human_eligible_slot_ids) && myOverride.human_eligible_slot_ids.length > 0} format={(v) => Array.isArray(v) && v.length > 0 ? v.join(", ") : "—"} onEdit={() => setReclassifyField("eligible_slot_ids")} />
+              {myOverride?.actor_at && (
+                <div className="text-[9px] text-muted-foreground italic mt-1">
+                  Corrected by you · {formatRelativeTime(myOverride.actor_at)}
+                  {myOverride.override_reason ? (
+                    <>
+                      {" "}—{" "}
+                      <span className="not-italic font-mono">
+                        “{truncate(myOverride.override_reason, 80)}”
+                      </span>
+                    </>
+                  ) : null}
+                </div>
+              )}
+            </div>
+
             {/* Stage 4 slot rationale — only meaningful when the card is in
                 AI PROPOSED or HUMAN APPROVED. For REJECTED cards this is
                 empty (rejected cards weren't picked by Stage 4). */}
@@ -793,6 +918,70 @@ export default function ShortlistingCard({
           </div>
         )}
       </div>
+
+      <ReclassifyDialog
+        open={reclassifyField !== null}
+        onOpenChange={(open) => setReclassifyField(open ? reclassifyField : null)}
+        field={reclassifyField}
+        aiValue={
+          reclassifyField === "room_type" ? cls.room_type
+          : reclassifyField === "composition_type" ? cls.composition_type
+          : reclassifyField === "vantage_point" ? cls.vantage_point
+          : reclassifyField === "combined_score" ? cls.combined_score
+          : reclassifyField === "eligible_slot_ids" ? cls.eligible_slot_ids
+          : null
+        }
+        currentValue={
+          reclassifyField === "room_type" ? effectiveRoomType
+          : reclassifyField === "composition_type" ? effectiveCompositionType
+          : reclassifyField === "vantage_point" ? effectiveVantagePoint
+          : reclassifyField === "combined_score" ? effectiveCombinedScore
+          : reclassifyField === "eligible_slot_ids" ? effectiveEligibleSlotIds
+          : null
+        }
+        onSubmit={handleReclassifySubmit}
+      />
     </Card>
   );
+}
+
+// ─── W11.6.9 — Reclassify section sub-components ─────────────────────────────
+
+function ReclassifyRow({ label, value, isOverridden, format, onEdit }) {
+  const display = format ? format(value) : (value ?? "—");
+  return (
+    <div className="flex items-center justify-between gap-2 text-[10px] py-0.5">
+      <div className="flex items-center gap-1 min-w-0">
+        <span className="text-muted-foreground shrink-0">{label}:</span>
+        <span className={cn("font-mono truncate", isOverridden ? "text-amber-700 dark:text-amber-300 font-semibold" : "text-foreground")} title={typeof display === "string" ? display : undefined}>
+          {display}
+        </span>
+        {isOverridden ? (
+          <Badge variant="outline" className="h-3.5 px-1 text-[8px] border-amber-400 text-amber-700 dark:text-amber-300">
+            Edited
+          </Badge>
+        ) : null}
+      </div>
+      <button type="button" onClick={(e) => { e.stopPropagation(); onEdit(); }} className="shrink-0 p-0.5 rounded hover:bg-muted/60 focus:outline-none focus:ring-1 focus:ring-primary/40" aria-label={`Reclassify ${label}`} title={`Reclassify ${label}`}>
+        <Pencil className="h-2.5 w-2.5 text-muted-foreground" />
+      </button>
+    </div>
+  );
+}
+
+function formatRelativeTime(isoTs) {
+  if (!isoTs) return "";
+  const ts = new Date(isoTs).getTime();
+  if (Number.isNaN(ts)) return "";
+  const diffMs = Date.now() - ts;
+  if (diffMs < 0) return "just now";
+  const sec = Math.floor(diffMs / 1000);
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} minute${min === 1 ? "" : "s"} ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hour${hr === 1 ? "" : "s"} ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day} day${day === 1 ? "" : "s"} ago`;
+  return new Date(isoTs).toISOString().slice(0, 10);
 }
