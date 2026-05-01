@@ -581,6 +581,72 @@ Full spec: separate doc `W11-7-9-master-class-prompt-enrichment.md` (coming).
 
 ---
 
+## Source-aware prompting (added iter-5b, 2026-05-01)
+
+### The bug iter-5a surfaced
+
+When iter-5a fired against Saladine, Stage 4's `coverage_notes` flagged the entire shoot as a *"complete technical failure"* and `overall_property_score` came back at 2.5/10 — because Gemini 2.5 Pro judged the EV0 RAW brackets as published deliverables, not pre-merge brackets. Anthropic Opus 4.7 had self-classified RAW inputs implicitly from training (every iter-3/4 analysis text said *"RAW HDR bracket — darkness expected"*); Gemini doesn't have that workflow knowledge.
+
+W11 universal schema already defines `source.type ∈ { internal_raw, internal_finals, external_listing, floorplan_image }`. The harness just never wired it through. iter-5b closes the gap.
+
+### The four source types and their preambles
+
+`_shared/visionPrompts/blocks/sourceContextBlock.ts` (new in W11.7.1, prototyped as `iter5SourceContext.ts` in the harness) exports:
+
+```typescript
+export type SourceType = 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image';
+export function sourceContextBlock(source_type: SourceType): string;
+```
+
+Each block tells the model what kind of input it's looking at and how to interpret quality issues that arise from the source format itself.
+
+| Source type | Used by | Preamble tells the model |
+|---|---|---|
+| `internal_raw` | Stage 1 + Stage 4 (default RAW workflow) | These are EV0 brackets pre-merge; dark/blown areas are intended; describe the FINAL property; never say "technical failure" or "requires reshoot"; clutter and architectural flaws are still valid concerns |
+| `internal_finals` | W15a finals scoring | These are HDR-merged + post-edited deliverables; window blowout + crushed shadows ARE flaws; populate `finals_specific.*` fields based on detectable post-processing artefacts |
+| `external_listing` | W15b external listing scoring | Competitor's published work; do NOT reject; estimate listing price class; populate `external_specific.package_signals.*`; capture competitor branding |
+| `floorplan_image` | Future floorplan OCR wave | OCR-style; aesthetic scoring N/A; enumerate rooms, dimensions, architectural relationships |
+
+### Where it injects
+
+- **Stage 1 user prompt**: TOP of `userPrefix`, before voice anchor. Per-image classification reads source context first.
+- **Stage 4 user prompt**: TOP of `buildStage4UserPrompt` output, before property facts and voice anchor. Master listing synthesis reads source context first.
+- **Pass 0 (Haiku hard-reject)**: not needed — Pass 0 only triggers on technical failure (corrupt frames, agent headshots) which is source-agnostic.
+
+### How callers select source
+
+Every harness or production engine entrypoint accepts `source_type` as input:
+
+| Entrypoint | Default | When to override |
+|---|---|---|
+| `shortlisting-shape-d` (production W11.7) | `internal_raw` | Never — production RAW workflow always has source_type=internal_raw |
+| `vendor-retroactive-compare` (audit harness) | `internal_raw` | Set to `internal_finals` when re-comparing finals; `external_listing` when sampling REA listings |
+| Future W15a finals scorer | `internal_finals` | Hardcoded — finals scorer always runs on finals |
+| Future W15b external scorer | `external_listing` | Hardcoded — external scorer always runs on listings |
+| Future floorplan OCR | `floorplan_image` | Hardcoded |
+
+### Iter-5b validation results (Saladine)
+
+Same Stage 1 outputs, same Stage 4 thinking budget, only change is the source-context preamble:
+
+| Metric | iter-5a (no source-context) | iter-5b (with source-context) | Δ |
+|---|---|---|---|
+| `coverage_notes` | "complete technical failure" | "Coverage is comprehensive...interior shots are functional RAW brackets" | transformed |
+| `narrative_arc_score` | 2/10 | 7.5/10 | +5.5 |
+| `overall_property_score` | 2.5/10 | 4.5/10 | +2 |
+| `missing_shot_recommendations` | 6 items mostly "reshoot everything" | 3 real coverage gaps (no facade hero, no laundry, no living-to-yard connection) | useful |
+| Reading grade level | 9.5 | 8.5 | tighter to Standard tier band |
+| Cost / wall | $0.13 / 70s | $0.13 / 65s | identical |
+| Stage 4 overrides | 3 | 3 | audit trail intact |
+
+The source-context preamble is a **pure quality lift with zero cost or latency impact**. It belongs in the production W11.7.1 orchestrator from day one.
+
+### Production W11.7.1 implication
+
+`shortlisting-shape-d` orchestrator MUST inject `sourceContextBlock('internal_raw')` at the top of every Stage 1 + Stage 4 prompt by default. The block lives as a W7.6 prompt block with version stamp captured in `composition_classifications.prompt_block_versions` and `engine_run_audit.prompt_block_versions`.
+
+---
+
 ## Cost model
 
 Per-call, average:
