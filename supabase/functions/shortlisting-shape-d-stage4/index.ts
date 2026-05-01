@@ -577,6 +577,12 @@ async function runStage4Core(
     // for the swimlane (which keys off ai_proposed_group_id) to render.
     // (Bug fix 2026-05-01: Stage 4 was dropping slot_decisions on the floor.)
     const slotDecisions = (output.slot_decisions as Array<Record<string, unknown>> | undefined) || [];
+    // W11.6.6: proposed_slots[] are Stage 4's suggestions for new slot
+    // taxonomy entries that don't yet exist in the canonical slotEnumeration
+    // enum. We persist each to shortlisting_events with event_type=
+    // 'pass2_slot_suggestion' (legacy event-type name, kept for W12 discovery
+    // queue compatibility). Empty/missing -> no-op. Spec: W11-7 §"proposed_slots".
+    const proposedSlots = (output.proposed_slots as Array<Record<string, unknown>> | undefined) || [];
     const gallerySeq = (output.gallery_sequence as string[] | undefined) || null;
     const dedupGroups = (output.dedup_groups as Array<Record<string, unknown>> | undefined) || null;
     const missingShots = (output.missing_shot_recommendations as string[] | undefined) || null;
@@ -653,6 +659,16 @@ async function runStage4Core(
       propertyTier: ctx.property_tier,
       slotDecisions,
       warnings,
+    });
+
+    // W11.6.6: persist proposed_slots[] to shortlisting_events for W12's
+    // discovery queue. Mirrors persistSlotDecisions' delete-then-insert
+    // idempotency so a regenerate doesn't double-stack suggestions.
+    await persistProposedSlots({
+      admin,
+      projectId: ctx.project_id,
+      roundId,
+      proposedSlots,
     });
 
     // Update engine_run_audit (incl. token attribution + prompt block versions)
@@ -1535,6 +1551,90 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
     `slot_decisions=${args.slotDecisions.length} persisted=${rowsToInsert.length}`,
   );
   return rowsToInsert.length;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// W11.6.6: proposed_slots → shortlisting_events (W12 discovery queue)
+// ──────────────────────────────────────────────────────────────────────────
+
+interface PersistProposedSlotsArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  projectId: string;
+  roundId: string;
+  proposedSlots: Array<Record<string, unknown>>;
+}
+
+/**
+ * Persist Stage 4's proposed_slots[] (suggestions for new slot taxonomy
+ * entries the AI noticed but couldn't place into the existing canonical
+ * enum) as one shortlisting_events row each. Event_type is the LEGACY name
+ * 'pass2_slot_suggestion' — the W12 discovery queue (which mines these
+ * across rounds to grow the canonical registry) still keys off that string.
+ *
+ * Idempotent: deletes any prior pass2_slot_suggestion events for this round
+ * before inserting, so a regenerate doesn't double-stack. Mirrors
+ * persistSlotDecisions' delete-then-insert pattern.
+ *
+ * Returns the count of events inserted (0 when proposedSlots is empty/missing).
+ */
+export async function persistProposedSlots(args: PersistProposedSlotsArgs): Promise<number> {
+  const proposedSlots = Array.isArray(args.proposedSlots) ? args.proposedSlots : [];
+
+  // Always delete prior, even when the new run produced zero — a regenerate
+  // that previously emitted suggestions but doesn't on the second pass should
+  // clear the stale rows so W12's queue sees the latest state.
+  const { error: delErr } = await args.admin
+    .from('shortlisting_events')
+    .delete()
+    .eq('round_id', args.roundId)
+    .eq('event_type', 'pass2_slot_suggestion');
+  if (delErr) {
+    console.warn(
+      `[${GENERATOR}] persistProposedSlots delete-prior failed: ${delErr.message}`,
+    );
+    // continue — INSERT may succeed if there were no prior rows
+  }
+
+  if (proposedSlots.length === 0) {
+    console.log(
+      `[${GENERATOR}] persistProposedSlots round=${args.roundId} emitted=0`,
+    );
+    return 0;
+  }
+
+  const nowIso = new Date().toISOString();
+  const rows = proposedSlots.map((entry) => ({
+    project_id: args.projectId,
+    round_id: args.roundId,
+    event_type: 'pass2_slot_suggestion',
+    actor_type: 'system',
+    payload: {
+      proposed_slot_id: typeof entry.proposed_slot_id === 'string'
+        ? entry.proposed_slot_id
+        : null,
+      candidate_stems: Array.isArray(entry.candidate_stems)
+        ? entry.candidate_stems
+        : [],
+      reasoning: typeof entry.reasoning === 'string' ? entry.reasoning : null,
+      emitted_by: 'shape_d_stage4',
+    },
+    created_at: nowIso,
+  }));
+
+  const { error: insErr } = await args.admin
+    .from('shortlisting_events')
+    .insert(rows);
+  if (insErr) {
+    console.warn(
+      `[${GENERATOR}] persistProposedSlots insert failed: ${insErr.message}`,
+    );
+    return 0;
+  }
+
+  console.log(
+    `[${GENERATOR}] persistProposedSlots round=${args.roundId} emitted=${rows.length}`,
+  );
+  return rows.length;
 }
 
 interface UpdateEngineRunAuditArgs {
