@@ -84,6 +84,11 @@ import {
   SELF_CRITIQUE_BLOCK,
 } from './iter5VoiceAnchor.ts';
 import {
+  sourceContextBlock,
+  SOURCE_CONTEXT_BLOCK_VERSION,
+  type SourceType,
+} from './iter5SourceContext.ts';
+import {
   COMPARISON_TOOL_NAME_ITER5,
   COMPARISON_TOOL_SCHEMA_ITER5,
 } from './iter5Schema.ts';
@@ -149,6 +154,15 @@ interface RetroactiveCompareRequest {
    * re-invoke just Stage 4 with a fresh worker budget.
    */
   stage4_only?: boolean;
+  /**
+   * iter-5b: source type of the input images. Drives the source-context
+   * preamble in Stage 1 + Stage 4 prompts. Default 'internal_raw' which
+   * matches our primary workflow (RAW HDR brackets pre-merge). Critical for
+   * Gemini, which doesn't self-classify RAW vs final from training (Anthropic
+   * Opus 4.7 does). Without this, Gemini judges EV0 brackets as final
+   * deliverables and produces "technical failure" coverage_notes.
+   */
+  source_type?: SourceType;
 }
 
 interface CompositionRow {
@@ -233,6 +247,13 @@ function validateBody(body: unknown): { ok: true; req: RetroactiveCompareRequest
   }
   if (b.skip_stage4 !== undefined && typeof b.skip_stage4 !== 'boolean') {
     return { ok: false, error: 'skip_stage4 must be boolean when present' };
+  }
+  if (b.source_type !== undefined &&
+      b.source_type !== 'internal_raw' &&
+      b.source_type !== 'internal_finals' &&
+      b.source_type !== 'external_listing' &&
+      b.source_type !== 'floorplan_image') {
+    return { ok: false, error: "source_type must be 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image' when present" };
   }
   if (b.stage4_only !== undefined && typeof b.stage4_only !== 'boolean') {
     return { ok: false, error: 'stage4_only must be boolean when present' };
@@ -706,6 +727,8 @@ interface ProcessComparisonArgs {
   iter5_run_stage4?: boolean;
   /** iter-5: skip Stage 1 entirely (rely on primed runs), run only Stage 4. */
   iter5_stage4_only?: boolean;
+  /** iter-5b: source type for source-context preamble. Default 'internal_raw'. */
+  iter5_source_type?: SourceType;
 }
 
 interface PrimedRun {
@@ -1002,6 +1025,7 @@ async function runStage4(
   voice: { tier: 'premium' | 'standard' | 'approachable'; override: string | null },
   dropboxRoot: string,
   round_id: string,
+  sourceType: SourceType,
 ): Promise<{ ok: boolean; cost_usd: number; elapsed_ms: number; error?: string }> {
   const start = Date.now();
 
@@ -1051,6 +1075,7 @@ async function runStage4(
     stage1Merged,
     imageStemsInBatchOrder: validPreviews.map((p) => p.stem),
     totalImages: validPreviews.length,
+    sourceType,
   });
 
   const sysText = [
@@ -1251,6 +1276,7 @@ async function processComparison(args: ProcessComparisonArgs): Promise<void> {
           args.iter5_voice,
           dropboxRoot,
           round_id,
+          args.iter5_source_type ?? 'internal_raw',
         );
         // Roll Stage 4 cost + elapsed into the summary so the final report
         // surfaces the total bill correctly.
@@ -1352,7 +1378,12 @@ async function handler(req: Request): Promise<Response> {
     force_iter5,
     skip_stage4,
     stage4_only,
+    source_type,
   } = v.req;
+  // Default source_type to internal_raw — our primary workflow. The preamble
+  // tells the model these are EV0 brackets, not finals; without it, Gemini
+  // judges raw exposure characteristics as "technical failure".
+  const sourceType: SourceType = source_type ?? 'internal_raw';
 
   // iter-5 mode activates when force_iter5=true OR any vendor label includes
   // "iter5". This keeps iter-4 the default path so legacy callers (e.g.
@@ -1456,9 +1487,13 @@ async function handler(req: Request): Promise<Response> {
   // Build the per-image (Stage 1) user prompt. iter-4 baseline = pass1
   // userPrefix + V2 taxonomy. iter-5 also injects voice anchor + Sydney
   // primer + self-critique block, all consistent with the W11.7 spec.
+  // iter-5b: source-context preamble at the TOP so the model reads source
+  // type (RAW/finals/external/floorplan) before any other instruction.
   const userPrefixBase = prompt.userPrefix + V2_TAXONOMY_AND_GRANULARITY_INSTRUCTION;
   const userPrefix = iter5Active
     ? [
+        sourceContextBlock(sourceType),
+        '',
         userPrefixBase,
         '',
         '── VOICE ANCHOR (drives per-image listing_copy register) ──',
@@ -1491,6 +1526,7 @@ async function handler(req: Request): Promise<Response> {
     iter5_voice: iter5Active ? voice : undefined,
     iter5_run_stage4: iter5Active && !skip_stage4,
     iter5_stage4_only: iter5Active && !!stage4_only,
+    iter5_source_type: sourceType,
   }).catch((err) => {
     console.error(`[${GENERATOR}] background sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   });

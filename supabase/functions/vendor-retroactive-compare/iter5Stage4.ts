@@ -32,6 +32,11 @@ import {
   SELF_CRITIQUE_BLOCK,
   VOICE_ANCHOR_BLOCK_VERSION,
 } from './iter5VoiceAnchor.ts';
+import {
+  sourceContextBlock,
+  SOURCE_CONTEXT_BLOCK_VERSION,
+  type SourceType,
+} from './iter5SourceContext.ts';
 
 export const STAGE4_TOOL_NAME = 'synthesise_round';
 export const STAGE4_PROMPT_VERSION = 'iter5-stage4-v1.0';
@@ -508,6 +513,9 @@ export interface BuildStage4UserPromptOpts {
   stage1Merged: Stage1MergedEntry[];
   imageStemsInBatchOrder: string[];
   totalImages: number;
+  /** iter-5b: source type of the input images. Drives the source-context
+   * preamble at the top of the Stage 4 prompt. Default 'internal_raw'. */
+  sourceType?: SourceType;
 }
 
 export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
@@ -556,6 +564,8 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
   }));
 
   return [
+    sourceContextBlock(opts.sourceType ?? 'internal_raw'),
+    '',
     voiceAnchorBlock(opts.voice),
     '',
     '── PROPERTY FACTS (authoritative; do NOT invent) ──',
@@ -587,5 +597,6 @@ export function stage4PromptVersions(): Record<string, string> {
   return {
     stage4_prompt: STAGE4_PROMPT_VERSION,
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
+    source_context: SOURCE_CONTEXT_BLOCK_VERSION,
   };
 }
