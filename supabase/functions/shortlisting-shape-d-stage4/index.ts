@@ -429,6 +429,12 @@ async function runStage4Core(
     const output = resp.output as Record<string, unknown>;
     const masterListing = output.master_listing as Record<string, unknown> | undefined;
     const stage4Overrides = (output.stage_4_overrides as Array<Record<string, unknown>> | undefined) || [];
+    // Slot decisions: each entry is {slot_id, phase, winner:{stem,rationale},
+    // alternatives:[], rejected_near_duplicates:[]}. These ARE the AI's
+    // proposed shortlist — they MUST be persisted to shortlisting_overrides
+    // for the swimlane (which keys off ai_proposed_group_id) to render.
+    // (Bug fix 2026-05-01: Stage 4 was dropping slot_decisions on the floor.)
+    const slotDecisions = (output.slot_decisions as Array<Record<string, unknown>> | undefined) || [];
     const gallerySeq = (output.gallery_sequence as string[] | undefined) || null;
     const dedupGroups = (output.dedup_groups as Array<Record<string, unknown>> | undefined) || null;
     const missingShots = (output.missing_shot_recommendations as string[] | undefined) || null;
@@ -479,6 +485,17 @@ async function runStage4Core(
       admin,
       roundId,
       stage4Overrides,
+      warnings,
+    });
+
+    // Persist slot_decisions to shortlisting_overrides — the swimlane's
+    // primary data source. One row per (slot, winner-or-alternative).
+    const slotDecisionsPersisted = await persistSlotDecisions({
+      admin,
+      roundId,
+      projectId: ctx.project_id,
+      propertyTier: ctx.property_tier,
+      slotDecisions,
       warnings,
     });
 
@@ -1130,6 +1147,133 @@ async function persistStage4Overrides(args: PersistStage4OverridesArgs): Promise
   );
 
   return auditRows.length;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Slot decisions → shortlisting_overrides (the swimlane's primary data source)
+// ──────────────────────────────────────────────────────────────────────────
+
+interface PersistSlotDecisionsArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  roundId: string;
+  projectId: string;
+  propertyTier: 'standard' | 'premium' | 'approachable' | null;
+  slotDecisions: Array<Record<string, unknown>>;
+  warnings: string[];
+}
+
+/**
+ * Persist Stage 4's slot_decisions[] to shortlisting_overrides — the table
+ * the AI Proposed swimlane keys off via ai_proposed_group_id. Without this,
+ * Stage 4 succeeds but the swimlane renders empty.
+ *
+ * Schema:
+ *   - One row per (slot_id, winner) — human_action='approved_as_proposed'
+ *     until operator interacts (swap/remove/add).
+ *   - Alternatives are NOT persisted as overrides today (the legacy pass2
+ *     pattern keeps alternatives in audit JSON only). When the operator
+ *     "swap"s in the swimlane, the frontend reads alternatives from the
+ *     master_listing JSONB or audit JSON and inserts the swap row.
+ *   - rejected_near_duplicates are also audit-only.
+ *
+ * project_tier maps shape_d's three tiers to the legacy two:
+ *   premium → 'premium'
+ *   standard / approachable → 'standard'
+ * (project_tier is nullable so we could leave it NULL too, but the legacy
+ * swimlane filters on it; populating preserves filter behaviour.)
+ */
+async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<number> {
+  if (args.slotDecisions.length === 0) return 0;
+
+  // Resolve stem → group_id from composition_groups.
+  const { data: groupRows } = await args.admin
+    .from('composition_groups')
+    .select('id, delivery_reference_stem, best_bracket_stem')
+    .eq('round_id', args.roundId);
+  const stemToGroup = new Map<string, string>();
+  for (const g of (groupRows || []) as Array<Record<string, unknown>>) {
+    const delivery = (g.delivery_reference_stem as string | null) || null;
+    const best = (g.best_bracket_stem as string | null) || null;
+    if (delivery) stemToGroup.set(delivery, g.id as string);
+    if (best && !stemToGroup.has(best)) stemToGroup.set(best, g.id as string);
+  }
+
+  // Pull combined_score per group_id from composition_classifications so we
+  // can populate ai_proposed_score.
+  const { data: classRows } = await args.admin
+    .from('composition_classifications')
+    .select('group_id, combined_score')
+    .eq('round_id', args.roundId);
+  const groupToScore = new Map<string, number | null>();
+  for (const c of (classRows || []) as Array<Record<string, unknown>>) {
+    const gid = c.group_id as string;
+    const score = c.combined_score === null || c.combined_score === undefined
+      ? null
+      : Number(c.combined_score);
+    groupToScore.set(gid, score);
+  }
+
+  const projectTier: 'standard' | 'premium' = args.propertyTier === 'premium' ? 'premium' : 'standard';
+
+  const rowsToInsert: Array<Record<string, unknown>> = [];
+  for (const decision of args.slotDecisions) {
+    const slotId = typeof decision.slot_id === 'string' ? decision.slot_id : null;
+    const winner = decision.winner as Record<string, unknown> | undefined;
+    if (!slotId || !winner) continue;
+    const winnerStem = typeof winner.stem === 'string' ? winner.stem : null;
+    if (!winnerStem) continue;
+    const winnerGroupId = stemToGroup.get(winnerStem);
+    if (!winnerGroupId) {
+      args.warnings.push(`slot_decision ${slotId}: winner stem ${winnerStem} not found in composition_groups`);
+      continue;
+    }
+    const rationale = typeof winner.rationale === 'string' ? winner.rationale : null;
+    const score = groupToScore.get(winnerGroupId) ?? null;
+
+    rowsToInsert.push({
+      project_id: args.projectId,
+      round_id: args.roundId,
+      ai_proposed_group_id: winnerGroupId,
+      ai_proposed_slot_id: slotId,
+      ai_proposed_score: score,
+      ai_proposed_analysis: rationale,
+      human_action: 'approved_as_proposed', // default until operator interacts
+      slot_group_id: slotId, // legacy field — same as slot_id under shape_d
+      project_tier: projectTier,
+    });
+  }
+
+  if (rowsToInsert.length === 0) {
+    args.warnings.push('persistSlotDecisions: no resolvable slot decisions to persist');
+    return 0;
+  }
+
+  // Idempotent: delete any existing AI-proposed rows for this round (only
+  // those with no operator interaction yet — human_action='approved_as_proposed')
+  // so a regenerate doesn't double-stack. Operator-edited rows are preserved.
+  const { error: delErr } = await args.admin
+    .from('shortlisting_overrides')
+    .delete()
+    .eq('round_id', args.roundId)
+    .eq('human_action', 'approved_as_proposed');
+  if (delErr) {
+    args.warnings.push(`shortlisting_overrides delete-prior failed: ${delErr.message}`);
+    // continue anyway — INSERT may succeed if there were no prior rows
+  }
+
+  const { error: insErr } = await args.admin
+    .from('shortlisting_overrides')
+    .insert(rowsToInsert);
+  if (insErr) {
+    args.warnings.push(`shortlisting_overrides insert failed: ${insErr.message}`);
+    return 0;
+  }
+
+  console.log(
+    `[${GENERATOR}] persistSlotDecisions round=${args.roundId} ` +
+    `slot_decisions=${args.slotDecisions.length} persisted=${rowsToInsert.length}`,
+  );
+  return rowsToInsert.length;
 }
 
 interface UpdateEngineRunAuditArgs {
