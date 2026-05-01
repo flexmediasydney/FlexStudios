@@ -75,6 +75,7 @@ const PHOTO_FALLBACK_CATEGORIES = ['Images', 'images'];
 
 interface RequestBody {
   project_id?: string;
+  job_id?: string;             // dispatcher passes {job_id} only — we resolve project_id from it
   trigger_source?: 'auto_settling' | 'manual' | 'reshoot';
   _health_check?: boolean;
 }
@@ -103,8 +104,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
   }
 
-  const projectId = typeof body.project_id === 'string' ? body.project_id : null;
-  if (!projectId) return errorResponse('project_id required', 400, req);
+  // Resolve project_id from explicit body field OR from job_id (dispatcher path).
+  // The shortlisting-job-dispatcher invokes every edge fn with body={job_id}; we
+  // look up the project_id from shortlisting_jobs when only job_id is provided.
+  let projectId: string | null = typeof body.project_id === 'string' ? body.project_id : null;
+  if (!projectId && typeof body.job_id === 'string' && body.job_id) {
+    const adminLookup = getAdminClient();
+    const { data: jobRow } = await adminLookup
+      .from('shortlisting_jobs')
+      .select('project_id')
+      .eq('id', body.job_id)
+      .maybeSingle();
+    projectId = jobRow?.project_id ? String(jobRow.project_id) : null;
+  }
+  if (!projectId) return errorResponse('project_id (or job_id) required', 400, req);
 
   const triggerSource = body.trigger_source || 'manual';
   const actorId = (user?.id && user.id !== '__service_role__') ? user.id : null;
