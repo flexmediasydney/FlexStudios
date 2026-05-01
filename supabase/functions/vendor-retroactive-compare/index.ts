@@ -835,7 +835,7 @@ async function processOneComposition(
         stem: comp.stem,
         resp: {
           output: p.output,
-          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, estimated_cost_usd: p.cost_usd },
+          usage: { input_tokens: 0, output_tokens: 0, cached_input_tokens: 0, thinking_tokens: 0, estimated_cost_usd: p.cost_usd },
           vendor_meta: { vendor: cfg.vendor, model: cfg.model, request_id: '', finish_reason: 'stop', elapsed_ms: p.elapsed_ms },
           raw_response_excerpt: '',
         } as VisionResponse,

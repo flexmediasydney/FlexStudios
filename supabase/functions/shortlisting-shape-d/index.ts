@@ -234,6 +234,11 @@ interface EngineSettings {
  * to engine_run_audit.stage1_total_input_tokens / stage1_total_output_tokens
  * (W11.5/11.7 closed-loop wave: token attribution was previously hard-coded
  * to 0; now sums correctly across parallel batches).
+ *
+ * `thinking_tokens` is the vendor-reported reasoning-token count (Gemini 2.5
+ * `thoughtsTokenCount`). Plumbed through to engine_run_audit
+ * .stage1_total_thinking_tokens for cost observability (W11.8.2 audit-fix).
+ * 0 for failed calls or when the vendor didn't report it.
  */
 interface PerImageResult {
   group_id: string;
@@ -244,6 +249,7 @@ interface PerImageResult {
   wall_ms: number;
   input_tokens: number;
   output_tokens: number;
+  thinking_tokens: number;
   // W11.8.1: vendor narrowed to 'google' (Anthropic stripped). Kept as a
   // literal type rather than removed so call-site code that reads .vendor_used
   // for audit-row assembly stays type-safe.
@@ -759,6 +765,7 @@ async function runShapeDStage1Core(
             wall_ms: 0,
             input_tokens: 0,
             output_tokens: 0,
+            thinking_tokens: 0,
             vendor_used: PRIMARY_VENDOR,
             model_used: PRIMARY_MODEL,
             failover_triggered: false,
@@ -823,6 +830,9 @@ async function runShapeDStage1Core(
   const totalCostUsd = allResults.reduce((sum, r) => sum + r.cost_usd, 0);
   const totalInputTokens = allResults.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
   const totalOutputTokens = allResults.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
+  // W11.8.2: thinking_tokens — Gemini thoughtsTokenCount summed across all
+  // per-image calls, persisted to engine_run_audit.stage1_total_thinking_tokens.
+  const totalThinkingTokens = allResults.reduce((sum, r) => sum + (r.thinking_tokens || 0), 0);
   // Wall time for per-image is harder than batched: we ran in parallel, so
   // the actual wall is roughly (ceil(N/concurrency) × max_per_image_wall).
   // We use sum of all per-image walls as the API-time aggregate (useful for
@@ -894,6 +904,7 @@ async function runShapeDStage1Core(
     stage1TotalWallMs: operatorWallMs,
     stage1TotalInputTokens: totalInputTokens,
     stage1TotalOutputTokens: totalOutputTokens,
+    stage1TotalThinkingTokens: totalThinkingTokens,
     stages_completed: ['stage1'],
     stages_failed: partial ? ['stage1_partial'] : [],
     retry_count: 0,
@@ -1239,6 +1250,7 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
       wall_ms: Date.now() - start,
       input_tokens: 0,
       output_tokens: 0,
+      thinking_tokens: 0,
       vendor_used: PRIMARY_VENDOR,
       model_used: PRIMARY_MODEL,
       failover_triggered: false,
@@ -1329,6 +1341,7 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
       wall_ms: Date.now() - start,
       input_tokens: 0,
       output_tokens: 0,
+      thinking_tokens: 0,
       vendor_used: PRIMARY_VENDOR,
       model_used: PRIMARY_MODEL,
       failover_triggered: false,
@@ -1341,6 +1354,9 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
   // Defensive coercion in case the adapter omits the fields.
   const inT = typeof resp.usage.input_tokens === 'number' ? resp.usage.input_tokens : 0;
   const outT = typeof resp.usage.output_tokens === 'number' ? resp.usage.output_tokens : 0;
+  // W11.8.2: thinking_tokens (Gemini thoughtsTokenCount) — defensive coerce
+  // in case an older adapter version omits the field.
+  const thinkT = typeof resp.usage.thinking_tokens === 'number' ? resp.usage.thinking_tokens : 0;
   return {
     group_id: composition.group_id,
     stem: composition.stem,
@@ -1350,6 +1366,7 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     wall_ms: resp.vendor_meta.elapsed_ms,
     input_tokens: inT,
     output_tokens: outT,
+    thinking_tokens: thinkT,
     vendor_used: PRIMARY_VENDOR,
     model_used: PRIMARY_MODEL,
     failover_triggered: false,
@@ -1749,6 +1766,12 @@ export interface UpsertEngineRunAuditArgs {
   stage1TotalWallMs: number;
   stage1TotalInputTokens: number;
   stage1TotalOutputTokens: number;
+  /**
+   * W11.8.2: vendor-reported reasoning tokens (Gemini thoughtsTokenCount)
+   * summed across all per-image batches. Persisted to
+   * engine_run_audit.stage1_total_thinking_tokens for cost observability.
+   */
+  stage1TotalThinkingTokens: number;
   stages_completed: string[];
   stages_failed: string[];
   retry_count: number;
@@ -1768,9 +1791,12 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
   // inference parses the literal at compile time; splitting across `+`
   // concatenated strings collapses the inferred type to GenericStringError
   // and breaks strict TS check on the field accessors below.
+  // W11.8.2 audit-fix Fix C: also pull stage1_total_thinking_tokens so the
+  // accumulator includes vendor-reported reasoning tokens across retries.
+  // The column was added in mig 376 but never written until this commit.
   const { data: existing } = await args.admin
     .from('engine_run_audit')
-    .select('stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stage1_total_input_tokens, stage1_total_output_tokens, stage4_total_cost_usd, stage4_total_wall_ms, stage4_total_input_tokens, stage4_total_output_tokens, stages_completed, stages_failed, retry_count, failover_triggered')
+    .select('stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stage1_total_input_tokens, stage1_total_output_tokens, stage1_total_thinking_tokens, stage4_total_cost_usd, stage4_total_wall_ms, stage4_total_input_tokens, stage4_total_output_tokens, stages_completed, stages_failed, retry_count, failover_triggered')
     .eq('round_id', args.roundId)
     .maybeSingle();
 
@@ -1779,6 +1805,7 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
   const priorCalls = (existing?.stage1_call_count as number | null) ?? 0;
   const priorInputTokens = (existing?.stage1_total_input_tokens as number | null) ?? 0;
   const priorOutputTokens = (existing?.stage1_total_output_tokens as number | null) ?? 0;
+  const priorThinkingTokens = (existing?.stage1_total_thinking_tokens as number | null) ?? 0;
   const priorStage4Cost = (existing?.stage4_total_cost_usd as number | null) ?? 0;
   const priorStage4Wall = (existing?.stage4_total_wall_ms as number | null) ?? 0;
   const priorStage4InputTokens = (existing?.stage4_total_input_tokens as number | null) ?? 0;
@@ -1786,14 +1813,30 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
   const priorStagesCompleted = (existing?.stages_completed as string[] | null) ?? [];
   const priorRetry = (existing?.retry_count as number | null) ?? 0;
 
+  // W11.8.2 audit-fix Fix D (accumulator-everywhere): every Stage 1 numeric
+  // column now accumulates `prior + args` — call_count included. The previous
+  // mix of `Math.max(prior, args)` on call_count + `prior + args` on cost
+  // produced an inconsistency where cost/call_count rendered ~6× too high
+  // on Rainbow Cres c55374b1 (cost summed across two persist calls but
+  // call_count was clamped to the larger single batch).
+  //
+  // The Max behaviour was originally defensive against a retry duplicating
+  // the same batch — but Stage 4's per-round DELETE-then-INSERT dedup (added
+  // in W11.7.17 hotfix-2) means retries don't double-count audit rows; each
+  // persist call represents new work to add. Stage 1 has the same property
+  // (a Stage 1 retry runs the parallel batches afresh against the same set
+  // of compositions, replacing the per-image classifications via PK upsert,
+  // so cost/tokens reported on the retry are net-new vs the prior attempt).
+  // Wall_ms stays Math.max because parallel batches' walls overlap; summing
+  // would double-count a 90s call that ran concurrently with another 90s
+  // call.
   const accumulatedCost = priorCost + args.stage1TotalCostUsd;
   const accumulatedRounded = Math.round(accumulatedCost * 1_000_000) / 1_000_000;
   const accumulatedWall = Math.max(priorWall, args.stage1TotalWallMs);
-  // Tokens accumulate the same way as cost — retries add to the row's
-  // running total. The W11.6 cost-per-stage dashboard reads this as the
-  // canonical Stage 1 token count.
+  const accumulatedCalls = priorCalls + args.stage1CallCount;
   const accumulatedInputTokens = priorInputTokens + args.stage1TotalInputTokens;
   const accumulatedOutputTokens = priorOutputTokens + args.stage1TotalOutputTokens;
+  const accumulatedThinkingTokens = priorThinkingTokens + args.stage1TotalThinkingTokens;
   const merged = Array.from(new Set([...priorStagesCompleted, ...args.stages_completed]));
 
   // total_* must include any Stage 4 contribution that already landed —
@@ -1814,11 +1857,12 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
     failover_reason: args.failoverReason ?? null,
     stages_completed: merged,
     stages_failed: args.stages_failed,
-    stage1_call_count: Math.max(priorCalls, args.stage1CallCount),
+    stage1_call_count: accumulatedCalls,
     stage1_total_cost_usd: accumulatedRounded,
     stage1_total_wall_ms: accumulatedWall,
     stage1_total_input_tokens: accumulatedInputTokens,
     stage1_total_output_tokens: accumulatedOutputTokens,
+    stage1_total_thinking_tokens: accumulatedThinkingTokens,
     total_cost_usd: totalCostRounded,
     total_wall_ms: totalWall,
     total_input_tokens: totalInputTokens,

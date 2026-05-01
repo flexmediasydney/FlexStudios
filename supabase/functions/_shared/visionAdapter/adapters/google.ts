@@ -172,6 +172,13 @@ interface GeminiUsageMetadata {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
   cachedContentTokenCount?: number;
+  /**
+   * W11.8.2 (audit instrumentation): Gemini 2.5 reports internal reasoning
+   * tokens consumed by `thinkingConfig.thinkingBudget` here. Returned only
+   * when thinking budget > 0. We propagate to VisionUsage.thinking_tokens so
+   * engine_run_audit.stage{1,4}_total_thinking_tokens can be populated.
+   */
+  thoughtsTokenCount?: number;
   totalTokenCount?: number;
 }
 
@@ -258,12 +265,25 @@ function buildUsage(
   // don't double-count.
   const input_tokens = Math.max(0, (m.promptTokenCount || 0) - cached_input_tokens);
   const output_tokens = m.candidatesTokenCount || 0;
+  // W11.8.2: thoughtsTokenCount is the visible-on-the-bill internal reasoning
+  // count. We propagate it for audit observability but DON'T add it to the
+  // cost estimate here — Gemini bills thinking tokens at the output rate and
+  // includes them in candidatesTokenCount when present, so adding again would
+  // double-count. (Verified: a Stage 1 call with thinking_budget=2048 returns
+  // promptTokenCount + candidatesTokenCount that already covers reasoning.)
+  const thinking_tokens = m.thoughtsTokenCount || 0;
   const estimated_cost_usd = estimateCost('google', model, {
     input_tokens,
     output_tokens,
     cached_input_tokens,
   });
-  return { input_tokens, output_tokens, cached_input_tokens, estimated_cost_usd };
+  return {
+    input_tokens,
+    output_tokens,
+    cached_input_tokens,
+    thinking_tokens,
+    estimated_cost_usd,
+  };
 }
 
 // ─── Public entrypoint ───────────────────────────────────────────────────────

@@ -104,6 +104,17 @@ export interface VisionUsage {
   input_tokens: number;
   output_tokens: number;
   cached_input_tokens: number;
+  /**
+   * W11.8.2: vendor-reported internal reasoning tokens. Gemini 2.5 returns
+   * this as `thoughtsTokenCount` in usageMetadata when thinkingBudget > 0;
+   * 0 when thinking is off or the vendor didn't report it. Propagated to
+   * engine_run_audit.stage{1,4}_total_thinking_tokens for cost observability.
+   *
+   * NOT added to estimated_cost_usd — Gemini bills thinking at the output
+   * rate and already includes those tokens in candidatesTokenCount; double-
+   * adding would inflate cost numbers.
+   */
+  thinking_tokens: number;
   estimated_cost_usd: number;
 }
 

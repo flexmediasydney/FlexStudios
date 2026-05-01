@@ -605,7 +605,7 @@ async function runStage4Core(
 
     // Call Gemini vision adapter with retries. W11.8.1: Anthropic failover
     // stripped — exhausted retries throw and the round flips to 'failed'.
-    const { resp, vendorUsed, modelUsed, costUsd, wallMs, inputTokens, outputTokens, failoverTriggered, failoverReason, error } =
+    const { resp, vendorUsed, modelUsed, costUsd, wallMs, inputTokens, outputTokens, thinkingTokens, failoverTriggered, failoverReason, error } =
       await callStage4Gemini({
         systemText,
         userText,
@@ -736,6 +736,7 @@ async function runStage4Core(
       stage4WallMs: wallMs,
       stage4InputTokens: inputTokens,
       stage4OutputTokens: outputTokens,
+      stage4ThinkingTokens: thinkingTokens,
       promptBlockVersions: stage4PromptBlockVersions(),
       warnings,
     });
@@ -1099,6 +1100,13 @@ interface CallStage4Result {
   inputTokens: number;
   /** Vendor-reported output tokens for this call (0 if call failed). */
   outputTokens: number;
+  /**
+   * W11.8.2: Gemini-reported reasoning tokens (`thoughtsTokenCount`). Stage 4
+   * uses thinking_budget=16384, so expect ~0–16384 here per call. Persisted
+   * to engine_run_audit.stage4_total_thinking_tokens for cost observability.
+   * 0 if the call failed or vendor didn't report it.
+   */
+  thinkingTokens: number;
   failoverTriggered: false;
   failoverReason: null;
   error: string | null;
@@ -1146,6 +1154,7 @@ async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result>
         wallMs: resp.vendor_meta.elapsed_ms || (Date.now() - start),
         inputTokens: resp.usage.input_tokens || 0,
         outputTokens: resp.usage.output_tokens || 0,
+        thinkingTokens: resp.usage.thinking_tokens || 0,
         failoverTriggered: false,
         failoverReason: null,
         error: null,
@@ -1156,7 +1165,7 @@ async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result>
         return {
           resp: null, vendorUsed: PRIMARY_VENDOR, modelUsed: PRIMARY_MODEL,
           costUsd: 0, wallMs: Date.now() - start,
-          inputTokens: 0, outputTokens: 0,
+          inputTokens: 0, outputTokens: 0, thinkingTokens: 0,
           failoverTriggered: false, failoverReason: null,
           error: e.message,
         };
@@ -1183,7 +1192,7 @@ async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result>
     modelUsed: PRIMARY_MODEL,
     costUsd: 0,
     wallMs: Date.now() - start,
-    inputTokens: 0, outputTokens: 0,
+    inputTokens: 0, outputTokens: 0, thinkingTokens: 0,
     failoverTriggered: false,
     failoverReason: null,
     error: lastErr,
@@ -1875,11 +1884,19 @@ export interface UpdateEngineRunAuditArgs {
   stage4WallMs: number;
   stage4InputTokens: number;
   stage4OutputTokens: number;
+  /**
+   * W11.8.2: vendor-reported reasoning tokens (Gemini thoughtsTokenCount).
+   * Persisted to engine_run_audit.stage4_total_thinking_tokens.
+   */
+  stage4ThinkingTokens: number;
   promptBlockVersions: Record<string, string>;
   warnings: string[];
 }
 
 export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Promise<void> {
+  // W11.8.2 audit-fix Fix C: also pull stage4_total_thinking_tokens so the
+  // accumulator includes vendor-reported reasoning tokens across re-runs.
+  // The column was added in mig 376 but never written until this commit.
   const { data: existingRaw } = await args.admin
     .from('engine_run_audit')
     .select(
@@ -1887,6 +1904,7 @@ export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Prom
       'stage1_total_input_tokens, stage1_total_output_tokens, ' +
       'stage4_total_cost_usd, stage4_total_wall_ms, stage4_call_count, ' +
       'stage4_total_input_tokens, stage4_total_output_tokens, ' +
+      'stage4_total_thinking_tokens, ' +
       'stages_completed, total_cost_usd, total_wall_ms, ' +
       'total_input_tokens, total_output_tokens, prompt_block_versions',
     )
@@ -1905,6 +1923,7 @@ export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Prom
   const priorStage4Calls = (existing?.stage4_call_count as number | null) ?? 0;
   const priorStage4InputTokens = (existing?.stage4_total_input_tokens as number | null) ?? 0;
   const priorStage4OutputTokens = (existing?.stage4_total_output_tokens as number | null) ?? 0;
+  const priorStage4ThinkingTokens = (existing?.stage4_total_thinking_tokens as number | null) ?? 0;
   const priorStagesCompleted = (existing?.stages_completed as string[] | null) ?? [];
   // W11.8.1: failover stripped — default mode for fresh-row case is
   // 'shape_d_full'. Legacy rows with 'unified_anthropic_failover' pass through.
@@ -1912,17 +1931,19 @@ export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Prom
   const priorPromptBlockVersions =
     (existing?.prompt_block_versions as Record<string, string> | null) ?? {};
 
+  // W11.8.2 audit-fix Fix D (accumulator-everywhere): every Stage 4 numeric
+  // column accumulates `prior + args` — wall_ms is the only Math.max here,
+  // because parallel Stage 4 retries' wall times overlap on the timeline.
+  // Stage 4 already used accumulator behaviour for cost / call_count /
+  // input_tokens / output_tokens before W11.8.2; this commit adds
+  // stage4_total_thinking_tokens to the accumulator set so it follows the
+  // same shape.
   const newStage4Cost = priorStage4Cost + args.stage4CostUsd;
   const newStage4Wall = Math.max(priorStage4Wall, args.stage4WallMs);
   const newStage4CostRounded = Math.round(newStage4Cost * 1_000_000) / 1_000_000;
-  // Token attribution: accumulate across re-runs (W11.7 cleanup defect #4 fix).
-  // Previously stage4_total_input_tokens / stage4_total_output_tokens were
-  // never written here; callers saw NULL on the audit row even though the
-  // vendor adapter returned the usage breakdown. Now we plumb resp.usage.*
-  // through and accumulate. Stage 1 token totals come from the prior row
-  // (Agent 2 owns shortlisting-shape-d Stage 1 token plumbing follow-up).
   const newStage4InputTokens = priorStage4InputTokens + args.stage4InputTokens;
   const newStage4OutputTokens = priorStage4OutputTokens + args.stage4OutputTokens;
+  const newStage4ThinkingTokens = priorStage4ThinkingTokens + args.stage4ThinkingTokens;
   const totalCost = stage1Cost + newStage4Cost;
   const totalCostRounded = Math.round(totalCost * 1_000_000) / 1_000_000;
   const totalWall = stage1Wall + newStage4Wall;
@@ -1960,6 +1981,7 @@ export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Prom
     stage4_total_wall_ms: newStage4Wall,
     stage4_total_input_tokens: newStage4InputTokens,
     stage4_total_output_tokens: newStage4OutputTokens,
+    stage4_total_thinking_tokens: newStage4ThinkingTokens,
     total_cost_usd: totalCostRounded,
     total_wall_ms: totalWall,
     total_input_tokens: totalInputTokens,

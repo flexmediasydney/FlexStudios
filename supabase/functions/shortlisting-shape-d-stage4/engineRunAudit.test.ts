@@ -127,6 +127,7 @@ Deno.test('updateEngineRunAudit: success path upserts row and logs ok line to st
       stage4WallMs: 95_000,
       stage4InputTokens: 12_000,
       stage4OutputTokens: 8_000,
+      stage4ThinkingTokens: 4_096,
       promptBlockVersions: { stage4_prompt: 'v1.0.0' },
       warnings,
     });
@@ -143,6 +144,8 @@ Deno.test('updateEngineRunAudit: success path upserts row and logs ok line to st
   assertStrictEquals(call.row.stage4_total_cost_usd, 1.4372);
   assertStrictEquals(call.row.total_cost_usd, 1.4372);
   assertStrictEquals(call.row.stage4_call_count, 1);
+  // W11.8.2 audit-fix Fix C: thinking tokens populated.
+  assertStrictEquals(call.row.stage4_total_thinking_tokens, 4_096);
   assertEquals(call.row.stages_completed, ['stage4', 'persistence']);
 
   // Success line went to stdout (so `supabase functions logs` shows it).
@@ -182,6 +185,7 @@ Deno.test('updateEngineRunAudit: upsert error mirrors to BOTH args.warnings and 
       stage4WallMs: 30_000,
       stage4InputTokens: 1_000,
       stage4OutputTokens: 500,
+      stage4ThinkingTokens: 0,
       promptBlockVersions: {},
       warnings,
     });
@@ -232,6 +236,7 @@ Deno.test('updateEngineRunAudit: re-run accumulates stage4 + preserves stage1 in
     stage4_call_count: 1,
     stage4_total_input_tokens: 5_000,
     stage4_total_output_tokens: 2_000,
+    stage4_total_thinking_tokens: 2_048,
     stages_completed: ['pass0', 'stage1', 'stage4', 'persistence'],
     total_cost_usd: 35.5,
     total_wall_ms: 620_000,
@@ -257,6 +262,7 @@ Deno.test('updateEngineRunAudit: re-run accumulates stage4 + preserves stage1 in
       stage4WallMs: 40_000,
       stage4InputTokens: 6_000,
       stage4OutputTokens: 3_000,
+      stage4ThinkingTokens: 3_500,
       promptBlockVersions: { stage4_prompt: 'v1.0.0' },
       warnings,
     });
@@ -271,6 +277,8 @@ Deno.test('updateEngineRunAudit: re-run accumulates stage4 + preserves stage1 in
   assertStrictEquals(row.stage4_total_cost_usd, 1.4372); // 0.5 + 0.9372
   assertStrictEquals(row.stage4_total_input_tokens, 11_000);
   assertStrictEquals(row.stage4_total_output_tokens, 5_000);
+  // W11.8.2 audit-fix Fix C: thinking tokens accumulate.
+  assertStrictEquals(row.stage4_total_thinking_tokens, 5_548); // 2048 + 3500
   // Wall-ms takes the max (single longest call), not a sum.
   assertStrictEquals(row.stage4_total_wall_ms, 40_000);
   // total_cost_usd preserves landed Stage 1 cost (35.0) — it does NOT regress

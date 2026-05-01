@@ -10,14 +10,17 @@
  * passes (pass0/pass1/pass2) and `vendor-retroactive-compare` keeps its own
  * Anthropic pricing for A/B benchmarks — neither shares this table.
  *
- * Google (Gemini) rates per https://ai.google.dev/gemini-api/docs/pricing as
- * of 2026-04-29. Rates are model-tier flat per spec — context-length tiers
- * (e.g. >128K input on Pro) are intentionally NOT modelled; the conservative
- * choice is to bill at the higher long-context rate so the cost cap fires
- * earlier rather than later.
+ * W11.8.2 (2026-05-01): Gemini 2.5 Pro / 2.5 Flash rates corrected. Prior
+ * commit (4e53f1d) shipped 2.5 rates copied from a stale 2.0 source comment —
+ * 2.5 Pro is $1.25 / $10.00 (≤200K context tier; Stage 1 single-image always
+ * <200K) and 2.5 Flash is $0.30 / $2.50. Source:
+ * https://ai.google.dev/gemini-api/docs/pricing as of 2026-04-30. The 2.0
+ * rows are unchanged ($3.50 / $10.50 Pro and $0.10 / $0.40 Flash) — those
+ * legacy rates remained correct for 2.0 and aren't currently called.
  *
- * Unknown models fall back to a defensive higher rate (Gemini 2.0 Pro)
- * so cost tracking never silently undercounts.
+ * Unknown models fall back to a defensive moderate rate (Gemini 2.5 Pro
+ * published rates) so cost tracking errs upward without quoting Sonnet-tier
+ * rates that no Gemini model has ever charged.
  */
 
 import type { VisionUsage, VisionVendor } from './types.ts';
@@ -44,16 +47,24 @@ export const VENDOR_PRICING: Record<VisionVendor, Record<string, ModelRates>> = 
     'gemini-2.0-pro': { inputPerMillion: 3.50, outputPerMillion: 10.50 },
     // Gemini 2.0 Flash: $0.10 / $0.40 per 1M tokens.
     'gemini-2.0-flash': { inputPerMillion: 0.10, outputPerMillion: 0.40 },
-    // Gemini 2.5 Pro: $3.50 / $10.50 per 1M tokens (production Stage 1 + 4
-    // model since W11.7.17 keystone cutover).
-    'gemini-2.5-pro': { inputPerMillion: 3.50, outputPerMillion: 10.50 },
-    // Gemini 2.5 Flash: $0.10 / $0.40 per 1M tokens (Pulse listing extract).
-    'gemini-2.5-flash': { inputPerMillion: 0.10, outputPerMillion: 0.40 },
+    // Gemini 2.5 Pro: $1.25 / $10.00 per 1M tokens (≤200K context tier;
+    // Stage 1 single-image calls always sit well under 200K). Production
+    // Stage 1 + 4 model since W11.7.17 keystone cutover. Source:
+    // https://ai.google.dev/gemini-api/docs/pricing (W11.8.2 correction —
+    // prior commit had stale 2.0-tier rates copied here).
+    'gemini-2.5-pro': { inputPerMillion: 1.25, outputPerMillion: 10.00 },
+    // Gemini 2.5 Flash: $0.30 / $2.50 per 1M tokens (Pulse listing extract).
+    // Source: same page (W11.8.2 correction — prior 0.10/0.40 was stale
+    // 2.0-tier).
+    'gemini-2.5-flash': { inputPerMillion: 0.30, outputPerMillion: 2.50 },
   },
 };
 
-// Fallback for unknown models — Gemini Pro rates so cost tracking errs upward.
-const FALLBACK_RATES: ModelRates = { inputPerMillion: 3.50, outputPerMillion: 10.50 };
+// Fallback for unknown models — Gemini 2.5 Pro published rates so cost
+// tracking errs slightly upward without inventing Sonnet-tier numbers no
+// Gemini model has ever charged. With explicit 2.0/2.5 Pro/Flash rows above,
+// this only fires for models we've forgotten to register.
+const FALLBACK_RATES: ModelRates = { inputPerMillion: 1.25, outputPerMillion: 10.00 };
 
 // ─── Resolution ──────────────────────────────────────────────────────────────
 
@@ -70,7 +81,7 @@ export function resolveRates(vendor: VisionVendor, model: string): ModelRates {
     if (table[stripped]) return table[stripped];
   }
   console.warn(
-    `[visionAdapter/pricing] unknown model '${model}' for vendor '${vendor}' — defaulting to Gemini Pro rates`,
+    `[visionAdapter/pricing] unknown model '${model}' for vendor '${vendor}' — defaulting to Gemini 2.5 Pro rates`,
   );
   return FALLBACK_RATES;
 }

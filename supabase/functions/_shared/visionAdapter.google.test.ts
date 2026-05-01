@@ -19,6 +19,7 @@ import {
   callGoogleVision,
   extractGeminiOutput,
 } from './visionAdapter/adapters/google.ts';
+import { estimateCost } from './visionAdapter/pricing.ts';
 import {
   MissingVendorCredential,
   VendorCallError,
@@ -390,5 +391,92 @@ Deno.test('callGoogleVision — throws MissingVendorCredential when GEMINI_API_K
     );
   } finally {
     if (orig !== undefined) Deno.env.set('GEMINI_API_KEY', orig);
+  }
+});
+
+// ─── W11.8.2: pricing rate corrections ───────────────────────────────────────
+
+Deno.test('estimateCost — gemini-2.5-pro uses corrected $1.25 / $10.00 rates', () => {
+  // Stage 1 single-image envelope: 100K input + 1K output.
+  // Expected: 100000 * 1.25 / 1M + 1000 * 10.00 / 1M = 0.125 + 0.01 = 0.135.
+  // Pre-W11.8.2 (broken) rates would have produced 0.315 here.
+  const cost = estimateCost('google', 'gemini-2.5-pro', {
+    input_tokens: 100_000,
+    output_tokens: 1_000,
+    cached_input_tokens: 0,
+  });
+  assertAlmostEquals(cost, 0.135, 1e-9);
+});
+
+Deno.test('estimateCost — gemini-2.5-flash uses corrected $0.30 / $2.50 rates', () => {
+  // Pulse listing extract envelope: 100K input + 1K output.
+  // Expected: 100000 * 0.30 / 1M + 1000 * 2.50 / 1M = 0.030 + 0.0025 = 0.0325.
+  // Pre-W11.8.2 (broken) rates would have produced 0.014 here (under-counted).
+  const cost = estimateCost('google', 'gemini-2.5-flash', {
+    input_tokens: 100_000,
+    output_tokens: 1_000,
+    cached_input_tokens: 0,
+  });
+  assertAlmostEquals(cost, 0.0325, 1e-9);
+});
+
+Deno.test('estimateCost — unknown google model falls back to Gemini 2.5 Pro rates', () => {
+  // Fallback assertion: $1.25 / $10.00 (Gemini 2.5 Pro published rate, used
+  // when a model row hasn't been registered). Pre-W11.8.2 fallback was Sonnet
+  // rates ($3.50 / $10.50) — too aggressive given no Gemini model has ever
+  // charged that.
+  const cost = estimateCost('google', 'gemini-future-model-2030', {
+    input_tokens: 100_000,
+    output_tokens: 1_000,
+    cached_input_tokens: 0,
+  });
+  assertAlmostEquals(cost, 0.135, 1e-9);
+});
+
+// ─── W11.8.2 (Fix C): thoughtsTokenCount propagation ─────────────────────────
+
+Deno.test('callGoogleVision — propagates thoughtsTokenCount as usage.thinking_tokens', async () => {
+  const orig = Deno.env.get('GEMINI_API_KEY');
+  Deno.env.set('GEMINI_API_KEY', 'test-key-xxx');
+  const restore = installMockFetch({
+    body: {
+      candidates: [{ content: { parts: [{ text: '{"a":1}' }] }, finishReason: 'STOP' }],
+      usageMetadata: {
+        promptTokenCount: 1_000,
+        candidatesTokenCount: 500,
+        thoughtsTokenCount: 1_900,
+      },
+    },
+  });
+  try {
+    const res = await callGoogleVision(baseReq());
+    // Pre-W11.8.2: thoughtsTokenCount silently dropped → thinking_tokens=0.
+    // Post-fix: propagated through to usage.thinking_tokens.
+    assertEquals(res.usage.thinking_tokens, 1_900);
+  } finally {
+    restore();
+    if (orig === undefined) Deno.env.delete('GEMINI_API_KEY');
+    else Deno.env.set('GEMINI_API_KEY', orig);
+  }
+});
+
+Deno.test('callGoogleVision — thinking_tokens defaults to 0 when vendor omits the field', async () => {
+  const orig = Deno.env.get('GEMINI_API_KEY');
+  Deno.env.set('GEMINI_API_KEY', 'test-key-xxx');
+  const restore = installMockFetch({
+    body: {
+      candidates: [{ content: { parts: [{ text: '{"a":1}' }] }, finishReason: 'STOP' }],
+      // No thoughtsTokenCount — Gemini doesn't always report it (e.g. when
+      // thinkingBudget=0 on Flash).
+      usageMetadata: { promptTokenCount: 1_000, candidatesTokenCount: 500 },
+    },
+  });
+  try {
+    const res = await callGoogleVision(baseReq());
+    assertEquals(res.usage.thinking_tokens, 0);
+  } finally {
+    restore();
+    if (orig === undefined) Deno.env.delete('GEMINI_API_KEY');
+    else Deno.env.set('GEMINI_API_KEY', orig);
   }
 });
