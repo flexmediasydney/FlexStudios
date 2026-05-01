@@ -140,7 +140,15 @@ const STALE_CLAIM_MIN = 5;
 // is still alive and holding the per-round mutex. Background kinds get a
 // longer leash — bgWork's per-round mutex (20-minute auto-expiry) is the
 // upstream backstop against truly orphaned rows.
-const BACKGROUND_MODE_KINDS = new Set(["shape_d_stage1", "stage4_synthesis"]);
+// Wave 13b adds `pulse_description_extract` — text-only Gemini extractor that
+// runs in EdgeRuntime.waitUntil for ~3-5 min on a 100-row smoke. Same
+// background-mode contract as shape_d_stage1: HTTP 200 ack with mode='background',
+// bgWork self-updates the row on completion.
+const BACKGROUND_MODE_KINDS = new Set([
+  "shape_d_stage1",
+  "stage4_synthesis",
+  "pulse_description_extract",
+]);
 const STALE_CLAIM_MIN_BACKGROUND = 15;
 
 type ShortlistingJob = {
@@ -503,6 +511,14 @@ const KIND_TO_FUNCTION: Record<string, string> = {
   shape_d_stage1: "shortlisting-shape-d",
   stage4_synthesis: "shortlisting-shape-d-stage4",
   canonical_rollup: "canonical-rollup",
+  // Wave 13b — text-only Gemini 2.5 Pro extractor over pulse_listings.description.
+  // Background-mode kind: returns {mode: 'background'} ack and self-updates
+  // the job row when bgWork completes (matches shape_d_stage1).
+  pulse_description_extract: "pulse-description-extractor",
+  // Wave 13c — vision-Gemini 2.5 Pro extractor over pulse_listings.floorplan_urls.
+  // Terminal kind, no chain. Inline mode for ≤4 units (smoke), background mode
+  // for larger N (immediate-ack + EdgeRuntime.waitUntil + self-update).
+  floorplan_extract: "floorplan-ocr-extractor",
 };
 
 async function dispatchOne(job: ShortlistingJob): Promise<DispatchResult> {
@@ -557,6 +573,17 @@ async function chainNextKind(
   // raw_attribute_observations + object_registry + object_registry_candidates
   // and exits. Nothing else chains off it.
   if (job.kind === "canonical_rollup") return;
+  // Wave 13b: pulse_description_extract is terminal — it's a standalone
+  // batch extractor over historical pulse_listings.description rows. It
+  // writes to pulse_description_extracts + pulse_extract_audit and exits.
+  // Downstream waves (W12.5 organic registry growth, W14 calibration) read
+  // those tables directly rather than via a chained dispatcher kind.
+  if (job.kind === "pulse_description_extract") return;
+  // Wave 13c: floorplan_extract is terminal — vision-Gemini 2.5 Pro extractor
+  // over pulse_listings.floorplan_urls. Writes to floorplan_extracts and exits.
+  // Downstream waves (W12.5 canonical registry, W15c floorplan-aware
+  // shortlisting) read floorplan_extracts directly.
+  if (job.kind === "floorplan_extract") return;
 
   // extract → pass0, only when ALL extract jobs for this round are done.
   if (job.kind === "extract") {

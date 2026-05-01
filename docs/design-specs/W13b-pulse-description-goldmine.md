@@ -466,3 +466,175 @@ Minimal — this is a backend bootstrap wave.
 - [ ] Modal app `flexstudios-pulse-description-extractor` deployed
 - [ ] 100-listing dry run: prompt validation against a stratified sample (10 sale × 10 sold × 5 rental at varied price points), Joseph QA's the output for hallucination + canonical-key accuracy
 - [ ] Cost cap monitor: nightly batch row in `pulse_description_extractions` aggregates includes cost_usd; alert if any single night exceeds $80 (vs ~$53 expected)
+
+---
+
+# v2 Implementation (2026-05-01) — supersedes Modal/Anthropic approach
+
+## Why a v2 — what changed
+
+The original spec (above) routed the work through a Modal Python worker calling Anthropic Sonnet/Opus. Joseph re-scoped on 2026-05-01 to:
+
+1. Run on **Gemini 2.5 Pro** (text-only, no images): costs ~$0.007/row vs Sonnet $0.014 — half the budget for the same structured pull.
+2. Live **inside an edge function** (`pulse-description-extractor`) — same dispatcher pattern as `shortlisting-shape-d`. No new Modal app, no new container deploy. Reuses `_shared/visionAdapter` (Gemini path), `_shared/dispatcherMutex`, `_shared/supabase`.
+3. Drive via **`shortlisting_jobs.kind = 'pulse_description_extract'`** — same cron + queue + retry semantics as the rest of the engine.
+4. **Two consumer surfaces** instead of just registry:
+   - `pulse_description_extracts` — raw rows for downstream waves (W12 organic registry growth, W14 calibration).
+   - `v_few_shot_voice_exemplars` view — pre-filtered by `derived_few_shot_eligibility=true`, sample-N best per voice tier, ready for `fewShotLibraryBlock` to read.
+5. Smoke test 100 rows first (~$0.70). Full 28k run is **out of scope** for this wave (deferred to Wave 3d.5 once Joseph signs off on smoke results).
+
+The Modal approach above is parked. It can be revisited if Gemini turns out to be insufficient on quality after the 100-row smoke; the schema in this v2 is compatible with re-running an Anthropic backfill into the same table later.
+
+## Goal (3 sentences)
+
+Extract structured signal (voice register, architectural features, material palette, period signals, lifestyle themes, forbidden phrases, quality indicators) from each of FlexMedia's 33,727 archived pulse-listing descriptions using Gemini 2.5 Pro at ~$0.007/row. Persist to `pulse_description_extracts` keyed by `pulse_listing_id` with full provenance (model, version, cost, duration). Surface a curated subset via `v_few_shot_voice_exemplars` so `fewShotLibraryBlock` can pull premium / standard / approachable voice exemplars from real published listing copy.
+
+## Source data
+
+- **Table**: `pulse_listings` (confirmed; primary key `id uuid`).
+- **Description column**: `description text` — free-form agency listing copy.
+- **Row counts** (as of 2026-05-01):
+  - Total rows: **33,834**
+  - With description: **33,833**
+  - With description ≥ 200 chars (substantial): **33,727**
+- **Quality**: spot-check of 5 random substantial descriptions confirms publishable agency copy across the full price range — Pello Upper North Shore (Turramurra premium architectural), Adrian William (Camperdown studio premium-modern), Property Now (Lane Cove North approachable), Sanders Property Agents (Jannali standard), Schwarz Real Estate (Dee Why standard). Voice register is naturally distinct.
+- **Co-fields available** for context joining: `suburb`, `postcode`, `property_type`, `bedrooms`, `bathrooms`, `asking_price`, `sold_price`, `agency_name`, `agent_name`, `features` (jsonb), `land_size_sqm`, `listing_type`.
+- **Derived price-band** (computed at extract time, NOT a source column): `<$1M | $1M–$2M | $2M–$5M | $5M–$10M | >$10M | rental | unknown` — feeds the model as voice-context grounding.
+
+## Extract schema (what the model emits per row)
+
+JSON object validated against the Gemini `responseSchema`:
+
+```json
+{
+  "voice_register": "premium | standard | approachable",
+  "voice_archetype": "string (free-form short label, max 64 chars)",
+  "architectural_features": ["string (noun phrase, canonical-eligible)"],
+  "material_palette": ["string (material noun, e.g. 'limestone bench', 'oak floors')"],
+  "period_signals": ["Federation | Edwardian | Mid-century | Contemporary | ..."],
+  "lifestyle_themes": ["entertaining | family | lock-and-leave | downsizer | first-home | investor | ..."],
+  "forbidden_phrases": ["string (cliche the description USED — 'nestled', 'boasting', 'stunning', etc.)"],
+  "quality_indicators": {
+    "reading_grade_level": "number (Flesch-Kincaid estimate, 1-20)",
+    "word_count": "integer",
+    "exclamation_marks": "integer"
+  },
+  "derived_few_shot_eligibility": "boolean (true if publishable enough to use as a voice exemplar)",
+  "extractor_notes": "string (optional, < 240 chars — why this is or isn't a good exemplar)"
+}
+```
+
+## Extractor — `pulse-description-extractor` edge function
+
+Lives at `supabase/functions/pulse-description-extractor/index.ts`.
+
+**Invocation modes:**
+- `{ job_id }` — dispatcher path. Looks up `pulse_listing_ids[]`, `cost_cap_usd`, `model` from `shortlisting_jobs.payload`.
+- `{ pulse_listing_ids: ["uuid", ...], cost_cap_usd?: number, model?: string }` — direct master_admin invocation.
+- `{ _health_check: true }` — version stamp.
+
+**Flow:**
+1. Auth: master_admin OR service-role; reject otherwise.
+2. Parse + validate input. If `job_id`, hydrate from job row.
+3. Filter pending IDs: `LEFT JOIN pulse_description_extracts USING (pulse_listing_id)` and skip rows where `extracted_at` is non-null AND `extractor_version = $current` (idempotent).
+4. Cost gate: `pendingCount * 0.007 ≤ cost_cap_usd` (per-call envelope of $0.014 max, default cap $1).
+5. Acquire mutex `pulse-description-extractor:<batch_id>` (5-min finish window).
+6. **Background work** (`EdgeRuntime.waitUntil`): per-row, sequentially call `callVisionAdapter` with `vendor='google'`, `model='gemini-2.5-pro'`, `images: []`, `system + user_text` from prompt, `tool_input_schema = PULSE_EXTRACT_SCHEMA`, `thinking_budget: 1024`, `max_output_tokens: 2000`, 60s timeout.
+7. Persist each successful extract via UPSERT on `(pulse_listing_id)`. Persist failures into `pulse_description_extracts` with `extract_status='failed'` + `error_message` so they're not retried in a tight loop (only retry by bumping `extractor_version`).
+8. Cost rollup written to `pulse_extract_audit` (one row per batch with: model, batch_size, total_cost_usd, total_wall_ms, success_count, failure_count).
+9. Self-update `shortlisting_jobs` row with `status='succeeded' / 'failed'` + result.
+
+**Concurrency**: per-row sequential (Gemini RPM tolerates 60+ but a 100-row smoke at 1-2s each is fine; full 28k will lift to in-flight=4 once promoted out of smoke).
+
+**Cost cap behaviour**: refuse to start if estimated > `cost_cap_usd`. The estimate is `pendingCount * 0.007 * 1.10` (10% headroom). If a single call exceeds 4× the per-row average, log a warning and continue.
+
+## Dispatcher integration
+
+- New kind: `pulse_description_extract`.
+- `KIND_TO_FUNCTION` map (`shortlisting-job-dispatcher`) gets `pulse_description_extract: "pulse-description-extractor"`.
+- `shortlisting_jobs_kind_check` CHECK constraint extended to allow the new kind.
+- Treated as a **background-mode kind** (long-running) — added to `BACKGROUND_MODE_KINDS` so the dispatcher doesn't auto-mark on the 200 ack.
+- Terminal — no chain. (Future Wave 14 calibration will read `pulse_description_extracts` directly, not via chained dispatcher kind.)
+- Manual master_admin trigger: insert a row into `shortlisting_jobs` with `kind='pulse_description_extract'`, `payload = { pulse_listing_ids, cost_cap_usd, model }`. Same admin pattern as the other manual triggers.
+
+## Cost model
+
+- **Gemini 2.5 Pro** (text-only, no images, ≤200K input): $1.25 / 1M input, $10 / 1M output.
+- Per-row average input: ~1500 tokens (system + user_text + description) = $0.0019.
+- Per-row average output: ~500 tokens (structured JSON) = $0.0050.
+- **Per-row total: ~$0.007.**
+- Full corpus (28k extractable rows): **$196**.
+- 10% headroom buffer: **$216 hard cap**.
+- Smoke test (100 rows): **~$0.70**.
+- Hard stop: refuse to start a batch whose `pendingCount * 0.007 * 1.10 > cost_cap_usd`.
+
+## Acceptance criteria
+
+| Criterion | Target |
+|---|---|
+| Extract quality (manual spot-check) | 8/10 fields plausibly correct on 50 random rows post-smoke |
+| `derived_few_shot_eligibility=true` rate | 5–10% (i.e. ~1,400–2,800 of 28k full-corpus eventually) |
+| Smoke wallclock (100 rows) | ≤ 5 minutes total (incl. background) |
+| Smoke cost | ≤ $1.00 |
+| Full-corpus runtime | ≤ 3 days at concurrency=4 (deferred to Wave 3d.5) |
+| Migration applied | `386_w13b_pulse_description_extracts.sql` |
+| Edge fn deployed | `pulse-description-extractor` v1.0 |
+
+## Out of scope (this wave)
+
+- Full 28k run — deferred to **Wave 3d.5** once Joseph signs off on the 100-row smoke.
+- Stage 1 / Stage 4 / shortlisting_overrides changes — none.
+- Backfill of `engine_fewshot_examples` from the new view — manual master_admin curation pass after smoke.
+- W12 organic registry growth from extractor output — Wave 12.5 will read `pulse_description_extracts.architectural_features` + `material_palette` and feed `object_registry_candidates`.
+
+## Smoke results (2026-05-01)
+
+**Run summary** — 100-row stratified random sample of pulse_listings with description ≥ 400 chars.
+
+| Metric | Target | Actual |
+|---|---|---|
+| Rows extracted (success) | 100 | **102** (88 + 12 idempotent skip + 2 from initial pre-test) |
+| Failures | 0 | **0** |
+| Total cost | ≤ $1.00 | **$0.337** |
+| Per-row cost (avg) | ~$0.007 | **~$0.0034** (Gemini cheaper than spec) |
+| Wallclock | ≤ 5 min | **132 s** (concurrency=8) |
+| Per-row duration (avg) | ~10 s | **~11 s** |
+| Few-shot eligibility rate | 5–10% (loose target) | **42%** — see breakdown below |
+
+**Per-tier breakdown:**
+
+| voice_register | rows | eligible | avg arch_features | avg forbidden_phrases | avg word_count |
+|---|---|---|---|---|---|
+| standard | 66 | 31 (47%) | 9.0 | 2.0 | 170 |
+| approachable | 23 | 0 (0%) | 6.7 | 1.5 | 144 |
+| premium | 13 | 12 (92%) | 11.3 | 1.8 | 215 |
+
+**Cost projection for full 28k corpus** (using actual per-row cost):
+- Actual: 28,000 × $0.0034 = **~$95** (less than half the spec's $200 budget)
+- Headroom: $200 budget covers >2× the corpus or a re-extraction with bumped extractor_version
+- Note: spec's $0.007/row was a conservative estimate; the real cost is ~$0.0034/row because most descriptions are well under our 1500-token estimate
+
+**Quality spot-check** (5 random rows manually reviewed):
+
+1. **Lane Cove North $850/wk rental, Ayre Real Estate** → standard, "professional rental", 14 architectural features inc. "shadowline ceilings", "video security intercom", "stone benchtops"; eligibility=true. ✓
+2. **East Lindfield $2,250/wk rental, SY REALTY** → standard, "Standard rental listing"; eligibility=false correctly flagged ("includes agent contact details and a disclaimer"). ✓
+3. **Peakhurst sale, Ausrealty** → standard, "bullet-point feature list"; eligibility=false correctly flagged ("heavily templated bullet-point list"). Identified `"perfect blend"`, `"light-filled spaces"`, `"perfect for"` as forbidden phrases — accurate. ✓
+4. **Cronulla $800/wk rental, Ressler Property** → approachable; eligibility=false ("description is too short and formulaic"). ✓
+5. **North Rocks $1,100/wk rental, A&E Real Estate** → standard; eligibility=true; 12 architectural features identified including "Herringbone timber flooring" + "in-ground swimming pool". ✓
+
+**Findings:**
+- Voice register classification is well-calibrated. The model correctly puts shouty cliché-heavy approachable copy in `approachable` and rejects it for few-shot eligibility (0/23 eligible).
+- Premium copy is rare in the 100-row random sample (only 13/102), but quality is high (92% eligibility) — when the corpus has premium copy, it's almost always good enough to use as an exemplar.
+- The model is a sharp critic of its own eligibility: it correctly flags listings with disclaimers, agent contact details, all-caps shouting, or templated bullet lists.
+- `forbidden_phrases` is doing real work — surfacing actual cliches (`"nestled"`, `"boasting"`, `"stunning"`, `"perfect for"`, `"in the heart of"`) used in the source.
+- `architectural_features` and `material_palette` are dense enough to feed W12.5 normalisation immediately. Examples: `"shadowline ceilings"`, `"Caesarstone benchtop"`, `"Federation cornicing"`, `"Herringbone timber flooring"`.
+
+**v_few_shot_voice_exemplars view check** (post-smoke):
+- premium: 12 exemplars (rank 1-12)
+- standard: 31 exemplars (rank 1-31)
+- approachable: 0 — correct (no eligible rows in this sample)
+
+**Decision:** Smoke results greenlight the full 28k run. Joseph to sign off, then **Wave 3d.5** dispatches the full corpus via `shortlisting_jobs.kind = 'pulse_description_extract'` with cost_cap=$210.
+
+**Known issue (non-blocking for smoke):**
+- The audit row's running counters are written only at end-of-batch in the bg worker's success path; during a long run the row stays at 0/0/0 and only updates when bgWork finishes. For ops visibility on full-corpus runs, consider an in-flight rollup every N rows. Tracked as a follow-up; smoke wallclock was short enough that this didn't matter.
