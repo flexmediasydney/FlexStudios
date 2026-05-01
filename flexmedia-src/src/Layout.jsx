@@ -365,6 +365,7 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsShortlistingOverrides") && { name: "Shortlist · Overrides", href: "SettingsShortlistingOverrides", icon: Sparkles },
           can("SettingsShortlistingPrompts") && { name: "Shortlist · Prompts", href: "SettingsShortlistingPrompts", icon: Sparkles },
           can("SettingsEngineSettings") && { name: "Shortlist · Engine Settings", href: "SettingsEngineSettings", icon: Sparkles },
+          can("SettingsEngineOverridePatterns") && { name: "Shortlist · Override Patterns", href: "SettingsEngineOverridePatterns", icon: Activity },
           can("SettingsPackageTierMapping") && { name: "Shortlist · Tier Mapping", href: "SettingsPackageTierMapping", icon: Sparkles },
           can("SettingsVendorComparison") && { name: "Shortlist · Vendor Comparison", href: "SettingsVendorComparison", icon: Sparkles },
         ].filter(Boolean)

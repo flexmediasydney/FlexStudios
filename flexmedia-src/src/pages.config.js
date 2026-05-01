@@ -139,6 +139,8 @@ const EngineDashboard = React.lazy(() => import('./pages/EngineDashboard'));
 const CalibrationDashboard = React.lazy(() => import('./pages/CalibrationDashboard'));
 // Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
 const SettingsObjectRegistryDiscovery = React.lazy(() => import('./pages/SettingsObjectRegistryDiscovery'));
+// W11.6.10 — engine override patterns analytics dashboard.
+const SettingsEngineOverridePatterns = React.lazy(() => import('./pages/SettingsEngineOverridePatterns'));
 const SettingsPackageTierMapping = React.lazy(() => import('./pages/SettingsPackageTierMapping'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
@@ -223,6 +225,7 @@ export const PAGES = {
     "EngineDashboard": EngineDashboard,
     "CalibrationDashboard": CalibrationDashboard,
     "SettingsObjectRegistryDiscovery": SettingsObjectRegistryDiscovery,
+    "SettingsEngineOverridePatterns": SettingsEngineOverridePatterns,
     "SettingsPackageTierMapping": SettingsPackageTierMapping,
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,

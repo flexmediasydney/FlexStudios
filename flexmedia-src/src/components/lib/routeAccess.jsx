@@ -59,6 +59,8 @@ export const ROUTE_ACCESS = {
   CalibrationDashboard: OWNER_ONLY,
   // Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
   SettingsObjectRegistryDiscovery: OWNER_ONLY,
+  // W11.6.10 — engine override patterns analytics dashboard.
+  SettingsEngineOverridePatterns: ADMIN_AND_ABOVE,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,

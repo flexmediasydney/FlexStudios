@@ -209,17 +209,18 @@ describe('getAccessLevel', () => {
 describe('getAccessibleRoutes', () => {
   const totalRoutes = Object.keys(ROUTE_ACCESS).length;
 
-  it('master_admin gets all 53 routes', () => {
+  it('master_admin gets all 54 routes', () => {
     const routes = getAccessibleRoutes('master_admin');
-    expect(routes.length).toBe(53);
+    expect(routes.length).toBe(54);
     expect(routes.length).toBe(totalRoutes);
   });
 
-  it('admin gets 49 routes', () => {
+  it('admin gets 50 routes', () => {
     const routes = getAccessibleRoutes('admin');
-    expect(routes.length).toBe(49);
+    expect(routes.length).toBe(50);
     expect(routes).toContain('Settings');
     expect(routes).toContain('Teams');
+    expect(routes).toContain('SettingsEngineOverridePatterns');
     expect(routes).not.toContain('Users');
     expect(routes).not.toContain('AdminTodoList');
     expect(routes).not.toContain('AIAuditLog');
