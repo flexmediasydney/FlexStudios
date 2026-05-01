@@ -215,7 +215,10 @@ export default function ShortlistingCard({
       );
       return rows || [];
     },
-    enabled: Boolean(roundId && whyExpanded),
+    // W11.6.15: enabled regardless of whyExpanded so the score-row render
+    // path can read slot_fit_score off the same row. Query key matches the
+    // swimlane's existing cache key so this is a cache hit, not a fetch.
+    enabled: Boolean(roundId),
     staleTime: 15_000,
   });
 
@@ -357,6 +360,41 @@ export default function ShortlistingCard({
         ? (Number(tScore) + Number(lScore) + Number(compScore) + Number(aScore)) / 4
         : null;
 
+  // W11.6.15: surface Stage 4's slot_fit_score (separate dimension from
+  // per-image quality) so operators can see WHEN slot-fit reasoning
+  // overrode raw quality. Resolves from the same shortlisting_overrides
+  // row as stage4SlotRationale: direct match by ai_proposed_group_id, then
+  // fall back to ai_proposed_slot_id for swap cases. Null when the row
+  // pre-dates W11.6.15 or the card is in REJECTED.
+  const slotFitScore = (() => {
+    const rows = overridesQuery.data || [];
+    if (!rows.length) return null;
+    const direct = rows.find(
+      (ov) =>
+        ov.human_action === "ai_proposed" && ov.ai_proposed_group_id === cardId,
+    );
+    if (direct?.slot_fit_score != null) return Number(direct.slot_fit_score);
+    if (slot?.slot_id) {
+      const slotRow = rows.find(
+        (ov) =>
+          ov.human_action === "ai_proposed" &&
+          ov.ai_proposed_slot_id === slot.slot_id,
+      );
+      if (slotRow?.slot_fit_score != null) return Number(slotRow.slot_fit_score);
+    }
+    return null;
+  })();
+
+  // Amber when slot-fit materially exceeds raw quality (delta > 2.0): Stage 4
+  // picked this for compositional intent over absolute quality, and the
+  // operator should be able to see that at a glance to validate or override.
+  // No highlight when slot-fit is lower or comparable — there's no trade-off
+  // to surface in those cases.
+  const slotFitAmber =
+    slotFitScore != null &&
+    avgScore != null &&
+    slotFitScore - Number(avgScore) > 2.0;
+
   const previewPath = c.dropbox_preview_path;
 
   const toggleWhy = (e) => {
@@ -459,6 +497,44 @@ export default function ShortlistingCard({
             avg={formatScore(avgScore)}
           </span>
         </div>
+
+        {/* W11.6.15: separate Slot-fit dimension. Only renders when Stage 4
+            wrote a slot_fit_score for this card's slot decision (post-
+            W11.6.15 rounds). Pre-W11.6.15 rounds + Phase 3 ai_recommended
+            rows that don't fill a canonical slot stay quality-only.
+            Amber highlight when slot-fit materially exceeds raw quality
+            (delta > 2.0) — surfaces the slot-vs-quality trade-off so an
+            operator can validate or disagree. */}
+        {slotFitScore != null && (
+          <TooltipProvider delayDuration={200}>
+            <div
+              className={cn(
+                "flex items-center gap-1 text-[10px] font-mono",
+                slotFitAmber
+                  ? "text-amber-700 dark:text-amber-300 font-semibold"
+                  : "text-muted-foreground",
+              )}
+              data-slot-fit-score={slotFitScore}
+              data-slot-fit-amber={slotFitAmber ? "true" : "false"}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex items-center gap-0.5 cursor-help underline decoration-dotted underline-offset-2">
+                    Slot fit
+                    <HelpCircle className="h-2.5 w-2.5 opacity-60" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-[280px] text-[11px] leading-snug">
+                  Stage 4's editorial fit-to-slot judgement, separate from
+                  per-image quality scores. High slot-fit + low quality
+                  means Stage 4 picked this shot for compositional intent
+                  over absolute quality.
+                </TooltipContent>
+              </Tooltip>
+              <span>: {formatScore(slotFitScore)}</span>
+            </div>
+          </TooltipProvider>
+        )}
 
         {/* Flags */}
         {cls.flag_for_retouching && (
