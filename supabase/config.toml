@@ -867,3 +867,9 @@ verify_jwt = false
 
 [functions.shortlist-lock-status]
 verify_jwt = false
+
+# W11.6.10 — engine-override-analytics admin GET surfacing all 9
+# dashboard sections (override patterns, cost attribution, voice tier,
+# canonical coverage). master_admin / admin only via getUserFromReq().
+[functions.engine-override-analytics]
+verify_jwt = false
