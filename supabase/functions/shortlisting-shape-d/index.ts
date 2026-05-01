@@ -1329,6 +1329,18 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     { isDrone: bool(out.is_drone) },
   );
 
+  // W11.6.13 — orthogonal SPACE/ZONE separation. Both are emitted by
+  // Stage 1 alongside the legacy room_type compatibility alias. The
+  // space_zone_count is optional but persisted when the model emits it.
+  const spaceType = str(out.space_type);
+  const zoneFocus = str(out.zone_focus);
+  const spaceZoneCountRaw = out.space_zone_count;
+  const spaceZoneCount = typeof spaceZoneCountRaw === 'number' && Number.isFinite(spaceZoneCountRaw)
+    ? Math.trunc(spaceZoneCountRaw)
+    : (typeof spaceZoneCountRaw === 'string' && /^-?\d+$/.test(spaceZoneCountRaw)
+        ? parseInt(spaceZoneCountRaw, 10)
+        : null);
+
   const row: Record<string, unknown> = {
     group_id: args.result.group_id,
     round_id: args.roundId,
@@ -1336,6 +1348,12 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     analysis: str(out.analysis),
     room_type: roomType,
     room_type_confidence: num(out.room_type_confidence),
+    // W11.6.13 — new orthogonal fields. Always written, even when
+    // null, so downstream readers get an explicit "absent" signal
+    // rather than a missing column.
+    space_type: spaceType,
+    zone_focus: zoneFocus,
+    space_zone_count: spaceZoneCount,
     composition_type: str(out.composition_type),
     vantage_point: vantageColumn,
     time_of_day: str(out.time_of_day),

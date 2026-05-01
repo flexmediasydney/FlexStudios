@@ -29,7 +29,10 @@
  *   - minItems / required honoured
  */
 
-export const STAGE1_RESPONSE_SCHEMA_VERSION = 'v1.0';
+// W11.6.13 — bumped from v1.0 to v1.1 for space_type / zone_focus /
+// space_zone_count additions. The room_type field is preserved as a
+// compatibility alias (legacy consumers + admin-curated taxonomy table).
+export const STAGE1_RESPONSE_SCHEMA_VERSION = 'v1.1';
 export const STAGE1_RESPONSE_TOOL_NAME = 'classify_image';
 
 export const STAGE1_RESPONSE_SCHEMA: Record<string, unknown> = {
@@ -55,9 +58,47 @@ export const STAGE1_RESPONSE_SCHEMA: Record<string, unknown> = {
         'Prefer the most specific applicable value — e.g. bedroom_guest over bedroom_secondary ' +
         'when the bedroom is clearly a formally-styled spare room; alfresco_undercover over alfresco ' +
         'when the alfresco is roofed; exterior_facade_hero over exterior_front when the shot is ' +
-        'a hero-quality framing of the front facade.',
+        'a hero-quality framing of the front facade. ' +
+        'COMPATIBILITY ALIAS (W11.6.13): the new SPACE/ZONE pair (space_type + zone_focus) is the ' +
+        'authoritative classification going forward. Keep emitting room_type for backward ' +
+        'compatibility, but always also emit space_type and zone_focus.',
     },
     room_type_confidence: { type: 'number' },
+    // W11.6.13 — orthogonal SPACE/ZONE separation. The architectural
+    // enclosure (space_type) and the compositional subject (zone_focus)
+    // are independent axes. In studios + open-plan apartments ONE space
+    // contains MANY zones; the new schema lets the engine reason about
+    // both correctly.
+    space_type: {
+      type: 'string',
+      description:
+        'The architectural enclosure (the 4 walls). Pick from canonical SPACE taxonomy: ' +
+        'master_bedroom | bedroom_secondary | bedroom_third | living_dining_combined | living_room_dedicated | dining_room_dedicated | ' +
+        'kitchen_dining_living_combined | kitchen_dedicated | studio_open_plan | bathroom | ensuite | powder_room | ' +
+        'entry_foyer | hallway | study | media_room | rumpus | laundry | mudroom | garage | alfresco_undercover | ' +
+        'alfresco_open | balcony | terrace | exterior_facade | exterior_rear | exterior_side | pool_area | garden | ' +
+        'streetscape | aerial_oblique | aerial_nadir.',
+    },
+    zone_focus: {
+      type: 'string',
+      description:
+        'The compositional SUBJECT of the shot — what the photographer is actually showing. ' +
+        'Pick from canonical ZONE taxonomy: bed_focal | wardrobe_built_in | dining_table | kitchen_island | ' +
+        'kitchen_appliance_wall | kitchen_pantry | lounge_seating | fireplace_focal | study_desk | tv_media_wall | ' +
+        'bath_focal | shower_focal | vanity_detail | toilet_visible | window_view | door_threshold | stair_focal | ' +
+        'feature_wall | ceiling_detail | floor_detail | material_proof | landscape_overview | full_facade | ' +
+        'pool_focal | outdoor_dining | outdoor_kitchen | bbq_zone | drying_zone | parking_zone. ' +
+        'Useful when space_type implies multiple zones (e.g. living_dining_combined → zone_focus distinguishes ' +
+        'dining_table vs lounge_seating). For single-zone shots, the zone_focus is still meaningful (e.g. ' +
+        'space_type=master_bedroom → zone_focus=bed_focal vs wardrobe_built_in vs window_view).',
+    },
+    space_zone_count: {
+      type: 'integer',
+      description:
+        '1 = single-purpose enclosed room (dedicated bedroom, dedicated bathroom). ' +
+        '2-4 = multi-zone open plan (living/dining combined = 2; kitchen+dining+living = 3). ' +
+        '5+ = studio-style (kitchen + bed + lounge + bathroom in one envelope).',
+    },
     composition_type: {
       type: 'string',
       description: 'Use one value from the composition_type taxonomy in the system prompt.',
@@ -288,6 +329,11 @@ export const STAGE1_RESPONSE_SCHEMA: Record<string, unknown> = {
   required: [
     'analysis',
     'room_type',
+    // W11.6.13 — both new orthogonal axes are required (space_zone_count
+    // remains optional but recommended; the model is encouraged but not
+    // forced to emit it).
+    'space_type',
+    'zone_focus',
     'composition_type',
     'technical_score',
     'lighting_score',

@@ -51,6 +51,10 @@ import {
   roomTypeTaxonomyBlock,
 } from './visionPrompts/blocks/roomTypeTaxonomy.ts';
 import {
+  SPACE_ZONE_TAXONOMY_BLOCK_VERSION,
+  spaceZoneTaxonomyBlock,
+} from './visionPrompts/blocks/spaceZoneTaxonomy.ts';
+import {
   COMPOSITION_TYPE_TAXONOMY_BLOCK_VERSION,
   compositionTypeTaxonomyBlock,
 } from './visionPrompts/blocks/compositionTypeTaxonomy.ts';
@@ -109,6 +113,15 @@ export function buildPass1Prompt(anchors: StreamBAnchors): AssembledPrompt {
         name: 'roomTypeTaxonomy',
         version: ROOM_TYPE_TAXONOMY_BLOCK_VERSION,
         text: roomTypeTaxonomyBlock(),
+      },
+      // W11.6.13 — orthogonal SPACE/ZONE taxonomy. The legacy room_type
+      // block above continues to populate the compatibility-alias field;
+      // this new block teaches the model to ALSO emit space_type +
+      // zone_focus + space_zone_count alongside it.
+      {
+        name: 'spaceZoneTaxonomy',
+        version: SPACE_ZONE_TAXONOMY_BLOCK_VERSION,
+        text: spaceZoneTaxonomyBlock(),
       },
       {
         name: 'compositionTypeTaxonomy',
