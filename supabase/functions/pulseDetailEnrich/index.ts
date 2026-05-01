@@ -47,6 +47,9 @@ import {
   breakerRecordFailure,
 } from '../_shared/observability.ts';
 import { recordFieldObservation } from '../_shared/fieldSources.ts';
+// W15b.6: post-enrich fan-out to vision extractors (photos + video frames).
+// Runs in EdgeRuntime.waitUntil() so the main response isn't blocked.
+import { fireVisionExtractsBatch, type ListingForFanout } from '../_shared/pulseVisionFanout.ts';
 
 // ── SAFR ingestion helper (silent-fails) ─────────────────────────────────────
 async function safrObserve(
@@ -814,6 +817,11 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       // single `pulse_inc_listing_detail_count_bulk` RPC at end of batch.
       // Dedup via Set so the same listing never gets double-counted in a run.
       const incrementIds = new Set<string>();
+      // W15b.6: snapshots of listings that successfully enriched, to feed the
+      // vision-extract fan-out at end of batch. Populated only after the
+      // pulse_listings UPDATE succeeds (no point queuing vision work for a
+      // listing whose enrich row didn't land).
+      const visionFanoutCandidates: ListingForFanout[] = [];
 
       for (const cand of batch) {
         const item = itemsById.get(String(cand.source_listing_id));
@@ -923,6 +931,21 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
         }
         incrementIds.add(cand.id);
         stats.items_processed++;
+
+        // W15b.6: snapshot for vision fan-out. We pull photo URLs from the
+        // mediaItems we just extracted (filter to type='photo' so we don't
+        // ship floorplan/video URLs to Gemini). Video URL is the dedicated
+        // listingUpdates.video_url. The actual fan-out runs in
+        // EdgeRuntime.waitUntil() at end of batch — non-blocking by design.
+        const photoUrls = (mediaItems || [])
+          .filter((m: any) => m && m.type === 'photo' && typeof m.url === 'string' && /^https?:\/\//.test(m.url))
+          .map((m: any) => m.url as string);
+        visionFanoutCandidates.push({
+          id: cand.id,
+          source_listing_id: cand.source_listing_id ?? null,
+          photo_urls: photoUrls,
+          video_url: videoUrl || null,
+        });
 
         // Base detail_enriched event (one per listing per day)
         timelineEvents.push({
@@ -1343,6 +1366,35 @@ serveWithAudit('pulseDetailEnrich', async (req) => {
       if (historyRows.length > 0) {
         const { error } = await admin.from('pulse_entity_sync_history').insert(historyRows);
         if (error) stats.errors.push(`history insert: ${error.message?.substring(0, 150)}`);
+      }
+
+      // W15b.6: fire vision extract fan-out for everything we just enriched.
+      // Non-blocking — runs in EdgeRuntime.waitUntil() so this batch's main
+      // response isn't held back by Gemini round-trips. If waitUntil isn't
+      // available (e.g. a future runtime change), fall through to fire-and-
+      // forget — the Promise rejection is caught inside fireVisionExtractsBatch.
+      if (visionFanoutCandidates.length > 0) {
+        const visionPromise = fireVisionExtractsBatch(admin, visionFanoutCandidates).then(decisions => {
+          const fired = decisions.filter(d => d.fired).length;
+          const skipped = decisions.length - fired;
+          const reasons = decisions
+            .filter(d => d.skipped_reason)
+            .reduce<Record<string, number>>((acc, d) => {
+              const k = d.skipped_reason || 'unknown';
+              acc[k] = (acc[k] || 0) + 1;
+              return acc;
+            }, {});
+          console.log(`[pulseDetailEnrich] vision fan-out: fired=${fired} skipped=${skipped} reasons=${JSON.stringify(reasons)}`);
+        }).catch(e => {
+          console.warn(`[pulseDetailEnrich] vision fan-out batch threw: ${(e as Error)?.message?.slice(0, 200)}`);
+        });
+        const er = (globalThis as any).EdgeRuntime;
+        if (er && typeof er.waitUntil === 'function') {
+          er.waitUntil(visionPromise);
+        }
+        // If waitUntil isn't available we still let the promise run; the
+        // edge runtime cleanup will leave it pending but the next batch
+        // will see fresh state. Catching above ensures no UnhandledRejection.
       }
     }
 
