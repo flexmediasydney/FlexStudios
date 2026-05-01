@@ -82,6 +82,7 @@ import {
   serveWithAudit,
   getAdminClient,
   invokeFunction,
+  fireNotif,
 } from '../_shared/supabase.ts';
 import { getShortlistingFolders } from '../_shared/shortlistingFolders.ts';
 import {
@@ -116,6 +117,36 @@ import {
 import { listFolder } from '../_shared/dropbox.ts';
 
 const GENERATOR = 'shortlist-lock';
+
+// W11.6.8 W7.10 P1-9: shortlist_lock_failed notification helper.
+// Centralises the fire so every failed-stage transition gets one alert
+// (master_admin + #deploy-alerts via mig 390 routing rule) without each
+// failure site needing its own try/catch. Idempotency keyed on roundId
+// so a single round's failure produces ONE alert across multiple
+// failure-update sites in the same flow. Always returns void; never
+// throws — notif glitches must NOT block the failure persistence.
+async function fireShortlistLockFailed(args: {
+  roundId: string;
+  projectId: string | null;
+  errorMessage: string;
+}): Promise<void> {
+  try {
+    await fireNotif({
+      type: 'shortlist_lock_failed',
+      category: 'system',
+      severity: 'critical',
+      title: `Shortlist lock failed`,
+      message: `Round ${args.roundId} lock did not complete: ${args.errorMessage.slice(0, 240)}`,
+      projectId: args.projectId || undefined,
+      ctaLabel: 'View lock status',
+      source: GENERATOR,
+      idempotencyKey: `shortlist-lock-failed-${args.roundId}`,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[${GENERATOR}] shortlist_lock_failed notification fire threw: ${msg}`);
+  }
+}
 
 // Background poll cadence + cap.
 const POLL_INTERVAL_MS = 3000;
@@ -569,6 +600,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         completed_at: new Date().toISOString(),
       })
       .eq('id', progressId);
+    await fireShortlistLockFailed({
+      roundId,
+      projectId: round.project_id,
+      errorMessage: `Dropbox batch submit failed: ${msg}`,
+    });
     return errorResponse(`Dropbox batch submit failed: ${msg}`, 502, req);
   }
 
@@ -609,6 +645,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           completed_at: new Date().toISOString(),
         })
         .eq('id', progressId);
+      await fireShortlistLockFailed({
+        roundId,
+        projectId: round.project_id,
+        errorMessage: finalizeResult.error || 'finalize failed',
+      });
       return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
     }
 
@@ -640,6 +681,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         completed_at: new Date().toISOString(),
       })
       .eq('id', progressId);
+    await fireShortlistLockFailed({
+      roundId,
+      projectId: round.project_id,
+      errorMessage: `unexpected move_batch_v2 response tag: ${submitResult['.tag']}`,
+    });
     return errorResponse(`Unexpected Dropbox response tag: ${submitResult['.tag']}`, 502, req);
   }
   const asyncJobId = submitResult.async_job_id;
@@ -1044,6 +1090,11 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
             completed_at: new Date().toISOString(),
           })
           .eq('id', args.progressId);
+        await fireShortlistLockFailed({
+          roundId: args.roundId,
+          projectId: args.projectId,
+          errorMessage: finalizeResult.error || 'finalize failed (poll path)',
+        });
         return;
       }
       await admin.from('shortlisting_lock_progress')
@@ -1061,6 +1112,11 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
           completed_at: new Date().toISOString(),
         })
         .eq('id', args.progressId);
+      await fireShortlistLockFailed({
+        roundId: args.roundId,
+        projectId: args.projectId,
+        errorMessage: `Dropbox batch reported failed: ${failureTxt}`,
+      });
       return;
     }
 
@@ -1069,13 +1125,19 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
   }
 
   // Cap reached without complete — mark failed so the operator can resume.
+  const capMsg = `Poll cap reached (${POLL_MAX_ATTEMPTS} attempts, ~${(POLL_INTERVAL_MS * POLL_MAX_ATTEMPTS) / 1000}s) without batch completing. Resume to retry.`;
   await admin.from('shortlisting_lock_progress')
     .update({
       stage: 'failed',
-      error_message: `Poll cap reached (${POLL_MAX_ATTEMPTS} attempts, ~${(POLL_INTERVAL_MS * POLL_MAX_ATTEMPTS) / 1000}s) without batch completing. Resume to retry.`,
+      error_message: capMsg,
       completed_at: new Date().toISOString(),
     })
     .eq('id', args.progressId);
+  await fireShortlistLockFailed({
+    roundId: args.roundId,
+    projectId: args.projectId,
+    errorMessage: capMsg,
+  });
 }
 
 // ─── Audit JSON mirror (Wave 7 P1-12 / W7.4) ─────────────────────────────────

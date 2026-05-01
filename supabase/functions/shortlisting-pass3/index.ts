@@ -487,6 +487,90 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
     warnings.push(`notification fire threw: ${msg}`);
   }
 
+  // 12. W11.6.8 W7.10 P1-9: secondary notifications for ops awareness.
+  //     SEPARATE from shortlist_ready_for_review — they target ops-facing
+  //     routing rules (engine-alerts / retouch-queue Slack channels via
+  //     notification_routing_rules.slack_channel binding, mig 390). Each
+  //     non-fatal; pass3RunCount-suffixed idempotency keys so reruns
+  //     produce distinct rows. Recipient-side dedup still applies.
+  try {
+    const projectName: string = (await (async () => {
+      const { data } = await admin
+        .from('projects')
+        .select('property_address')
+        .eq('id', projectId)
+        .maybeSingle();
+      return (data?.property_address as string | undefined) || 'Project';
+    })());
+
+    // 12a. coverage_gap_error → master_admin + #engine-alerts (mig 390).
+    if (unfilledMandatory.length > 0) {
+      const gapCount = unfilledMandatory.length;
+      const sample = unfilledMandatory.slice(0, 5).join(', ');
+      const more = gapCount > 5 ? ` (+${gapCount - 5} more)` : '';
+      await fireNotif({
+        type: 'coverage_gap_error',
+        category: 'system',
+        severity: 'warning',
+        title: `Coverage gap: ${projectName}`,
+        message:
+          `Pass 3 detected ${gapCount} unfilled mandatory slot${gapCount === 1 ? '' : 's'}: ${sample}${more}. ` +
+          `Overall coverage ${overallCoveragePercent}%.`,
+        projectId,
+        projectName,
+        ctaLabel: 'Review shortlist',
+        source: GENERATOR,
+        idempotencyKey: `coverage-gap-${roundId}-r${pass3RunCount}`,
+      });
+    }
+
+    // 12b. retouch_flags → admin + #retouch-queue (mig 390).
+    if (retouchFlagsOnShortlist > 0) {
+      await fireNotif({
+        type: 'retouch_flags',
+        category: 'system',
+        severity: 'warning',
+        title: `Retouch needed: ${projectName}`,
+        message:
+          `Pass 3 surfaced ${retouchFlagsOnShortlist} retouch flag${retouchFlagsOnShortlist === 1 ? '' : 's'} ` +
+          `on the proposed shortlist (${retouchRows.length} total flagged).`,
+        projectId,
+        projectName,
+        ctaLabel: 'View retouch queue',
+        source: GENERATOR,
+        idempotencyKey: `retouch-flags-${roundId}-r${pass3RunCount}`,
+      });
+    }
+
+    // 12c. out_of_scope_detected → admin + #engine-alerts (mig 390).
+    // Fires when classifications exist but the project's engine roles
+    // produce zero active slots, OR when no engine roles at all.
+    const hasNoEngineRoles = projectEngineRoles.length === 0;
+    const hasNoActiveSlots = activeSlots.length === 0 && (slotDefs?.length || 0) > 0;
+    if (totalClassifications > 0 && (hasNoEngineRoles || hasNoActiveSlots)) {
+      const reason = hasNoEngineRoles
+        ? 'project has no engine roles resolved (no products with engine_role on its packages)'
+        : 'no active slot_definitions matched project_engine_roles';
+      await fireNotif({
+        type: 'out_of_scope_detected',
+        category: 'system',
+        severity: 'warning',
+        title: `Out of scope: ${projectName}`,
+        message:
+          `Pass 3: ${reason}. ${totalClassifications} compositions classified but cannot be slotted.`,
+        projectId,
+        projectName,
+        ctaLabel: 'Review project config',
+        source: GENERATOR,
+        idempotencyKey: `out-of-scope-${roundId}-r${pass3RunCount}`,
+      });
+    }
+  } catch (secNotifErr) {
+    const msg = secNotifErr instanceof Error ? secNotifErr.message : String(secNotifErr);
+    console.warn(`[${GENERATOR}] secondary notifications fire threw: ${msg}`);
+    warnings.push(`secondary notifications fire threw: ${msg}`);
+  }
+
   return {
     status: 'proposed',
     total_classifications: totalClassifications,

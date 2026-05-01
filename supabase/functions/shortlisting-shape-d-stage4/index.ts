@@ -55,6 +55,7 @@ import {
   serveWithAudit,
   getAdminClient,
   callerHasProjectAccess,
+  fireNotif,
 } from '../_shared/supabase.ts';
 import {
   callVisionAdapter,
@@ -504,6 +505,28 @@ async function runStage4Core(
       cached_input_tokens: 0,
     });
     if (preflightUsd > settings.cost_cap_per_round_usd) {
+      // W11.6.8 W7.10 P1-9: fire cost_cap_exceeded BEFORE throwing so ops
+      // gets the alert even though Stage 4 aborts. Routes to master_admin
+      // + #engine-alerts per mig 390 seed. Fire-and-forget; the throw
+      // below is the source-of-truth for the round status flip.
+      try {
+        await fireNotif({
+          type: 'cost_cap_exceeded',
+          category: 'system',
+          severity: 'critical',
+          title: `Stage 4 cost cap exceeded`,
+          message:
+            `Stage 4 pre-flight cost $${preflightUsd.toFixed(4)} exceeds cap ` +
+            `$${settings.cost_cap_per_round_usd.toFixed(4)} on round ${roundId}.`,
+          projectId: ctx.project_id,
+          ctaLabel: 'Review engine settings',
+          source: GENERATOR,
+          idempotencyKey: `cost-cap-exceeded-${roundId}`,
+        });
+      } catch (notifErr) {
+        const msg = notifErr instanceof Error ? notifErr.message : String(notifErr);
+        console.warn(`[${GENERATOR}] cost_cap_exceeded notification fire failed: ${msg}`);
+      }
       throw new Error(
         `Stage 4 pre-flight cost $${preflightUsd.toFixed(4)} exceeds cap ` +
         `$${settings.cost_cap_per_round_usd.toFixed(4)}`,
@@ -727,6 +750,50 @@ async function runStage4Core(
         audit_dropbox_path: auditPath,
       },
     });
+
+    // W11.6.8 W7.10 P1-9: ops-facing notifications. All non-fatal — Stage
+    // 4 already succeeded by here, so a notif glitch must NOT roll back
+    // state. vendor_failover_triggered → master_admin + #engine-alerts;
+    // master_listing_regenerated → admin + #listing-review (mig 390).
+    try {
+      if (failoverTriggered) {
+        await fireNotif({
+          type: 'vendor_failover_triggered',
+          category: 'system',
+          severity: 'critical',
+          title: `Stage 4 vendor failover (Gemini → Anthropic)`,
+          message:
+            `Round ${roundId}: primary vendor failed (${failoverReason ?? 'unknown'}). ` +
+            `Stage 4 completed via Anthropic at $${(Math.round(costUsd * 1_000_000) / 1_000_000).toFixed(4)} ` +
+            `(~12× envelope). Investigate Gemini health.`,
+          projectId: ctx.project_id,
+          ctaLabel: 'View engine logs',
+          source: GENERATOR,
+          idempotencyKey: `vendor-failover-${roundId}`,
+        });
+      }
+      if (regenCtx !== null) {
+        await fireNotif({
+          type: 'master_listing_regenerated',
+          category: 'system',
+          severity: 'info',
+          title: `Master listing regenerated`,
+          message:
+            `Round ${roundId} master listing rewrite complete. ` +
+            `Tier=${voice.tier}${regenCtx.voiceTierOverride ? ' (override)' : ''}` +
+            `${regenCtx.voiceAnchorOverride ? ', anchor=override' : ''}` +
+            `${regenCtx.reason ? `. Reason: ${regenCtx.reason.slice(0, 120)}` : ''}.`,
+          projectId: ctx.project_id,
+          ctaLabel: 'Review listing',
+          source: GENERATOR,
+          idempotencyKey: `master-listing-regen-${masterListingId ?? roundId}`,
+        });
+      }
+    } catch (notifErr) {
+      const msg = notifErr instanceof Error ? notifErr.message : String(notifErr);
+      console.warn(`[${GENERATOR}] ops notifications fire threw: ${msg}`);
+      warnings.push(`ops notifications fire threw: ${msg}`);
+    }
 
     return {
       ok: true,
