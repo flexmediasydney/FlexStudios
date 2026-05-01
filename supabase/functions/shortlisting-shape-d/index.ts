@@ -1728,7 +1728,7 @@ function extractObservedAttributes(v: unknown): Array<Record<string, unknown>> {
 
 // ─── engine_run_audit upsert ─────────────────────────────────────────────────
 
-interface UpsertEngineRunAuditArgs {
+export interface UpsertEngineRunAuditArgs {
   admin: ReturnType<typeof getAdminClient>;
   roundId: string;
   engineMode: string;
@@ -1747,15 +1747,22 @@ interface UpsertEngineRunAuditArgs {
   warnings: string[];
 }
 
-async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<void> {
-  // Read existing row for cost / token / wall accumulation across retries.
+export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<void> {
+  // W11.7.17 hotfix-2 (Fix B): also pull stage4_* + total_input/output_tokens
+  // so a Stage 1 retry doesn't blow away an already-landed Stage 4 contribution
+  // to total_cost_usd / total_wall_ms / total_*_tokens (Rainbow Cres c55374b1
+  // showed total_cost_usd=35.8169 == stage1 only despite stage4_total=1.4372
+  // because Stage 1 retried after Stage 4 landed and overwrote total_cost_usd
+  // with stage1-only). The cost-per-stage dashboard reads total_cost_usd —
+  // sparse / under-counted dashboards trace back to this overwrite.
+  //
   // NOTE: keep this select as a SINGLE string literal — Postgrest's TS type
   // inference parses the literal at compile time; splitting across `+`
   // concatenated strings collapses the inferred type to GenericStringError
   // and breaks strict TS check on the field accessors below.
   const { data: existing } = await args.admin
     .from('engine_run_audit')
-    .select('stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stage1_total_input_tokens, stage1_total_output_tokens, stages_completed, stages_failed, retry_count, failover_triggered')
+    .select('stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stage1_total_input_tokens, stage1_total_output_tokens, stage4_total_cost_usd, stage4_total_wall_ms, stage4_total_input_tokens, stage4_total_output_tokens, stages_completed, stages_failed, retry_count, failover_triggered')
     .eq('round_id', args.roundId)
     .maybeSingle();
 
@@ -1764,17 +1771,31 @@ async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<voi
   const priorCalls = (existing?.stage1_call_count as number | null) ?? 0;
   const priorInputTokens = (existing?.stage1_total_input_tokens as number | null) ?? 0;
   const priorOutputTokens = (existing?.stage1_total_output_tokens as number | null) ?? 0;
+  const priorStage4Cost = (existing?.stage4_total_cost_usd as number | null) ?? 0;
+  const priorStage4Wall = (existing?.stage4_total_wall_ms as number | null) ?? 0;
+  const priorStage4InputTokens = (existing?.stage4_total_input_tokens as number | null) ?? 0;
+  const priorStage4OutputTokens = (existing?.stage4_total_output_tokens as number | null) ?? 0;
   const priorStagesCompleted = (existing?.stages_completed as string[] | null) ?? [];
   const priorRetry = (existing?.retry_count as number | null) ?? 0;
 
   const accumulatedCost = priorCost + args.stage1TotalCostUsd;
   const accumulatedRounded = Math.round(accumulatedCost * 1_000_000) / 1_000_000;
+  const accumulatedWall = Math.max(priorWall, args.stage1TotalWallMs);
   // Tokens accumulate the same way as cost — retries add to the row's
   // running total. The W11.6 cost-per-stage dashboard reads this as the
   // canonical Stage 1 token count.
   const accumulatedInputTokens = priorInputTokens + args.stage1TotalInputTokens;
   const accumulatedOutputTokens = priorOutputTokens + args.stage1TotalOutputTokens;
   const merged = Array.from(new Set([...priorStagesCompleted, ...args.stages_completed]));
+
+  // total_* must include any Stage 4 contribution that already landed —
+  // otherwise a Stage 1 retry that runs after Stage 4 silently zeros out
+  // stage4 in the dashboard's total_cost_usd column.
+  const totalCost = accumulatedCost + priorStage4Cost;
+  const totalCostRounded = Math.round(totalCost * 1_000_000) / 1_000_000;
+  const totalWall = accumulatedWall + priorStage4Wall;
+  const totalInputTokens = accumulatedInputTokens + priorStage4InputTokens;
+  const totalOutputTokens = accumulatedOutputTokens + priorStage4OutputTokens;
 
   const row: Record<string, unknown> = {
     round_id: args.roundId,
@@ -1787,11 +1808,13 @@ async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<voi
     stages_failed: args.stages_failed,
     stage1_call_count: Math.max(priorCalls, args.stage1CallCount),
     stage1_total_cost_usd: accumulatedRounded,
-    stage1_total_wall_ms: Math.max(priorWall, args.stage1TotalWallMs),
+    stage1_total_wall_ms: accumulatedWall,
     stage1_total_input_tokens: accumulatedInputTokens,
     stage1_total_output_tokens: accumulatedOutputTokens,
-    total_cost_usd: accumulatedRounded,
-    total_wall_ms: Math.max(priorWall, args.stage1TotalWallMs),
+    total_cost_usd: totalCostRounded,
+    total_wall_ms: totalWall,
+    total_input_tokens: totalInputTokens,
+    total_output_tokens: totalOutputTokens,
     retry_count: priorRetry + (args.retry_count || 0),
   };
 
@@ -1800,8 +1823,19 @@ async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<voi
     .from('engine_run_audit')
     .upsert(row, { onConflict: 'round_id' });
   if (error) {
-    args.warnings.push(`engine_run_audit upsert failed: ${error.message}`);
+    // W11.7.17 hotfix-2 (Fix B): also emit to stdout so the failure shows up
+    // in `supabase functions logs` — previously the warning only landed in
+    // the Dropbox audit JSON, masking sparse audit-table failures from QC.
+    const msg = `engine_run_audit upsert failed: ${error.message}`;
+    args.warnings.push(msg);
+    console.warn(`[${GENERATOR}] ${msg} (round=${args.roundId})`);
+    return;
   }
+  console.log(
+    `[${GENERATOR}] engine_run_audit upsert ok round=${args.roundId} ` +
+    `stage1_cost=${accumulatedRounded} total_cost=${totalCostRounded} ` +
+    `stages_completed=[${merged.join(',')}]`,
+  );
 }
 
 // ─── Audit JSON → Dropbox ────────────────────────────────────────────────────

@@ -1400,7 +1400,7 @@ interface PersistStage4OverridesArgs {
   warnings: string[];
 }
 
-async function persistStage4Overrides(args: PersistStage4OverridesArgs): Promise<number> {
+export async function persistStage4Overrides(args: PersistStage4OverridesArgs): Promise<number> {
   if (args.stage4Overrides.length === 0) return 0;
 
   // Resolve stem → group_id from composition_groups for FK in
@@ -1416,6 +1416,25 @@ async function persistStage4Overrides(args: PersistStage4OverridesArgs): Promise
     const best = (g.best_bracket_stem as string | null) || null;
     if (delivery) stemToGroup.set(delivery, g.id as string);
     if (best && !stemToGroup.has(best)) stemToGroup.set(best, g.id as string);
+  }
+
+  // W11.7.17 hotfix-2 (Fix A): delete-then-insert idempotency. Mig 383
+  // hard-enforces uniq(round_id, stem, field) on shortlisting_stage4_overrides
+  // — a regenerate that re-runs Stage 4 on the same round was failing the
+  // raw INSERT with a duplicate-key violation (Rainbow Cres c55374b1 emitted
+  // `shortlisting_stage4_overrides insert failed: duplicate key value violates
+  // unique constraint "uniq_stage4_overrides_round_stem_field"`). Mirror
+  // persistSlotDecisions' / persistProposedSlots' delete-then-insert pattern:
+  // clear the round's prior audit rows first, then insert the fresh batch.
+  // Idempotent — re-running on the same round produces the same final state.
+  // Failure to delete is logged but doesn't abort: the INSERT will surface
+  // any residual duplicate-key issue loudly.
+  const { error: delErr } = await args.admin
+    .from('shortlisting_stage4_overrides')
+    .delete()
+    .eq('round_id', args.roundId);
+  if (delErr) {
+    args.warnings.push(`shortlisting_stage4_overrides delete-prior failed: ${delErr.message}`);
   }
 
   // Insert into shortlisting_stage4_overrides (audit table).
@@ -1856,7 +1875,7 @@ export async function persistProposedSlots(args: PersistProposedSlotsArgs): Prom
   return rows.length;
 }
 
-interface UpdateEngineRunAuditArgs {
+export interface UpdateEngineRunAuditArgs {
   admin: ReturnType<typeof getAdminClient>;
   roundId: string;
   vendorUsed: 'google' | 'anthropic';
@@ -1871,7 +1890,7 @@ interface UpdateEngineRunAuditArgs {
   warnings: string[];
 }
 
-async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Promise<void> {
+export async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Promise<void> {
   const { data: existingRaw } = await args.admin
     .from('engine_run_audit')
     .select(
@@ -1958,8 +1977,20 @@ async function updateEngineRunAudit(args: UpdateEngineRunAuditArgs): Promise<voi
     .from('engine_run_audit')
     .upsert(row, { onConflict: 'round_id' });
   if (error) {
-    args.warnings.push(`engine_run_audit Stage 4 update failed: ${error.message}`);
+    // W11.7.17 hotfix-2 (Fix B): also emit to stdout so failures show up in
+    // `supabase functions logs` instead of only landing in Dropbox audit
+    // JSON. Sparse engine_run_audit was masked by warnings sitting in the
+    // Dropbox audit blob nobody greps.
+    const msg = `engine_run_audit Stage 4 update failed: ${error.message}`;
+    args.warnings.push(msg);
+    console.warn(`[${GENERATOR}] ${msg} (round=${args.roundId})`);
+    return;
   }
+  console.log(
+    `[${GENERATOR}] engine_run_audit Stage 4 upsert ok round=${args.roundId} ` +
+    `stage4_cost=${newStage4CostRounded} total_cost=${totalCostRounded} ` +
+    `stages_completed=[${merged.join(',')}]`,
+  );
 }
 
 // ─── Audit JSON ──────────────────────────────────────────────────────────────
