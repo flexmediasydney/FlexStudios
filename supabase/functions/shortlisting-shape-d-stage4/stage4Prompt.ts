@@ -539,6 +539,15 @@ export interface BuildStage4UserPromptOpts {
    * back-compat; production paths always supply it.
    */
   photographerTechniquesBlockText?: string;
+  /**
+   * W11.6.14: per-image EXIF metadata table rendered via
+   * exifContextTable (compact pipe-separated rows, one per image).
+   * Injected BEFORE the Stage 1 enrichment JSON so Gemini reads
+   * focal/aperture/shutter/iso/bracket/risks for every image when
+   * making cross-image slot decisions. Optional for back-compat;
+   * production paths always supply it.
+   */
+  exifContextTableText?: string;
   voiceBlockText: string;
   selfCritiqueBlockText: string;
   propertyFacts: PropertyFacts;
@@ -595,6 +604,14 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     ? [opts.photographerTechniquesBlockText, '']
     : [];
 
+  // W11.6.14: per-image EXIF metadata table BEFORE the Stage 1 enrichment
+  // JSON. Gives Gemini focal/aperture/shutter/iso/bracket/risks for every
+  // image so cross-image slot decisions can reason about perspective +
+  // depth-of-field + exposure intent. Optional for back-compat.
+  const exifTableSection = opts.exifContextTableText && opts.exifContextTableText.length > 0
+    ? [opts.exifContextTableText, '']
+    : [];
+
   return [
     opts.sourceContextBlockText,
     '',
@@ -604,6 +621,7 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     '── PROPERTY FACTS (authoritative; do NOT invent) ──',
     factLines.join('\n'),
     '',
+    ...exifTableSection,
     `── STAGE 1 PER-IMAGE ENRICHMENT (${opts.stage1Merged.length} entries) ──`,
     'Use this as text context alongside the visual previews. Each entry is the',
     'compact summary of what Stage 1 said about that image. You see the actual',

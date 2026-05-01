@@ -95,6 +95,11 @@ import {
   PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/photographerTechniquesBlock.ts';
 import {
+  exifContextBlock,
+  EXIF_CONTEXT_BLOCK_VERSION,
+  type ExifContextOpts,
+} from '../_shared/visionPrompts/blocks/exifContextBlock.ts';
+import {
   voiceAnchorBlock,
   VOICE_ANCHOR_BLOCK_VERSION,
   SYDNEY_PRIMER_BLOCK,
@@ -622,7 +627,12 @@ async function runShapeDStage1Core(
   // anchors, vantage, clutter), then voice anchor rubric, then self-critique,
   // then few_shot library at the END. The model sees ONE image — no stem
   // matching needed.
-  const userBlocks = [
+  // W11.6.14 wiring: split the user prompt into a `userTextPrefix`
+  // (everything BEFORE the per-image EXIF block) and `userTextSuffix`
+  // (SELF_CRITIQUE + few_shot library) so runStage1PerImage can splice
+  // the per-image exifContextBlock between them. The EXIF block is fresh
+  // context for the model just before the scoring discipline reminder.
+  const userPrefixBlocks = [
     sourceContextBlock(sourceType),
     '',
     photographerTechniquesBlock(),
@@ -631,14 +641,16 @@ async function runShapeDStage1Core(
     '',
     '── VOICE ANCHOR (drives per-image listing_copy register) ──',
     voiceAnchorBlock(voice),
-    '',
+  ];
+  const userSuffixBlocks: string[] = [
     '── SELF-CRITIQUE ──',
     SELF_CRITIQUE_BLOCK,
   ];
   if (fewShotText.length > 0) {
-    userBlocks.push('', '── EMPIRICAL FEW-SHOT LIBRARY (W11.5/11.7/W14) ──', fewShotText);
+    userSuffixBlocks.push('', '── EMPIRICAL FEW-SHOT LIBRARY (W11.5/11.7/W14) ──', fewShotText);
   }
-  const userText = userBlocks.join('\n');
+  const userTextPrefix = userPrefixBlocks.join('\n');
+  const userTextSuffix = userSuffixBlocks.join('\n');
 
   // Run per-image calls in parallel batches of STAGE1_PER_IMAGE_CONCURRENCY.
   // Persist each successful classification to composition_classifications
@@ -660,7 +672,8 @@ async function runShapeDStage1Core(
           composition: c,
           ctx,
           systemText,
-          userText,
+          userTextPrefix,
+          userTextSuffix,
           settings,
           previewsBase,
         }).catch((err): PerImageResult => {
@@ -1102,7 +1115,13 @@ interface RunStage1PerImageOpts {
   composition: CompositionRow;
   ctx: RoundContext;
   systemText: string;
-  userText: string;
+  // W11.6.14: per-image user_text composed in the runner. Prefix is the
+  // shared user blocks (source/techniques/pass1/voice anchor); suffix is
+  // SELF_CRITIQUE + few_shot library. Per-image exifContextBlock is spliced
+  // between them so the model reads fresh metadata just before the scoring
+  // discipline reminder.
+  userTextPrefix: string;
+  userTextSuffix: string;
   settings: EngineSettings;
   previewsBase: string;
 }
@@ -1145,6 +1164,36 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     };
   }
 
+  // W11.6.14: derive per-image EXIF context from the composition row's
+  // exif_metadata JSONB (populated at Pass 0, surfaced via W11.6.7 P1-4).
+  // Pass 0 keys the JSONB by stem; the value is the full ExifSignals
+  // object. Map the load-bearing fields onto ExifContextOpts; missing
+  // fields render as graceful "unknown" fallbacks so the prompt is never
+  // broken by absent metadata.
+  const exifRaw = composition.exif_metadata && typeof composition.exif_metadata === 'object'
+    ? (composition.exif_metadata[composition.stem] as Record<string, unknown> | undefined) ?? null
+    : null;
+  const exifOpts: ExifContextOpts = exifRaw
+    ? {
+        cameraModel: typeof exifRaw.cameraModel === 'string' ? exifRaw.cameraModel : null,
+        focalLengthMm: typeof exifRaw.focalLength === 'number' ? exifRaw.focalLength : null,
+        aperture: typeof exifRaw.aperture === 'number' ? exifRaw.aperture : null,
+        shutterSpeed: typeof exifRaw.shutterSpeed === 'string' ? exifRaw.shutterSpeed : null,
+        iso: typeof exifRaw.iso === 'number' ? exifRaw.iso : null,
+        aebBracketValue: typeof exifRaw.aebBracketValue === 'number' ? exifRaw.aebBracketValue : null,
+        motionBlurRisk: exifRaw.motionBlurRisk === true,
+        highIsoRisk: exifRaw.highIsoRisk === true,
+      }
+    : {};
+  const exifText = exifContextBlock(exifOpts);
+  const userText = [
+    opts.userTextPrefix,
+    '',
+    exifText,
+    '',
+    opts.userTextSuffix,
+  ].join('\n');
+
   // Single-image vision call. Schema returns the per-image object directly.
   const baseReq: VisionRequest = {
     vendor: PRIMARY_VENDOR,
@@ -1152,7 +1201,7 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     tool_name: STAGE1_RESPONSE_TOOL_NAME,
     tool_input_schema: STAGE1_RESPONSE_SCHEMA,
     system: opts.systemText,
-    user_text: opts.userText,
+    user_text: userText,
     images: [{
       source_type: 'base64',
       media_type: preview.media_type,
@@ -1712,6 +1761,7 @@ function stage1PromptBlockVersions(): Record<string, string> {
     stage1_response_schema: STAGE1_RESPONSE_SCHEMA_VERSION,
     source_context: SOURCE_CONTEXT_BLOCK_VERSION,
     photographer_techniques: PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
+    exif_context: EXIF_CONTEXT_BLOCK_VERSION,
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,
