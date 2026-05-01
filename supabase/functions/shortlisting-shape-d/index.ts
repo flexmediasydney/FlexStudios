@@ -333,6 +333,8 @@ interface RoundResult {
   failover_triggered: boolean;
   stage4_dispatched: boolean;
   stage4_job_id: string | null;
+  canonical_rollup_dispatched: boolean;
+  canonical_rollup_job_id: string | null;
   audit_dropbox_path: string | null;
   warnings: string[];
 }
@@ -785,6 +787,30 @@ async function runShapeDStage1Core(
     warnings,
   });
 
+  // ── Dispatch canonical-rollup as a separate edge job ─────────────────────
+  // Wave 12 hygiene: Stage 1.5 normalisation runs as its own dispatcher-routed
+  // job (kind='canonical_rollup') alongside stage4_synthesis. It walks the
+  // round's composition_classifications, embeds each key_element via Gemini,
+  // and writes raw_attribute_observations + bumps object_registry frequency
+  // (or queues object_registry_candidates for ambiguous matches).
+  //
+  // It runs AFTER Stage 1 because it reads composition_classifications.key_elements
+  // (Stage 1's output). It can run IN PARALLEL with Stage 4 because the two
+  // touch disjoint tables — Stage 4 writes shortlisting_overrides + master_listings,
+  // canonical-rollup writes raw_attribute_observations + object_registry.
+  // No mutex contention, no ordering requirement.
+  //
+  // The canonical-rollup fn is idempotent: the unique index on
+  // (round_id, group_id, raw_label) for raw_attribute_observations means
+  // re-running for the same round skips already-processed labels. So a
+  // dispatcher retry on transient failure won't double-count market_frequency.
+  const canonicalRollupJobId = await dispatchCanonicalRollupJob({
+    admin,
+    projectId: ctx.project_id,
+    roundId,
+    warnings,
+  });
+
   // ── Append shortlisting_events ───────────────────────────────────────────
   await admin.from('shortlisting_events').insert({
     project_id: ctx.project_id,
@@ -804,6 +830,7 @@ async function runShapeDStage1Core(
       vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
       failover_triggered: failoverTriggered,
       stage4_job_id: stage4JobId,
+      canonical_rollup_job_id: canonicalRollupJobId,
       audit_dropbox_path: auditPath,
     },
   });
@@ -821,6 +848,8 @@ async function runShapeDStage1Core(
     failover_triggered: failoverTriggered,
     stage4_dispatched: !!stage4JobId,
     stage4_job_id: stage4JobId,
+    canonical_rollup_dispatched: !!canonicalRollupJobId,
+    canonical_rollup_job_id: canonicalRollupJobId,
     audit_dropbox_path: auditPath,
     warnings,
   };
@@ -1488,6 +1517,59 @@ async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<string | 
     return null;
   }
   console.log(`[${GENERATOR}] dispatched stage4_synthesis job ${data?.id} for round ${args.roundId}`);
+  return (data?.id as string) || null;
+}
+
+// ─── canonical-rollup dispatch (Wave 12) ─────────────────────────────────────
+
+async function dispatchCanonicalRollupJob(
+  args: DispatchStage4JobArgs,
+): Promise<string | null> {
+  // Idempotency mirror of dispatchStage4Job: skip if a non-terminal (or already
+  // succeeded) canonical_rollup row exists for this round. The mig 380 unique
+  // partial index uniq_shortlisting_jobs_active_pass_per_round (extended with
+  // 'canonical_rollup') enforces this at the DB layer too — the explicit check
+  // just avoids the unique-violation log noise on retry / replay paths.
+  const { count: existing } = await args.admin
+    .from('shortlisting_jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('round_id', args.roundId)
+    .eq('kind', 'canonical_rollup')
+    .in('status', ['pending', 'running', 'succeeded']);
+  if ((existing ?? 0) > 0) {
+    console.log(
+      `[${GENERATOR}] canonical_rollup job already exists for round ${args.roundId} — skipping insert`,
+    );
+    return null;
+  }
+
+  const { data, error } = await args.admin
+    .from('shortlisting_jobs')
+    .insert({
+      project_id: args.projectId,
+      round_id: args.roundId,
+      group_id: null,
+      kind: 'canonical_rollup',
+      status: 'pending',
+      payload: {
+        project_id: args.projectId,
+        round_id: args.roundId,
+        chained_from: 'shortlisting-shape-d',
+      },
+      scheduled_for: new Date().toISOString(),
+    })
+    .select('id')
+    .maybeSingle();
+  if (error) {
+    // Don't fail Stage 1 if rollup dispatch fails — rollup is a hygiene/
+    // observability sidecar, not part of the user-visible shortlisting pipeline.
+    // Surface in warnings so the operator dashboard sees it.
+    args.warnings.push(`canonical_rollup dispatch failed: ${error.message}`);
+    return null;
+  }
+  console.log(
+    `[${GENERATOR}] dispatched canonical_rollup job ${data?.id} for round ${args.roundId}`,
+  );
   return (data?.id as string) || null;
 }
 

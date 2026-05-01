@@ -485,6 +485,13 @@ type DispatchResult = {
  * shape_d_stage1 (shape_d). Stage 4 is dispatched as a standalone job by
  * the shape-d orchestrator at the end of Stage 1 — the dispatcher does not
  * chain it.
+ *
+ * Wave 12 hygiene: `canonical_rollup` is dispatched alongside `stage4_synthesis`
+ * by the shape-d orchestrator when Stage 1 finishes. The dispatcher only needs
+ * to map the kind to the canonical-rollup edge fn — it is terminal (no chain).
+ * The fn is idempotent (the unique key on raw_attribute_observations means
+ * re-running for the same round skips already-processed labels) so a retry
+ * after a transient failure is safe.
  */
 const KIND_TO_FUNCTION: Record<string, string> = {
   ingest: "shortlisting-ingest",
@@ -495,12 +502,28 @@ const KIND_TO_FUNCTION: Record<string, string> = {
   pass3: "shortlisting-pass3",
   shape_d_stage1: "shortlisting-shape-d",
   stage4_synthesis: "shortlisting-shape-d-stage4",
+  canonical_rollup: "canonical-rollup",
 };
 
 async function dispatchOne(job: ShortlistingJob): Promise<DispatchResult> {
   const fnName = KIND_TO_FUNCTION[job.kind];
   if (!fnName) {
     return { ok: false, error: `unknown kind: ${job.kind}` };
+  }
+  // Wave 12: canonical-rollup parses `{ round_id }` from its body (it's a
+  // round-level Stage 1.5 normalisation pass, not a per-job pass). Send
+  // round_id alongside job_id so the fn sees what it expects without breaking
+  // the per-job contract every other kind uses.
+  if (job.kind === "canonical_rollup") {
+    const roundId =
+      job.round_id || (job.payload?.round_id as string | undefined) || null;
+    if (!roundId) {
+      return {
+        ok: false,
+        error: `canonical_rollup job ${job.id} missing round_id`,
+      };
+    }
+    return await callEdgeFunction(fnName, { job_id: job.id, round_id: roundId });
   }
   return await callEdgeFunction(fnName, { job_id: job.id });
 }
@@ -529,6 +552,11 @@ async function chainNextKind(
   // shortlisting_rounds.status to 'proposed', matching legacy pass2's terminal
   // state — no further chain).
   if (job.kind === "stage4_synthesis") return;
+  // Wave 12: canonical_rollup is terminal — it's a Stage 1.5 normalisation
+  // sidecar enqueued by shape-d alongside stage4_synthesis. It writes to
+  // raw_attribute_observations + object_registry + object_registry_candidates
+  // and exits. Nothing else chains off it.
+  if (job.kind === "canonical_rollup") return;
 
   // extract → pass0, only when ALL extract jobs for this round are done.
   if (job.kind === "extract") {
