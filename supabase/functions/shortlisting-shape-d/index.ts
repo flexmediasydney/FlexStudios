@@ -105,6 +105,14 @@ import {
   STAGE1_RESPONSE_SCHEMA_VERSION,
   STAGE1_RESPONSE_TOOL_NAME,
 } from '../_shared/visionPrompts/blocks/stage1ResponseSchema.ts';
+import {
+  projectMemoryBlock,
+  PROJECT_MEMORY_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/projectMemoryBlock.ts';
+import {
+  fewShotLibraryBlock,
+  FEW_SHOT_LIBRARY_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/fewShotLibraryBlock.ts';
 import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
 import { getActiveStreamBAnchors } from '../_shared/streamBInjector.ts';
 
@@ -180,6 +188,12 @@ interface EngineSettings {
 /**
  * Per-image call result: either a successful classified output, or an error
  * captured per-image (the round still completes; failed images get audit rows).
+ *
+ * `input_tokens` / `output_tokens` come from the vision adapter's `usage`
+ * field. They are 0 for failed calls (no usage to attribute) and accumulate
+ * to engine_run_audit.stage1_total_input_tokens / stage1_total_output_tokens
+ * (W11.5/11.7 closed-loop wave: token attribution was previously hard-coded
+ * to 0; now sums correctly across parallel batches).
  */
 interface PerImageResult {
   group_id: string;
@@ -188,6 +202,8 @@ interface PerImageResult {
   error: string | null;
   cost_usd: number;
   wall_ms: number;
+  input_tokens: number;
+  output_tokens: number;
   vendor_used: 'google' | 'anthropic';
   model_used: string;
   failover_triggered: boolean;
@@ -514,14 +530,39 @@ async function runShapeDStage1Core(
   const anchors = await getActiveStreamBAnchors();
   const basePrompt = buildPass1Prompt(anchors);
 
+  // ── Closed-loop learning: project_memory + few_shot blocks (W11.5/11.7) ──
+  // Both are async (DB lookups) — fetch in parallel. Either may return ''
+  // when there's nothing to render; the join with '\n' below collapses
+  // empty blocks cleanly without polluting the prompt with empty headers.
+  //
+  // projectMemoryBlock: per-project authoritative prior corrections from
+  //   composition_classification_overrides. Injected at the END of system
+  //   prompt so it sits in the highest-precedence context — when the model
+  //   weighs evidence, prior operator corrections are treated as ground
+  //   truth for THIS property.
+  // fewShotLibraryBlock: master_admin-curated cross-project patterns from
+  //   engine_fewshot_examples. Injected at the END of user prompt — last
+  //   thing the model reads before emitting JSON, so the empirical
+  //   correction patterns are top-of-mind on tricky judgements.
+  const [projectMemoryText, fewShotText] = await Promise.all([
+    projectMemoryBlock({ project_id: ctx.project_id, current_round_id: roundId }),
+    fewShotLibraryBlock({ property_tier: voice.tier }),
+  ]);
+
   // System prompt: pass1 system blocks + Sydney primer (anchor style_archetype
-  // + era_hint to Sydney typology).
-  const systemText = [basePrompt.system, '', '', SYDNEY_PRIMER_BLOCK].join('\n');
+  // + era_hint to Sydney typology) + project_memory at the END so it's the
+  // last authoritative directive before user content.
+  const systemBlocks = [basePrompt.system, '', '', SYDNEY_PRIMER_BLOCK];
+  if (projectMemoryText.length > 0) {
+    systemBlocks.push('', '── PROJECT MEMORY (W11.5) ──', projectMemoryText);
+  }
+  const systemText = systemBlocks.join('\n');
 
   // User prompt: source-context preamble TOP, then pass1 user blocks (room
   // taxonomy, scoring anchors, vantage, clutter), then voice anchor rubric,
-  // then self-critique. The model sees ONE image — no stem matching needed.
-  const userText = [
+  // then self-critique, then few_shot library at the END. The model sees ONE
+  // image — no stem matching needed.
+  const userBlocks = [
     sourceContextBlock(sourceType),
     '',
     basePrompt.userPrefix,
@@ -531,7 +572,11 @@ async function runShapeDStage1Core(
     '',
     '── SELF-CRITIQUE ──',
     SELF_CRITIQUE_BLOCK,
-  ].join('\n');
+  ];
+  if (fewShotText.length > 0) {
+    userBlocks.push('', '── EMPIRICAL FEW-SHOT LIBRARY (W11.5/11.7/W14) ──', fewShotText);
+  }
+  const userText = userBlocks.join('\n');
 
   // Run per-image calls in parallel batches of STAGE1_PER_IMAGE_CONCURRENCY.
   // Persist each successful classification to composition_classifications
@@ -566,6 +611,8 @@ async function runShapeDStage1Core(
             error: `wholesale_failed: ${msg}`,
             cost_usd: 0,
             wall_ms: 0,
+            input_tokens: 0,
+            output_tokens: 0,
             vendor_used: PRIMARY_VENDOR,
             model_used: PRIMARY_MODEL,
             failover_triggered: false,
@@ -599,10 +646,19 @@ async function runShapeDStage1Core(
     }
   }
 
-  // ── Aggregate cost + wall ────────────────────────────────────────────────
+  // ── Aggregate cost + wall + tokens ───────────────────────────────────────
+  //
+  // Tokens accumulate via reduce() over `allResults`. `allResults` is built by
+  // pushing batch slices sequentially in the outer for-loop, so even though
+  // each batch slice runs in parallel via Promise.all, the slice merge into
+  // `allResults` happens on the main fiber — no race conditions on the
+  // accumulator. Each PerImageResult carries its own input_tokens /
+  // output_tokens straight from the vision adapter's usage envelope.
   const allSuccesses = allResults.filter((r) => r.output);
   const allFailures = allResults.filter((r) => !r.output);
   const totalCostUsd = allResults.reduce((sum, r) => sum + r.cost_usd, 0);
+  const totalInputTokens = allResults.reduce((sum, r) => sum + (r.input_tokens || 0), 0);
+  const totalOutputTokens = allResults.reduce((sum, r) => sum + (r.output_tokens || 0), 0);
   // Wall time for per-image is harder than batched: we ran in parallel, so
   // the actual wall is roughly (ceil(N/concurrency) × max_per_image_wall).
   // We use sum of all per-image walls as the API-time aggregate (useful for
@@ -653,6 +709,12 @@ async function runShapeDStage1Core(
   }
 
   // ── engine_run_audit upsert (Stage 1 stage_complete) ─────────────────────
+  // Token attribution: previously hard-coded to 0 — this commit threads
+  // input_tokens / output_tokens through PerImageResult and accumulates
+  // across all parallel batches. Persisted to engine_run_audit's
+  // stage1_total_input_tokens + stage1_total_output_tokens columns
+  // (mig 376). Cost-per-token rollups + W11.6 dashboard now have real
+  // token counts to query.
   await upsertEngineRunAudit({
     admin,
     roundId,
@@ -664,8 +726,8 @@ async function runShapeDStage1Core(
     stage1CallCount: allResults.length,
     stage1TotalCostUsd: totalCostUsd,
     stage1TotalWallMs: operatorWallMs,
-    stage1TotalInputTokens: 0,  // Vendor adapter usage_metrics aggregation deferred
-    stage1TotalOutputTokens: 0,
+    stage1TotalInputTokens: totalInputTokens,
+    stage1TotalOutputTokens: totalOutputTokens,
     stages_completed: ['stage1'],
     stages_failed: partial ? ['stage1_partial'] : [],
     retry_count: 0,
@@ -971,6 +1033,8 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
       error: `preview_fetch_failed: ${msg}`,
       cost_usd: 0,
       wall_ms: Date.now() - start,
+      input_tokens: 0,
+      output_tokens: 0,
       vendor_used: PRIMARY_VENDOR,
       model_used: PRIMARY_MODEL,
       failover_triggered: false,
@@ -1039,6 +1103,8 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
       error: err ?? 'no_response',
       cost_usd: 0,
       wall_ms: Date.now() - start,
+      input_tokens: 0,
+      output_tokens: 0,
       vendor_used: vendorUsed,
       model_used: modelUsed,
       failover_triggered: failoverTriggered,
@@ -1047,6 +1113,11 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
   }
 
   // resp.output IS the per-image classification — no per_image[] unwrap.
+  // Token attribution: pull straight from the adapter's usage envelope.
+  // Both Gemini + Anthropic adapters populate input_tokens/output_tokens.
+  // Defensive coercion in case any future adapter omits the fields.
+  const inT = typeof resp.usage.input_tokens === 'number' ? resp.usage.input_tokens : 0;
+  const outT = typeof resp.usage.output_tokens === 'number' ? resp.usage.output_tokens : 0;
   return {
     group_id: composition.group_id,
     stem: composition.stem,
@@ -1054,6 +1125,8 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     error: null,
     cost_usd: resp.usage.estimated_cost_usd,
     wall_ms: resp.vendor_meta.elapsed_ms,
+    input_tokens: inT,
+    output_tokens: outT,
     vendor_used: vendorUsed,
     model_used: modelUsed,
     failover_triggered: failoverTriggered,
@@ -1200,23 +1273,32 @@ interface UpsertEngineRunAuditArgs {
 }
 
 async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<void> {
-  // Read existing row for cost accumulation across retries.
+  // Read existing row for cost / token / wall accumulation across retries.
+  // NOTE: keep this select as a SINGLE string literal — Postgrest's TS type
+  // inference parses the literal at compile time; splitting across `+`
+  // concatenated strings collapses the inferred type to GenericStringError
+  // and breaks strict TS check on the field accessors below.
   const { data: existing } = await args.admin
     .from('engine_run_audit')
-    .select(
-      'stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stages_completed, stages_failed, retry_count, failover_triggered',
-    )
+    .select('stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stage1_total_input_tokens, stage1_total_output_tokens, stages_completed, stages_failed, retry_count, failover_triggered')
     .eq('round_id', args.roundId)
     .maybeSingle();
 
   const priorCost = (existing?.stage1_total_cost_usd as number | null) ?? 0;
   const priorWall = (existing?.stage1_total_wall_ms as number | null) ?? 0;
   const priorCalls = (existing?.stage1_call_count as number | null) ?? 0;
+  const priorInputTokens = (existing?.stage1_total_input_tokens as number | null) ?? 0;
+  const priorOutputTokens = (existing?.stage1_total_output_tokens as number | null) ?? 0;
   const priorStagesCompleted = (existing?.stages_completed as string[] | null) ?? [];
   const priorRetry = (existing?.retry_count as number | null) ?? 0;
 
   const accumulatedCost = priorCost + args.stage1TotalCostUsd;
   const accumulatedRounded = Math.round(accumulatedCost * 1_000_000) / 1_000_000;
+  // Tokens accumulate the same way as cost — retries add to the row's
+  // running total. The W11.6 cost-per-stage dashboard reads this as the
+  // canonical Stage 1 token count.
+  const accumulatedInputTokens = priorInputTokens + args.stage1TotalInputTokens;
+  const accumulatedOutputTokens = priorOutputTokens + args.stage1TotalOutputTokens;
   const merged = Array.from(new Set([...priorStagesCompleted, ...args.stages_completed]));
 
   const row: Record<string, unknown> = {
@@ -1231,8 +1313,8 @@ async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<voi
     stage1_call_count: Math.max(priorCalls, args.stage1CallCount),
     stage1_total_cost_usd: accumulatedRounded,
     stage1_total_wall_ms: Math.max(priorWall, args.stage1TotalWallMs),
-    stage1_total_input_tokens: args.stage1TotalInputTokens,
-    stage1_total_output_tokens: args.stage1TotalOutputTokens,
+    stage1_total_input_tokens: accumulatedInputTokens,
+    stage1_total_output_tokens: accumulatedOutputTokens,
     total_cost_usd: accumulatedRounded,
     total_wall_ms: Math.max(priorWall, args.stage1TotalWallMs),
     retry_count: priorRetry + (args.retry_count || 0),
@@ -1299,6 +1381,10 @@ async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null
     ),
     total_api_wall_ms: args.perImageResults.reduce((sum, r) => sum + r.wall_ms, 0),
     operator_wall_ms: Date.now() - args.startedAt,
+    // W11.5/11.7 closed-loop: per-stage token attribution. Sum across all
+    // per-image calls in this invocation. Matches engine_run_audit.
+    total_input_tokens: args.perImageResults.reduce((sum, r) => sum + (r.input_tokens || 0), 0),
+    total_output_tokens: args.perImageResults.reduce((sum, r) => sum + (r.output_tokens || 0), 0),
     failures: failures.map((f) => ({
       stem: f.stem,
       group_id: f.group_id,
@@ -1428,5 +1514,15 @@ function stage1PromptBlockVersions(): Record<string, string> {
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,
+    // Wave 11.5/11.7 closed-loop blocks. These versions are persisted to
+    // composition_classifications.prompt_block_versions on every successful
+    // Stage 1 row, and SHOULD also flow to engine_run_audit.prompt_block_versions
+    // — Agent 1 hasn't plumbed that column yet (mig 376 covers the table; the
+    // column itself is a future extension). When that column lands, populate
+    // it from this same map at the engine_run_audit upsert site.
+    // TODO(closed-loop): wire this map into engine_run_audit.prompt_block_versions
+    // once Agent 1 ships the column on engine_run_audit.
+    project_memory: PROJECT_MEMORY_BLOCK_VERSION,
+    few_shot_library: FEW_SHOT_LIBRARY_BLOCK_VERSION,
   };
 }

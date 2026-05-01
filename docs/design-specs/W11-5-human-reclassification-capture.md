@@ -1,6 +1,6 @@
 # W11.5 — Human Reclassification Capture — Design Spec
 
-**Status:** ⚙️ Future wave — depends on W11 (universal vision schema) + W11.7 (Shape D multi-stage architecture). Authored 2026-04-29 from Joseph's question on whether operators can override Stage 1's room_type / slot / score; terminology refreshed 2026-04-30 to align with the rewritten W11.7 (Gemini-anchored Shape D, 5-call multi-stage).
+**Status:** ⚙️ **Backend complete (2026-05-01) — frontend pending Agent 4.** Closed-loop learning is wired end-to-end on the engine side: operator overrides flow into `composition_classification_overrides` via the new `composition-override` edge fn, get rendered into Stage 1's prompt via `projectMemoryBlock` (per-project authoritative), and master_admin-approved overrides graduate into `engine_fewshot_examples` via `approve-stage4-override` for cross-project consumption via `fewShotLibraryBlock`. Authored 2026-04-29 from Joseph's question on whether operators can override Stage 1's room_type / slot / score; terminology refreshed 2026-04-30 to align with the rewritten W11.7 (Gemini-anchored Shape D, 5-call multi-stage); backend wired 2026-05-01 alongside Stage 1 token attribution fix.
 **Backlog ref:** P1-23 (new)
 **Wave plan ref:** W11.5 — operator-driven correction of Shape D mislabels feeds the closed-loop learning system
 **Dependencies:** W11 (per-signal scoring schema), W11.7 (Shape D multi-stage architecture — overrides feed `project_memory` consumed in Stage 1's prompt context), W12 (object_registry — for the cross-project canonical-feature memory path)
@@ -18,6 +18,67 @@ This spec was originally authored against the "single Opus call + Sonnet backfil
 - **Few-shot feedback loop:** W11.5 reclassifications populate the `pass1_fewshot_examples` library that Stage 1 reads on every subsequent batch call, so the engine learns from each operator correction without code changes.
 
 Section references below to "Pass 1" / "Pass 2" should be read as **Stage 1** (per-image enrichment) and **Stage 4** (visual master synthesis) under the Shape D engine.
+
+---
+
+## ✅ Closed-loop architecture (2026-05-01) — backend complete
+
+The closed loop now runs end-to-end on the engine side. Per-project memory and cross-project few-shot are both wired into Stage 1's prompt assembly. Frontend reclassification UI is the only remaining gap (Agent 4).
+
+```
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  Operator reclassifies a card in the swimlane                               │
+│  (Agent 4 frontend — pending)                                                │
+│                       │                                                       │
+│                       ▼                                                       │
+│  POST /functions/v1/composition-override                                     │
+│  { round_id, group_id, field, ai_value, human_value, reason, ... }           │
+│                       │                                                       │
+│                       ▼                                                       │
+│  composition_classification_overrides row                                    │
+│  (override_source='stage1_correction', actor=user.id, actor_at=NOW())        │
+│  Idempotent: same (group, round, source) → UPDATE not INSERT                 │
+│                       │                                                       │
+│            ┌──────────┴──────────┐                                            │
+│            ▼                     ▼                                            │
+│   PROJECT MEMORY          ┌─ shortlisting_events row ──┐                     │
+│   (per-project)           │ event_type='human_reclass-│                     │
+│            │              │ ification', diff payload   │                     │
+│            ▼              └────────────────────────────┘                     │
+│  projectMemoryBlock(project_id, current_round_id)                            │
+│  → injected at END of system prompt                                          │
+│  → next Stage 1 run on this project sees authoritative correction            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+                    ─── master_admin curation ───
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  POST /functions/v1/approve-stage4-override                                  │
+│  { override_id }                                                              │
+│  master_admin only — cross-project pollution gate                            │
+│                       │                                                       │
+│                       ▼                                                       │
+│  engine_fewshot_examples row (in_active_prompt=TRUE)                         │
+│  Dedup: same (kind, ai_value, human_value, tier, image_type) → UPDATE        │
+│  observation_count++ rather than insert duplicate                            │
+│                       │                                                       │
+│                       ▼                                                       │
+│  fewShotLibraryBlock(property_tier, image_type)                              │
+│  → injected at END of user prompt                                            │
+│  → all future projects see the cross-project pattern                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Two scopes, two libraries:**
+| Scope | Source | Library | Block | Injection point |
+|---|---|---|---|---|
+| Per-project | operator override (any role) | `composition_classification_overrides` | `projectMemoryBlock` | END of system prompt |
+| Cross-project | master_admin-approved | `engine_fewshot_examples` (in_active_prompt=TRUE) | `fewShotLibraryBlock` | END of user prompt |
+
+**Curation gate:** raw operator overrides do NOT auto-graduate to the cross-project few-shot library. A master_admin must explicitly invoke `approve-stage4-override` (or curate via the W14 admin UI) for any pattern to start affecting other projects. This protects the engine from a single operator's quirky call polluting the global prompt context.
+
+**Block versions:** every Stage 1 row's `composition_classifications.prompt_block_versions` JSONB now records `project_memory: 'v1.0'` and `few_shot_library: 'v1.0'` alongside the existing `voice_anchor`, `sydney_primer`, etc. When Agent 1 plumbs `prompt_block_versions` onto `engine_run_audit`, the same map populates the per-round audit row.
 
 ---
 
@@ -124,32 +185,80 @@ New `ReclassifyMenu` component on `ShortlistingCard.jsx` (engine mode only — m
 
 Visual indication on cards with active overrides: amber border + "Reclassified" badge; clicking the badge opens read-only diff modal. Cards where Stage 4 visually corrected Stage 1 (without operator action) display a separate "Engine self-corrected" badge — clicking it opens the Stage 1 → Stage 4 diff and offers a one-click "Confirm" button that writes a `stage4`-source override row.
 
-### Section 4 — Edge fn `reclassify-composition`
+### Section 4 — Edge fns `composition-override` and `approve-stage4-override` (shipped 2026-05-01)
+
+The override capture and graduation flow ships as **two** distinct edge fns, not one. The split keeps the curation gate (master_admin-only graduation) cleanly separated from the operator-level reclassification capture (master_admin / admin / manager).
+
+#### 4a. `composition-override` (operator reclassification capture)
+
+`supabase/functions/composition-override/index.ts` — backend for the swimlane reclassify menu (Agent 4 frontend will call this).
 
 ```typescript
-// supabase/functions/reclassify-composition/index.ts (new)
-
-interface ReclassifyRequest {
-  group_id: string;
-  round_id: string;
-  override_source: 'stage1' | 'stage4';  // which stage's value is being corrected/confirmed
-  human_room_type?: string;
-  human_composition_type?: string;
-  human_vantage_point?: string;
-  human_combined_score?: number;
-  human_eligible_slot_ids?: string[];
-  override_reason: string;          // required
-  override_notes?: string;
+// POST body
+interface OverrideRequest {
+  round_id: string;                            // required
+  group_id: string;                            // required
+  field: 'room_type'                           // exactly one field per request
+       | 'composition_type'
+       | 'vantage_point'
+       | 'combined_score';
+  ai_value: string | number | null;            // what the engine emitted
+  human_value: string | number;                // what the operator wants instead
+  reason: string;                              // ≥ 5 chars, ≤ 2000 chars
+  evidence_keywords?: string[];                // forward-compat for W12 rollup; not currently persisted
+  override_source?: 'stage1_correction'        // default
+                  | 'stage4_visual_override'
+                  | 'master_admin_correction';
 }
 
-// 1. Auth: master_admin / admin / manager (employees can suggest but not commit per RLS)
-// 2. Validate: room_type must exist in shortlisting_room_types registry; combined_score in [0,10]
-// 3. UPSERT composition_classification_overrides row (keyed on group_id + round_id + override_source)
-// 4. Emit shortlisting_events.event_type='human_reclassification' with the diff
-// 5. Return the override row + a "next-round impact preview" (which slots would change)
+// 1. Auth: master_admin / admin / manager (and service-role)
+// 2. Project-access guard via callerHasProjectAccess (non-service callers)
+// 3. Validate field-specific constraints (vantage_point enum, combined_score [0,10])
+// 4. Idempotent UPSERT keyed on (group_id, round_id, override_source):
+//      - exists → UPDATE the field-specific ai_/human_ pair, refresh actor + actor_at
+//      - missing → INSERT a fresh row
+// 5. Emit shortlisting_events.event_type='human_reclassification' with the diff payload
+// 6. Return { ok: true, override: <row>, action: 'inserted' | 'updated' }
 ```
 
-The "next-round impact preview" runs the slot-resolver against the override + remaining ai-classifications and surfaces "If we re-ran Stage 4 now, IMG_6195 would route to exterior_rear and IMG_6210 would lose its winner status to a closer match." Operator sees the consequence before committing.
+Note: the original spec named this fn `reclassify-composition`. The shipped name is `composition-override` to keep alignment with the table name (`composition_classification_overrides`) and to make the API's purpose unambiguous from its URL. Future-state mention of "reclassify-composition" in older specs should be read as `composition-override`.
+
+#### 4b. `approve-stage4-override` (master_admin few-shot graduation)
+
+`supabase/functions/approve-stage4-override/index.ts` — backend for the W11.6 review dashboard's "approve" button (Agent 4 frontend pending).
+
+```typescript
+// POST body
+interface ApprovalRequest {
+  override_id: string;                         // composition_classification_overrides.id
+  example_kind?: 'room_type_correction'        // optional override; auto-derived from
+                | 'composition_correction'      // the override row's first non-null human_*
+                | 'reject_pattern',
+  property_tier?: 'premium' | 'standard'       // optional; default NULL = applies all tiers
+                | 'approachable',
+  image_type?: 'interior' | 'exterior'         // optional; default NULL = applies all types
+              | 'detail',
+  description?: string,                         // optional override; default auto-generated
+  evidence_keywords?: string[]                  // optional override; default sourced from
+                                                // the round's key_elements
+}
+
+// 1. Auth: master_admin ONLY (cross-project pollution gate)
+// 2. Look up the override row + auto-derive example_kind from its first non-null human_*
+// 3. Source evidence_keywords from composition_classifications.key_elements unless supplied
+// 4. Auto-generate the description (or use the supplied one)
+// 5. Dedup against existing engine_fewshot_examples on
+//    (kind, ai_value, human_value, property_tier, image_type):
+//      - exists → UPDATE observation_count++, refresh curated_by + curated_at
+//      - missing → INSERT new row with in_active_prompt=TRUE, observation_count=1
+// 6. Update the source override row's actor_user_id + actor_at to the approver
+// 7. Emit shortlisting_events.event_type='fewshot_graduation' with full payload
+// 8. Return { ok: true, fewshot_example: <row>, action: 'inserted' | 'updated', source_override_id }
+```
+
+#### "Next-round impact preview"
+
+The original spec called for a synchronous "if we re-ran Stage 4 now, IMG_6195 would route to exterior_rear" preview as part of the override capture path. This is **deferred** out of the v1 backend — it's a slot-resolver re-execution that's safer to compute on the frontend (the swimlane already knows the slot state). When Agent 4 builds the reclassify modal, the impact preview is a client-side render against the override + remaining classifications, not a server-side API call.
 
 ### Section 5 — Cross-project canonical memory (W12 hook)
 
@@ -180,28 +289,56 @@ Wave 11's Stage 1 prompt block `objectsAndAttributes` then primes the model:
 
 **Net effect:** by the 11th project where IMG_6195-style mislabel could happen, Stage 1 has **empirically-grown evidence** that Hills Hoist is a back-yard signal, regardless of facade dominance in the frame. This is the closed-loop ethos working.
 
-### Section 6 — Few-shot library for Stage 1 (Wave 14 hook)
+### Section 6 — Few-shot library for Stage 1 (Wave 14 hook) — shipped as `engine_fewshot_examples`
 
-Every W11.5 reclassification — whether sourced from a Stage 1 mislabel or a confirmed Stage 4 self-correction — populates the `pass1_fewshot_examples` library that Stage 1 reads on every batch call. W14 calibration session also captures 50 stratified projects' editor decisions including reclassifications. The combined output feeds a `pass1_fewshot_examples` table:
+The few-shot library shipped under the renamed table `engine_fewshot_examples` (mig 371). The original spec name `pass1_fewshot_examples` was renamed during W11.7 integration since the same library serves both Stage 1 AND Stage 4 prompts, not just the legacy Pass 1.
 
 ```sql
-CREATE TABLE pass1_fewshot_examples (
-  id UUID PRIMARY KEY,
-  example_kind TEXT NOT NULL,        -- 'room_type_correction' | 'composition_type_correction' | ...
+-- Live schema (mig 371). Differences from the original spec:
+--   - 'pass1_fewshot_examples' renamed to 'engine_fewshot_examples'
+--   - in_active_prompt defaults FALSE (master_admin curation required, not auto-active)
+--   - +property_tier + image_type filters for tier-aware injection
+--   - +example_kind 'voice_exemplar' for W11.7.9 voice library
+CREATE TABLE engine_fewshot_examples (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  example_kind TEXT NOT NULL,         -- 'room_type_correction' | 'composition_correction' | 'reject_pattern' | 'voice_exemplar'
+  property_tier TEXT,                 -- 'premium' | 'standard' | 'approachable' | NULL (all tiers)
+  image_type TEXT,                    -- 'interior' | 'exterior' | 'detail' | NULL (all types)
   ai_value TEXT,
   human_value TEXT,
-  evidence_keywords TEXT[],          -- ['hills_hoist', 'rotary_clothesline']
-  evidence_image_path TEXT,           -- Dropbox path to the actual image (not bundled in prompts; reference for review)
-  in_active_prompt BOOLEAN DEFAULT TRUE,
-  observation_count INT,
+  evidence_keywords TEXT[],
+  evidence_image_path TEXT,
+  description TEXT,
+  ideal_output JSONB,                 -- voice_exemplar full target JSON
+  in_active_prompt BOOLEAN NOT NULL DEFAULT FALSE,  -- master_admin curation gate
+  observation_count INT NOT NULL DEFAULT 1,
   source_session_id UUID,
+  curated_by UUID,
+  curated_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
-Wave 11's Stage 1 prompt assembly conditionally injects the top-N most-frequent few-shot examples (Wave 14 admin curates which ones graduate from raw observation to active prompt material):
+The `fewShotLibraryBlock` (W7.6 prompt block) loads the active library on every Stage 1 call:
 
-> "EMPIRICAL CORRECTION EXAMPLES: 8 cases where Stage 1 said `exterior_front` but operators corrected to `exterior_rear`. Common evidence: Hills Hoist clothesline, hot water system, garden tap. When you see these elements in the frame, prefer `exterior_rear` even if the facade is prominent."
+```typescript
+// supabase/functions/_shared/visionPrompts/blocks/fewShotLibraryBlock.ts
+const fewShotText = await fewShotLibraryBlock({
+  property_tier: 'standard',     // matches round.property_tier
+  image_type: undefined,         // Stage 1 typically omits; per-image type is per-call
+  max_examples: 20,              // matches engine_settings.fewshot_max_active default
+});
+// Renders to:
+//   EMPIRICAL CORRECTION EXAMPLES (cross-project patterns):
+//   1. AI labelled exterior_front → human corrected to exterior_rear (8 cases).
+//      Common evidence: hills_hoist, hot_water_system, garden_tap.
+//   ...
+//   Apply these patterns when current images match the evidence keywords.
+```
+
+The block is injected at the END of Stage 1's user prompt — last directive before the model emits JSON, so empirical patterns are top-of-mind on tricky judgements.
+
+**Curation flow:** raw operator overrides (via `composition-override`) land in `composition_classification_overrides` with no graduation. Master_admin invokes `approve-stage4-override` to promote a specific override to `engine_fewshot_examples` with `in_active_prompt=TRUE`. The dedup logic on (kind, ai_value, human_value, tier, image_type) bumps `observation_count` rather than inserting duplicates — repeated approval of the same pattern strengthens its empirical confidence.
 
 This is what "engine grows with each project" actually means in concrete terms.
 
