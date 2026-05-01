@@ -68,14 +68,48 @@
  * tracks block changes. Persisted in
  * `composition_classifications.prompt_block_versions`.
  *
- * Gemini responseSchema honoured constraints:
- *   - no $ref, no oneOf/anyOf
- *   - no patternProperties / additionalProperties
- *   - no minLength/maxLength on strings (use description guidance instead)
- *   - minItems / required honoured
+ * ─── GEMINI COMPATIBILITY (W11.7.17 hotfix-3) ───────────────────────────────
+ *
+ * Gemini's `responseSchema` is OpenAPI 3.0, NOT JSON Schema 2020-12 / OpenAPI
+ * 3.1. The 3.1 type-array nullable form is REJECTED with a 400 INVALID_ARGUMENT
+ * — every emission then silently fails over to Anthropic at ~12x the cost
+ * (~$0.17/image vs ~$0.014/image on Gemini).
+ *
+ * REQUIRED CONVENTION for nullable fields in this schema:
+ *
+ *   FORBIDDEN (OpenAPI 3.1):    { type: ['string', 'null'] }
+ *   REQUIRED  (OpenAPI 3.0):    { type: 'string', nullable: true }
+ *
+ *   FORBIDDEN nullable object:  { type: ['object', 'null'], properties: {...} }
+ *   REQUIRED  nullable object:  { type: 'object', nullable: true, properties: {...} }
+ *
+ *   FORBIDDEN array w/ null items:    { items: { type: ['string', 'null'] } }
+ *   REQUIRED  array w/ null items:    { items: { type: 'string', nullable: true } }
+ *
+ *   FORBIDDEN multi-type union:    { type: ['string', 'number', 'null'] }
+ *   ACCEPTED  multi-type union:    pick a single primary type + nullable: true
+ *                                  (Gemini does NOT support multi-type unions
+ *                                  even without null — collapse to one type).
+ *
+ * Other Gemini responseSchema constraints (UNCHANGED):
+ *   - no `$ref`
+ *   - no `oneOf` / `anyOf`
+ *   - no `patternProperties`
+ *   - no `additionalProperties` (use `properties: {}` only)
+ *   - no `minLength` / `maxLength` on strings (use `description` guidance)
+ *   - `minItems`, `maxItems`, `enum`, `required` ARE honoured
+ *
+ * Future schema authors: when adding a nullable field, ALWAYS use
+ * `nullable: true` next to a single primary `type`. The `geminiCompatibility`
+ * test walks the schema tree and FAILS the build if any of the forbidden
+ * patterns reappear.
  */
 
-export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.0';
+// W11.7.17 hotfix-3: bumped from v2.0 to v2.1 for Gemini-compatible nullable
+// annotation. Schema shape unchanged; only the encoding of nullable changed
+// (type-array union → nullable: true). Breaking for downstream prompt-cache
+// invalidation, hence the version bump.
+export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.1';
 export const UNIVERSAL_VISION_RESPONSE_TOOL_NAME = 'classify_image';
 
 /**
@@ -178,7 +212,8 @@ export const SIGNAL_TO_DIMENSION: Partial<Record<UniversalSignalKey, 'technical'
 // ─── Schema definition (Gemini responseSchema-compatible) ───────────────────
 
 const SIGNAL_SCORE_PROP = (description: string): Record<string, unknown> => ({
-  type: ['number', 'null'],
+  type: 'number',
+  nullable: true,
   description,
 });
 
@@ -364,13 +399,15 @@ const IMAGE_CLASSIFICATION_SCHEMA: Record<string, unknown> = {
     time_of_day_confidence: { type: 'number' },
     is_drone: { type: 'boolean' },
     drone_type: {
-      type: ['string', 'null'],
+      type: 'string',
+      nullable: true,
       description:
         'One of: orbit_oblique | nadir | elevation_rise | null when not a drone shot.',
     },
     is_video_frame: { type: 'boolean' },
     quarantine_reason: {
-      type: ['string', 'null'],
+      type: 'string',
+      nullable: true,
       description:
         'One of: agent_headshot | bts | test_shot | equipment | corrupt_frame | ' +
         'severe_underexposure | null when no quarantine reason applies.',
@@ -390,7 +427,8 @@ const IMAGE_CLASSIFICATION_SCHEMA: Record<string, unknown> = {
 };
 
 const ROOM_CLASSIFICATION_SCHEMA: Record<string, unknown> = {
-  type: ['object', 'null'],
+  type: 'object',
+  nullable: true,
   description:
     'Room/composition classification. NULL when the source is a floorplan ' +
     'or when the subject is not a single-room interior/exterior shot.',
@@ -431,7 +469,8 @@ const OBSERVED_OBJECTS_SCHEMA: Record<string, unknown> = {
           '"tap", "window".',
       },
       proposed_canonical_id: {
-        type: ['string', 'null'],
+        type: 'string',
+        nullable: true,
         description:
           'When the raw_label matches a known canonical object_id from the ' +
           'CANONICAL FEATURE REGISTRY block, emit that id; else null.',
@@ -471,11 +510,12 @@ const OBSERVED_ATTRIBUTES_SCHEMA: Record<string, unknown> = {
     type: 'object',
     properties: {
       raw_label: { type: 'string' },
-      canonical_attribute_id: { type: ['string', 'null'] },
-      canonical_value_id: { type: ['string', 'null'] },
+      canonical_attribute_id: { type: 'string', nullable: true },
+      canonical_value_id: { type: 'string', nullable: true },
       confidence: { type: 'number' },
       object_anchor: {
-        type: ['string', 'null'],
+        type: 'string',
+        nullable: true,
         description:
           'When this attribute belongs to a specific observed_object, anchor ' +
           'by that object\'s raw_label or proposed_canonical_id.',
@@ -494,12 +534,13 @@ const QUALITY_FLAGS_SCHEMA: Record<string, unknown> = {
     "we don't reject). is_near_duplicate_candidate is scored on all sources.",
   properties: {
     clutter_severity: {
-      type: ['string', 'null'],
+      type: 'string',
+      nullable: true,
       description:
         'One of: none | minor_photoshoppable | moderate_retouch | major_reject | null. ' +
         'NULL on floorplan_image.',
     },
-    clutter_detail: { type: ['string', 'null'] },
+    clutter_detail: { type: 'string', nullable: true },
     flag_for_retouching: { type: 'boolean' },
     is_near_duplicate_candidate: { type: 'boolean' },
   },
@@ -523,14 +564,15 @@ const SOURCE_SCHEMA: Record<string, unknown> = {
       description:
         'One of: still_image | video_frame | drone_image | floorplan_image.',
     },
-    is_hdr_bracket: { type: ['boolean', 'null'] },
-    is_post_edit: { type: ['boolean', 'null'] },
-    external_url: { type: ['string', 'null'] },
-    listing_id: { type: ['string', 'null'] },
-    bracket_index: { type: ['number', 'null'] },
-    bracket_count: { type: ['number', 'null'] },
+    is_hdr_bracket: { type: 'boolean', nullable: true },
+    is_post_edit: { type: 'boolean', nullable: true },
+    external_url: { type: 'string', nullable: true },
+    listing_id: { type: 'string', nullable: true },
+    bracket_index: { type: 'number', nullable: true },
+    bracket_count: { type: 'number', nullable: true },
     property_tier: {
-      type: ['string', 'null'],
+      type: 'string',
+      nullable: true,
       description: 'One of: premium | standard | approachable | null.',
     },
   },
@@ -538,7 +580,8 @@ const SOURCE_SCHEMA: Record<string, unknown> = {
 };
 
 const RAW_SPECIFIC_SCHEMA: Record<string, unknown> = {
-  type: ['object', 'null'],
+  type: 'object',
+  nullable: true,
   description:
     'RAW-only signals. Populate when source.type=internal_raw; NULL otherwise. ' +
     'Q5 binding: leave the other 3 *_specific blocks set to null.',
@@ -564,7 +607,8 @@ const RAW_SPECIFIC_SCHEMA: Record<string, unknown> = {
 };
 
 const FINALS_SPECIFIC_SCHEMA: Record<string, unknown> = {
-  type: ['object', 'null'],
+  type: 'object',
+  nullable: true,
   description:
     'Finals-only signals. Populate when source.type=internal_finals; NULL ' +
     'otherwise. Look for post-processing artefacts (sky replacement, digital ' +
@@ -573,18 +617,18 @@ const FINALS_SPECIFIC_SCHEMA: Record<string, unknown> = {
   properties: {
     looks_post_processed: { type: 'boolean' },
     vertical_lines_corrected: { type: 'boolean' },
-    color_grade_consistent_with_set: { type: ['boolean', 'null'] },
+    color_grade_consistent_with_set: { type: 'boolean', nullable: true },
     sky_replaced: { type: 'boolean' },
-    sky_replacement_halo_severity: { type: ['number', 'null'] },
+    sky_replacement_halo_severity: { type: 'number', nullable: true },
     digital_furniture_present: { type: 'boolean' },
-    digital_furniture_artefact_severity: { type: ['number', 'null'] },
+    digital_furniture_artefact_severity: { type: 'number', nullable: true },
     digital_dusk_applied: { type: 'boolean' },
-    digital_dusk_oversaturation_severity: { type: ['number', 'null'] },
-    window_blowout_severity: { type: ['number', 'null'] },
-    shadow_recovery_score: { type: ['number', 'null'] },
-    color_cast_score: { type: ['number', 'null'] },
-    hdr_halo_severity: { type: ['number', 'null'] },
-    retouch_artefact_severity: { type: ['number', 'null'] },
+    digital_dusk_oversaturation_severity: { type: 'number', nullable: true },
+    window_blowout_severity: { type: 'number', nullable: true },
+    shadow_recovery_score: { type: 'number', nullable: true },
+    color_cast_score: { type: 'number', nullable: true },
+    hdr_halo_severity: { type: 'number', nullable: true },
+    retouch_artefact_severity: { type: 'number', nullable: true },
   },
   required: [
     'looks_post_processed',
@@ -596,7 +640,8 @@ const FINALS_SPECIFIC_SCHEMA: Record<string, unknown> = {
 };
 
 const EXTERNAL_SPECIFIC_SCHEMA: Record<string, unknown> = {
-  type: ['object', 'null'],
+  type: 'object',
+  nullable: true,
   description:
     'External listing observational signals. Populate when ' +
     "source.type=external_listing; NULL otherwise. Q4 binding: NO " +
@@ -611,8 +656,8 @@ const EXTERNAL_SPECIFIC_SCHEMA: Record<string, unknown> = {
       type: 'object',
       properties: {
         watermark_visible: { type: 'boolean' },
-        agency_logo: { type: ['string', 'null'] },
-        photographer_credit: { type: ['string', 'null'] },
+        agency_logo: { type: 'string', nullable: true },
+        photographer_credit: { type: 'string', nullable: true },
       },
       required: ['watermark_visible'],
     },
@@ -627,7 +672,7 @@ const EXTERNAL_SPECIFIC_SCHEMA: Record<string, unknown> = {
         video_thumbnail: { type: 'boolean' },
         floorplan_present: { type: 'boolean' },
         twilight_hdr: { type: 'boolean' },
-        photo_count_in_listing: { type: ['number', 'null'] },
+        photo_count_in_listing: { type: 'number', nullable: true },
       },
       required: [
         'dusk_quality',
@@ -642,7 +687,8 @@ const EXTERNAL_SPECIFIC_SCHEMA: Record<string, unknown> = {
 };
 
 const FLOORPLAN_SPECIFIC_SCHEMA: Record<string, unknown> = {
-  type: ['object', 'null'],
+  type: 'object',
+  nullable: true,
   description:
     'Floorplan OCR-style signals. Populate when source.type=floorplan_image; ' +
     'NULL otherwise. Q5 binding: leave the other 3 *_specific blocks set ' +
@@ -655,31 +701,37 @@ const FLOORPLAN_SPECIFIC_SCHEMA: Record<string, unknown> = {
         type: 'object',
         properties: {
           room_label: { type: 'string' },
-          canonical_room_type: { type: ['string', 'null'] },
-          area_sqm: { type: ['number', 'null'] },
-          dimensions_text: { type: ['string', 'null'] },
+          canonical_room_type: { type: 'string', nullable: true },
+          area_sqm: { type: 'number', nullable: true },
+          dimensions_text: { type: 'string', nullable: true },
         },
         required: ['room_label'],
       },
     },
-    total_internal_sqm: { type: ['number', 'null'] },
-    bedrooms_count: { type: ['number', 'null'] },
-    bathrooms_count: { type: ['number', 'null'] },
-    car_spaces: { type: ['number', 'null'] },
-    home_archetype: { type: ['string', 'null'] },
+    total_internal_sqm: { type: 'number', nullable: true },
+    bedrooms_count: { type: 'number', nullable: true },
+    bathrooms_count: { type: 'number', nullable: true },
+    car_spaces: { type: 'number', nullable: true },
+    home_archetype: { type: 'string', nullable: true },
     north_arrow_orientation: {
-      type: ['string', 'null'],
+      type: 'string',
+      nullable: true,
       description: 'One of: N | NE | E | SE | S | SW | W | NW | null.',
     },
-    levels_count: { type: ['number', 'null'] },
+    levels_count: { type: 'number', nullable: true },
     cross_check_flags: {
       type: 'array',
       items: {
         type: 'object',
         properties: {
           flag: { type: 'string' },
-          crm_value: { type: ['string', 'number', 'null'] },
-          floorplan_value: { type: ['string', 'number', 'null'] },
+          // W11.7.17 hotfix-3: Gemini does NOT support multi-type unions —
+          // collapsed to `string` (with nullable). Numeric CRM values like
+          // bedrooms/bathrooms render perfectly well as their string form
+          // ("3", "2.5") so the model can stringify before emit. The
+          // persist layer accepts both.
+          crm_value: { type: 'string', nullable: true },
+          floorplan_value: { type: 'string', nullable: true },
         },
         required: ['flag'],
       },
@@ -689,7 +741,8 @@ const FLOORPLAN_SPECIFIC_SCHEMA: Record<string, unknown> = {
 };
 
 const LISTING_COPY_SCHEMA: Record<string, unknown> = {
-  type: ['object', 'null'],
+  type: 'object',
+  nullable: true,
   description:
     'Per-image listing copy. Populated for internal sources only ' +
     "(internal_raw, internal_finals); NULL for external_listing (we don't " +
@@ -706,7 +759,7 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = {
   properties: {
     schema_version: {
       type: 'string',
-      description: "Echo '2.0' — Wave 11.7.17 universal schema cutover.",
+      description: "Echo '2.1' — Wave 11.7.17 hotfix-3 (Gemini-compatible nullable annotation).",
     },
     source: SOURCE_SCHEMA,
     analysis: {
@@ -784,7 +837,7 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = {
         'One of: urgent | recommended | none. external_listing: always "none". ' +
         'floorplan_image: always "none".',
     },
-    retouch_estimate_minutes: { type: ['number', 'null'] },
+    retouch_estimate_minutes: { type: 'number', nullable: true },
     gallery_position_hint: {
       type: 'string',
       description:
@@ -792,7 +845,7 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = {
         'external_listing: always "archive_only". floorplan_image: ' +
         'always "archive_only".',
     },
-    social_first_friendly: { type: ['boolean', 'null'] },
+    social_first_friendly: { type: 'boolean', nullable: true },
     requires_human_review: { type: 'boolean' },
     confidence_per_field: {
       type: 'object',
@@ -806,8 +859,8 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = {
       },
       required: ['room_type', 'scoring', 'classification'],
     },
-    style_archetype: { type: ['string', 'null'] },
-    era_hint: { type: ['string', 'null'] },
+    style_archetype: { type: 'string', nullable: true },
+    era_hint: { type: 'string', nullable: true },
     material_palette_summary: {
       type: 'array',
       description:
@@ -827,7 +880,8 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = {
       items: { type: 'string' },
     },
     shot_intent: {
-      type: ['string', 'null'],
+      type: 'string',
+      nullable: true,
       description:
         'One of: hero_establishing | scale_clarification | lifestyle_anchor | ' +
         'material_proof | indoor_outdoor_connection | detail_specimen | ' +
@@ -892,7 +946,7 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = {
  * persist-layer typing in `shortlisting-shape-d/index.ts`.
  */
 export interface UniversalVisionResponseV2 {
-  schema_version: '2.0';
+  schema_version: '2.0' | '2.1';
   source: {
     type: 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image';
     media_kind: 'still_image' | 'video_frame' | 'drone_image' | 'floorplan_image';
