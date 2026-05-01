@@ -306,7 +306,8 @@ interface UniversalVisionResponseV2 {
 
   external_specific: {
     estimated_price_class: 'sub_1M' | '1M_to_3M' | '3M_to_10M' | '10M_plus' | 'unknown';
-    delivery_quality_grade: 'A' | 'B' | 'C' | 'D' | 'F';
+    // W11.7.17 Q4 binding: DROPPED letter-grade delivery_quality_grade.
+    // External listings get combined_score numeric only.
     competitor_branding: {
       watermark_visible: boolean;
       agency_logo: string | null;
@@ -540,10 +541,11 @@ change**. The schema work is all in W11.7.17.
 
 ---
 
-## 9. The 22 signal measurement prompts
+## 9. The 26 signal measurement prompts
 
-Each signal gets 1-2 sentences as the model-facing instruction. Block:
-`signalMeasurementBlock(source_type)`.
+W11.7.17 Q2 binding: lighting now has 4 dedicated signals; total = 26 signals
+(22 from v1 + 4 new lighting). Each signal gets 1-2 sentences as the model-
+facing instruction. Block: `signalMeasurementBlock(source_type)`.
 
 ```
 SIGNAL MEASUREMENT INSTRUCTIONS — score 0-10. NULL = signal does not apply
@@ -575,6 +577,34 @@ plumb_verticals:
 perspective_distortion:
   Do straight architectural lines bow at frame edges (lens barrel/pincushion)?
   10 = no bow. 5 = mild bow at edges. 0 = severe fisheye effect.
+
+— LIGHTING (NEW — Q2 binding) —
+light_quality:
+  Overall lighting CHARACTER and quality. 10 = beautiful, evocative light
+  (golden-hour warmth, soft north-facing daylight, evenly-modulated dusk);
+  5 = adequate ambient; 0 = harsh fluorescent overheads, mixed colour
+  temperature chaos, or flat featureless light. RAW: scored. Finals:
+  scored. External: observational. Floorplan: NULL.
+
+light_directionality:
+  Direction of light and how it shapes the subject. 10 = clear, intentional
+  direction that reveals form (raking side-light on textured walls, top-back
+  rim on architectural detail); 5 = neutral frontal/ambient; 0 = lighting
+  works against the subject. Floorplan: NULL.
+
+color_temperature_appropriateness:
+  White balance MATCHES the scene the photographer is selling. 10 = tonally
+  consistent (warm interiors for period homes, neutral cool for contemporary,
+  dusk-amber for twilight sets); 5 = slightly off but recoverable; 0 =
+  jarring mixed white balance or wrong temperature for the era/style.
+  Floorplan: NULL.
+
+light_falloff_quality:
+  Gradient and rolloff between bright and shadow zones. 10 = smooth,
+  photographic falloff that creates depth (gentle window wash gradient onto
+  a wall, soft shadow into ceiling line); 5 = hard edges between zones but
+  not distracting; 0 = harsh sharp-edged shadows, banding, or flash-flat
+  with no falloff. Floorplan: NULL.
 
 — COMPOSITIONAL —
 depth_layering:
@@ -661,31 +691,33 @@ The block is conditionally rendered:
 
 ---
 
-## 10. Open questions for Joseph
+## 10. Joseph's binding decisions (signed off 2026-05-01)
 
-1. **Q1 — `image_type` enum scope.** 11 options listed. Are any wrong / missing?
-   Recommendation: ship the 11; add others when a real source surfaces.
+1. **Q1 — `image_type` enum scope.** SHIP THE 11 OPTIONS as listed.
 
-2. **Q2 — Lighting dimension mapping.** v2's 22 signals collapse most lighting work into
-   `exposure_balance` + `color_cast` + `material_specificity`. Recommendation: preserve
-   `lighting_score` as backwards-compat aggregate but compute it from
-   `(exposure_balance + color_cast + (1 - distraction_freeness))/3`.
+2. **Q2 — Lighting dimension mapping.** ADD 4 NEW LIGHTING SIGNALS instead
+   of computing `lighting_score` from existing technical signals:
+   `light_quality`, `light_directionality`,
+   `color_temperature_appropriateness`, `light_falloff_quality`. Total
+   schema = 26 signals (22 from v1 + 4 new lighting). `lighting_score`
+   aggregate computes from these 4.
 
-3. **Q3 — Bounding boxes on `observed_objects`.** Optional. Recommendation: ship optional,
-   opt-in via a flag passed in the source block.
+3. **Q3 — Bounding boxes on `observed_objects`.** DEFAULT ON. Stage 1 emits
+   `bounding_box: {x_pct, y_pct, w_pct, h_pct}` on every observed_object
+   by default. ~10-15% extra output tokens per call accepted.
 
-4. **Q4 — `external_listing` `delivery_quality_grade` letter scale.** Letter grade alongside
-   numeric signals. Recommendation: keep for human readability.
+4. **Q4 — `external_listing` `delivery_quality_grade` letter scale.** DROP
+   the A-F letter grade. External listings get `combined_score` numeric only.
 
-5. **Q5 — Per-image bracketing of `*_specific` blocks.** Nullable objects vs discriminated
-   union. Recommendation: keep four nullable blocks; enforce via prompt + persist-layer
-   validation.
+5. **Q5 — Per-image bracketing of `*_specific` blocks.** Keep four nullable
+   blocks; enforce via prompt + persist-layer validation.
 
-6. **Q6 — Schema version bump.** v2 = `'2.0'`. Recommendation: bump; declare 4-week dual-emit
-   window.
+6. **Q6 — Schema version bump.** HARD CUTOVER to v2.0. NO 4-week dual-emit
+   window. Existing v1 rows tagged `schema_version='v1.0'` and immutable;
+   new emissions are v2 from day one.
 
-7. **Q7 — Floorplan source type — keep separate or fold into external?** Recommendation:
-   keep separate.
+7. **Q7 — Floorplan source type — keep separate or fold into external?**
+   KEEP SEPARATE as its own source type (separate schema branch).
 
 ---
 
