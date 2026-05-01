@@ -115,6 +115,7 @@ import {
 // STAGE4_TOOL_SCHEMA stays on its current schema (W11.7.17 spec is per-image
 // only; cross-image master_listing moved to a future W11.7 spec).
 import {
+  UNIVERSAL_SIGNAL_KEYS,
   UNIVERSAL_VISION_RESPONSE_SCHEMA,
   UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
   UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
@@ -126,6 +127,7 @@ import {
 import { normaliseSignalScores } from '../_shared/visionPrompts/blocks/normaliseSignalScores.ts';
 import { getActiveTierConfig, type TierConfigRow } from '../_shared/tierConfig.ts';
 import { selectCombinedScore } from '../_shared/scoreRollup.ts';
+import { computeAggregateScores } from '../_shared/dimensionRollup.ts';
 import {
   projectMemoryBlock,
   PROJECT_MEMORY_BLOCK_VERSION,
@@ -1426,28 +1428,36 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     return null;
   };
 
-  // Combined score: Stage 1 emits the 4 dim aggregates directly. The combined
-  // value is selected by `selectCombinedScore` (W11.6.18):
-  //   - W11 per-signal weighted rollup when tier_config has signal_weights
-  //     AND signal_scores has at least one matching numeric entry.
-  //   - Legacy 4-axis hardcoded blend (technical*0.25 + lighting*0.30 +
-  //     composition*0.25 + aesthetic*0.20) otherwise.
-  const techScore = num(out.technical_score);
-  const lightScore = num(out.lighting_score);
-  const compScore = num(out.composition_score);
-  const aesScore = num(out.aesthetic_score);
+  // ─── W11.7.17 hotfix: quality_flags v2-nested read ─────────────────────────
+  // v2 universal schema (W11.7.17) nests quality fields under
+  // `out.quality_flags.{flag_for_retouching, clutter_severity, clutter_detail,
+  // is_near_duplicate_candidate}`. The pre-cutover persist read these from the
+  // top level (v1 shape). Read from the v2 nested object first, fall back to
+  // top-level for backwards compatibility with any pre-v2 traffic still in
+  // flight (legacy engine_modes, replay tests, etc.).
+  const qualityFlagsRaw = (out.quality_flags && typeof out.quality_flags === 'object')
+    ? out.quality_flags as Record<string, unknown>
+    : {};
+  const flagForRetouchingRaw = qualityFlagsRaw.flag_for_retouching ?? out.flag_for_retouching;
+  const clutterSeverityRaw = qualityFlagsRaw.clutter_severity ?? out.clutter_severity;
+  const clutterDetailRaw = qualityFlagsRaw.clutter_detail ?? out.clutter_detail;
 
   const roomType = str(out.room_type);
   const vantage = str(out.vantage_point);
   const eligibleExtRear = roomType === 'alfresco' && vantage === 'exterior_looking_in';
 
   // clutter_severity must be one of the 4 enum values; coerce defensively.
-  const clutterRaw = str(out.clutter_severity);
-  const clutter = clutterRaw && ['none', 'minor_photoshoppable', 'moderate_retouch', 'major_reject']
-    .includes(clutterRaw)
-    ? clutterRaw
+  const clutterRawStr = str(clutterSeverityRaw);
+  const clutter = clutterRawStr && ['none', 'minor_photoshoppable', 'moderate_retouch', 'major_reject']
+    .includes(clutterRawStr)
+    ? clutterRawStr
     : null;
-  const flagForRetouching = clutter === 'minor_photoshoppable' || clutter === 'moderate_retouch';
+  // flag_for_retouching: prefer the explicit boolean from the model; fall back
+  // to the clutter-severity heuristic when the model didn't emit a flag (defensive
+  // null → false coercion via bool()).
+  const flagForRetouching = flagForRetouchingRaw == null
+    ? (clutter === 'minor_photoshoppable' || clutter === 'moderate_retouch')
+    : bool(flagForRetouchingRaw);
 
   // vantage_point CHECK constraint accepts only 3 values; coerce others to null.
   const vantageColumn = vantage && ['interior_looking_out', 'exterior_looking_in', 'neutral']
@@ -1505,10 +1515,50 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     args.warnings.push(sigNormResult.warning);
   }
 
-  // W11.6.18 — pick the W11 per-signal weighted rollup when tier_config has
-  // signal_weights AND signal_scores has at least one matching numeric entry;
-  // otherwise the helper returns the legacy 4-axis hardcoded blend.
-  const combined = selectCombinedScore({
+  // ─── W11.7.17 hotfix: 4-axis aggregates + combined_score from rollup ───────
+  // Per W11.7.17 spec §6 (dimensionRollup.ts header): the 4 backwards-compat
+  // dimension scores AND combined_score are now COMPUTED VIEWS over the 26
+  // signal scores, NOT authoritative model output. Pre-cutover persist used
+  // the model's top-level technical_score etc. directly + selectCombinedScore;
+  // that path produced combined_score=0 for Rainbow Cres because the active
+  // tier_config.signal_weights had legacy 4-key dimension-name aliases
+  // (vantage_point, clutter_severity, living_zone_count,
+  // indoor_outdoor_connection_quality) that don't exist in the v2 26-signal
+  // map — selectCombinedScore's `?? 0` fallback for missing scores summed to 0.
+  //
+  // Fix: compute aggregates from signal_scores via computeAggregateScores.
+  // Pass tier_config.signal_weights ONLY when at least one weight key
+  // overlaps the canonical v2 26-signal set; otherwise pass null and the
+  // helper produces a uniform mean of present signals (the W11.7.17 default).
+  // dimension_weights are passed through as-is (the standard 0.25/0.30/0.25/0.20
+  // blend from mig 344 → DEFAULT_DIMENSION_WEIGHTS fallback in scoreRollup.ts).
+  const sigW = args.tierConfig?.signal_weights ?? null;
+  const v2Keys = new Set<string>(UNIVERSAL_SIGNAL_KEYS);
+  const sigWHasV2Overlap = sigW && typeof sigW === 'object'
+    && Object.keys(sigW).some((k) => v2Keys.has(k));
+  const usableSigWeights = sigWHasV2Overlap ? sigW : null;
+  const dimWeights = (args.tierConfig?.dimension_weights
+    && typeof args.tierConfig.dimension_weights === 'object')
+    ? args.tierConfig.dimension_weights as Record<string, number>
+    : null;
+
+  const aggregates = computeAggregateScores(
+    signalScores ?? {},
+    usableSigWeights,
+    dimWeights,
+  );
+
+  // Prefer rollup-computed aggregates; fall back to model-emitted top-level
+  // dim scores when the rollup yields null for that dimension (no signals
+  // present — e.g. floorplan composition_*, RAW exposure_balance edge case).
+  const techScore = aggregates.technical ?? num(out.technical_score);
+  const lightScore = aggregates.lighting ?? num(out.lighting_score);
+  const compScore = aggregates.composition ?? num(out.composition_score);
+  const aesScore = aggregates.aesthetic ?? num(out.aesthetic_score);
+
+  // combined_score: prefer rollup output; fall back to legacy 4-axis blend
+  // via selectCombinedScore when rollup is null (all signals missing).
+  const combined = aggregates.combined ?? selectCombinedScore({
     dimensionScores: {
       technical: techScore,
       lighting: lightScore,
@@ -1543,7 +1593,7 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     is_styled: bool(out.is_styled),
     indoor_outdoor_visible: bool(out.indoor_outdoor_visible),
     clutter_severity: clutter,
-    clutter_detail: str(out.clutter_detail),
+    clutter_detail: str(clutterDetailRaw),
     flag_for_retouching: flagForRetouching,
     technical_score: techScore,
     lighting_score: lightScore,
