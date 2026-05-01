@@ -234,7 +234,7 @@ export default function ShortlistingQuarantine({ roundId }) {
                 <DroneThumbnail
                   dropboxPath={dropboxPath}
                   mode="thumb"
-                  aspectRatio="aspect-[4/3]"
+                  aspectRatio="aspect-[3/2]"
                   alt={q.file_stem || "quarantined"}
                 />
                 <CardContent className="p-2 space-y-1.5">

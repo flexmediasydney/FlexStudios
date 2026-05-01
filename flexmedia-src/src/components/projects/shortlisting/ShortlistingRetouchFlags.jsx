@@ -288,7 +288,7 @@ export default function ShortlistingRetouchFlags({ roundId }) {
               <DroneThumbnail
                 dropboxPath={flag.dropboxPath}
                 mode="thumb"
-                aspectRatio="aspect-[4/3]"
+                aspectRatio="aspect-[3/2]"
                 alt={flag.file_stem || "retouch flag"}
               />
               <CardContent className="p-2 space-y-1.5">

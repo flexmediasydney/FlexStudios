@@ -388,11 +388,11 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
                         <DroneThumbnail
                           dropboxPath={winnerGroup.dropbox_preview_path}
                           mode="thumb"
-                          aspectRatio="aspect-[4/3]"
+                          aspectRatio="aspect-[3/2]"
                           alt={winnerGroup.delivery_reference_stem || slot.slot_id}
                         />
                       ) : (
-                        <div className="aspect-[4/3] rounded bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
+                        <div className="aspect-[3/2] rounded bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
                           {isMandatory ? "GAP — required" : "Not filled"}
                         </div>
                       )}

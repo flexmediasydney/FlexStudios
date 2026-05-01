@@ -116,12 +116,16 @@ function ManualFileCard({ file, dragHandleProps, draggableProps, innerRef, isDra
         isDragging && "shadow-lg ring-2 ring-primary",
       )}
     >
-      <div className="aspect-video w-full bg-muted rounded mb-1.5 overflow-hidden flex items-center justify-center">
+      {/* W11.6.2: Canon R5 native is 3:2 (6240x4160). aspect-video (16:9)
+          cropped portrait floorplans + chopped 3:2 landscape. object-contain
+          letterboxes mismatched aspects (e.g. portrait floorplans → dark
+          bands on the sides) instead of cropping the composition. */}
+      <div className="aspect-[3/2] w-full bg-muted rounded mb-1.5 overflow-hidden flex items-center justify-center">
         {previewUrl && !previewError ? (
           <img
             src={previewUrl}
             alt={file.name}
-            className="object-cover w-full h-full"
+            className="object-contain w-full h-full"
             onError={() => setPreviewError(true)}
             loading="lazy"
           />

@@ -147,13 +147,15 @@ export default function ShortlistingCard({
         column === "rejected" && "border-red-200 dark:border-red-900",
       )}
     >
-      {/* Thumbnail */}
+      {/* Thumbnail — W11.6.2: 3:2 (Canon R5 native is 6240x4160 = 1.5).
+          aspect-[4/3] cropped vertical edges, destroying the compositional
+          fidelity that Stage 1 spent 1,700 chars analysing. */}
       <div className="relative">
         <DroneThumbnail
           dropboxPath={previewPath}
           mode="thumb"
           alt={filename}
-          aspectRatio="aspect-[4/3]"
+          aspectRatio="aspect-[3/2]"
           overlay={
             <>
               {column === "approved" && (
