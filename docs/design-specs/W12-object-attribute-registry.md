@@ -1,9 +1,29 @@
 # W12 — Object/Attribute Registry + AI Suggestions — Design Spec
 
-**Status:** ⚙️ Ready to dispatch (pending Joseph sign-off on Q1-Q4 below).
+**Status:** ⚙️ **Foundation shipped 2026-05-01.** 4 tables + 191-entry seed + canonical-rollup edge fn + object-registry-admin curation fn + canonicalRegistryBlock prompt helper deployed and smoke-tested against the Saladine round (211/414 obs auto-normalised at 0.9477 avg cosine similarity, 191 candidates queued).
 **Backlog ref:** P2-2 + P2-3.
 **Wave plan ref:** Wave 12 — engine grows institutional memory. Subsumes W12.1-W12.8 from `docs/WAVE_PLAN.md`.
 **Companion spec:** `docs/design-specs/W12-trigger-thresholds.md` covers the AI-suggestion threshold defaults (W12.7-W12.8). This spec covers the full wave: schema, extractor worker, manual-trigger normalisation, discovery queue UI, and AI-suggestion plumbing. The two specs are intended to be read together at execution time.
+
+---
+
+## ⚙️ Implementation status (2026-05-01)
+
+**Shipped:**
+- ✅ **Migration 380** (`380_w12_object_registry.sql.draft`, applied as `380_w12_object_registry`) — pgvector extension + 4 tables (`object_registry` with **5-level hierarchy** `level_0_class → level_4_detail` + `parent_canonical_id` + `aliases TEXT[]` + `signal_room_type` + `signal_confidence`; `raw_attribute_observations`; `attribute_values`; `object_registry_candidates`) + RLS (master_admin SELECT/UPDATE; service_role bypass) + HNSW vector index on `embedding_vector` + `canonical_nearest_neighbors(embedding, top_n)` RPC for cosine top-N lookup.
+- ✅ **Migration 381** (`381_w12_canonical_seed.sql.draft`, applied via Management API SQL) — **191 curated canonical entries** with full 5-level hierarchy, signal_room_type populated for 151/191, aliases tuned to real Saladine + iter-5 vocabulary. Embeddings backfilled (191/191 populated via Gemini `gemini-embedding-001` @ 1536 dim).
+- ✅ **`canonical-rollup`** (`supabase/functions/canonical-rollup/index.ts`, deployed) — Stage 1.5 normalisation. POST `{round_id, [group_id], [key_elements[]], [limit]}`. Pre-embeds in parallel batches of 8, top-5 nearest match via the HNSW index, threshold-splits per spec (≥0.92 auto-normalise; 0.75-0.92 queue; <0.75 new observation). Idempotent via dedup on (round, group, raw_label). Per-call cap (default 60, max 200) keeps under the 150s edge-fn timeout.
+- ✅ **`object-registry-admin`** (`supabase/functions/object-registry-admin/index.ts`, deployed) — master_admin curation router. Subcommands: `list_candidates`, `approve_candidate`, `reject_candidate`, `merge_candidates`, `defer_candidate`, `auto_archive`, `backfill_embeddings`.
+- ✅ **`canonicalRegistryBlock`** (`supabase/functions/_shared/visionPrompts/blocks/canonicalRegistryBlock.ts`) — W7.6 composable prompt block. Renders top-N (default 200) canonicals as the W11.7 spec's "CANONICAL FEATURE REGISTRY" text block. **Helper is live but NOT YET WIRED into Stage 1's prompt — Agent 2 owns `shortlisting-shape-d/index.ts` and will pick this up next session.**
+- ✅ **Smoke test** — Saladine round `3ed54b53-9184-402f-9907-d168ed1968a4` (42 classifications) processed end-to-end. 414 raw_attribute_observations created, 211 auto-normalised at 0.9477 avg similarity, 203 queued/new (191 unique candidates after dedup). Top observed: `obj_blinds_venetian_white` (market_frequency=20). Cost ~$0.04 for the round.
+
+**Pending (out of scope for this dispatch):**
+- 🔜 **Stage 1 prompt integration** — Agent 2 wires `canonicalRegistryBlock()` into the Stage 1 system prompt (top 200 by `market_frequency`).
+- 🔜 **Stage 4 prompt integration** — same block, same import, in `shortlisting-shape-d-stage4/index.ts` (Agent 1).
+- 🔜 **Frontend admin UI** — Settings → Engine → Object Registry. Browse + Discovery Queue + Normalisation tabs (Agent 4 may scaffold; full UI later).
+- 🔜 **`shortlisting-suggestion-engine`** edge fn (W12.7-W12.8) — slot + room-type AI suggestions (separate dispatch).
+- 🔜 **W13a/b/c population** — pulse + finals goldmines write into `raw_attribute_observations` (separate waves).
+- 🔜 **`attribute_value` candidate approval** — `object-registry-admin.approve_candidate` only handles object candidates in v1; attribute_value approval returns 501 until v2.
 
 **Dependencies:**
 - **Wave 11 must land first** — universal vision response defines the canonical-key shape (`OBJECT_*` keys, `observed_objects` JSONB array shape, `attribute_observations` JSON shape). Pre-W11, the engine doesn't emit per-object structured output; W12's extractor would have nothing to consume.
