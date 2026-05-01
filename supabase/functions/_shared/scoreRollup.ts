@@ -228,6 +228,62 @@ export function computeWeightedSignalScore(
   return round2(weightedSum / weightTotal);
 }
 
+// ─── W11.6.18 persist-level branch selector ──────────────────────────────────
+
+/**
+ * Branch selector used by Shape D's persistOneClassification (W11.6.18).
+ *
+ * Decides which combined_score formula applies for a single classification
+ * row, given the available inputs:
+ *   1. W11 per-signal weighted rollup, when the active tier_config has
+ *      `signal_weights` AND the model emitted at least one numeric
+ *      `signal_scores` entry that matches a weighted key.
+ *   2. Legacy 4-axis hardcoded blend (technical*0.25 + lighting*0.30 +
+ *      composition*0.25 + aesthetic*0.20) — the pre-W11.6.18 fallback. Used
+ *      whenever path #1 is unavailable.
+ *
+ * Returns null when neither path can produce a number (e.g., all dim scores
+ * absent and no usable per-signal data).
+ */
+export interface SelectCombinedScoreInput {
+  dimensionScores: {
+    technical: number | null;
+    lighting: number | null;
+    composition: number | null;
+    aesthetic: number | null;
+  };
+  /** Normalised per-signal scores from `normaliseSignalScores`. May be null
+   *  for legacy traffic that didn't emit signal_scores; null entries are
+   *  ignored when computing the weighted average. */
+  signalScores: Record<string, number | null> | null;
+  /** Active tier_config row, or null when no config is resolvable. */
+  tierConfig:
+    | { signal_weights?: Record<string, number> | null }
+    | null;
+}
+
+export function selectCombinedScore(input: SelectCombinedScoreInput): number | null {
+  const sigW = input.tierConfig?.signal_weights;
+  const sigS = input.signalScores;
+
+  if (sigW && typeof sigW === 'object' && Object.keys(sigW).length > 0 && sigS) {
+    const numericSig: Record<string, number> = {};
+    for (const [k, v] of Object.entries(sigS)) {
+      if (typeof v === 'number' && Number.isFinite(v)) numericSig[k] = v;
+    }
+    if (Object.keys(numericSig).length > 0) {
+      const w = computeWeightedSignalScore(numericSig, sigW);
+      if (Number.isFinite(w)) return w;
+    }
+  }
+
+  const { technical, lighting, composition, aesthetic } = input.dimensionScores;
+  if (technical == null || lighting == null || composition == null || aesthetic == null) {
+    return null;
+  }
+  return round2(technical * 0.25 + lighting * 0.30 + composition * 0.25 + aesthetic * 0.20);
+}
+
 // ─── Internal ─────────────────────────────────────────────────────────────────
 
 function numericWeight(

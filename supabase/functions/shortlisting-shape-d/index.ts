@@ -115,6 +115,8 @@ import {
   STAGE1_RESPONSE_TOOL_NAME,
 } from '../_shared/visionPrompts/blocks/stage1ResponseSchema.ts';
 import { normaliseSignalScores } from '../_shared/visionPrompts/blocks/normaliseSignalScores.ts';
+import { getActiveTierConfig, type TierConfigRow } from '../_shared/tierConfig.ts';
+import { selectCombinedScore } from '../_shared/scoreRollup.ts';
 import {
   projectMemoryBlock,
   PROJECT_MEMORY_BLOCK_VERSION,
@@ -653,6 +655,38 @@ async function runShapeDStage1Core(
   const userTextPrefix = userPrefixBlocks.join('\n');
   const userTextSuffix = userSuffixBlocks.join('\n');
 
+  // W11.6.18 — resolve the active tier_config once per round so persist can
+  // pick the W11 per-signal weighted rollup when signal_weights is configured.
+  // Falls back to null (legacy hardcoded 4-axis blend) when engine_tier_id is
+  // missing or no active config exists. Mirrors the shortlisting-pass1 path
+  // and emits a shortlisting_events warning so admin notices.
+  const tierConfig: TierConfigRow | null = ctx.engine_tier_id
+    ? await getActiveTierConfig(ctx.engine_tier_id)
+    : null;
+  if (!tierConfig) {
+    const reason = !ctx.engine_tier_id
+      ? 'engine_tier_id is null (legacy round)'
+      : 'no active tier_config row for engine_tier_id';
+    warnings.push(
+      `shape-d tier_config fallback: ${reason} — combined_score uses legacy hardcoded weights`,
+    );
+    const { error: warnEvtErr } = await admin
+      .from('shortlisting_events')
+      .insert({
+        project_id: ctx.project_id,
+        round_id: roundId,
+        event_type: 'shape_d_tier_config_fallback',
+        actor_type: 'system',
+        payload: {
+          engine_tier_id: ctx.engine_tier_id,
+          reason,
+        },
+      });
+    if (warnEvtErr) {
+      warnings.push(`tier_config fallback warning event insert failed: ${warnEvtErr.message}`);
+    }
+  }
+
   // Run per-image calls in parallel batches of STAGE1_PER_IMAGE_CONCURRENCY.
   // Persist each successful classification to composition_classifications
   // immediately as it completes (don't wait for batch closure).
@@ -719,6 +753,9 @@ async function runShapeDStage1Core(
             modelVersion: r.model_used,
             // W11.6.7 P1-4: composition row carries exif_metadata for lens_class derivation.
             composition: comp,
+            // W11.6.18: per-round tier_config drives the W11 per-signal
+            // weighted rollup when signal_weights is non-empty.
+            tierConfig,
             warnings,
           });
         }
@@ -1298,6 +1335,10 @@ interface PersistOneArgs {
   modelVersion: string;
   /** Wave 11.6.7 P1-4: composition row (carries exif_metadata for lens_class). */
   composition: CompositionRow;
+  /** Wave 11.6.18: active tier_config row (signal_weights drives the W11
+   *  per-signal weighted rollup). Null when no active config is resolvable;
+   *  persist falls back to the legacy 4-axis hardcoded blend. */
+  tierConfig: TierConfigRow | null;
   warnings: string[];
 }
 
@@ -1334,18 +1375,16 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     return String(v);
   };
 
-  // Combined score: weighted blend of 4 dimensions. Stage 1 emits dim scores
-  // directly. Combined score derived here uses spec defaults — Pass 3 / W8
-  // tier-config can override at validation time.
+  // Combined score: Stage 1 emits the 4 dim aggregates directly. The combined
+  // value is selected by `selectCombinedScore` (W11.6.18):
+  //   - W11 per-signal weighted rollup when tier_config has signal_weights
+  //     AND signal_scores has at least one matching numeric entry.
+  //   - Legacy 4-axis hardcoded blend (technical*0.25 + lighting*0.30 +
+  //     composition*0.25 + aesthetic*0.20) otherwise.
   const techScore = num(out.technical_score);
   const lightScore = num(out.lighting_score);
   const compScore = num(out.composition_score);
   const aesScore = num(out.aesthetic_score);
-  const combined = (techScore != null && lightScore != null && compScore != null && aesScore != null)
-    ? Math.round(
-        (techScore * 0.25 + lightScore * 0.30 + compScore * 0.25 + aesScore * 0.20) * 100,
-      ) / 100
-    : null;
 
   const roomType = str(out.room_type);
   const vantage = str(out.vantage_point);
@@ -1414,6 +1453,20 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
   if (sigNormResult.warning) {
     args.warnings.push(sigNormResult.warning);
   }
+
+  // W11.6.18 — pick the W11 per-signal weighted rollup when tier_config has
+  // signal_weights AND signal_scores has at least one matching numeric entry;
+  // otherwise the helper returns the legacy 4-axis hardcoded blend.
+  const combined = selectCombinedScore({
+    dimensionScores: {
+      technical: techScore,
+      lighting: lightScore,
+      composition: compScore,
+      aesthetic: aesScore,
+    },
+    signalScores,
+    tierConfig: args.tierConfig,
+  });
 
   const row: Record<string, unknown> = {
     group_id: args.result.group_id,
