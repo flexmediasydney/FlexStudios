@@ -98,6 +98,10 @@ import {
   canonicalRegistryBlock,
   CANONICAL_REGISTRY_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/canonicalRegistryBlock.ts';
+import {
+  normaliseSlotId,
+  SLOT_ENUMERATION_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/slotEnumeration.ts';
 
 const GENERATOR = 'shortlisting-shape-d-stage4';
 
@@ -1437,10 +1441,25 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
   const projectTier: 'standard' | 'premium' = args.propertyTier === 'premium' ? 'premium' : 'standard';
 
   const rowsToInsert: Array<Record<string, unknown>> = [];
+  let droppedUnrecognised = 0;
   for (const decision of args.slotDecisions) {
-    const slotId = typeof decision.slot_id === 'string' ? decision.slot_id : null;
+    // W11.7.1 hygiene: normalise slot_id through the alias map, then validate
+    // against the canonical enum. STRICT: drop the row when neither the raw
+    // value nor the aliased form is canonical — better to surface drift loudly
+    // than silently fragment the swimlane across slot_id variants.
+    const rawSlotId = typeof decision.slot_id === 'string' ? decision.slot_id : null;
+    const slotId = normaliseSlotId(rawSlotId);
+    if (!rawSlotId) continue;
+    if (!slotId) {
+      droppedUnrecognised++;
+      args.warnings.push(
+        `persistSlotDecisions: dropped unrecognised slot_id="${rawSlotId}" ` +
+        `(not in canonical enum, not in alias map)`,
+      );
+      continue;
+    }
     const winner = decision.winner as Record<string, unknown> | undefined;
-    if (!slotId || !winner) continue;
+    if (!winner) continue;
     const winnerStem = typeof winner.stem === 'string' ? winner.stem : null;
     if (!winnerStem) continue;
     const winnerGroupId = stemToGroup.get(winnerStem);
@@ -1455,13 +1474,19 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
       project_id: args.projectId,
       round_id: args.roundId,
       ai_proposed_group_id: winnerGroupId,
-      ai_proposed_slot_id: slotId,
+      ai_proposed_slot_id: slotId, // canonical form
       ai_proposed_score: score,
       ai_proposed_analysis: rationale,
       human_action: 'approved_as_proposed', // default until operator interacts
       slot_group_id: slotId, // legacy field — same as slot_id under shape_d
       project_tier: projectTier,
     });
+  }
+  if (droppedUnrecognised > 0) {
+    console.warn(
+      `[${GENERATOR}] persistSlotDecisions round=${args.roundId} ` +
+      `dropped_unrecognised=${droppedUnrecognised} (slot_id outside canonical enum)`,
+    );
   }
 
   if (rowsToInsert.length === 0) {
@@ -1690,5 +1715,6 @@ function stage4PromptBlockVersions(): Record<string, string> {
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,
     canonical_registry: CANONICAL_REGISTRY_BLOCK_VERSION,
+    slot_enumeration: SLOT_ENUMERATION_BLOCK_VERSION,
   };
 }

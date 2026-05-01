@@ -14,12 +14,192 @@
  *   - `engineRoles` field added — surfaced in the SHORTLISTING CONTEXT block
  *     so the model knows which deliverable types are in scope.
  *
- * Bumped to v1.1 to reflect the new field surface.
+ * Wave 11.7.1 (W11.7.1 hygiene) addition:
+ *   - `CANONICAL_SLOT_IDS` closed enum + `SLOT_ID_ALIASES` drift map +
+ *     `normaliseSlotId()` helper. Stage 4 emits free-form slot_id strings
+ *     that drift across regen runs (e.g. `exterior_rear` vs `exterior_rear_hero`,
+ *     `living_hero` vs `living_dining_hero`). The downstream swimlane keys
+ *     off slot_id, so dupes fragment the lane. We now (a) constrain the
+ *     Gemini responseSchema with this enum, (b) normalise via the alias map
+ *     at persist time, (c) drop unrecognised slot_ids with a warning rather
+ *     than silently fragmenting.
+ *
+ * Bumped to v1.2 to reflect the canonical-enum addition.
  */
 
 import type { Pass2SlotDefinition } from '../../pass2Prompt.ts';
 
-export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.1';
+export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.2';
+
+// ─── Canonical slot vocabulary (W11.7.1 hygiene) ────────────────────────────
+//
+// Closed set of slot_ids Stage 4 is allowed to emit. The schema (Gemini
+// responseSchema enum) constrains the model directly; the persist layer
+// double-checks via normaliseSlotId() and drops unrecognised ids.
+//
+// Ordered by phase for readability — Phase 1 lead heroes first, then Phase 2
+// supporting, then Phase 3 detail/specials, plus a Phase-3 sentinel for
+// free-recommendation rows.
+export const CANONICAL_SLOT_IDS = [
+  // Phase 1 — lead heroes (always filled when eligible)
+  'exterior_facade_hero',
+  'kitchen_hero',
+  'living_hero',
+  'master_bedroom_hero',
+  'alfresco_hero',
+
+  // Phase 2 — supporting
+  'exterior_rear',
+  'kitchen_secondary',
+  'dining_hero',
+  'bedroom_secondary',
+  'bathroom_main',
+  'ensuite_hero',
+  'entry_hero',
+  'study_hero',
+  'powder_room',
+  'laundry_hero',
+  'garage_hero',
+  'pool_hero',
+  'view_hero',
+
+  // Phase 3 — detail / archive / specials
+  'kitchen_detail',
+  'bathroom_detail',
+  'material_detail',
+  'garden_detail',
+  'balcony_terrace',
+  'games_room',
+  'media_room',
+
+  // Phase 3 sentinel — Stage 4 free recommendations not tied to a specific slot.
+  'ai_recommended',
+] as const;
+
+export type CanonicalSlotId = typeof CANONICAL_SLOT_IDS[number];
+
+const CANONICAL_SET: ReadonlySet<string> = new Set(CANONICAL_SLOT_IDS);
+
+/**
+ * Drift map from observed Gemini variants → canonical slot_id. Common
+ * patterns:
+ *   - `_hero` suffix added/dropped inconsistently (e.g. master_bedroom vs
+ *     master_bedroom_hero).
+ *   - Compound room labels collapsed to a single slot (e.g. living_dining_hero
+ *     → living_hero — dining is its own Phase 2 slot).
+ *   - Synonyms (alfresco_outdoor_hero, outdoor_hero → alfresco_hero;
+ *     exterior_front_hero → exterior_facade_hero).
+ *
+ * Keys MUST be lowercase snake_case. Values MUST be members of CANONICAL_SLOT_IDS.
+ */
+export const SLOT_ID_ALIASES: Readonly<Record<string, CanonicalSlotId>> = {
+  // _hero suffix drift
+  master_bedroom: 'master_bedroom_hero',
+  exterior_facade: 'exterior_facade_hero',
+  exterior_rear_hero: 'exterior_rear',
+  kitchen: 'kitchen_hero',
+  living: 'living_hero',
+  dining: 'dining_hero',
+  alfresco: 'alfresco_hero',
+  ensuite: 'ensuite_hero',
+  entry: 'entry_hero',
+  study: 'study_hero',
+  study_office: 'study_hero',
+  view: 'view_hero',
+  pool: 'pool_hero',
+  laundry: 'laundry_hero',
+  garage: 'garage_hero',
+  bathroom: 'bathroom_main',
+
+  // Compound-room collapse
+  living_dining_hero: 'living_hero',
+  living_dining: 'living_hero',
+  open_plan_hero: 'living_hero',
+  open_plan: 'living_hero',
+  kitchen_living_hero: 'kitchen_hero',
+  kitchen_dining_hero: 'kitchen_hero',
+
+  // Synonyms — exterior
+  exterior_front_hero: 'exterior_facade_hero',
+  exterior_front: 'exterior_facade_hero',
+  facade_hero: 'exterior_facade_hero',
+  facade: 'exterior_facade_hero',
+  street_view_hero: 'exterior_facade_hero',
+  exterior_back: 'exterior_rear',
+  exterior_back_hero: 'exterior_rear',
+  rear_hero: 'exterior_rear',
+  backyard_hero: 'exterior_rear',
+  backyard: 'exterior_rear',
+
+  // Synonyms — alfresco / outdoor
+  alfresco_outdoor_hero: 'alfresco_hero',
+  outdoor_hero: 'alfresco_hero',
+  outdoor: 'alfresco_hero',
+  patio_hero: 'alfresco_hero',
+  deck_hero: 'alfresco_hero',
+  balcony_terrace_hero: 'balcony_terrace',
+  balcony_hero: 'balcony_terrace',
+  terrace_hero: 'balcony_terrace',
+
+  // Synonyms — bedrooms / bathrooms
+  bedroom_2: 'bedroom_secondary',
+  bedroom_3: 'bedroom_secondary',
+  bedroom_4: 'bedroom_secondary',
+  secondary_bedroom: 'bedroom_secondary',
+  guest_bedroom: 'bedroom_secondary',
+  primary_bedroom: 'master_bedroom_hero',
+  primary_bedroom_hero: 'master_bedroom_hero',
+  main_bedroom: 'master_bedroom_hero',
+  main_bedroom_hero: 'master_bedroom_hero',
+  bathroom_hero: 'bathroom_main',
+  main_bathroom: 'bathroom_main',
+  main_bathroom_hero: 'bathroom_main',
+  ensuite_main: 'ensuite_hero',
+
+  // Synonyms — Phase 3
+  detail_hero: 'material_detail',
+  material_hero: 'material_detail',
+  garden_hero: 'garden_detail',
+  landscape_detail: 'garden_detail',
+  kitchen_detail_hero: 'kitchen_detail',
+  bathroom_detail_hero: 'bathroom_detail',
+  games_room_hero: 'games_room',
+  media_room_hero: 'media_room',
+  cinema_room: 'media_room',
+  cinema_room_hero: 'media_room',
+  rumpus_room: 'games_room',
+  rumpus: 'games_room',
+
+  // Free-recommendation sentinel
+  ai_recommendation: 'ai_recommended',
+  free_recommendation: 'ai_recommended',
+  bonus: 'ai_recommended',
+  bonus_recommendation: 'ai_recommended',
+};
+
+/**
+ * Normalise a free-form slot_id through the alias map then validate against
+ * the canonical enum. Returns the canonical form, or `null` when neither
+ * the raw nor the aliased value is in the canonical set.
+ *
+ * Caller-side discipline: STRICT — drop the row when this returns null.
+ */
+export function normaliseSlotId(raw: unknown): CanonicalSlotId | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed.length === 0) return null;
+  // Direct canonical hit.
+  if (CANONICAL_SET.has(trimmed)) return trimmed as CanonicalSlotId;
+  // Aliased.
+  const aliased = SLOT_ID_ALIASES[trimmed];
+  if (aliased && CANONICAL_SET.has(aliased)) return aliased;
+  return null;
+}
+
+/** Convenience predicate for tests / callers. */
+export function isCanonicalSlotId(raw: unknown): raw is CanonicalSlotId {
+  return typeof raw === 'string' && CANONICAL_SET.has(raw);
+}
 
 export interface SlotEnumerationBlockOpts {
   /** Resolved street/property address (falls back to "Unknown property"). */

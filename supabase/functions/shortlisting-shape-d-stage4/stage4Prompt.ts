@@ -20,7 +20,12 @@
  * context, then image stems list, then self-critique block.
  */
 
-export const STAGE4_PROMPT_VERSION = 'v1.0';
+import { CANONICAL_SLOT_IDS } from '../_shared/visionPrompts/blocks/slotEnumeration.ts';
+
+// Bumped to v1.1 — slot_id is now an enum-constrained string. The model can
+// no longer drift to free-form variants like `living_dining_hero` or
+// `exterior_rear_hero` (W11.7.1 swimlane-fragmentation fix).
+export const STAGE4_PROMPT_VERSION = 'v1.1';
 export const STAGE4_TOOL_NAME = 'synthesise_round';
 
 /**
@@ -92,10 +97,16 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
         properties: {
           slot_id: {
             type: 'string',
+            // W11.7.1 hygiene: closed enum sourced from CANONICAL_SLOT_IDS.
+            // Gemini honours JSON-schema `enum` in responseSchema and will
+            // refuse to emit anything outside the list. Drift like
+            // `living_dining_hero`, `exterior_rear_hero`, `master_bedroom`
+            // (vs `master_bedroom_hero`) is now structurally impossible.
+            enum: [...CANONICAL_SLOT_IDS],
             description:
-              'Slot identifier (canonical lowercase snake_case): exterior_facade_hero | ' +
-              'kitchen_hero | living_hero | master_bedroom | alfresco_hero | ' +
-              'exterior_rear | bedroom_secondary | bathroom_main | etc.',
+              'Slot identifier (canonical lowercase snake_case). Pick the ' +
+              'closest match from the enum. Use `ai_recommended` for Phase 3 ' +
+              'free recommendations not tied to a specific slot.',
           },
           phase: {
             type: 'integer',

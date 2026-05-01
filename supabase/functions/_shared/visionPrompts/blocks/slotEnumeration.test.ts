@@ -1,7 +1,11 @@
-import { assertEquals, assertStringIncludes } from 'https://deno.land/std@0.208.0/assert/mod.ts';
+import { assert, assertEquals, assertStringIncludes } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import type { Pass2SlotDefinition } from '../../pass2Prompt.ts';
 import {
+  CANONICAL_SLOT_IDS,
+  isCanonicalSlotId,
+  normaliseSlotId,
   SLOT_ENUMERATION_BLOCK_VERSION,
+  SLOT_ID_ALIASES,
   slotEnumerationBlock,
 } from './slotEnumeration.ts';
 
@@ -101,6 +105,109 @@ Deno.test('slotEnumerationBlock: uses caller-supplied packageDisplayName for cei
   assertStringIncludes(txt, 'Package ceiling: 17 images (Custom à la carte maximum)');
 });
 
-Deno.test('slotEnumerationBlock: version bumped to v1.1 (W7.7 field rename + describeCeiling drop)', () => {
-  assertEquals(SLOT_ENUMERATION_BLOCK_VERSION, 'v1.1');
+Deno.test('slotEnumerationBlock: version bumped to v1.2 (W11.7.1 canonical-enum addition)', () => {
+  assertEquals(SLOT_ENUMERATION_BLOCK_VERSION, 'v1.2');
+});
+
+// ─── W11.7.1 hygiene: canonical slot vocabulary tests ───────────────────────
+
+Deno.test('CANONICAL_SLOT_IDS: closed list, no duplicates, ~25 entries', () => {
+  // Sanity: list isn't empty and has stayed within an order-of-magnitude of
+  // the ~25-slot lattice we agreed on. If we exceed 35 the lattice is
+  // fragmenting again.
+  assert(CANONICAL_SLOT_IDS.length >= 20, `expected >= 20 canonical slots, got ${CANONICAL_SLOT_IDS.length}`);
+  assert(CANONICAL_SLOT_IDS.length <= 35, `expected <= 35 canonical slots, got ${CANONICAL_SLOT_IDS.length}`);
+  assertEquals(
+    new Set(CANONICAL_SLOT_IDS).size,
+    CANONICAL_SLOT_IDS.length,
+    'CANONICAL_SLOT_IDS must not contain duplicates',
+  );
+  // Every entry must be lowercase snake_case.
+  for (const s of CANONICAL_SLOT_IDS) {
+    assert(
+      /^[a-z][a-z0-9_]*$/.test(s),
+      `slot_id "${s}" is not lowercase snake_case`,
+    );
+  }
+  // Phase 1 lead heroes must all be present.
+  for (
+    const required of [
+      'exterior_facade_hero',
+      'kitchen_hero',
+      'living_hero',
+      'master_bedroom_hero',
+      'alfresco_hero',
+    ]
+  ) {
+    assert(isCanonicalSlotId(required), `missing canonical slot: ${required}`);
+  }
+});
+
+Deno.test('SLOT_ID_ALIASES: every alias resolves to a canonical slot_id', () => {
+  for (const [alias, target] of Object.entries(SLOT_ID_ALIASES)) {
+    assert(
+      isCanonicalSlotId(target),
+      `alias "${alias}" → "${target}" but target is not in CANONICAL_SLOT_IDS`,
+    );
+    // Aliases MUST NOT collide with canonical names — that would hide drift.
+    assert(
+      !(CANONICAL_SLOT_IDS as readonly string[]).includes(alias),
+      `alias key "${alias}" collides with a canonical slot_id (would hide drift)`,
+    );
+  }
+});
+
+Deno.test('normaliseSlotId: canonical hits pass through unchanged', () => {
+  assertEquals(normaliseSlotId('kitchen_hero'), 'kitchen_hero');
+  assertEquals(normaliseSlotId('master_bedroom_hero'), 'master_bedroom_hero');
+  assertEquals(normaliseSlotId('alfresco_hero'), 'alfresco_hero');
+  assertEquals(normaliseSlotId('ai_recommended'), 'ai_recommended');
+});
+
+Deno.test('normaliseSlotId: drift patterns observed in prod resolve via alias map', () => {
+  // Real drift Joseph saw on Rainbow Cres + the wider survey:
+  assertEquals(normaliseSlotId('master_bedroom'), 'master_bedroom_hero');
+  assertEquals(normaliseSlotId('exterior_rear_hero'), 'exterior_rear');
+  assertEquals(normaliseSlotId('living_dining_hero'), 'living_hero');
+  assertEquals(normaliseSlotId('alfresco_outdoor_hero'), 'alfresco_hero');
+  assertEquals(normaliseSlotId('exterior_front_hero'), 'exterior_facade_hero');
+  assertEquals(normaliseSlotId('open_plan_hero'), 'living_hero');
+  assertEquals(normaliseSlotId('balcony_terrace_hero'), 'balcony_terrace');
+  assertEquals(normaliseSlotId('study_office'), 'study_hero');
+});
+
+Deno.test('normaliseSlotId: case-insensitive, trims whitespace', () => {
+  assertEquals(normaliseSlotId('  KITCHEN_HERO  '), 'kitchen_hero');
+  assertEquals(normaliseSlotId('Master_Bedroom'), 'master_bedroom_hero');
+});
+
+Deno.test('normaliseSlotId: unknown slot_ids return null (caller drops the row)', () => {
+  // Genuine garbage / future drift the alias map doesn't cover: must return
+  // null so the persist layer drops the row + warns. This is the strict
+  // contract — never silently pass through unrecognised values.
+  assertEquals(normaliseSlotId('completely_unknown_slot'), null);
+  assertEquals(normaliseSlotId(''), null);
+  assertEquals(normaliseSlotId('   '), null);
+  assertEquals(normaliseSlotId(null), null);
+  assertEquals(normaliseSlotId(undefined), null);
+  assertEquals(normaliseSlotId(42), null);
+  assertEquals(normaliseSlotId({}), null);
+});
+
+Deno.test('normaliseSlotId: persist-time normalisation matches Stage 4 schema enum', () => {
+  // The contract Part B relies on: every value the persist layer will accept
+  // (canonical hit OR aliased hit) ends up as a member of CANONICAL_SLOT_IDS.
+  // This is the load-bearing invariant — the swimlane keys off slot_id, so
+  // every ai_proposed_slot_id row written must be in this closed set.
+  for (const slotId of CANONICAL_SLOT_IDS) {
+    assertEquals(normaliseSlotId(slotId), slotId);
+  }
+  for (const aliasKey of Object.keys(SLOT_ID_ALIASES)) {
+    const result = normaliseSlotId(aliasKey);
+    assert(result !== null, `alias "${aliasKey}" should normalise to a canonical slot`);
+    assert(
+      isCanonicalSlotId(result),
+      `alias "${aliasKey}" normalised to "${result}" which is NOT canonical`,
+    );
+  }
 });
