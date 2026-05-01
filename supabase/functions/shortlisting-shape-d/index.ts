@@ -113,6 +113,10 @@ import {
   fewShotLibraryBlock,
   FEW_SHOT_LIBRARY_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/fewShotLibraryBlock.ts';
+import {
+  canonicalRegistryBlock,
+  CANONICAL_REGISTRY_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/canonicalRegistryBlock.ts';
 import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
 import { getActiveStreamBAnchors } from '../_shared/streamBInjector.ts';
 
@@ -544,17 +548,27 @@ async function runShapeDStage1Core(
   //   engine_fewshot_examples. Injected at the END of user prompt — last
   //   thing the model reads before emitting JSON, so the empirical
   //   correction patterns are top-of-mind on tricky judgements.
-  const [projectMemoryText, fewShotText] = await Promise.all([
+  // canonicalRegistryBlock: Wave 12 cross-project canonical feature registry.
+  //   Renders the top-N most-frequent canonical objects from object_registry
+  //   so the model prefers canonical_ids when emitting observed_objects.
+  //   Returns '' when the registry is empty — safe to wire unconditionally.
+  const [projectMemoryText, fewShotText, canonicalRegistryText] = await Promise.all([
     projectMemoryBlock({ project_id: ctx.project_id, current_round_id: roundId }),
     fewShotLibraryBlock({ property_tier: voice.tier }),
+    canonicalRegistryBlock(),
   ]);
 
   // System prompt: pass1 system blocks + Sydney primer (anchor style_archetype
   // + era_hint to Sydney typology) + project_memory at the END so it's the
-  // last authoritative directive before user content.
+  // last authoritative directive before user content. canonical registry is
+  // appended at the very END as the authoritative cross-project feature
+  // vocabulary (W12 spec §"Canonical registry").
   const systemBlocks = [basePrompt.system, '', '', SYDNEY_PRIMER_BLOCK];
   if (projectMemoryText.length > 0) {
     systemBlocks.push('', '── PROJECT MEMORY (W11.5) ──', projectMemoryText);
+  }
+  if (canonicalRegistryText.length > 0) {
+    systemBlocks.push('', '── CANONICAL FEATURE REGISTRY (W12) ──', canonicalRegistryText);
   }
   const systemText = systemBlocks.join('\n');
 
@@ -1524,5 +1538,6 @@ function stage1PromptBlockVersions(): Record<string, string> {
     // once Agent 1 ships the column on engine_run_audit.
     project_memory: PROJECT_MEMORY_BLOCK_VERSION,
     few_shot_library: FEW_SHOT_LIBRARY_BLOCK_VERSION,
+    canonical_registry: CANONICAL_REGISTRY_BLOCK_VERSION,
   };
 }

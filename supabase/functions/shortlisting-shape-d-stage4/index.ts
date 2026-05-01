@@ -90,6 +90,10 @@ import {
   type PropertyFacts,
   type Stage1MergedEntry,
 } from './stage4Prompt.ts';
+import {
+  canonicalRegistryBlock,
+  CANONICAL_REGISTRY_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/canonicalRegistryBlock.ts';
 
 const GENERATOR = 'shortlisting-shape-d-stage4';
 
@@ -107,6 +111,31 @@ interface RequestBody {
   job_id?: string;
   _health_check?: boolean;
 }
+
+// W11.7.7 master_listing regenerate context: parsed from
+// shortlisting_jobs.payload when payload.regenerate === true. Carries the
+// voice tier/anchor overrides (Operator may rewrite copy with a different
+// voice without re-running Stage 1) and the master_listing_id of the row to
+// UPDATE in place (the regenerate-master-listing edge fn already archived
+// the prior version + bumped regeneration_count synchronously; Stage 4 just
+// needs to overwrite the master_listing JSONB on the same row).
+interface RegenerateContext {
+  /** master_listings row to UPDATE in place (preserves FK target for history). */
+  masterListingIdToOverwrite: string | null;
+  /** History row already inserted by regenerate-master-listing fn. We don't
+   *  re-archive — defensive double-archive is OK but redundant. */
+  archivedHistoryId: string | null;
+  /** Optional tier override — replaces ctx.property_tier for THIS regen only. */
+  voiceTierOverride: PropertyTier | null;
+  /** Optional free-text voice anchor — replaces tier preset for THIS regen only. */
+  voiceAnchorOverride: string | null;
+  /** auth.users.id of the operator who requested the regen (optional). */
+  regeneratedBy: string | null;
+  /** Operator-provided context for the audit trail. */
+  reason: string | null;
+}
+
+const ALLOWED_TIERS = new Set<PropertyTier>(['premium', 'standard', 'approachable']);
 
 // Wave 11.7.1 immediate-ack contract (mirrors shortlisting-shape-d Stage 1):
 // Stage 4 is typically ~70s but worst case (3 primary retries × 240s timeout
@@ -161,16 +190,36 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   let roundId = body.round_id || null;
   const jobId = body.job_id || null;
-  if (!roundId && jobId) {
+  // Read job payload up-front so we can extract round_id AND the regenerate
+  // context in one DB hit. The dispatcher invokes us with `{ job_id }` so
+  // the payload (regenerate flag, voice overrides) lives in
+  // shortlisting_jobs.payload — the regenerate-master-listing edge fn writes
+  // it there when an operator triggers a master_listing rewrite.
+  let jobPayload: Record<string, unknown> | null = null;
+  if (jobId) {
     const admin = getAdminClient();
     const { data: job } = await admin
       .from('shortlisting_jobs')
-      .select('round_id')
+      .select('round_id, payload')
       .eq('id', jobId)
       .maybeSingle();
-    if (job?.round_id) roundId = job.round_id;
+    if (job?.round_id && !roundId) roundId = job.round_id as string;
+    jobPayload = (job?.payload as Record<string, unknown> | null) || null;
   }
   if (!roundId) return errorResponse('round_id (or job_id) required', 400, req);
+
+  // Parse regenerate context from job payload. When payload.regenerate is
+  // truthy, the regenerate-master-listing fn has already (a) archived the
+  // prior master_listing to history and (b) bumped regeneration_count on the
+  // master_listings row. Stage 4 here just needs to UPDATE that row in place
+  // with the new master_listing JSON, optionally honouring tier/anchor
+  // overrides. If voice_tier_override is set but not a recognised tier, we
+  // warn + fall back to the round's default tier (defensive — the regen edge
+  // fn already validates, but service-role callers can bypass that).
+  const regenWarnings: string[] = [];
+  const regenCtx: RegenerateContext | null = (jobPayload && jobPayload.regenerate === true)
+    ? parseRegenerateContext(jobPayload, regenWarnings)
+    : null;
 
   if (!isService) {
     const adminLookup = getAdminClient();
@@ -193,12 +242,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // failures like "round not in shape_d state" or "cost cap exceeded".
   let preflight: Stage4PreflightOk;
   try {
-    preflight = await preflightStage4(roundId);
+    preflight = await preflightStage4(roundId, regenCtx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[${GENERATOR}] preflight failed for round ${roundId}: ${msg}`);
     return errorResponse(`shortlisting-shape-d-stage4 preflight failed: ${msg}`, 400, req);
   }
+  // Bubble parser warnings into preflight so they reach the audit trail.
+  for (const w of regenWarnings) preflight.preflightWarnings.push(w);
 
   const startedIso = new Date().toISOString();
   const bgWork = runStage4Background({ roundId, jobId, preflight })
@@ -215,12 +266,57 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       mode: BACKGROUND_MODE_RESPONSE,
       round_id: roundId,
       job_id: jobId,
+      regenerate: regenCtx !== null,
       started_at: startedIso,
     },
     200,
     req,
   );
 });
+
+/**
+ * Parse + validate the regenerate context from a stage4_synthesis job's
+ * payload. Returns null if `payload.regenerate` is not strictly true. Warnings
+ * for invalid overrides are appended to `warnings` (non-fatal — we degrade to
+ * the round's default tier).
+ */
+function parseRegenerateContext(
+  payload: Record<string, unknown>,
+  warnings: string[],
+): RegenerateContext {
+  const tierRaw = payload.voice_tier_override;
+  let voiceTierOverride: PropertyTier | null = null;
+  if (typeof tierRaw === 'string' && tierRaw.length > 0) {
+    if (ALLOWED_TIERS.has(tierRaw as PropertyTier)) {
+      voiceTierOverride = tierRaw as PropertyTier;
+    } else {
+      warnings.push(
+        `regenerate: voice_tier_override='${tierRaw}' is not in {premium, standard, approachable} — ignoring, using round's default tier`,
+      );
+    }
+  }
+
+  const anchorRaw = payload.voice_anchor_override;
+  const voiceAnchorOverride = (typeof anchorRaw === 'string' && anchorRaw.length > 0)
+    ? anchorRaw
+    : null;
+
+  return {
+    masterListingIdToOverwrite:
+      typeof payload.master_listing_id_to_overwrite === 'string'
+        ? payload.master_listing_id_to_overwrite
+        : null,
+    archivedHistoryId:
+      typeof payload.archived_history_id === 'string'
+        ? payload.archived_history_id
+        : null,
+    voiceTierOverride,
+    voiceAnchorOverride,
+    regeneratedBy:
+      typeof payload.regenerated_by === 'string' ? payload.regenerated_by : null,
+    reason: typeof payload.reason === 'string' ? payload.reason : null,
+  };
+}
 
 // ─── Core ───────────────────────────────────────────────────────────────────
 
@@ -246,6 +342,8 @@ interface Stage4PreflightOk {
   lockName: string;
   tickId: string;
   startedAt: number;
+  /** Set when this Stage 4 invocation is a master_listing regen (payload.regenerate=true). */
+  regenCtx: RegenerateContext | null;
 }
 
 interface Stage4BackgroundArgs {
@@ -262,7 +360,10 @@ interface Stage4BackgroundArgs {
  *
  * On success, the per-round mutex IS HELD — bgWork's finally must release it.
  */
-async function preflightStage4(roundId: string): Promise<Stage4PreflightOk> {
+async function preflightStage4(
+  roundId: string,
+  regenCtx: RegenerateContext | null,
+): Promise<Stage4PreflightOk> {
   const startedAt = Date.now();
   const admin = getAdminClient();
   const preflightWarnings: string[] = [];
@@ -287,10 +388,27 @@ async function preflightStage4(roundId: string): Promise<Stage4PreflightOk> {
     );
   }
 
+  // Voice resolution. Default path: tier from round context. Regen path: if
+  // payload.voice_tier_override is set + valid, it replaces the round's tier
+  // for THIS Stage 4 run only (we do NOT mutate the round's property_tier;
+  // operator-initiated tier changes are a separate flow). Same for
+  // voice_anchor_override — replaces the tier preset block. The
+  // ctx.property_voice_anchor_override remains the project default; the regen
+  // override takes precedence when present.
+  const effectiveTier: PropertyTier = regenCtx?.voiceTierOverride ?? ctx.property_tier;
+  const effectiveAnchor: string | null =
+    regenCtx?.voiceAnchorOverride ?? ctx.property_voice_anchor_override;
   const voice: VoiceAnchorOpts = {
-    tier: ctx.property_tier,
-    override: ctx.property_voice_anchor_override,
+    tier: effectiveTier,
+    override: effectiveAnchor,
   };
+  if (regenCtx) {
+    preflightWarnings.push(
+      `regenerate=true tier=${effectiveTier}${regenCtx.voiceTierOverride ? ' (override)' : ''}` +
+      `${regenCtx.voiceAnchorOverride ? ' anchor_override=set' : ''}` +
+      `${regenCtx.reason ? ` reason="${regenCtx.reason.slice(0, 60)}"` : ''}`,
+    );
+  }
   const sourceType: SourceType = 'internal_raw';
 
   const lockName = `shape-d-stage4:${roundId}`;
@@ -300,7 +418,7 @@ async function preflightStage4(roundId: string): Promise<Stage4PreflightOk> {
     throw new Error(`round ${roundId} Stage 4 already running (mutex held)`);
   }
 
-  return { ctx, settings, voice, sourceType, preflightWarnings, lockName, tickId, startedAt };
+  return { ctx, settings, voice, sourceType, preflightWarnings, lockName, tickId, startedAt, regenCtx };
 }
 
 /**
@@ -358,7 +476,7 @@ async function runStage4Core(
   preflight: Stage4PreflightOk,
 ): Promise<Stage4RunResult> {
   const admin = getAdminClient();
-  const { ctx, settings, voice, sourceType, startedAt } = preflight;
+  const { ctx, settings, voice, sourceType, startedAt, regenCtx } = preflight;
   const warnings: string[] = [...preflight.preflightWarnings];
 
   {
@@ -396,13 +514,17 @@ async function runStage4Core(
       );
     }
 
-    // Build the prompt.
+    // Build the prompt. canonicalRegistryBlock is fetched in parallel — empty
+    // string when registry has no rows yet (W12 spec §"Canonical registry":
+    // "safe to wire unconditionally").
+    const canonicalRegistryText = await canonicalRegistryBlock();
+
     const systemText = [
       buildStage4SystemPrompt(),
       '',
       SYDNEY_PRIMER_BLOCK,
     ].join('\n');
-    const userText = buildStage4UserPrompt({
+    const userPromptCore = buildStage4UserPrompt({
       sourceContextBlockText: sourceContextBlock(sourceType),
       voiceBlockText: voiceAnchorBlock(voice),
       selfCritiqueBlockText: SELF_CRITIQUE_BLOCK,
@@ -411,6 +533,17 @@ async function runStage4Core(
       imageStemsInOrder: previews.map((p) => p.stem),
       totalImages: previews.length,
     });
+    // Append canonical registry block at the END of user_text so it's the
+    // last cross-project vocabulary the model reads before emitting JSON.
+    // Empty registry → block returns '' and we skip the section entirely.
+    const userText = canonicalRegistryText.length > 0
+      ? [
+          userPromptCore,
+          '',
+          '── CANONICAL FEATURE REGISTRY (W12) ──',
+          canonicalRegistryText,
+        ].join('\n')
+      : userPromptCore;
 
     // Call vision adapter with retries + Anthropic failover.
     const { resp, vendorUsed, modelUsed, costUsd, wallMs, inputTokens, outputTokens, failoverTriggered, failoverReason, error } =
@@ -452,15 +585,29 @@ async function runStage4Core(
       throw new Error('Stage 4 output missing master_listing object');
     }
 
-    // Persist master_listing
+    // Persist master_listing. Use the EFFECTIVE tier (voice.tier) which
+    // honours regenerate's voice_tier_override, not the round's default
+    // ctx.property_tier — so when an operator regenerates a 'standard' round
+    // with tier_override='premium', the persisted property_tier reflects the
+    // tier that produced the copy on disk. When this is a regenerate run
+    // (regenCtx.masterListingIdToOverwrite set), persistMasterListing uses
+    // UPDATE-in-place on that row id (preserving the FK target for
+    // shortlisting_master_listings_history archive rows). On regen success
+    // we ALSO stamp regenerated_at + regenerated_by; the regenerate-master-
+    // listing edge fn pre-incremented regeneration_count synchronously, so
+    // we DO NOT touch that field here (avoids double-bump under concurrent
+    // regen + Stage 4 race conditions).
+    const voiceAnchorUsed: 'tier_preset' | 'override' | 'master_class_enhanced' =
+      voice.override ? 'override' : 'tier_preset';
     const masterListingId = await persistMasterListing({
       admin,
       roundId,
       masterListing,
-      propertyTier: ctx.property_tier,
-      voiceAnchorUsed: ctx.property_voice_anchor_override ? 'override' : 'tier_preset',
+      propertyTier: voice.tier,
+      voiceAnchorUsed,
       vendor: vendorUsed,
       modelVersion: modelUsed,
+      regenCtx,
       warnings,
     });
 
@@ -921,10 +1068,86 @@ interface PersistMasterListingArgs {
   voiceAnchorUsed: 'tier_preset' | 'override' | 'master_class_enhanced';
   vendor: 'google' | 'anthropic';
   modelVersion: string;
+  /** Set when this Stage 4 run is a master_listing regeneration. Routes to
+   *  UPDATE-in-place on the existing row (preserving the FK target for
+   *  history rows) instead of upsert/insert. */
+  regenCtx: RegenerateContext | null;
   warnings: string[];
 }
 
 async function persistMasterListing(args: PersistMasterListingArgs): Promise<string | null> {
+  const wordCount = typeof args.masterListing.word_count === 'number'
+    ? args.masterListing.word_count
+    : null;
+  const readingGrade = typeof args.masterListing.reading_grade_level === 'number'
+    ? args.masterListing.reading_grade_level
+    : null;
+  const nowIso = new Date().toISOString();
+
+  // ── Regenerate path ─────────────────────────────────────────────────────
+  // The regenerate-master-listing edge fn already (a) archived the prior
+  // master_listing JSONB to shortlisting_master_listings_history and (b)
+  // pre-incremented regeneration_count synchronously. Stage 4's job here is
+  // to UPDATE the master_listing JSONB on the SAME row (preserves the FK
+  // target for history rows) plus stamp regenerated_at. We use a monotonic
+  // UPDATE-with-RETURNING for regeneration_count so multiple back-to-back
+  // regens increment cleanly even under concurrent writes — never blind ++.
+  if (args.regenCtx) {
+    const targetId = args.regenCtx.masterListingIdToOverwrite;
+    if (targetId) {
+      // Verify the target row still exists + belongs to this round (defensive
+      // guard against stale job payloads). If it's gone (manual deletion),
+      // fall through to the fresh-INSERT branch below.
+      const { data: existing, error: existingErr } = await args.admin
+        .from('shortlisting_master_listings')
+        .select('id, regeneration_count')
+        .eq('id', targetId)
+        .eq('round_id', args.roundId)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (existingErr) {
+        args.warnings.push(`regenerate: target master_listing lookup failed: ${existingErr.message}`);
+      }
+      if (existing) {
+        // UPDATE-in-place. We do NOT touch regeneration_count here — the
+        // edge fn already bumped it synchronously. We only stamp
+        // regenerated_at to mark Stage 4 completion of the regen + persist
+        // the new master_listing JSONB and the (possibly overridden) tier.
+        const { error: updErr } = await args.admin
+          .from('shortlisting_master_listings')
+          .update({
+            master_listing: args.masterListing,
+            property_tier: args.propertyTier,
+            voice_anchor_used: args.voiceAnchorUsed,
+            word_count: wordCount,
+            reading_grade_level: readingGrade,
+            vendor: args.vendor,
+            model_version: args.modelVersion,
+            regenerated_at: nowIso,
+            regenerated_by: args.regenCtx.regeneratedBy,
+            regeneration_reason: args.regenCtx.reason ?? null,
+            updated_at: nowIso,
+          })
+          .eq('id', existing.id);
+        if (updErr) {
+          args.warnings.push(`master_listing regenerate update failed: ${updErr.message}`);
+          return null;
+        }
+        return existing.id as string;
+      }
+      args.warnings.push(
+        `regenerate: target master_listing ${targetId} not found for round ${args.roundId} — falling back to fresh INSERT`,
+      );
+    } else {
+      args.warnings.push(
+        'regenerate: payload had regenerate=true but no master_listing_id_to_overwrite — falling back to fresh INSERT',
+      );
+    }
+    // Fallthrough: regen called on a round that never had Stage 4 fire.
+    // Behave like a fresh run via the upsert branch below.
+  }
+
+  // ── Fresh / re-run path ─────────────────────────────────────────────────
   // Idempotency: unique(round_id) on shortlisting_master_listings means re-run
   // must archive prior to history then upsert. We use upsert via onConflict.
   // First, copy the existing row to history if it exists (re-run case).
@@ -951,13 +1174,6 @@ async function persistMasterListing(args: PersistMasterListingArgs): Promise<str
       args.warnings.push(`master_listing history archive failed: ${histErr.message}`);
     }
   }
-
-  const wordCount = typeof args.masterListing.word_count === 'number'
-    ? args.masterListing.word_count
-    : null;
-  const readingGrade = typeof args.masterListing.reading_grade_level === 'number'
-    ? args.masterListing.reading_grade_level
-    : null;
 
   const row: Record<string, unknown> = {
     round_id: args.roundId,
@@ -1467,5 +1683,6 @@ function stage4PromptBlockVersions(): Record<string, string> {
     voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
     sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,
+    canonical_registry: CANONICAL_REGISTRY_BLOCK_VERSION,
   };
 }
