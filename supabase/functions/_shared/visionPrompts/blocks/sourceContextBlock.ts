@@ -33,7 +33,11 @@
  * anchor and any other instruction.
  */
 
-export const SOURCE_CONTEXT_BLOCK_VERSION = 'v1.0';
+// W11.7.17 — bumped from v1.0 to v1.1 for the per-source field-list
+// paragraphs that tell the model exactly which `*_specific` JSONB block to
+// populate and to leave the other 3 set to null. Q5 binding decision:
+// nullable blocks enforced via prompt + persist-layer validation.
+export const SOURCE_CONTEXT_BLOCK_VERSION = 'v1.1';
 
 export type SourceType = 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image';
 
@@ -85,6 +89,11 @@ const INTERNAL_RAW_BLOCK = [
   '   active and meaningful — they describe the underlying scene, not the',
   '   bracket. Score them normally.',
   '',
+  '── W11.7.17 v2 SOURCE-SPECIFIC BLOCK (Q5 binding) ──',
+  'Populate `raw_specific.{ luminance_class, is_aeb_zero, bracket_recoverable }`.',
+  'Leave the other 3 *_specific blocks (`finals_specific`, `external_specific`,',
+  '`floorplan_specific`) set to null.',
+  '',
 ].join('\n');
 
 const INTERNAL_FINALS_BLOCK = [
@@ -119,6 +128,16 @@ const INTERNAL_FINALS_BLOCK = [
   '   - Listing copy and master_listing should describe what a buyer sees in',
   '     this final published image.',
   '',
+  '── W11.7.17 v2 SOURCE-SPECIFIC BLOCK (Q5 binding) ──',
+  'Populate `finals_specific.{ looks_post_processed, vertical_lines_corrected,',
+  'color_grade_consistent_with_set, sky_replaced, sky_replacement_halo_severity,',
+  'digital_furniture_present, digital_furniture_artefact_severity,',
+  'digital_dusk_applied, digital_dusk_oversaturation_severity,',
+  'window_blowout_severity, shadow_recovery_score, color_cast_score,',
+  'hdr_halo_severity, retouch_artefact_severity }`.',
+  'Leave the other 3 *_specific blocks (`raw_specific`, `external_specific`,',
+  '`floorplan_specific`) set to null.',
+  '',
 ].join('\n');
 
 const EXTERNAL_LISTING_BLOCK = [
@@ -148,6 +167,13 @@ const EXTERNAL_LISTING_BLOCK = [
   '4. Capture competitor branding when visible.',
   '   - Agent watermark, photography credit text, agency logo overlay.',
   '',
+  '── W11.7.17 v2 SOURCE-SPECIFIC BLOCK (Q4 + Q5 binding) ──',
+  'Populate `external_specific.{ estimated_price_class, competitor_branding,',
+  'package_signals }`. NO `delivery_quality_grade` letter scale (Q4 binding —',
+  'dropped). External listings get `combined_score` numeric only.',
+  'Leave the other 3 *_specific blocks (`raw_specific`, `finals_specific`,',
+  '`floorplan_specific`) set to null.',
+  '',
 ].join('\n');
 
 const FLOORPLAN_IMAGE_BLOCK = [
@@ -164,6 +190,13 @@ const FLOORPLAN_IMAGE_BLOCK = [
   '3. Capture dimensions / area when legibly drawn.',
   '4. Identify architectural relationships (which rooms connect, flow paths).',
   '5. Identify the home archetype from layout patterns when possible.',
+  '',
+  '── W11.7.17 v2 SOURCE-SPECIFIC BLOCK (Q5 binding) ──',
+  'Populate `floorplan_specific.{ rooms_detected[], total_internal_sqm,',
+  'bedrooms_count, bathrooms_count, car_spaces, home_archetype,',
+  'north_arrow_orientation, levels_count, cross_check_flags[] }`.',
+  'Leave the other 3 *_specific blocks (`raw_specific`, `finals_specific`,',
+  '`external_specific`) set to null.',
   '',
 ].join('\n');
 
