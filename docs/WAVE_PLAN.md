@@ -153,7 +153,7 @@ delegated to subagents without my up-front design work + Joseph's sign-off.
 | # | Item | Backlog ref |
 |---|---|---|
 | W11.1 | New universal vision response schema document + Pass 1 prompt rewrite | P1-14 + P2-1 |
-| W11.2 | `composition_signal_scores` table + Pass 1 post-processing | P2-1 |
+| W11.2 | ~~`composition_signal_scores` sidecar table~~ — **subsumed by W11.7.17 — JSONB column on `composition_classifications` instead of sidecar table.** v2 spec dropped the sidecar table after Joseph's 2026-05-01 sign-off. | P2-1 |
 | W11.3 | Pass 2 receives per-signal context | P2-1 |
 | W11.4 | `composition_classifications.image_type_*` columns (or JSONB) | P1-14 |
 | W11.5 | Tier-weighted dimension rollup using DB-driven weights from W8.1 | P2-1 |
@@ -216,6 +216,41 @@ Largest single wave.
 - Dispatcher's `pass1` and `pass2` job kinds removed; pass1→pass2 chain logic removed
 - `'two_pass'` dropped from `engine_settings.engine_mode` CHECK constraint
 - `shortlisting_rounds.engine_mode` historical stamp preserved indefinitely for replay (`two_pass` rows from 3 historical test rounds remain immutable)
+
+---
+
+## Wave 11.7.17 — Universal Vision Response Schema v2 cutover (✅ shipped)
+
+**Theme:** unify the Stage 1 vision response schema across the 4 source contexts (internal_raw, internal_finals, external_listing, floorplan_image) so a single Stage 1 caller can be re-aimed at finals, external REA listings, and floorplan images by flipping a `source_type` input — with no parallel forks of prompt logic, no per-source schema column gymnastics, and no breaking change to the 4-axis dimension scores already in production.
+
+**Status:** ✅ **Shipped 2026-05-01.** Hard cutover to `schema_version='v2.0'` (Q6 binding — no dual-emit window). Existing v1 rows tagged `schema_version='v1.0'` and immutable; new emissions are v2 from this point forward. Spec: `docs/design-specs/W11-universal-vision-response-schema-v2.md`. Mig 398.
+
+**Joseph's binding decisions (signed off 2026-05-01):**
+- **Q1** — `image_type` enum: ship the 11 options as listed (is_day, is_dusk, is_drone, is_agent_headshot, is_test_shot, is_bts, is_floorplan, is_video_frame, is_detail_shot, is_facade_hero, is_other).
+- **Q2** — Lighting dimension: ADD 4 NEW lighting signals (`light_quality`, `light_directionality`, `color_temperature_appropriateness`, `light_falloff_quality`). Total = **26 signals** (22 from v1 + 4 new lighting). `lighting_score` aggregate computes from these 4.
+- **Q3** — Bounding boxes on `observed_objects`: **DEFAULT ON**. Stage 1 emits `bounding_box: {x_pct, y_pct, w_pct, h_pct}` on every observed_object by default.
+- **Q4** — DROP `external_specific.delivery_quality_grade` letter scale. External listings get `combined_score` numeric only.
+- **Q5** — 4 nullable `*_specific` blocks; enforced via prompt + persist-layer validation.
+- **Q6** — HARD CUTOVER to v2.0. Existing v1 rows tagged `schema_version='v1.0'` (immutable historical record); new emissions are v2 from day one.
+- **Q7** — `floorplan_image` kept as its own source type (separate schema branch).
+
+### Bursts
+
+| # | Item | Status |
+|---|---|---|
+| W11.7.17.1 | Mig 398: additive columns (`source_type`, `image_type`, `raw_specific`, `finals_specific`, `external_specific`, `floorplan_specific`, `observed_objects`, `observed_attributes`, `schema_version`) + indexes; backfill existing rows with `source_type='internal_raw'`, `schema_version='v1.0'` | ✅ |
+| W11.7.17.2 | New block `universalVisionResponseSchemaV2.ts` (`UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.0'`) — 26 signals, bounding_box required, 4 nullable `*_specific` blocks, no `delivery_quality_grade` | ✅ |
+| W11.7.17.3 | New block `signalMeasurementBlock.ts` (`SIGNAL_MEASUREMENT_BLOCK_VERSION = 'v1.0'`) — source-aware 26-signal measurement prompts with per-source activation tails | ✅ |
+| W11.7.17.4 | Bump `sourceContextBlock.ts` to `v1.1` — appends per-source field-list paragraphs (which `*_specific` to populate, which 3 to leave null) | ✅ |
+| W11.7.17.5 | `shortlisting-shape-d/index.ts` Stage 1 prompt swaps `stage1ResponseSchema` for `universalVisionResponseSchemaV2`; injects `signalMeasurementBlock(source_type)` after `header` and before `roomTypeTaxonomy`; persist-layer extends to write the 4 new JSONB columns + `source_type` + `image_type` + `schema_version='v2.0'`; `stage1PromptBlockVersions` map gains `universal_vision_response_schema='v2.0'` + `signal_measurement='v1.0'`, drops `stage1_response_schema`. Stage 4 schema OUT OF SCOPE per spec Appendix A. | ✅ |
+| W11.7.17.6 | New `_shared/dimensionRollup.ts` helper — `computeAggregateScores()` rolls 26 signals into 4 dimension aggregates + combined_score per spec §6. Tier-config-aware (signal_weights + dimension_weights). 46 unit tests covering all-present / partial / per-source dimorphism / tier weights / edge cases / Q2 lighting binding. | ✅ |
+| W11.7.17.7 | Snapshot tests under `shortlisting-shape-d/__snapshots__/` covering all 4 source types + 2 defensive edge cases | ✅ |
+| W11.7.17.8 | Smoke run on Rainbow Cres (`b7c2c9ac-41b3-44b5-b3ec-c0cc6b63f750`, round `c55374b1-1d10-4875-aaad-8dbba646ed3d`) — Stage 1 re-emitted at v2 (33 rows). Cost ~$0.50. | ✅ |
+| W11.7.17.9 | Hard cutover: existing v1 rows preserved as immutable historical record; new emissions v2 from day one. **W15a / W15b / W15c UNBLOCKED.** | ✅ |
+
+**Effort:** ~5 days execution (delivered as a single burst on 2026-05-01).
+
+**Why this wave matters:** v2 is the schema that lets W15a (internal finals scoring) + W15b (external REA listing scoring) + W15c (cross-source competitor analysis) become incremental new callers of the same Stage 1 path — zero schema change, zero new persist tables. The schema work is all here.
 
 ---
 
@@ -324,17 +359,17 @@ Largest single wave.
 **Theme:** apply the universal vision response schema (Wave 11) to internal
 finals + external REA listings + competitor analysis.
 
-**Status:** 🛑 Cannot start until Wave 11 schema is live.
+**Status:** 🟢 **UNBLOCKED 2026-05-01** — W11.7.17 universal schema v2 cutover shipped. Each of W15a/b/c is now a 2-3 day burst of caller wiring + storage routing — zero schema change.
 
 ### Sub-waves
 
-#### W15a — Internal finals scoring
+#### W15a — Internal finals scoring (🟢 unblocked)
 
 Score our own delivered JPEGs to populate the universal vision response
 table for finished media. Same engine, different reject criteria (finals
 should NOT have window blowout, vertical lines should be straightened, etc).
 
-#### W15b — External REA listing scoring + missed-opportunity recalibration
+#### W15b — External REA listing scoring + missed-opportunity recalibration (🟢 unblocked)
 
 The big business value. Per spec section 24:
 - Early-exit signal acquisition (dusk_confirmed, drone_confirmed,
@@ -345,7 +380,7 @@ The big business value. Per spec section 24:
 - `pulse_listing_missed_opportunity.quoted_price` self-heals from rules-
   based bucket guesses to vision-informed accuracy
 
-#### W15c — Cross-source competitor analysis
+#### W15c — Cross-source competitor analysis (🟢 unblocked)
 
 `object_registry` and `signal_scores` are now populated from THREE sources
 (internal RAW, internal finals, external listings). Cross-source queries:
