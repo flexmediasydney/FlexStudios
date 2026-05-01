@@ -18,6 +18,11 @@
  *     ai_recommended: boolean|null,   // surfaces a small AI badge
  *     status:       string|null,      // small text-only status pill (e.g. "AI Proposed")
  *     id:           string,           // for React keys / preload de-dup
+ *     stem:         string|null,      // OPTIONAL — file stem (e.g. "IMG_5751").
+ *                                     // Required only when the caller wants
+ *                                     // slot-aware nav via filterStems
+ *                                     // (W11.6.3 P3 #8). Drone callers may
+ *                                     // omit.
  *   }
  *
  * Props:
@@ -25,9 +30,31 @@
  *   initialIndex  - integer index into items
  *   groupLabel    - string shown next to the counter ("Raw Proposed", "Orbital", "All roles")
  *   onClose       - close handler
+ *   filterStems   - OPTIONAL string[]|null. Slot-aware nav scope (W11.6.3
+ *                   P3 #8): when provided, ←/→ only cycle through items whose
+ *                   `stem` is in this set. Pass `null` for unrestricted nav
+ *                   (legacy behaviour).
+ *   filterLabel   - OPTIONAL string. Pretty label rendered in the slot pill
+ *                   (e.g. "kitchen_hero"). Only shown when filterStems is
+ *                   active.
+ *
+ * Slot-aware nav (W11.6.3 P3 #8):
+ *   When `filterStems` is provided we precompute a list of indices into
+ *   `items` whose stems match. Prev/next walks that virtual list with
+ *   wrap-around. The original `items` array is left intact so the
+ *   per-instance blob cache + neighbour preload still benefit from the full
+ *   set. When `filterStems` is null/undefined, behaviour is unchanged.
+ *
+ * Graceful degradation: callers walk the DOM via
+ *   `event.target.closest('[data-slot-id]')`
+ * to find the slot wrapper. If group-by-slot is OFF, no ancestor is found
+ * and the caller passes `null` — the lightbox falls back to legacy nav and
+ * no slot pill renders. This matters during the W11.6.1 rollout window:
+ * before W11.6.1's `data-slot-id` markers ship, this prop is dormant and
+ * the lightbox just behaves as it always did.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   X,
@@ -36,6 +63,7 @@ import {
   Sparkles,
   Loader2,
   Image as ImageIcon,
+  Filter,
 } from "lucide-react";
 import { enqueueFetch } from "@/utils/mediaPerf";
 import { cn } from "@/lib/utils";
@@ -107,12 +135,47 @@ export default function DroneLightbox({
   initialIndex = 0,
   groupLabel = "",
   onClose,
+  filterStems = null,
+  filterLabel = "",
 }) {
   const total = items?.length || 0;
   const safeInitial = Math.max(0, Math.min(initialIndex, Math.max(0, total - 1)));
   const [index, setIndex] = useState(safeInitial);
   const safeIndex = total > 0 ? Math.max(0, Math.min(index, total - 1)) : 0;
   const item = total > 0 ? items[safeIndex] : null;
+
+  // ── Slot-aware filter (W11.6.3 P3 #8) ──────────────────────────────────
+  // Normalise filterStems → Set for O(1) lookups, then precompute the list
+  // of indices into `items` whose stem is in the set. Prev/next walks that
+  // list when filterActive; otherwise we walk the full items array (legacy).
+  const filterStemSet = useMemo(() => {
+    if (!Array.isArray(filterStems)) return null;
+    return new Set(filterStems);
+  }, [filterStems]);
+
+  const filteredIndices = useMemo(() => {
+    if (!filterStemSet) return null;
+    const out = [];
+    for (let i = 0; i < (items?.length || 0); i++) {
+      const stem = items[i]?.stem;
+      if (stem && filterStemSet.has(stem)) out.push(i);
+    }
+    return out;
+  }, [items, filterStemSet]);
+
+  // Position of the currently-displayed item within the filtered subset, or
+  // -1 if outside. Outside-the-slot is rare (caller picks the click target)
+  // but guarded: first ←/→ press jumps into the slot.
+  const filterPosition = useMemo(() => {
+    if (!filteredIndices) return -1;
+    return filteredIndices.indexOf(safeIndex);
+  }, [filteredIndices, safeIndex]);
+
+  // Filter is active when caller provided filterStems AND we found at least
+  // one matching item. Gates: slot pill, "in slot" counter, filter-aware
+  // preload, filter-aware nav arrows.
+  const filterActive =
+    filteredIndices !== null && filteredIndices.length > 0;
 
   // QC3 #8 a11y: capture the element that opened the lightbox so we can
   // restore focus on close (without this, AT users — and any keyboard user
@@ -173,16 +236,54 @@ export default function DroneLightbox({
     };
   }, []);
 
-  // Wrap-around prev/next.
+  // Wrap-around prev/next. Two modes:
+  //   1. Filtered (W11.6.3 P3 #8): walks filteredIndices with wrap-around.
+  //      The lightbox's `index` state still indexes into the full items
+  //      list — we just translate filtered position → filteredIndices[pos]
+  //      before setting it. If the initial item is outside the filter, the
+  //      first press JUMPS into the slot (last for prev, first for next).
+  //   2. Unfiltered (legacy): walks the full items array with wrap-around.
   const goPrev = useCallback(() => {
+    if (filterActive) {
+      const len = filteredIndices.length;
+      if (len <= 1) {
+        setIndex(filteredIndices[0]);
+        return;
+      }
+      if (filterPosition < 0) {
+        // Currently outside the slot — first prev press lands on the LAST
+        // item in the slot (visually "going back into the slot").
+        setIndex(filteredIndices[len - 1]);
+        return;
+      }
+      const next = filterPosition > 0 ? filterPosition - 1 : len - 1;
+      setIndex(filteredIndices[next]);
+      return;
+    }
     if (total <= 1) return;
     setIndex((i) => (i > 0 ? i - 1 : total - 1));
-  }, [total]);
+  }, [total, filterActive, filteredIndices, filterPosition]);
 
   const goNext = useCallback(() => {
+    if (filterActive) {
+      const len = filteredIndices.length;
+      if (len <= 1) {
+        setIndex(filteredIndices[0]);
+        return;
+      }
+      if (filterPosition < 0) {
+        // Currently outside the slot — first next press lands on the FIRST
+        // item in the slot.
+        setIndex(filteredIndices[0]);
+        return;
+      }
+      const next = filterPosition < len - 1 ? filterPosition + 1 : 0;
+      setIndex(filteredIndices[next]);
+      return;
+    }
     if (total <= 1) return;
     setIndex((i) => (i < total - 1 ? i + 1 : 0));
-  }, [total]);
+  }, [total, filterActive, filteredIndices, filterPosition]);
 
   // Re-fetch (or pull from cache) whenever the displayed path changes.
   useEffect(() => {
@@ -226,19 +327,39 @@ export default function DroneLightbox({
   // Predictive preload of neighbours so flicking forward feels instant.
   // Walks the wrap-around so the last item preloads index 0 too. Cache writes
   // are dedup'd by mediaPerf — cheap to call repeatedly.
+  //
+  // When slot-aware filtering is active we preload along the filtered scope —
+  // otherwise we'd waste fetches on images the operator can't reach via ←/→
+  // (those land on different slot sub-lanes the operator hasn't opened).
   useEffect(() => {
     if (total <= 1) return;
     const offsets = [1, -1, 2];
     const tasks = [];
-    for (const off of offsets) {
-      const idx = ((safeIndex + off) % total + total) % total;
-      const path = items[idx]?.dropbox_path;
-      if (!path) continue;
-      if (getCachedProxyUrl(path)) continue;
-      tasks.push(fetchProxyUrl(path));
+    if (filterActive) {
+      const len = filteredIndices.length;
+      if (len <= 1) return;
+      // If currently outside the slot, anchor preload at position 0 (where
+      // the first ←/→ press will land).
+      const anchor = filterPosition >= 0 ? filterPosition : 0;
+      for (const off of offsets) {
+        const pos = ((anchor + off) % len + len) % len;
+        const idx = filteredIndices[pos];
+        const path = items[idx]?.dropbox_path;
+        if (!path) continue;
+        if (getCachedProxyUrl(path)) continue;
+        tasks.push(fetchProxyUrl(path));
+      }
+    } else {
+      for (const off of offsets) {
+        const idx = ((safeIndex + off) % total + total) % total;
+        const path = items[idx]?.dropbox_path;
+        if (!path) continue;
+        if (getCachedProxyUrl(path)) continue;
+        tasks.push(fetchProxyUrl(path));
+      }
     }
     if (tasks.length > 0) Promise.allSettled(tasks);
-  }, [safeIndex, total, items]);
+  }, [safeIndex, total, items, filterActive, filteredIndices, filterPosition]);
 
   // Keyboard navigation.
   useEffect(() => {
@@ -356,10 +477,26 @@ export default function DroneLightbox({
 
   if (!item) return null;
 
+  // Counter text — when the slot filter is active we show position within
+  // the filtered subset (matches what ←/→ traverses); otherwise we show
+  // position in the full list. We keep `groupLabel` (caller-supplied free
+  // text like "Raw Proposed") at the end of the unfiltered counter for
+  // back-compat with the drone module. When outside the slot we fall back
+  // to the unfiltered counter style and append "outside slot" so the
+  // operator knows ←/→ will jump into the slot.
   const counter =
     total > 0
-      ? `${safeIndex + 1} of ${total}${groupLabel ? ` — ${groupLabel}` : ""}`
+      ? filterActive
+        ? filterPosition >= 0
+          ? `${filterPosition + 1} of ${filteredIndices.length} in slot`
+          : `${safeIndex + 1} of ${total} (outside slot)`
+        : `${safeIndex + 1} of ${total}${groupLabel ? ` — ${groupLabel}` : ""}`
       : "";
+
+  // Pretty label for the slot pill. Caller passes the canonical slot id —
+  // we render it verbatim (same convention as ShortlistingCard's slot
+  // badge). Falls back to "Slot" if the caller forgot to pass a label.
+  const slotPillLabel = filterActive ? filterLabel || "Slot" : null;
 
   const handleOverlayClick = (e) => {
     if (e.target === e.currentTarget) onClose?.();
@@ -384,16 +521,38 @@ export default function DroneLightbox({
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
-      {/* Top bar — counter + close */}
-      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 z-10">
-        <div className="text-white/80 text-xs sm:text-sm tabular-nums">
-          {counter}
+      {/* Top bar — counter + slot pill (W11.6.3 P3 #8) + close */}
+      <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 z-10 gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="text-white/80 text-xs sm:text-sm tabular-nums whitespace-nowrap">
+            {counter}
+          </div>
+          {/* Slot pill — only renders in slot-aware filtering mode. The
+              "X of Y in slot" portion lives in `counter` above; the pill
+              itself just shows the slot id so the operator can see at a
+              glance which scope ←/→ is bound to. */}
+          {slotPillLabel && (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5",
+                "bg-amber-500/20 text-amber-200 text-[11px] font-medium",
+                "ring-1 ring-amber-400/30 shrink-0",
+              )}
+              title="Slot-aware navigation: arrow keys cycle within this slot"
+            >
+              <Filter className="h-3 w-3" aria-hidden="true" />
+              <span className="opacity-80">Slot:</span>
+              <code className="font-mono text-[11px] text-amber-100">
+                {slotPillLabel}
+              </code>
+            </span>
+          )}
         </div>
         <button
           ref={closeButtonRef}
           type="button"
           onClick={onClose}
-          className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+          className="p-2 rounded-lg text-white/70 hover:text-white hover:bg-white/10 transition-colors shrink-0"
           title="Close (Esc)"
           aria-label="Close lightbox"
         >
@@ -401,8 +560,11 @@ export default function DroneLightbox({
         </button>
       </div>
 
-      {/* Nav arrows (only meaningful when >1 item) */}
-      {total > 1 && (
+      {/* Nav arrows. Hidden when nav scope has only one element — for the
+          legacy unfiltered case that's `total <= 1`; for slot-aware filtering
+          it's `filteredIndices.length <= 1` so the operator doesn't see
+          arrows that wrap to the same image. */}
+      {(filterActive ? filteredIndices.length > 1 : total > 1) && (
         <>
           <button
             type="button"
