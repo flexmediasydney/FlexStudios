@@ -1,10 +1,12 @@
 /**
  * ShortlistingCoverageMap — Wave 6 Phase 6 SHORTLIST
  *                          + W11.6.1-hotfix BUG #2 (Shape D plumbing)
+ *                          + W11.6.1-followup (engine-roles eligibility)
  *
  * Visual coverage map for a round.
  *
- * For each active slot definition (filtered by round.package_type), show:
+ * For each eligible slot definition (filtered by the project's resolved
+ * engine_roles — see eligibility derivation below), show:
  *   - filled / unfilled (color-coded)
  *   - winner thumbnail (if filled)
  *   - alternatives count (legacy pass2 only — Shape D doesn't surface alts
@@ -37,11 +39,29 @@
  *   Both readers map into the same slotState shape:
  *     Map<slot_id, { winner: { groupId }, alts: [{ groupId, payload }...] }>
  *   so the render path is unchanged.
+ *
+ * Slot eligibility — W11.6.1-followup:
+ *   The legacy `s.package_types` filter referenced a column dropped from
+ *   `shortlisting_slot_definitions` in mig 339 (Wave 7 P1-6 / W7.7). With
+ *   that column gone, every slot's `package_types` is undefined and the
+ *   filter silently dropped every slot. The Coverage tab now mirrors the
+ *   backend eligibility resolver (`_shared/slotEligibility.ts`):
+ *
+ *     project (products[] + packages[].products[])
+ *       ->  productsById -> distinct, active engine_role values
+ *           (`projectEngineRoles`)
+ *       ->  slot eligible iff slot.eligible_when_engine_roles overlaps
+ *           projectEngineRoles
+ *
+ *   When the project hasn't been loaded yet (or has no resolvable engine
+ *   roles), we fall through to ALL active slots — the swimlane will show
+ *   the full taxonomy rather than crashing the tab. A misconfigured slot
+ *   (is_active=true with empty eligible_when_engine_roles) is dropped just
+ *   like the backend resolver.
  */
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { useActivePackages } from "@/hooks/useActivePackages";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AlertCircle, CheckCircle2, AlertTriangle } from "lucide-react";
@@ -56,14 +76,36 @@ const PHASE_TONE = {
 };
 
 export default function ShortlistingCoverageMap({ roundId, round }) {
-  // Wave 7 P1-11: subscribe to the live packages table so we can canonicalise
-  // the round's package_type against the actual catalog when possible.
-  // Per Joseph's architectural correction (2026-04-27): packages must NEVER
-  // be hardcoded in the frontend — they live in the `packages` table.
-  const { names: livePackageNames } = useActivePackages();
+  // W11.6.1-followup: load the project + product catalog so we can resolve
+  // `projectEngineRoles` the same way the backend does (see
+  // `_shared/slotEligibility.ts`). Slot eligibility for the Coverage view
+  // is driven exclusively by `eligible_when_engine_roles` matching the
+  // resolved roles — the legacy `package_types` substring filter was
+  // retired with mig 339 and the column no longer exists on slot rows.
+  const projectId = round?.project_id || null;
 
-  // Fetch all active slot definitions; we'll filter to this round's package
-  // client-side (matches the spec's permissive package_types semantics).
+  const projectQuery = useQuery({
+    queryKey: ["coverage_project", projectId],
+    queryFn: async () => {
+      if (!projectId) return null;
+      const rows = await api.entities.Project.filter({ id: projectId }, null, 1);
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+    },
+    enabled: Boolean(projectId),
+    staleTime: 60_000,
+  });
+
+  const productsQuery = useQuery({
+    queryKey: ["coverage_products"],
+    queryFn: async () => {
+      const rows = await api.entities.Product.list("name", 1000);
+      return Array.isArray(rows) ? rows : [];
+    },
+    staleTime: 5 * 60_000,
+  });
+
+  // Fetch all active slot definitions; we'll filter to this project's
+  // resolved engine roles client-side (mirrors backend slotEligibility).
   const slotsQuery = useQuery({
     queryKey: ["shortlisting_slot_definitions_active"],
     queryFn: async () => {
@@ -213,48 +255,76 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
     return m;
   }, [overrides, events]);
 
-  // Filter slots to this round's package (or treat empty as universal).
+  // W11.6.1-followup: derive `projectEngineRoles` from the project's
+  // package + à la carte products, mirroring `_shared/slotEligibility.ts`.
   //
-  // W7.11: the legacy "package_types" array on a slot used to hold raw
-  // strings ("Gold", "Day to Dusk", "Premium"). With the dynamic packages
-  // architecture, the slot editor (SettingsShortlistingSlots) now writes
-  // canonical names sourced from the live `packages` table — but historic
-  // slot rows + new-style rounds may not be perfectly aligned yet.
+  //   project.products[]  + project.packages[].products[]
+  //     -> { product_id }[] -> products lookup -> distinct active engine_role values
   //
-  // Resolution strategy:
-  //   1. Try to canonicalise the round's package_type against the live
-  //      packages list (case-insensitive name lookup).
-  //   2. Match slot.package_types against the canonical name when found.
-  //   3. Fall back to the legacy substring match (Burst 19 NN1, audit
-  //      defect #53) so seed slots tagged "Gold" still resolve when the
-  //      round records "Gold Package". This fallback can retire once
-  //      every slot row has been re-edited via the new admin UI.
-  const pkg = round?.package_type;
-  const canonicalPkgName = useMemo(() => {
-    const target = String(pkg || "").toLowerCase().trim();
-    if (!target) return null;
-    const exact = livePackageNames.find(
-      (n) => String(n).toLowerCase().trim() === target,
-    );
-    return exact || null;
-  }, [pkg, livePackageNames]);
+  // Inactive products are dropped (they're catalog residue and shouldn't
+  // drive engine behaviour). Roles outside the known enum are dropped too
+  // — the slot match will simply not resolve, the Coverage tab won't crash.
+  const project = projectQuery.data || null;
+  const products = productsQuery.data || [];
+  const productsById = useMemo(() => {
+    const m = new Map();
+    for (const p of products) m.set(p.id, p);
+    return m;
+  }, [products]);
 
-  const pkgMatches = (defPkg, roundPkg) => {
-    const a = String(defPkg || "").toLowerCase().trim();
-    const b = String(roundPkg || "").toLowerCase().trim();
-    if (!a || !b) return false;
-    if (a === b) return true;
-    return a.includes(b) || b.includes(a);
-  };
+  const projectEngineRoles = useMemo(() => {
+    if (!project) return [];
+    const roles = new Set();
+    const collectFromEntries = (entries) => {
+      if (!Array.isArray(entries)) return;
+      for (const entry of entries) {
+        if (!entry || typeof entry.product_id !== "string") continue;
+        const product = productsById.get(entry.product_id);
+        if (!product) continue;
+        if (product.is_active !== true) continue;
+        if (!product.engine_role) continue;
+        roles.add(product.engine_role);
+      }
+    };
+    // À la carte products live on `projects.products`.
+    collectFromEntries(project.products);
+    // Package-bundled products live on `projects.packages[].products`.
+    if (Array.isArray(project.packages)) {
+      for (const pkg of project.packages) {
+        collectFromEntries(pkg?.products);
+      }
+    }
+    return Array.from(roles);
+  }, [project, productsById]);
+
+  // Filter slots to those whose `eligible_when_engine_roles` overlap the
+  // project's resolved roles. A slot with `is_active=true` but an
+  // empty/null `eligible_when_engine_roles` is misconfigured and dropped
+  // (matches the backend resolver's defensive policy).
+  //
+  // If we couldn't resolve any project engine roles (project not loaded yet,
+  // or genuinely no products with engine_role), fall through to ALL active
+  // slots so the tab still renders the taxonomy rather than going blank.
   const eligibleSlots = useMemo(() => {
-    const target = canonicalPkgName || pkg;
+    if (projectEngineRoles.length === 0) {
+      // No roles resolved — show every active slot that has any engine_role
+      // declaration, so the tab still renders something useful while the
+      // project loads (or, defensively, when the project has no shortlist
+      // products configured).
+      return slots.filter((s) =>
+        Array.isArray(s.eligible_when_engine_roles) &&
+        s.eligible_when_engine_roles.length > 0,
+      );
+    }
+    const projectRoleSet = new Set(projectEngineRoles);
     return slots.filter((s) => {
-      const types = s.package_types || [];
-      if (types.length === 0) return true;
-      if (!target) return true;
-      return types.some((p) => pkgMatches(p, target));
+      const engineRoles = Array.isArray(s.eligible_when_engine_roles)
+        ? s.eligible_when_engine_roles
+        : [];
+      if (engineRoles.length === 0) return false;
+      return engineRoles.some((r) => projectRoleSet.has(r));
     });
-  }, [slots, pkg, canonicalPkgName]);
+  }, [slots, projectEngineRoles]);
 
   // Coverage stats: phase 1 + 2 only (phase 3 is AI free, not gap-able).
   const stats = useMemo(() => {
@@ -276,7 +346,12 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
     slotsQuery.isLoading ||
     eventsQuery.isLoading ||
     overridesQuery.isLoading ||
-    groupsQuery.isLoading
+    groupsQuery.isLoading ||
+    // W11.6.1-followup: also wait for the project + products so we resolve
+    // engine roles before filtering — avoids a flicker where the tab first
+    // renders the "fall-through to all active slots" set and then narrows.
+    projectQuery.isLoading ||
+    productsQuery.isLoading
   ) {
     return (
       <div className="space-y-3 animate-pulse">
