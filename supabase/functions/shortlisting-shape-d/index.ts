@@ -1306,7 +1306,7 @@ interface PersistOneArgs {
  * matches the harness pattern and means a partial round still surfaces real
  * data to the swimlane UI.
  */
-async function persistOneClassification(args: PersistOneArgs): Promise<void> {
+export async function persistOneClassification(args: PersistOneArgs): Promise<void> {
   const out = args.result.output;
   if (!out) return;
   const num = (v: unknown): number | null => {
@@ -1331,6 +1331,26 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     if (v == null) return null;
     if (typeof v === 'string') return v.length === 0 ? null : v;
     return String(v);
+  };
+  // Wave 11.6.16: int = num truncated. retouch_estimate_minutes is INTEGER.
+  const int = (v: unknown): number | null => {
+    const n = num(v);
+    return n == null ? null : Math.trunc(n);
+  };
+  // Wave 11.6.16: boolNullable preserves null/undefined as null instead of
+  // forcing to false — used for iter-5 fields where the model may genuinely
+  // omit a value, and forcing false would write a misleading "not flagged
+  // for review" row.
+  const boolNullable = (v: unknown): boolean | null => {
+    if (v === true) return true;
+    if (v === false) return false;
+    if (v == null) return null;
+    if (typeof v === 'string') {
+      const t = v.toLowerCase();
+      if (t === 'true' || t === 'yes' || t === '1') return true;
+      if (t === 'false' || t === 'no' || t === '0') return false;
+    }
+    return null;
   };
 
   // Combined score: weighted blend of 4 dimensions. Stage 1 emits dim scores
@@ -1435,6 +1455,42 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     lens_class: lensClass, // W11.6.7 P1-4
     model_version: args.modelVersion,
     prompt_block_versions: args.promptBlockVersions,
+    // ─── Wave 11.6.16: iter-5 enrichment persistence ─────────────────────
+    // Stage 1 has been emitting these 17 fields since iter-5 shipped but the
+    // persist layer was silently discarding them. Mig 396 added the columns;
+    // this block writes them. listing_copy is a nested {headline, paragraphs}
+    // object — flattened defensively (fall back to top-level if Gemini ever
+    // drops the nesting). confidence_per_field is JSONB — accept the object
+    // as-is when emitted, else null.
+    style_archetype: str(out.style_archetype),
+    era_hint: str(out.era_hint),
+    material_palette_summary: arr(out.material_palette_summary),
+    embedding_anchor_text: str(out.embedding_anchor_text),
+    searchable_keywords: arr(out.searchable_keywords),
+    shot_intent: str(out.shot_intent),
+    appeal_signals: arr(out.appeal_signals),
+    concern_signals: arr(out.concern_signals),
+    buyer_persona_hints: arr(out.buyer_persona_hints),
+    retouch_priority: str(out.retouch_priority),
+    retouch_estimate_minutes: int(out.retouch_estimate_minutes),
+    gallery_position_hint: str(out.gallery_position_hint),
+    social_first_friendly: boolNullable(out.social_first_friendly),
+    requires_human_review: boolNullable(out.requires_human_review),
+    confidence_per_field: (out.confidence_per_field && typeof out.confidence_per_field === 'object')
+      ? out.confidence_per_field as Record<string, unknown>
+      : null,
+    listing_copy_headline: (() => {
+      const lc = (out.listing_copy && typeof out.listing_copy === 'object')
+        ? out.listing_copy as Record<string, unknown>
+        : {};
+      return str(lc.headline) ?? str(out.listing_copy_headline);
+    })(),
+    listing_copy_paragraphs: (() => {
+      const lc = (out.listing_copy && typeof out.listing_copy === 'object')
+        ? out.listing_copy as Record<string, unknown>
+        : {};
+      return str(lc.paragraphs) ?? str(out.listing_copy_paragraphs);
+    })(),
   };
 
   // Use upsert on the unique (group_id) constraint so retries replace rather
