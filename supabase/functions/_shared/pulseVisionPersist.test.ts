@@ -444,3 +444,388 @@ Deno.test('W15b.2 — aggregateCompetitorBranding: writes competitor JSONB to ro
   assert(upd, 'expected an UPDATE call');
   assertEquals(upd!.values!.competitor, competitor);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// W15b.4 — video frame vision aggregator
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// These tests cover the enrichment path of computeVideoBreakdown when the
+// caller supplies frame_timestamps_s + scene_changes_s. Each test builds a
+// hand-crafted set of VisionResponseV2 frames so the aggregation logic is
+// exercised against deterministic fixtures (no DB, no network).
+//
+// Scenarios covered (per W15b.4 spec):
+//   1. 1 segment of 5 day frames → has_day_segment true / dusk false.
+//   2. 5 day + 5 dusk frames → 2 segments, has_dusk_segment true.
+//   3. Single dusk frame → segment with duration_s=0 still counts.
+//   4. Scene change mid-day → 2 day segments.
+//   5. Drone-shot in observed_objects → has_drone true.
+//   6. signal_score median computation correct on hand-built fixture.
+//   7. unique_spaces dedup.
+//   8. Empty frames array → returns valid empty breakdown (no crash).
+//
+// All tests rely on the already-imported `computeVideoBreakdown` symbol from
+// pulseVisionPersist.ts; the spec's "aggregateVideoResults" entry point is
+// the DB-touching wrapper around the same pure helper, so unit-testing the
+// pure helper covers the same logic deterministically.
+
+Deno.test('W15b.4 — single day segment: 5 day frames → has_day_segment true / dusk false', () => {
+  const frames: VisionResponseV2[] = Array.from({ length: 5 }, () => ({
+    image_type: 'is_day',
+    analysis: { lighting_state: 'day' },
+    confidence_score: 0.85,
+    source_image_url: 'https://signed/frame.jpg',
+  }));
+  const ts = [0, 5, 10, 15, 20];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: ts,
+    scene_changes_s: [],
+    total_duration_s: 25,
+  });
+  assertEquals(out.segments?.length, 1);
+  assertEquals(out.segments?.[0].type, 'day');
+  assertEquals(out.segments?.[0].start_s, 0);
+  assertEquals(out.segments?.[0].end_s, 20);
+  assertEquals(out.segments?.[0].duration_s, 20);
+  assertEquals(out.has_day_segment, true);
+  assertEquals(out.has_dusk_segment, false);
+  assertEquals(out.day_segment_count, 1);
+  assertEquals(out.dusk_segment_count, 0);
+  assertEquals(out.frame_count, 5);
+});
+
+Deno.test('W15b.4 — day → dusk transition: 5 day + 5 dusk frames → 2 segments', () => {
+  const dayFrames: VisionResponseV2[] = Array.from({ length: 5 }, () => ({
+    image_type: 'is_day',
+    analysis: { lighting_state: 'day' },
+  }));
+  const duskFrames: VisionResponseV2[] = Array.from({ length: 5 }, () => ({
+    image_type: 'is_dusk',
+    analysis: { lighting_state: 'dusk' },
+  }));
+  const frames = [...dayFrames, ...duskFrames];
+  const ts = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: ts,
+    scene_changes_s: [],
+    total_duration_s: 50,
+  });
+  assertEquals(out.segments?.length, 2);
+  assertEquals(out.segments?.[0].type, 'day');
+  assertEquals(out.segments?.[0].start_s, 0);
+  assertEquals(out.segments?.[0].end_s, 20);
+  assertEquals(out.segments?.[1].type, 'dusk');
+  assertEquals(out.segments?.[1].start_s, 25);
+  assertEquals(out.segments?.[1].end_s, 45);
+  assertEquals(out.has_day_segment, true);
+  assertEquals(out.has_dusk_segment, true);
+  assertEquals(out.day_segment_count, 1);
+  assertEquals(out.dusk_segment_count, 1);
+});
+
+Deno.test('W15b.4 — single dusk frame: segment with duration_s=0 still counts', () => {
+  const frames: VisionResponseV2[] = [
+    {
+      image_type: 'is_dusk',
+      analysis: { lighting_state: 'dusk' },
+      confidence_score: 0.9,
+      source_image_url: 'https://signed/dusk.jpg',
+    },
+  ];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: [42.5],
+    scene_changes_s: [],
+    total_duration_s: 60,
+  });
+  assertEquals(out.segments?.length, 1);
+  assertEquals(out.segments?.[0].type, 'dusk');
+  assertEquals(out.segments?.[0].duration_s, 0);
+  assertEquals(out.segments?.[0].start_s, 42.5);
+  assertEquals(out.segments?.[0].end_s, 42.5);
+  assertEquals(out.segments?.[0].representative_frame_url, 'https://signed/dusk.jpg');
+  assertEquals(out.has_dusk_segment, true);
+  assertEquals(out.dusk_segment_count, 1);
+});
+
+Deno.test('W15b.4 — scene change mid-day: scene_changes_s splits into 2 day segments', () => {
+  const frames: VisionResponseV2[] = Array.from({ length: 6 }, () => ({
+    image_type: 'is_day',
+    analysis: { lighting_state: 'day' },
+  }));
+  const ts = [0, 5, 10, 15, 20, 25];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: ts,
+    scene_changes_s: [12.5], // between frame[2] @10 and frame[3] @15
+    total_duration_s: 30,
+  });
+  assertEquals(out.segments?.length, 2);
+  assertEquals(out.segments?.[0].type, 'day');
+  assertEquals(out.segments?.[0].start_s, 0);
+  assertEquals(out.segments?.[0].end_s, 10);
+  assertEquals(out.segments?.[1].type, 'day');
+  assertEquals(out.segments?.[1].start_s, 15);
+  assertEquals(out.segments?.[1].end_s, 25);
+  assertEquals(out.day_segment_count, 2);
+  assertEquals(out.scene_change_count, 1);
+});
+
+Deno.test('W15b.4 — drone shot detection: observed_objects with category drone_shot → has_drone true', () => {
+  const frames: VisionResponseV2[] = [
+    { image_type: 'is_day', analysis: { lighting_state: 'day' } },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      observed_objects: [
+        { raw_label: 'aerial pull-back', category: 'drone_shot', confidence: 0.92 },
+      ],
+    },
+  ];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: [0, 5],
+    scene_changes_s: [],
+    total_duration_s: 10,
+  });
+  assertEquals(out.has_drone, true);
+});
+
+Deno.test('W15b.4 — signal_score median across frames: hand-built fixture', () => {
+  const frames: VisionResponseV2[] = [
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      signal_scores: { exposure_balance: 6, sharpness_subject: 8 },
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      signal_scores: { exposure_balance: 8, sharpness_subject: 9 },
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      signal_scores: { exposure_balance: 4, sharpness_subject: 7 },
+    },
+  ];
+  // exposure_balance values: [4, 6, 8] → median 6, max 8, frame_count 3
+  // sharpness_subject values: [7, 8, 9] → median 8, max 9, frame_count 3
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: [0, 5, 10],
+    scene_changes_s: [],
+    total_duration_s: 15,
+  });
+  const summary = out.signal_score_summary!;
+  assertEquals(summary.exposure_balance.median, 6);
+  assertEquals(summary.exposure_balance.max, 8);
+  assertEquals(summary.exposure_balance.frame_count, 3);
+  assertEquals(summary.sharpness_subject.median, 8);
+  assertEquals(summary.sharpness_subject.max, 9);
+  assertEquals(summary.sharpness_subject.frame_count, 3);
+});
+
+Deno.test('W15b.4 — unique_spaces / unique_zones dedup', () => {
+  const frames: VisionResponseV2[] = [
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      space_type: 'living_room',
+      zone_focus: 'lounge',
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      space_type: 'living_room', // dup
+      zone_focus: ['lounge', 'fireplace'], // array shape
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      space_type: 'kitchen',
+      zone_focus: 'island_bench',
+    },
+  ];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: [0, 5, 10],
+    scene_changes_s: [],
+    total_duration_s: 15,
+  });
+  // unique_spaces sorted alphabetically
+  assertEquals(out.unique_spaces, ['kitchen', 'living_room']);
+  assertEquals(out.unique_zones, ['fireplace', 'island_bench', 'lounge']);
+});
+
+Deno.test('W15b.4 — empty frames array → valid empty breakdown, no crash', () => {
+  const out = computeVideoBreakdown([], {
+    frame_timestamps_s: [],
+    scene_changes_s: [],
+    total_duration_s: 0,
+  });
+  assertEquals(out.present, false);
+  assertEquals(out.frame_count, 0);
+  assertEquals(out.segments, []);
+  assertEquals(out.has_drone, false);
+  assertEquals(out.has_dusk_segment, false);
+  assertEquals(out.has_day_segment, false);
+  assertEquals(out.unique_spaces, []);
+  assertEquals(out.unique_zones, []);
+  assertEquals(out.signal_score_summary, {});
+  assertEquals(out.branding_signals, {
+    competitor_logos_seen: [],
+    flexmedia_branding_seen: false,
+  });
+  assertEquals(out.frames_with_concerns, 0);
+  assertEquals(out.frames_with_strong_appeal, 0);
+});
+
+// Bonus W15b.4 tests — additional coverage for scoring + concerns + appeal +
+// the lighting_state=null edge case the spec calls out.
+
+Deno.test('W15b.4 — lighting_state=null bucketed as unknown, excluded from has_*_segment', () => {
+  const frames: VisionResponseV2[] = [
+    { image_type: 'is_day', analysis: { lighting_state: null } },
+    { image_type: 'is_day', analysis: null },
+    { image_type: 'is_day' /* analysis missing entirely */ },
+  ];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: [0, 5, 10],
+    scene_changes_s: [],
+    total_duration_s: 15,
+  });
+  // All 3 frames are 'unknown' → 1 segment of unknown lighting
+  assertEquals(out.segments?.length, 1);
+  assertEquals(out.segments?.[0].type, 'unknown');
+  // has_day_segment / has_dusk_segment must be false for unknown-only video
+  assertEquals(out.has_day_segment, false);
+  assertEquals(out.has_dusk_segment, false);
+  assertEquals(out.day_segment_count, 0);
+  assertEquals(out.dusk_segment_count, 0);
+});
+
+Deno.test('W15b.4 — frames_with_concerns and frames_with_strong_appeal counters', () => {
+  const frames: VisionResponseV2[] = [
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      concern_signals: ['lawn brown'],
+      appeal_signals: ['big windows'],
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      concern_signals: [],
+      appeal_signals: ['big windows', 'high ceilings', 'pool view'],
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      concern_signals: ['power lines visible', 'crack in driveway'],
+      appeal_signals: ['big windows', 'high ceilings'],
+    },
+  ];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: [0, 5, 10],
+    scene_changes_s: [],
+    total_duration_s: 15,
+  });
+  // frames 0 and 2 have non-empty concern_signals → 2
+  assertEquals(out.frames_with_concerns, 2);
+  // only frame 1 has >=3 appeal_signals → 1
+  assertEquals(out.frames_with_strong_appeal, 1);
+});
+
+Deno.test('W15b.4 — representative_frame_url picks median-confidence frame deterministically', () => {
+  const frames: VisionResponseV2[] = [
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      confidence_score: 0.6,
+      source_image_url: 'https://signed/low.jpg',
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      confidence_score: 0.85,
+      source_image_url: 'https://signed/median.jpg',
+    },
+    {
+      image_type: 'is_day',
+      analysis: { lighting_state: 'day' },
+      confidence_score: 0.95,
+      source_image_url: 'https://signed/high.jpg',
+    },
+  ];
+  const out = computeVideoBreakdown(frames, {
+    frame_timestamps_s: [0, 5, 10],
+    scene_changes_s: [],
+    total_duration_s: 15,
+  });
+  assertEquals(out.segments?.length, 1);
+  // sorted asc by confidence: [0.6, 0.85, 0.95]; median = floor(3/2)=index 1 → median.jpg
+  assertEquals(out.segments?.[0].representative_frame_url, 'https://signed/median.jpg');
+  // mean confidence: (0.6 + 0.85 + 0.95)/3 = 0.8
+  const conf = out.segments?.[0].confidence;
+  assert(conf !== null && conf !== undefined);
+  assert(Math.abs((conf as number) - 0.8) < 1e-9);
+});
+
+Deno.test('W15b.4 — backward compat: omitting frame_timestamps_s yields legacy shape only', () => {
+  // Caller using the W15b.2 signature (no timestamps) must still get the
+  // simple per-frame counts and NOT the enrichment fields.
+  const frames: VisionResponseV2[] = [
+    { image_type: 'is_day' },
+    { image_type: 'is_dusk' },
+  ];
+  const out = computeVideoBreakdown(frames, {
+    total_duration_s: 60,
+    frames_extracted: 2,
+  });
+  assertEquals(out.present, true);
+  assertEquals(out.day_segments_count, 1);
+  assertEquals(out.dusk_segments_count, 1);
+  assertEquals(out.total_duration_s, 60);
+  assertEquals(out.frames_extracted, 2);
+  // Enrichment fields should be undefined when timestamps are not supplied.
+  assertEquals(out.segments, undefined);
+  assertEquals(out.signal_score_summary, undefined);
+  assertEquals(out.unique_spaces, undefined);
+});
+
+Deno.test('W15b.4 — aggregateVideoResults persists enriched breakdown when timestamps supplied', async () => {
+  const captured: CapturedCall[] = [];
+  const admin = makeFakeAdmin({}, captured);
+  const breakdown = await aggregateVideoResults(
+    // deno-lint-ignore no-explicit-any
+    admin as any,
+    'extract-vid-enriched',
+    [
+      {
+        image_type: 'is_day',
+        analysis: { lighting_state: 'day' },
+        space_type: 'living_room',
+      },
+      {
+        image_type: 'is_dusk',
+        analysis: { lighting_state: 'dusk' },
+        space_type: 'rear_yard',
+      },
+    ],
+    {
+      frame_timestamps_s: [0, 30],
+      scene_changes_s: [],
+      total_duration_s: 60,
+      frames_extracted: 2,
+    },
+  );
+  // Legacy fields populated
+  assertStrictEquals(breakdown.present, true);
+  assertStrictEquals(breakdown.day_segments_count, 1);
+  assertStrictEquals(breakdown.dusk_segments_count, 1);
+  // Enrichment fields populated
+  assertEquals(breakdown.segments?.length, 2);
+  assertEquals(breakdown.has_day_segment, true);
+  assertEquals(breakdown.has_dusk_segment, true);
+  assertEquals(breakdown.unique_spaces, ['living_room', 'rear_yard']);
+  // Persisted to DB
+  const upd = captured.find((c) => c.op === 'update');
+  assert(upd, 'expected an UPDATE call');
+  assertEquals(upd!.values!.video_breakdown, breakdown);
+});
