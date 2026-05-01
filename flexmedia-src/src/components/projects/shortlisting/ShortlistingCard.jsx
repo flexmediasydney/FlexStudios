@@ -554,6 +554,20 @@ export default function ShortlistingCard({
                   Proposed
                 </span>
               )}
+              {/* W11.6.16 — "Needs your eye" callout when Stage 1 self-flags
+                  uncertainty. Top-right placement keeps it out of the way of
+                  the column-state badge (top-left). The badge is a
+                  cost-paid-for-data surface: Gemini already paid the tokens
+                  to make this judgement; surfacing it lets the operator focus
+                  review effort. */}
+              {cls.requires_human_review === true && (
+                <span
+                  className="absolute top-1 right-1 text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 pointer-events-none font-medium"
+                  title="Stage 1 flagged this image for human review"
+                >
+                  Needs your eye
+                </span>
+              )}
             </>
           }
         />
@@ -784,6 +798,92 @@ export default function ShortlistingCard({
                     </span>
                   </p>
                 ) : null}
+              </div>
+            )}
+
+            {/* W11.6.16 — Architecture & Style section. Surfaces the
+                style_archetype + era_hint + material_palette_summary that
+                Gemini emits per image (Sydney primer anchors archetype to
+                Federation / post-war / 1960s Sydney School / etc). The
+                badges read alongside the analysis paragraph above as
+                quick-scan typology. */}
+            {(cls.style_archetype || cls.era_hint || (cls.material_palette_summary && cls.material_palette_summary.length > 0)) && (
+              <div>
+                <div className="font-semibold text-foreground text-[10px] uppercase tracking-wide mb-0.5">
+                  Architecture & Style
+                </div>
+                <div className="flex flex-wrap items-center gap-1">
+                  {cls.style_archetype ? (
+                    <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-slate-300 text-slate-700 dark:text-slate-300">
+                      {cls.style_archetype}
+                    </Badge>
+                  ) : null}
+                  {cls.era_hint ? (
+                    <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-slate-300 text-slate-600 dark:text-slate-400">
+                      {cls.era_hint}
+                    </Badge>
+                  ) : null}
+                  {Array.isArray(cls.material_palette_summary) && cls.material_palette_summary.map((mat) => (
+                    <Badge key={`mat-${mat}`} variant="outline" className="text-[9px] h-4 px-1.5 border-stone-300 text-stone-600 dark:text-stone-400">
+                      {mat}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* W11.6.16 — Appeal & Concern Signals.
+                Marketing positives (green) + negatives (amber) emitted by
+                Gemini. snake_case tokens prettified for display. Power the
+                swimlane "any-of" filters when matched on a chip. */}
+            {((Array.isArray(cls.appeal_signals) && cls.appeal_signals.length > 0)
+              || (Array.isArray(cls.concern_signals) && cls.concern_signals.length > 0)) && (
+              <div>
+                <div className="font-semibold text-foreground text-[10px] uppercase tracking-wide mb-0.5">
+                  Appeal & Concern Signals
+                </div>
+                <div className="flex flex-wrap items-center gap-1">
+                  {(cls.appeal_signals || []).map((s) => (
+                    <Badge key={`appeal-${s}`} variant="outline" className="text-[9px] h-4 px-1.5 border-emerald-300 text-emerald-700 dark:text-emerald-300">
+                      + {s.replace(/_/g, " ")}
+                    </Badge>
+                  ))}
+                  {(cls.concern_signals || []).map((s) => (
+                    <Badge key={`concern-${s}`} variant="outline" className="text-[9px] h-4 px-1.5 border-amber-300 text-amber-700 dark:text-amber-300">
+                      − {s.replace(/_/g, " ")}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* W11.6.16 — Shot Intent badge. One of:
+                hero_establishing | scale_clarification | lifestyle_anchor |
+                material_proof | indoor_outdoor_connection | detail_specimen |
+                record_only | reshoot_candidate. Single-row badge so the
+                expander stays compact. */}
+            {cls.shot_intent ? (
+              <div>
+                <div className="font-semibold text-foreground text-[10px] uppercase tracking-wide mb-0.5">
+                  Shot Intent
+                </div>
+                <Badge variant="outline" className="text-[9px] h-4 px-1.5 border-blue-300 text-blue-700 dark:text-blue-300">
+                  {cls.shot_intent.replace(/_/g, " ")}
+                </Badge>
+              </div>
+            ) : null}
+
+            {/* W11.6.16 — Requires Review warning. The card-level "Needs
+                your eye" badge (top-right of thumbnail) is the at-a-glance
+                version; this is the inline expander reminder. */}
+            {cls.requires_human_review === true && (
+              <div className="rounded-sm border border-amber-300 bg-amber-50/60 dark:bg-amber-950/20 px-2 py-1">
+                <div className="text-amber-700 dark:text-amber-300 font-semibold text-[10px] uppercase tracking-wide">
+                  Requires Review
+                </div>
+                <p className="text-[10px] text-amber-800/80 dark:text-amber-200/80">
+                  The model self-flagged uncertainty on this image — eyeball before publishing.
+                </p>
               </div>
             )}
 
