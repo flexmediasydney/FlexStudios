@@ -122,6 +122,7 @@ import {
   CANONICAL_REGISTRY_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/canonicalRegistryBlock.ts';
 import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
+import { deriveLensClass } from '../_shared/lensClass.ts';
 import { roomTypeTaxonomyBlock } from '../_shared/visionPrompts/blocks/roomTypeTaxonomy.ts';
 import {
   roomTypesFromDb,
@@ -173,6 +174,10 @@ interface CompositionRow {
   delivery_reference_stem: string | null;
   stem: string;
   is_secondary_camera: boolean;
+  /** Wave 11.6.7 P1-4: per-stem ExifSignals JSONB pulled from
+   *  composition_groups.exif_metadata. Keyed by file stem. Used by
+   *  persistOneClassification to derive lens_class. */
+  exif_metadata: Record<string, unknown> | null;
 }
 
 interface RoundContext {
@@ -689,6 +694,8 @@ async function runShapeDStage1Core(
             result: r,
             promptBlockVersions: stage1PromptBlockVersions(),
             modelVersion: r.model_used,
+            // W11.6.7 P1-4: composition row carries exif_metadata for lens_class derivation.
+            composition: c,
             warnings,
           });
         }
@@ -1023,7 +1030,7 @@ async function loadCompositionGroups(
 ): Promise<CompositionRow[]> {
   const { data, error } = await admin
     .from('composition_groups')
-    .select('id, group_index, best_bracket_stem, delivery_reference_stem, is_secondary_camera')
+    .select('id, group_index, best_bracket_stem, delivery_reference_stem, is_secondary_camera, exif_metadata')
     .eq('round_id', roundId)
     .order('group_index');
   if (error) throw new Error(`composition_groups load failed: ${error.message}`);
@@ -1037,6 +1044,9 @@ async function loadCompositionGroups(
       delivery_reference_stem: delivery,
       stem: delivery || best || `group_${g.group_index}`,
       is_secondary_camera: (g.is_secondary_camera as boolean) ?? false,
+      // W11.6.7 P1-4: surface exif_metadata so persistOneClassification can
+      // derive lens_class. Pass 0 keys it by stem.
+      exif_metadata: (g.exif_metadata as Record<string, unknown> | null) ?? null,
     };
   });
 }
@@ -1227,6 +1237,8 @@ interface PersistOneArgs {
   result: PerImageResult;
   promptBlockVersions: Record<string, string>;
   modelVersion: string;
+  /** Wave 11.6.7 P1-4: composition row (carries exif_metadata for lens_class). */
+  composition: CompositionRow;
   warnings: string[];
 }
 
@@ -1294,6 +1306,29 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     ? vantage
     : null;
 
+  // W11.6.7 P1-4: derive lens_class from EXIF + Pass 1's is_drone flag.
+  // exif_metadata is keyed by stem; pull the best_bracket_stem (or the first
+  // available if best is missing).
+  const exifMap = (args.composition.exif_metadata || {}) as Record<string, unknown>;
+  const bestStem = args.composition.best_bracket_stem
+    || args.composition.delivery_reference_stem
+    || Object.keys(exifMap)[0]
+    || null;
+  const exifEntry = bestStem ? (exifMap[bestStem] as Record<string, unknown> | undefined) : undefined;
+  const focalRaw = exifEntry?.focalLength;
+  const lensModelRaw = exifEntry?.lensModel;
+  const cameraModelRaw = exifEntry?.cameraModel;
+  const cameraMakeRaw = exifEntry?.cameraMake;
+  const lensClass = deriveLensClass(
+    {
+      focalLength: typeof focalRaw === 'number' ? focalRaw : null,
+      lensModel: typeof lensModelRaw === 'string' ? lensModelRaw : null,
+      cameraModel: typeof cameraModelRaw === 'string' ? cameraModelRaw : null,
+      cameraMake: typeof cameraMakeRaw === 'string' ? cameraMakeRaw : null,
+    },
+    { isDrone: bool(out.is_drone) },
+  );
+
   const row: Record<string, unknown> = {
     group_id: args.result.group_id,
     round_id: args.roundId,
@@ -1321,6 +1356,7 @@ async function persistOneClassification(args: PersistOneArgs): Promise<void> {
     combined_score: combined,
     eligible_for_exterior_rear: eligibleExtRear,
     is_near_duplicate_candidate: false,
+    lens_class: lensClass, // W11.6.7 P1-4
     model_version: args.modelVersion,
     prompt_block_versions: args.promptBlockVersions,
   };
