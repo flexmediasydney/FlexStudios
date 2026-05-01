@@ -418,6 +418,12 @@ type DispatchResult = {
  * `{ job_id }` in their request body (see each function's RequestBody type)
  * and use it to look up round_id / payload server-side. Centralising the
  * mapping here means new kinds only need a single line added.
+ *
+ * Wave 11.7.1: Shape D adds `shape_d_stage1` + `stage4_synthesis`. The chain
+ * `pass0 → ?` reads engine_mode at chain time and picks pass1 (two_pass) or
+ * shape_d_stage1 (shape_d). Stage 4 is dispatched as a standalone job by
+ * the shape-d orchestrator at the end of Stage 1 — the dispatcher does not
+ * chain it.
  */
 const KIND_TO_FUNCTION: Record<string, string> = {
   ingest: "shortlisting-ingest",
@@ -426,6 +432,8 @@ const KIND_TO_FUNCTION: Record<string, string> = {
   pass1: "shortlisting-pass1",
   pass2: "shortlisting-pass2",
   pass3: "shortlisting-pass3",
+  shape_d_stage1: "shortlisting-shape-d",
+  stage4_synthesis: "shortlisting-shape-d-stage4",
 };
 
 async function dispatchOne(job: ShortlistingJob): Promise<DispatchResult> {
@@ -450,6 +458,16 @@ async function chainNextKind(
 
   // pass3 is terminal — it fires the notification itself.
   if (job.kind === "pass3") return;
+
+  // Wave 11.7.1: Shape D terminal kinds.
+  // shape_d_stage1 itself enqueues stage4_synthesis at the end of its run
+  // (the orchestrator inserts the row inline so it can carry round-state
+  // context). The dispatcher does NOT chain after shape_d_stage1.
+  if (job.kind === "shape_d_stage1") return;
+  // stage4_synthesis is terminal in Shape D (Stage 4's persistence transitions
+  // shortlisting_rounds.status to 'proposed', matching legacy pass2's terminal
+  // state — no further chain).
+  if (job.kind === "stage4_synthesis") return;
 
   // extract → pass0, only when ALL extract jobs for this round are done.
   if (job.kind === "extract") {
@@ -519,22 +537,61 @@ async function chainNextKind(
     return;
   }
 
-  // pass0 → pass1, pass1 → pass2, pass2 → pass3.
-  const nextMap: Record<string, string> = {
-    pass0: "pass1",
-    pass1: "pass2",
-    pass2: "pass3",
-  };
-  const nextKind = nextMap[job.kind];
-  if (!nextKind) return;
-
+  // pass0 → (pass1 OR shape_d_stage1, depending on engine_mode), pass1 → pass2,
+  // pass2 → pass3.
+  //
+  // Wave 11.7.1 coexistence: pass0 is shared by both engines; the next-kind
+  // picks at chain time based on the round's engine_mode (with the engine_
+  // settings.engine_mode as the global fallback). engine_mode is stamped onto
+  // shortlisting_rounds at round-bootstrap so the routing is deterministic
+  // even if a round is replayed mid-flight.
   const roundId =
     job.round_id || (job.payload?.round_id as string | undefined) || null;
   if (!roundId) {
     console.warn(
-      `[${GENERATOR}] ${job.kind} ${job.id} succeeded but round_id missing — cannot chain ${nextKind}`,
+      `[${GENERATOR}] ${job.kind} ${job.id} succeeded but round_id missing — cannot chain next kind`,
     );
     return;
+  }
+  let nextKind: string;
+  if (job.kind === "pass0") {
+    // Look up the round's engine_mode. If 'shape_d_*' → route to
+    // shape_d_stage1; if 'two_pass' or null → route to legacy pass1.
+    const { data: roundRow } = await admin
+      .from("shortlisting_rounds")
+      .select("engine_mode")
+      .eq("id", roundId)
+      .maybeSingle();
+    const roundMode = (roundRow?.engine_mode as string | null) || null;
+    let useShapeD = roundMode?.startsWith("shape_d") ?? false;
+    if (!roundMode || roundMode === "two_pass") {
+      // No per-round override → check the global default.
+      const { data: gs } = await admin
+        .from("engine_settings")
+        .select("value")
+        .eq("key", "engine_mode")
+        .maybeSingle();
+      const globalMode = typeof gs?.value === "string"
+        ? gs.value
+        : (typeof gs?.value === "object" && gs?.value !== null
+          ? (gs.value as Record<string, unknown>).value
+          : null);
+      if (globalMode === "shape_d") useShapeD = true;
+    }
+    nextKind = useShapeD ? "shape_d_stage1" : "pass1";
+    if (useShapeD) {
+      console.log(
+        `[${GENERATOR}] pass0 ${job.id} → routing round ${roundId} to Shape D (engine_mode=${roundMode ?? "global_shape_d"})`,
+      );
+    }
+  } else {
+    const nextMap: Record<string, string> = {
+      pass1: "pass2",
+      pass2: "pass3",
+    };
+    const mapped = nextMap[job.kind];
+    if (!mapped) return;
+    nextKind = mapped;
   }
 
   // Idempotency guard — same as extract → pass0 above.

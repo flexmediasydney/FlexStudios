@@ -1,0 +1,1253 @@
+/**
+ * shortlisting-shape-d
+ * ────────────────────
+ * Wave 11.7.1 — production Shape D shortlisting orchestrator.
+ *
+ * Replaces (Phase A coexistence) `shortlisting-pass1` + `shortlisting-pass2`
+ * for rounds where `engine_settings.engine_mode = 'shape_d'` (or per-round
+ * override `shortlisting_rounds.engine_mode = 'shape_d_*'`).
+ *
+ * Spec: docs/design-specs/W11-7-unified-shortlisting-architecture.md
+ *
+ * ─── ARCHITECTURE ────────────────────────────────────────────────────────────
+ *
+ * 5 calls per shoot for ≤200 angles:
+ *   - Stage 1: 3-4 batched Gemini 2.5 Pro calls × 50 images = full per-image
+ *              enrichment (analysis, scores, classification, key_elements,
+ *              listing_copy, appeal_signals, concern_signals, retouch_priority,
+ *              etc.). thinkingBudget=2048, max_output_tokens=6000.
+ *   - Stage 4: 1 visual master synthesis call (sees all images + Stage 1 JSON)
+ *              dispatched as a SEPARATE edge job (production lesson from
+ *              iter-5a wall-time issue: combined Stage 1 + Stage 4 chain hit
+ *              the worker wall budget).
+ *
+ * THIS edge fn is the Stage 1 orchestrator. Stage 4 lives in its own edge fn
+ * (`shortlisting-shape-d-stage4`), dispatched via `shortlisting_jobs` of kind
+ * `stage4_synthesis` after Stage 1 completes.
+ *
+ * ─── RESPONSIBILITIES ─────────────────────────────────────────────────────────
+ *
+ *  1. Auth + RLS: master_admin/admin/manager + service-role (matches pass1).
+ *  2. Engine-mode gate: 400 if engine_mode='two_pass' (caller must use pass1).
+ *  3. Round bootstrap: load shortlisting_rounds + projects + composition_groups.
+ *  4. Property tier resolution: round.property_tier (default 'standard').
+ *  5. Source type: defaults to 'internal_raw' for the production RAW workflow.
+ *  6. Stage 1 batched execution: 3-4 batches of ≤50 images, parallel Gemini.
+ *  7. Stage 4 dispatch: insert shortlisting_jobs row of kind 'stage4_synthesis'.
+ *  8. Audit JSON to Dropbox at Photos/_AUDIT/round_<id>_stage1_<ts>.json.
+ *  9. engine_run_audit upsert: stages_completed=['pass0','stage1'], cost, wall.
+ * 10. Stamp shortlisting_rounds.engine_mode = 'shape_d_full' | 'shape_d_partial'.
+ * 11. Mutex via dispatcher_locks (W7.5 pattern) per round.
+ * 12. Idempotent retry: prime from existing composition_classifications.
+ * 13. Cost cap from engine_settings.cost_cap_per_round_usd (default $10).
+ *
+ * ─── INPUT MODES ──────────────────────────────────────────────────────────────
+ *
+ *   { round_id }   — direct invocation (master_admin manual or cron-style)
+ *   { job_id }     — dispatcher path (look up round_id from shortlisting_jobs)
+ *   { _health_check: true } → 200 with version stamp
+ *
+ * ─── EDGE-RUNTIME WALL-TIME ───────────────────────────────────────────────────
+ *
+ * Stage 1 only. Even with 4 parallel batches (~50s each at 200 angles), the
+ * orchestrator returns within ~70s. Stage 4 is dispatched as a follow-up job
+ * so its 60-90s thinking + 240s timeout doesn't stack.
+ */
+
+import {
+  handleCors,
+  jsonResponse,
+  errorResponse,
+  getUserFromReq,
+  serveWithAudit,
+  getAdminClient,
+  callerHasProjectAccess,
+} from '../_shared/supabase.ts';
+import {
+  callVisionAdapter,
+  estimateCost,
+  MissingVendorCredential,
+  VendorCallError,
+  type VisionRequest,
+  type VisionResponse,
+} from '../_shared/visionAdapter/index.ts';
+import { getDropboxAccessToken, uploadFile, createFolder } from '../_shared/dropbox.ts';
+import { tryAcquireMutex, releaseMutex } from '../_shared/dispatcherMutex.ts';
+import {
+  sourceContextBlock,
+  SOURCE_CONTEXT_BLOCK_VERSION,
+  type SourceType,
+} from '../_shared/visionPrompts/blocks/sourceContextBlock.ts';
+import {
+  voiceAnchorBlock,
+  VOICE_ANCHOR_BLOCK_VERSION,
+  SYDNEY_PRIMER_BLOCK,
+  SYDNEY_PRIMER_BLOCK_VERSION,
+  SELF_CRITIQUE_BLOCK,
+  SELF_CRITIQUE_BLOCK_VERSION,
+  type PropertyTier,
+  type VoiceAnchorOpts,
+} from '../_shared/visionPrompts/blocks/voiceAnchorBlock.ts';
+import {
+  buildStage1SystemPrompt,
+  buildStage1UserPrompt,
+  STAGE1_TOOL_NAME,
+  STAGE1_TOOL_SCHEMA,
+  STAGE1_PROMPT_VERSION,
+} from './stage1Prompt.ts';
+
+const GENERATOR = 'shortlisting-shape-d';
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+
+const PRIMARY_VENDOR = 'google' as const;
+const PRIMARY_MODEL = 'gemini-2.5-pro';
+const STAGE1_DEFAULT_BATCH_SIZE = 50;
+const STAGE1_DEFAULT_THINKING_BUDGET = 2048;
+const STAGE1_DEFAULT_MAX_OUTPUT_TOKENS = 6000;
+const STAGE1_DEFAULT_TIMEOUT_MS = 180_000; // 3 min per batch — 50 imgs at high thinking budget
+const STAGE1_BATCH_CONCURRENCY = 4; // Promise.all all 4 typical batches in parallel
+const DEFAULT_COST_CAP_USD = 10;
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface RequestBody {
+  round_id?: string;
+  job_id?: string;
+  _health_check?: boolean;
+}
+
+interface CompositionRow {
+  group_id: string;
+  group_index: number;
+  best_bracket_stem: string | null;
+  delivery_reference_stem: string | null;
+  stem: string;
+  is_secondary_camera: boolean;
+}
+
+interface RoundContext {
+  round_id: string;
+  project_id: string;
+  status: string;
+  engine_tier_id: string | null;
+  property_tier: PropertyTier;
+  property_voice_anchor_override: string | null;
+  dropbox_root_path: string;
+  property_address: string | null;
+  property_suburb: string | null;
+  pricing_tier: string | null;
+  property_type: string | null;
+}
+
+interface EngineSettings {
+  engine_mode: 'two_pass' | 'shape_d';
+  production_vendor: 'google' | 'anthropic';
+  failover_vendor: 'anthropic' | null;
+  stage1_thinking_budget: number;
+  stage1_max_output_tokens: number;
+  stage1_batch_size: number;
+  cost_cap_per_round_usd: number;
+}
+
+interface Stage1BatchResult {
+  batch_index: number;
+  group_count: number;
+  successes: Array<{ group_id: string; stem: string; output: Record<string, unknown> }>;
+  failures: Array<{ group_id: string; stem: string; error: string }>;
+  cost_usd: number;
+  wall_ms: number;
+  vendor_used: 'google' | 'anthropic';
+  model_used: string;
+  failover_triggered: boolean;
+  failover_reason: string | null;
+}
+
+// ─── Handler ────────────────────────────────────────────────────────────────
+
+serveWithAudit(GENERATOR, async (req: Request) => {
+  const cors = handleCors(req);
+  if (cors) return cors;
+  if (req.method !== 'POST') return errorResponse('Method not allowed', 405, req);
+
+  // Auth: service-role bypass + master_admin/admin/manager allowed (matches
+  // pass1). The dispatcher passes a service-role JWT.
+  const user = await getUserFromReq(req).catch(() => null);
+  const isService = user?.id === '__service_role__';
+  if (!isService) {
+    if (!user) return errorResponse('Authentication required', 401, req);
+    if (!['master_admin', 'admin', 'manager'].includes(user.role || '')) {
+      return errorResponse('Forbidden', 403, req);
+    }
+  }
+
+  let body: RequestBody = {};
+  try {
+    body = await req.json();
+  } catch {
+    /* empty body OK */
+  }
+  if (body._health_check) {
+    return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
+  }
+
+  // Resolve round_id from job_id if dispatcher invoked us.
+  let roundId = body.round_id || null;
+  if (!roundId && body.job_id) {
+    const admin = getAdminClient();
+    const { data: job } = await admin
+      .from('shortlisting_jobs')
+      .select('round_id')
+      .eq('id', body.job_id)
+      .maybeSingle();
+    if (job?.round_id) roundId = job.round_id;
+  }
+  if (!roundId) return errorResponse('round_id (or job_id) required', 400, req);
+
+  // Project-access guard for non-service callers (matches pass1 audit defect #42).
+  if (!isService) {
+    const adminLookup = getAdminClient();
+    const { data: rowForAcl } = await adminLookup
+      .from('shortlisting_rounds')
+      .select('project_id')
+      .eq('id', roundId)
+      .maybeSingle();
+    const pid = rowForAcl?.project_id ? String(rowForAcl.project_id) : '';
+    if (!pid) return errorResponse('round not found', 404, req);
+    const allowed = await callerHasProjectAccess(user, pid);
+    if (!allowed) {
+      return errorResponse('Forbidden — caller has no access to this project', 403, req);
+    }
+  }
+
+  try {
+    const result = await runShapeDStage1(roundId);
+    return jsonResponse({ ok: true, round_id: roundId, ...result }, 200, req);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[${GENERATOR}] failed for round ${roundId}: ${msg}`);
+    return errorResponse(`shortlisting-shape-d failed: ${msg}`, 500, req);
+  }
+});
+
+// ─── Core orchestration ──────────────────────────────────────────────────────
+
+interface RoundResult {
+  total_compositions: number;
+  successes: number;
+  failures: number;
+  batches_run: number;
+  stage1_cost_usd: number;
+  stage1_wall_ms: number;
+  engine_mode: string;
+  vendor_used: 'google' | 'anthropic';
+  model_used: string;
+  failover_triggered: boolean;
+  stage4_dispatched: boolean;
+  stage4_job_id: string | null;
+  audit_dropbox_path: string | null;
+  warnings: string[];
+}
+
+async function runShapeDStage1(roundId: string): Promise<RoundResult> {
+  const startedAt = Date.now();
+  const admin = getAdminClient();
+  const warnings: string[] = [];
+
+  // ── 1. Engine settings + mode gate ─────────────────────────────────────────
+  const settings = await loadEngineSettings(admin);
+
+  // ── 2. Round bootstrap ─────────────────────────────────────────────────────
+  const ctx = await loadRoundContext(admin, roundId);
+  if (ctx.status !== 'processing') {
+    throw new Error(
+      `round ${roundId} status='${ctx.status}' — Shape D Stage 1 requires status='processing'`,
+    );
+  }
+
+  // Engine-mode gate: per-round engine_mode column overrides global setting.
+  // Global setting is the default; per-round 'shape_d_*' value forces this fn.
+  const roundEngineMode = await loadRoundEngineMode(admin, roundId);
+  const wantsShapeD = roundEngineMode?.startsWith('shape_d')
+    || (settings.engine_mode === 'shape_d' && (!roundEngineMode || roundEngineMode === 'two_pass'));
+  if (!wantsShapeD) {
+    throw new Error(
+      `round ${roundId} engine_mode is two_pass — use shortlisting-pass1. ` +
+      `Set engine_settings.engine_mode='shape_d' or shortlisting_rounds.engine_mode='shape_d_full' ` +
+      `to opt this round into Shape D.`,
+    );
+  }
+
+  // ── 3. Mutex (per-round) ───────────────────────────────────────────────────
+  // Lock name is bounded by round id so two rounds can run in parallel without
+  // blocking each other. The W7.5 row-based mutex matches the dispatcher pattern.
+  const lockName = `shape-d-stage1:${roundId}`;
+  const tickId = crypto.randomUUID();
+  const acquired = await tryAcquireMutex(admin, lockName, tickId);
+  if (!acquired) {
+    throw new Error(`round ${roundId} Shape D Stage 1 already running (mutex held)`);
+  }
+
+  try {
+    // ── 4. Composition groups ────────────────────────────────────────────────
+    const compositions = await loadCompositionGroups(admin, roundId);
+    if (compositions.length === 0) {
+      throw new Error(`round ${roundId} has no composition_groups — Pass 0 must run first`);
+    }
+
+    // ── 5. Idempotency: prime from existing classifications ──────────────────
+    // If retry, only re-fire batches for groups that don't already have a row
+    // in composition_classifications. Matches the harness primed-cache pattern.
+    const primedGroupIds = await loadPrimedGroupIds(admin, roundId);
+    const groupsToRun = compositions.filter((c) => !primedGroupIds.has(c.group_id));
+    if (groupsToRun.length === 0) {
+      warnings.push(
+        `all ${compositions.length} compositions already classified — re-dispatching Stage 4 only`,
+      );
+    } else if (primedGroupIds.size > 0) {
+      warnings.push(
+        `${primedGroupIds.size} compositions already classified (primed); re-classifying ${groupsToRun.length}`,
+      );
+    }
+
+    // ── 6. Cost cap pre-flight ───────────────────────────────────────────────
+    const batches = partitionBatches(groupsToRun, settings.stage1_batch_size);
+    const preflightUsd = estimateStage1Cost(batches.length);
+    if (preflightUsd > settings.cost_cap_per_round_usd) {
+      throw new Error(
+        `Stage 1 pre-flight cost $${preflightUsd.toFixed(4)} exceeds cap ` +
+        `$${settings.cost_cap_per_round_usd.toFixed(4)} (${batches.length} batches at ~$0.66 each). ` +
+        `Increase engine_settings.cost_cap_per_round_usd to override.`,
+      );
+    }
+
+    // ── 7. Voice resolution ──────────────────────────────────────────────────
+    const voice: VoiceAnchorOpts = {
+      tier: ctx.property_tier,
+      override: ctx.property_voice_anchor_override,
+    };
+    const sourceType: SourceType = 'internal_raw';
+
+    // ── 8. Run Stage 1 batches in parallel ───────────────────────────────────
+    const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
+    const batchResults: Stage1BatchResult[] = [];
+    if (batches.length > 0) {
+      const promises = batches.map((batch, idx) =>
+        runStage1Batch({
+          batch_index: idx,
+          batch,
+          ctx,
+          voice,
+          sourceType,
+          settings,
+          previewsBase,
+        }).catch((err): Stage1BatchResult => {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(`[${GENERATOR}] batch ${idx} failed wholesale: ${msg}`);
+          return {
+            batch_index: idx,
+            group_count: batch.length,
+            successes: [],
+            failures: batch.map((c) => ({
+              group_id: c.group_id, stem: c.stem, error: `batch_failed: ${msg}`,
+            })),
+            cost_usd: 0,
+            wall_ms: 0,
+            vendor_used: PRIMARY_VENDOR,
+            model_used: PRIMARY_MODEL,
+            failover_triggered: false,
+            failover_reason: null,
+          };
+        })
+      );
+      // Run all batches in parallel up to STAGE1_BATCH_CONCURRENCY. For ≤4
+      // batches (typical 200-angle shoot) this is just Promise.all. For bigger
+      // shoots we chunk so we don't fire 8 simultaneous Gemini calls.
+      for (let i = 0; i < promises.length; i += STAGE1_BATCH_CONCURRENCY) {
+        const slice = await Promise.all(promises.slice(i, i + STAGE1_BATCH_CONCURRENCY));
+        batchResults.push(...slice);
+      }
+    }
+
+    // ── 9. Persist successes to composition_classifications ──────────────────
+    const allSuccesses = batchResults.flatMap((r) => r.successes);
+    const allFailures = batchResults.flatMap((r) => r.failures);
+    const persisted = await persistClassifications({
+      admin,
+      roundId,
+      projectId: ctx.project_id,
+      successes: allSuccesses,
+      compositions,
+      promptBlockVersions: stage1PromptBlockVersions(),
+      modelVersion: PRIMARY_MODEL,
+      warnings,
+    });
+
+    // ── 10. Aggregate cost + wall ────────────────────────────────────────────
+    const totalCostUsd = batchResults.reduce((sum, r) => sum + r.cost_usd, 0);
+    const stage1WallMs = batchResults.length > 0
+      ? Math.max(...batchResults.map((r) => r.wall_ms))
+      : 0;
+    const failoverTriggered = batchResults.some((r) => r.failover_triggered);
+    const failoverReason = batchResults.find((r) => r.failover_reason)?.failover_reason ?? null;
+
+    // ── 11. Determine round engine_mode result ───────────────────────────────
+    const totalGroupsTouched = groupsToRun.length;
+    const partial = allFailures.length > 0 && allSuccesses.length > 0;
+    const allFailed = totalGroupsTouched > 0 && allSuccesses.length === 0;
+    const finalEngineMode = allFailed
+      ? 'two_pass' /* leave it for retry */
+      : failoverTriggered
+        ? 'unified_anthropic_failover'
+        : (partial ? 'shape_d_partial' : 'shape_d_full');
+
+    if (allFailed) {
+      throw new Error(
+        `Stage 1 failed for all ${totalGroupsTouched} compositions. Sample errors: ` +
+        allFailures.slice(0, 3).map((f) => `${f.stem}: ${f.error}`).join(' | '),
+      );
+    }
+
+    // ── 12. Stamp engine_mode + cost on shortlisting_rounds ──────────────────
+    {
+      // Accumulate cost across retries (matches pass1 audit defect #5 pattern).
+      const { data: priorRound } = await admin
+        .from('shortlisting_rounds')
+        .select('stage_1_total_cost_usd')
+        .eq('id', roundId)
+        .maybeSingle();
+      const priorCost = typeof priorRound?.stage_1_total_cost_usd === 'number'
+        ? priorRound.stage_1_total_cost_usd
+        : 0;
+      const accumulated = priorCost + totalCostUsd;
+      const rounded = Math.round(accumulated * 1_000_000) / 1_000_000;
+      const { error: updErr } = await admin
+        .from('shortlisting_rounds')
+        .update({
+          engine_mode: finalEngineMode,
+          stage_1_total_cost_usd: rounded,
+        })
+        .eq('id', roundId);
+      if (updErr) warnings.push(`round update failed: ${updErr.message}`);
+    }
+
+    // ── 13. engine_run_audit upsert (Stage 1 stage_complete) ─────────────────
+    await upsertEngineRunAudit({
+      admin,
+      roundId,
+      engineMode: finalEngineMode,
+      vendorUsed: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
+      modelUsed: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
+      failoverTriggered,
+      failoverReason,
+      stage1CallCount: batches.length,
+      stage1TotalCostUsd: totalCostUsd,
+      stage1TotalWallMs: stage1WallMs,
+      stage1TotalInputTokens: 0,  // Vendor adapter usage_metrics aggregation deferred
+      stage1TotalOutputTokens: 0,
+      stages_completed: ['stage1'],
+      stages_failed: partial ? ['stage1_partial'] : [],
+      retry_count: 0,
+      warnings,
+    });
+
+    // ── 14. Audit JSON to Dropbox ────────────────────────────────────────────
+    const auditPath = await uploadStage1AuditJson({
+      ctx,
+      roundId,
+      finalEngineMode,
+      batchResults,
+      compositions,
+      groupsToRun,
+      persisted,
+      voice,
+      sourceType,
+      settings,
+      startedAt,
+      warnings,
+    });
+
+    // ── 15. Dispatch Stage 4 as a separate edge job ──────────────────────────
+    // Important production lesson from iter-5a: Stage 4 must NOT chain in this
+    // same worker. Stage 1 (4 batches × ~50s) + Stage 4 (60-90s + 16k thinking)
+    // hit the edge-runtime wall budget. Insert a `stage4_synthesis` job; the
+    // dispatcher (mig 377 extends the kind enum) routes it to
+    // shortlisting-shape-d-stage4 next tick.
+    const stage4JobId = await dispatchStage4Job({
+      admin,
+      projectId: ctx.project_id,
+      roundId,
+      warnings,
+    });
+
+    // ── 16. Append shortlisting_events ───────────────────────────────────────
+    await admin.from('shortlisting_events').insert({
+      project_id: ctx.project_id,
+      round_id: roundId,
+      event_type: 'shape_d_stage1_complete',
+      actor_type: 'system',
+      payload: {
+        engine_mode: finalEngineMode,
+        batches_run: batches.length,
+        successes: allSuccesses.length,
+        failures: allFailures.length,
+        compositions_total: compositions.length,
+        compositions_primed: primedGroupIds.size,
+        cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
+        wall_ms: stage1WallMs,
+        vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
+        failover_triggered: failoverTriggered,
+        stage4_job_id: stage4JobId,
+        audit_dropbox_path: auditPath,
+      },
+    });
+
+    return {
+      total_compositions: compositions.length,
+      successes: allSuccesses.length,
+      failures: allFailures.length,
+      batches_run: batches.length,
+      stage1_cost_usd: Math.round(totalCostUsd * 1_000_000) / 1_000_000,
+      stage1_wall_ms: stage1WallMs,
+      engine_mode: finalEngineMode,
+      vendor_used: failoverTriggered ? 'anthropic' : PRIMARY_VENDOR,
+      model_used: failoverTriggered ? 'claude-opus-4-7' : PRIMARY_MODEL,
+      failover_triggered: failoverTriggered,
+      stage4_dispatched: !!stage4JobId,
+      stage4_job_id: stage4JobId,
+      audit_dropbox_path: auditPath,
+      warnings,
+    };
+  } finally {
+    await releaseMutex(admin, lockName, tickId).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[${GENERATOR}] mutex release failed: ${msg}`);
+    });
+  }
+}
+
+// ─── Engine settings loader ──────────────────────────────────────────────────
+
+async function loadEngineSettings(
+  admin: ReturnType<typeof getAdminClient>,
+): Promise<EngineSettings> {
+  const keys = [
+    'engine_mode',
+    'production_vendor',
+    'failover_vendor',
+    'stage1_thinking_budget',
+    'stage1_max_output_tokens',
+    'stage1_batch_size',
+    'cost_cap_per_round_usd',
+  ];
+  const { data, error } = await admin
+    .from('engine_settings')
+    .select('key, value')
+    .in('key', keys);
+  if (error) {
+    console.warn(`[${GENERATOR}] engine_settings load failed: ${error.message} — using defaults`);
+  }
+  const map = new Map<string, unknown>();
+  for (const row of (data || []) as Array<{ key: string; value: unknown }>) {
+    map.set(row.key, row.value);
+  }
+
+  // Helpers — engine_settings.value is JSONB so a string value comes back as
+  // a JS string already; a numeric value as a number.
+  const str = (k: string, def: string): string => {
+    const v = map.get(k);
+    if (typeof v === 'string') return v;
+    return def;
+  };
+  const num = (k: string, def: number): number => {
+    const v = map.get(k);
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      const n = Number(v);
+      return Number.isNaN(n) ? def : n;
+    }
+    return def;
+  };
+
+  const engine_mode = (str('engine_mode', 'two_pass') as 'two_pass' | 'shape_d');
+  const production_vendor = (str('production_vendor', 'google') as 'google' | 'anthropic');
+  const failover_vendor_raw = map.get('failover_vendor');
+  const failover_vendor: 'anthropic' | null = failover_vendor_raw === null
+    ? null
+    : (str('failover_vendor', 'anthropic') as 'anthropic');
+
+  return {
+    engine_mode,
+    production_vendor,
+    failover_vendor,
+    stage1_thinking_budget: num('stage1_thinking_budget', STAGE1_DEFAULT_THINKING_BUDGET),
+    stage1_max_output_tokens: num('stage1_max_output_tokens', STAGE1_DEFAULT_MAX_OUTPUT_TOKENS),
+    stage1_batch_size: num('stage1_batch_size', STAGE1_DEFAULT_BATCH_SIZE),
+    cost_cap_per_round_usd: num('cost_cap_per_round_usd', DEFAULT_COST_CAP_USD),
+  };
+}
+
+// ─── Round + composition group loaders ──────────────────────────────────────
+
+async function loadRoundEngineMode(
+  admin: ReturnType<typeof getAdminClient>,
+  roundId: string,
+): Promise<string | null> {
+  const { data } = await admin
+    .from('shortlisting_rounds')
+    .select('engine_mode')
+    .eq('id', roundId)
+    .maybeSingle();
+  return (data?.engine_mode as string | null) || null;
+}
+
+async function loadRoundContext(
+  admin: ReturnType<typeof getAdminClient>,
+  roundId: string,
+): Promise<RoundContext> {
+  const { data: round, error: rErr } = await admin
+    .from('shortlisting_rounds')
+    .select(
+      'id, project_id, status, engine_tier_id, property_tier, property_voice_anchor_override',
+    )
+    .eq('id', roundId)
+    .maybeSingle();
+  if (rErr) throw new Error(`round lookup failed: ${rErr.message}`);
+  if (!round) throw new Error(`round ${roundId} not found`);
+
+  const { data: proj, error: pErr } = await admin
+    .from('projects')
+    .select(
+      'id, dropbox_root_path, property_address, property_suburb, pricing_tier, property_type',
+    )
+    .eq('id', round.project_id)
+    .maybeSingle();
+  if (pErr) throw new Error(`project lookup failed: ${pErr.message}`);
+  if (!proj) throw new Error(`project ${round.project_id} not found`);
+
+  const dropboxRoot = (proj.dropbox_root_path as string | null) || null;
+  if (!dropboxRoot) {
+    throw new Error(
+      `project ${round.project_id} has no dropbox_root_path — folders not provisioned`,
+    );
+  }
+
+  // property_tier may be null on legacy rounds; default 'standard' (matches
+  // mig 372 trigger). The trigger normally fills this on round insert, but
+  // we fall back defensively for any pre-trigger rows.
+  const propertyTier = ((round.property_tier as string | null) || 'standard') as PropertyTier;
+  if (!['premium', 'standard', 'approachable'].includes(propertyTier)) {
+    throw new Error(
+      `round ${roundId} has invalid property_tier='${propertyTier}' — must be premium|standard|approachable`,
+    );
+  }
+
+  return {
+    round_id: roundId,
+    project_id: round.project_id as string,
+    status: round.status as string,
+    engine_tier_id: (round.engine_tier_id as string | null) ?? null,
+    property_tier: propertyTier,
+    property_voice_anchor_override: (round.property_voice_anchor_override as string | null) ?? null,
+    dropbox_root_path: dropboxRoot,
+    property_address: (proj.property_address as string | null) ?? null,
+    property_suburb: (proj.property_suburb as string | null) ?? null,
+    pricing_tier: (proj.pricing_tier as string | null) ?? null,
+    property_type: (proj.property_type as string | null) ?? null,
+  };
+}
+
+async function loadCompositionGroups(
+  admin: ReturnType<typeof getAdminClient>,
+  roundId: string,
+): Promise<CompositionRow[]> {
+  const { data, error } = await admin
+    .from('composition_groups')
+    .select('id, group_index, best_bracket_stem, delivery_reference_stem, is_secondary_camera')
+    .eq('round_id', roundId)
+    .order('group_index');
+  if (error) throw new Error(`composition_groups load failed: ${error.message}`);
+  return (data || []).map((g: Record<string, unknown>) => {
+    const delivery = (g.delivery_reference_stem as string | null) || null;
+    const best = (g.best_bracket_stem as string | null) || null;
+    return {
+      group_id: g.id as string,
+      group_index: g.group_index as number,
+      best_bracket_stem: best,
+      delivery_reference_stem: delivery,
+      stem: delivery || best || `group_${g.group_index}`,
+      is_secondary_camera: (g.is_secondary_camera as boolean) ?? false,
+    };
+  });
+}
+
+async function loadPrimedGroupIds(
+  admin: ReturnType<typeof getAdminClient>,
+  roundId: string,
+): Promise<Set<string>> {
+  const { data, error } = await admin
+    .from('composition_classifications')
+    .select('group_id')
+    .eq('round_id', roundId);
+  if (error) {
+    console.warn(`[${GENERATOR}] primed lookup failed: ${error.message} — treating all as fresh`);
+    return new Set();
+  }
+  return new Set((data || []).map((r) => r.group_id as string));
+}
+
+// ─── Batch partitioning ──────────────────────────────────────────────────────
+
+function partitionBatches(groups: CompositionRow[], batchSize: number): CompositionRow[][] {
+  // Stable order: secondary-camera groups last, primary by capture order
+  // (group_index already in capture_timestamp order from Pass 0).
+  const sorted = [...groups].sort((a, b) => {
+    const sec = (a.is_secondary_camera ? 1 : 0) - (b.is_secondary_camera ? 1 : 0);
+    if (sec !== 0) return sec;
+    return a.group_index - b.group_index;
+  });
+  const out: CompositionRow[][] = [];
+  for (let i = 0; i < sorted.length; i += batchSize) {
+    out.push(sorted.slice(i, i + batchSize));
+  }
+  return out;
+}
+
+// ─── Cost preflight ──────────────────────────────────────────────────────────
+
+function estimateStage1Cost(batchCount: number): number {
+  // Conservative envelope per W11.7 spec: ~$0.66/batch on Gemini 2.5 Pro at
+  // thinkingBudget=2048 + max_output_tokens=6000 + 50 imgs. We use the pricing
+  // adapter for the actual numbers but fall back to envelope arithmetic.
+  const inputTokensPerBatch = 90_000; // 50 imgs × ~1.5K + ~15K prompt
+  const outputTokensPerBatch = 6_000;
+  const perBatch = estimateCost('google', PRIMARY_MODEL, {
+    input_tokens: inputTokensPerBatch,
+    output_tokens: outputTokensPerBatch,
+    cached_input_tokens: 0,
+  });
+  return perBatch * batchCount;
+}
+
+// ─── Stage 1 batch runner ───────────────────────────────────────────────────
+
+interface RunStage1BatchOpts {
+  batch_index: number;
+  batch: CompositionRow[];
+  ctx: RoundContext;
+  voice: VoiceAnchorOpts;
+  sourceType: SourceType;
+  settings: EngineSettings;
+  previewsBase: string;
+}
+
+async function runStage1Batch(opts: RunStage1BatchOpts): Promise<Stage1BatchResult> {
+  const start = Date.now();
+  const { batch, ctx, voice, sourceType, settings, previewsBase, batch_index } = opts;
+
+  // Fetch previews in parallel (Dropbox tolerates ~10 simultaneous downloads).
+  const PREVIEW_CONCURRENCY = 8;
+  const previews: Array<{ stem: string; group_id: string; data: string; media_type: string } | null> = [];
+  const stems = batch.map((c) => c.stem);
+  for (let i = 0; i < batch.length; i += PREVIEW_CONCURRENCY) {
+    const slice = batch.slice(i, i + PREVIEW_CONCURRENCY);
+    const fetched = await Promise.all(slice.map(async (c) => {
+      const path = `${previewsBase}/${c.stem}.jpg`;
+      try {
+        const p = await fetchPreviewBase64(path);
+        return { stem: c.stem, group_id: c.group_id, data: p.data, media_type: p.media_type };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[${GENERATOR}] batch ${batch_index} preview ${c.stem} fetch failed: ${msg}`);
+        return null;
+      }
+    }));
+    previews.push(...fetched);
+  }
+  const validPreviews = previews.filter(
+    (p): p is { stem: string; group_id: string; data: string; media_type: string } => p !== null,
+  );
+
+  // Build the prompt (single batched call covers all 50 images).
+  const systemText = buildStage1SystemPrompt({
+    voice,
+    sydneyPrimer: SYDNEY_PRIMER_BLOCK,
+  });
+  const userText = buildStage1UserPrompt({
+    sourceContextBlockText: sourceContextBlock(sourceType),
+    voiceBlockText: voiceAnchorBlock(voice),
+    selfCritiqueBlockText: SELF_CRITIQUE_BLOCK,
+    imageStems: validPreviews.map((p) => p.stem),
+  });
+
+  // Vision call. Stage 1 emits one structured response per image keyed by stem.
+  const req: VisionRequest = {
+    vendor: PRIMARY_VENDOR,
+    model: PRIMARY_MODEL,
+    tool_name: STAGE1_TOOL_NAME,
+    tool_input_schema: STAGE1_TOOL_SCHEMA,
+    system: systemText,
+    user_text: userText,
+    images: validPreviews.map((p) => ({
+      source_type: 'base64',
+      media_type: p.media_type,
+      data: p.data,
+    })),
+    max_output_tokens: settings.stage1_max_output_tokens,
+    temperature: 0,
+    thinking_budget: settings.stage1_thinking_budget,
+    timeout_ms: STAGE1_DEFAULT_TIMEOUT_MS,
+  };
+
+  let resp: VisionResponse | null = null;
+  let err: string | undefined;
+  let vendorUsed: 'google' | 'anthropic' = PRIMARY_VENDOR;
+  let modelUsed = PRIMARY_MODEL;
+  let failoverTriggered = false;
+  let failoverReason: string | null = null;
+
+  try {
+    resp = await callVisionAdapter(req);
+  } catch (e) {
+    if (e instanceof MissingVendorCredential) err = e.message;
+    else if (e instanceof VendorCallError) err = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
+    else err = e instanceof Error ? e.message : String(e);
+
+    // Failover to Anthropic Opus 4.7 if configured + vendor side error
+    // (not a credential issue). Stage 1 fall-back: keep schema identical.
+    if (settings.failover_vendor === 'anthropic' && !(e instanceof MissingVendorCredential)) {
+      console.warn(`[${GENERATOR}] batch ${batch_index} primary failed (${err}) — failing over to Anthropic`);
+      try {
+        const failReq: VisionRequest = { ...req, vendor: 'anthropic', model: 'claude-opus-4-7' };
+        resp = await callVisionAdapter(failReq);
+        vendorUsed = 'anthropic';
+        modelUsed = 'claude-opus-4-7';
+        failoverTriggered = true;
+        failoverReason = err ?? 'gemini_primary_call_failed';
+        err = undefined;
+      } catch (failErr) {
+        const fmsg = failErr instanceof Error ? failErr.message : String(failErr);
+        err = `primary_then_failover_failed: ${err} | failover: ${fmsg}`;
+      }
+    }
+  }
+
+  if (!resp) {
+    return {
+      batch_index,
+      group_count: batch.length,
+      successes: [],
+      failures: batch.map((c) => ({ group_id: c.group_id, stem: c.stem, error: err ?? 'no_response' })),
+      cost_usd: 0,
+      wall_ms: Date.now() - start,
+      vendor_used: vendorUsed,
+      model_used: modelUsed,
+      failover_triggered: failoverTriggered,
+      failover_reason: failoverReason,
+    };
+  }
+
+  // Parse response. The schema requires `per_image: [{ stem, ... }]` with
+  // length matching the input images, indexed by stem.
+  const successes: Array<{ group_id: string; stem: string; output: Record<string, unknown> }> = [];
+  const failures: Array<{ group_id: string; stem: string; error: string }> = [];
+  const perImage = (resp.output.per_image as Array<Record<string, unknown>> | undefined) || [];
+  const stemMap = new Map<string, Record<string, unknown>>();
+  for (const entry of perImage) {
+    const stem = (entry.stem as string | undefined) || '';
+    if (stem) stemMap.set(stem, entry);
+  }
+
+  for (const c of batch) {
+    const out = stemMap.get(c.stem);
+    if (out) {
+      successes.push({ group_id: c.group_id, stem: c.stem, output: out });
+    } else {
+      failures.push({
+        group_id: c.group_id,
+        stem: c.stem,
+        error: 'stem missing from per_image response',
+      });
+    }
+  }
+
+  return {
+    batch_index,
+    group_count: batch.length,
+    successes,
+    failures,
+    cost_usd: resp.usage.estimated_cost_usd,
+    wall_ms: resp.vendor_meta.elapsed_ms,
+    vendor_used: vendorUsed,
+    model_used: modelUsed,
+    failover_triggered: failoverTriggered,
+    failover_reason: failoverReason,
+  };
+}
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+
+interface PersistArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  roundId: string;
+  projectId: string;
+  successes: Array<{ group_id: string; stem: string; output: Record<string, unknown> }>;
+  compositions: CompositionRow[];
+  promptBlockVersions: Record<string, string>;
+  modelVersion: string;
+  warnings: string[];
+}
+
+async function persistClassifications(args: PersistArgs): Promise<number> {
+  let inserted = 0;
+  for (const s of args.successes) {
+    const out = s.output;
+    const num = (v: unknown): number | null => {
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string') {
+        const n = Number(v);
+        return Number.isNaN(n) ? null : n;
+      }
+      return null;
+    };
+    const bool = (v: unknown): boolean => {
+      if (v === true) return true;
+      if (v === false || v == null) return false;
+      if (typeof v === 'string') {
+        const t = v.toLowerCase();
+        return t === 'true' || t === 'yes' || t === '1';
+      }
+      return false;
+    };
+    const arr = (v: unknown): string[] => Array.isArray(v) ? v.map(String) : [];
+    const str = (v: unknown): string | null => {
+      if (v == null) return null;
+      if (typeof v === 'string') return v.length === 0 ? null : v;
+      return String(v);
+    };
+
+    // Combined score: weighted blend of 4 dimensions. Stage 1 emits dim scores
+    // directly. Combined score derived here uses spec defaults — Pass 3 / W8
+    // tier-config can override at validation time.
+    const techScore = num(out.technical_score);
+    const lightScore = num(out.lighting_score);
+    const compScore = num(out.composition_score);
+    const aesScore = num(out.aesthetic_score);
+    const combined = (techScore != null && lightScore != null && compScore != null && aesScore != null)
+      ? Math.round(
+          (techScore * 0.25 + lightScore * 0.30 + compScore * 0.25 + aesScore * 0.20) * 100,
+        ) / 100
+      : null;
+
+    const roomType = str(out.room_type);
+    const vantage = str(out.vantage_point);
+    const eligibleExtRear = roomType === 'alfresco' && vantage === 'exterior_looking_in';
+
+    // clutter_severity must be one of the 4 enum values; coerce defensively.
+    const clutterRaw = str(out.clutter_severity);
+    const clutter = clutterRaw && ['none', 'minor_photoshoppable', 'moderate_retouch', 'major_reject']
+      .includes(clutterRaw)
+      ? clutterRaw
+      : null;
+    const flagForRetouching = clutter === 'minor_photoshoppable' || clutter === 'moderate_retouch';
+
+    // vantage_point CHECK constraint accepts only 3 values; coerce others to null.
+    const vantageColumn = vantage && ['interior_looking_out', 'exterior_looking_in', 'neutral']
+      .includes(vantage)
+      ? vantage
+      : null;
+
+    const row: Record<string, unknown> = {
+      group_id: s.group_id,
+      round_id: args.roundId,
+      project_id: args.projectId,
+      analysis: str(out.analysis),
+      room_type: roomType,
+      room_type_confidence: num(out.room_type_confidence),
+      composition_type: str(out.composition_type),
+      vantage_point: vantageColumn,
+      time_of_day: str(out.time_of_day),
+      is_drone: bool(out.is_drone),
+      is_exterior: bool(out.is_exterior),
+      is_detail_shot: bool(out.is_detail_shot),
+      zones_visible: arr(out.zones_visible),
+      key_elements: arr(out.key_elements),
+      is_styled: bool(out.is_styled),
+      indoor_outdoor_visible: bool(out.indoor_outdoor_visible),
+      clutter_severity: clutter,
+      clutter_detail: str(out.clutter_detail),
+      flag_for_retouching: flagForRetouching,
+      technical_score: techScore,
+      lighting_score: lightScore,
+      composition_score: compScore,
+      aesthetic_score: aesScore,
+      combined_score: combined,
+      eligible_for_exterior_rear: eligibleExtRear,
+      is_near_duplicate_candidate: false,
+      model_version: args.modelVersion,
+      prompt_block_versions: args.promptBlockVersions,
+    };
+
+    // Use upsert on the unique (group_id) constraint so retries replace rather
+    // than fail.
+    const { error: insErr } = await args.admin
+      .from('composition_classifications')
+      .upsert(row, { onConflict: 'group_id' });
+    if (insErr) {
+      args.warnings.push(`classification upsert failed for ${s.group_id}: ${insErr.message}`);
+      continue;
+    }
+    inserted++;
+  }
+  return inserted;
+}
+
+// ─── engine_run_audit upsert ─────────────────────────────────────────────────
+
+interface UpsertEngineRunAuditArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  roundId: string;
+  engineMode: string;
+  vendorUsed: 'google' | 'anthropic';
+  modelUsed: string;
+  failoverTriggered: boolean;
+  failoverReason: string | null;
+  stage1CallCount: number;
+  stage1TotalCostUsd: number;
+  stage1TotalWallMs: number;
+  stage1TotalInputTokens: number;
+  stage1TotalOutputTokens: number;
+  stages_completed: string[];
+  stages_failed: string[];
+  retry_count: number;
+  warnings: string[];
+}
+
+async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Promise<void> {
+  const round = Math.round(args.stage1TotalCostUsd * 1_000_000) / 1_000_000;
+  // Read existing row for cost accumulation across retries.
+  const { data: existing } = await args.admin
+    .from('engine_run_audit')
+    .select(
+      'stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stages_completed, stages_failed, retry_count',
+    )
+    .eq('round_id', args.roundId)
+    .maybeSingle();
+
+  const priorCost = (existing?.stage1_total_cost_usd as number | null) ?? 0;
+  const priorWall = (existing?.stage1_total_wall_ms as number | null) ?? 0;
+  const priorCalls = (existing?.stage1_call_count as number | null) ?? 0;
+  const priorStagesCompleted = (existing?.stages_completed as string[] | null) ?? [];
+  const priorRetry = (existing?.retry_count as number | null) ?? 0;
+
+  const accumulatedCost = priorCost + args.stage1TotalCostUsd;
+  const accumulatedRounded = Math.round(accumulatedCost * 1_000_000) / 1_000_000;
+  const merged = Array.from(new Set([...priorStagesCompleted, ...args.stages_completed]));
+
+  const row: Record<string, unknown> = {
+    round_id: args.roundId,
+    engine_mode: args.engineMode,
+    vendor_used: args.vendorUsed,
+    model_used: args.modelUsed,
+    failover_triggered: args.failoverTriggered || (existing as Record<string, unknown> | null)?.failover_triggered === true,
+    failover_reason: args.failoverReason ?? null,
+    stages_completed: merged,
+    stages_failed: args.stages_failed,
+    stage1_call_count: Math.max(priorCalls, args.stage1CallCount),
+    stage1_total_cost_usd: accumulatedRounded,
+    stage1_total_wall_ms: Math.max(priorWall, args.stage1TotalWallMs),
+    stage1_total_input_tokens: args.stage1TotalInputTokens,
+    stage1_total_output_tokens: args.stage1TotalOutputTokens,
+    total_cost_usd: accumulatedRounded,
+    total_wall_ms: Math.max(priorWall, args.stage1TotalWallMs),
+    retry_count: priorRetry + (args.retry_count || 0),
+  };
+
+  // engine_run_audit PK is round_id; upsert on conflict by PK.
+  const { error } = await args.admin
+    .from('engine_run_audit')
+    .upsert(row, { onConflict: 'round_id' });
+  if (error) {
+    args.warnings.push(`engine_run_audit upsert failed: ${error.message}`);
+  }
+}
+
+// ─── Audit JSON → Dropbox ────────────────────────────────────────────────────
+
+interface AuditJsonArgs {
+  ctx: RoundContext;
+  roundId: string;
+  finalEngineMode: string;
+  batchResults: Stage1BatchResult[];
+  compositions: CompositionRow[];
+  groupsToRun: CompositionRow[];
+  persisted: number;
+  voice: VoiceAnchorOpts;
+  sourceType: SourceType;
+  settings: EngineSettings;
+  startedAt: number;
+  warnings: string[];
+}
+
+async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null> {
+  const ts = new Date().toISOString().replace(/[:.]/g, '').replace('T', '_').replace('Z', '');
+  const path = `${args.ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/_AUDIT/round_${args.roundId}_stage1_${ts}.json`;
+  const audit = {
+    version: 'v1.0',
+    generator: GENERATOR,
+    round_id: args.roundId,
+    project_id: args.ctx.project_id,
+    started_at: new Date(args.startedAt).toISOString(),
+    finished_at: new Date().toISOString(),
+    engine_mode: args.finalEngineMode,
+    property_tier: args.voice.tier,
+    property_voice_anchor_override: args.voice.override,
+    source_type: args.sourceType,
+    settings: {
+      stage1_thinking_budget: args.settings.stage1_thinking_budget,
+      stage1_max_output_tokens: args.settings.stage1_max_output_tokens,
+      stage1_batch_size: args.settings.stage1_batch_size,
+      production_vendor: args.settings.production_vendor,
+      failover_vendor: args.settings.failover_vendor,
+    },
+    prompt_block_versions: stage1PromptBlockVersions(),
+    compositions_total: args.compositions.length,
+    compositions_persisted: args.persisted,
+    compositions_run_this_invocation: args.groupsToRun.length,
+    batches: args.batchResults.map((b) => ({
+      batch_index: b.batch_index,
+      group_count: b.group_count,
+      success_count: b.successes.length,
+      failure_count: b.failures.length,
+      cost_usd: Number(b.cost_usd.toFixed(6)),
+      wall_ms: b.wall_ms,
+      vendor_used: b.vendor_used,
+      model_used: b.model_used,
+      failover_triggered: b.failover_triggered,
+      failover_reason: b.failover_reason,
+      failures: b.failures,
+    })),
+    warnings: args.warnings,
+  };
+  const json = JSON.stringify(audit, null, 2);
+  try {
+    await uploadFile(path, json, 'overwrite');
+    return path;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('path/not_found') || msg.includes('not_found')) {
+      try {
+        const auditDir = `${args.ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/_AUDIT`;
+        await createFolder(auditDir);
+        await uploadFile(path, json, 'overwrite');
+        return path;
+      } catch (retryErr) {
+        const m = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        console.warn(`[${GENERATOR}] audit JSON upload retry failed: ${m}`);
+        return null;
+      }
+    }
+    console.warn(`[${GENERATOR}] audit JSON upload failed: ${msg}`);
+    return null;
+  }
+}
+
+// ─── Stage 4 dispatch ────────────────────────────────────────────────────────
+
+interface DispatchStage4JobArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  projectId: string;
+  roundId: string;
+  warnings: string[];
+}
+
+async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<string | null> {
+  // Idempotency: skip if a non-terminal stage4_synthesis job already exists
+  // for this round. The unique partial index (mig 377) also enforces this at
+  // the DB layer; the explicit check just avoids the noisy unique-violation
+  // log.
+  const { count: existing } = await args.admin
+    .from('shortlisting_jobs')
+    .select('id', { count: 'exact', head: true })
+    .eq('round_id', args.roundId)
+    .eq('kind', 'stage4_synthesis')
+    .in('status', ['pending', 'running', 'succeeded']);
+  if ((existing ?? 0) > 0) {
+    console.log(
+      `[${GENERATOR}] stage4_synthesis job already exists for round ${args.roundId} — skipping insert`,
+    );
+    return null;
+  }
+
+  const { data, error } = await args.admin
+    .from('shortlisting_jobs')
+    .insert({
+      project_id: args.projectId,
+      round_id: args.roundId,
+      group_id: null,
+      kind: 'stage4_synthesis',
+      status: 'pending',
+      payload: {
+        project_id: args.projectId,
+        round_id: args.roundId,
+        chained_from: 'shortlisting-shape-d',
+      },
+      scheduled_for: new Date().toISOString(),
+    })
+    .select('id')
+    .maybeSingle();
+  if (error) {
+    args.warnings.push(`stage4_synthesis dispatch failed: ${error.message}`);
+    return null;
+  }
+  console.log(`[${GENERATOR}] dispatched stage4_synthesis job ${data?.id} for round ${args.roundId}`);
+  return (data?.id as string) || null;
+}
+
+// ─── Dropbox preview helper ─────────────────────────────────────────────────
+
+async function fetchPreviewBase64(
+  dropboxPath: string,
+): Promise<{ data: string; media_type: string }> {
+  const token = await getDropboxAccessToken();
+  // Team-folder namespace header — without this, paths like
+  // "/Flex Media Team Folder/..." resolve in the user's PERSONAL namespace
+  // and 404. Mirrors `_shared/dropbox.ts:pathRootHeader()`.
+  const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
+  const pathRootHeader: Record<string, string> = ns
+    ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) }
+    : {};
+  const res = await fetch('https://content.dropboxapi.com/2/files/download', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Dropbox-API-Arg': JSON.stringify({ path: dropboxPath }),
+      ...pathRootHeader,
+    },
+    signal: AbortSignal.timeout(60_000),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`dropbox download ${res.status}: ${txt.slice(0, 200)}`);
+  }
+  const buf = new Uint8Array(await res.arrayBuffer());
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < buf.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, Array.from(buf.subarray(i, i + CHUNK)));
+  }
+  const data = btoa(bin);
+  return { data, media_type: 'image/jpeg' };
+}
+
+// ─── Prompt-block version map (persisted with each classification) ──────────
+
+function stage1PromptBlockVersions(): Record<string, string> {
+  return {
+    stage1_prompt: STAGE1_PROMPT_VERSION,
+    source_context: SOURCE_CONTEXT_BLOCK_VERSION,
+    voice_anchor: VOICE_ANCHOR_BLOCK_VERSION,
+    sydney_primer: SYDNEY_PRIMER_BLOCK_VERSION,
+    self_critique: SELF_CRITIQUE_BLOCK_VERSION,
+  };
+}
