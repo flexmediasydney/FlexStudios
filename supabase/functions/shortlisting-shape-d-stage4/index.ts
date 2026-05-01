@@ -57,6 +57,7 @@ import {
   callerHasProjectAccess,
   fireNotif,
 } from '../_shared/supabase.ts';
+import { validateSlotConstraints, type SlotDefinitionConstraints, type ClassificationContext } from '../_shared/slotConstraintValidator.ts';
 import {
   callVisionAdapter,
   estimateCost,
@@ -1515,25 +1516,108 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
   }
 
   // Pull combined_score per group_id from composition_classifications so we
-  // can populate ai_proposed_score.
+  // can populate ai_proposed_score. W11.6.7 P1-4 + P1-5: also pull lens_class,
+  // composition_type, room_type for the slot-constraint validator.
   const { data: classRows } = await args.admin
     .from('composition_classifications')
-    .select('group_id, combined_score')
+    .select('group_id, combined_score, lens_class, composition_type, room_type')
     .eq('round_id', args.roundId);
   const groupToScore = new Map<string, number | null>();
+  const classByGroup = new Map<string, ClassificationContext>();
   for (const c of (classRows || []) as Array<Record<string, unknown>>) {
     const gid = c.group_id as string;
     const score = c.combined_score === null || c.combined_score === undefined
       ? null
       : Number(c.combined_score);
     groupToScore.set(gid, score);
+    classByGroup.set(gid, {
+      group_id: gid,
+      lens_class: (c.lens_class as string | null) ?? null,
+      composition_type: (c.composition_type as string | null) ?? null,
+      room_type: (c.room_type as string | null) ?? null,
+    });
+  }
+
+  // W11.6.7 P1-4 + P1-5: load active slot_definitions with the new constraint
+  // columns. We pull all rows the round might use; the validator only acts
+  // on the slot_ids actually present in slotDecisions[].
+  const { data: slotRows } = await args.admin
+    .from('shortlisting_slot_definitions')
+    .select('id, slot_id, lens_class_constraint, eligible_composition_types, same_room_as_slot, is_active')
+    .eq('is_active', true);
+  const slotsBySlotId = new Map<string, SlotDefinitionConstraints>();
+  for (const s of (slotRows || []) as Array<Record<string, unknown>>) {
+    slotsBySlotId.set(s.slot_id as string, {
+      id: s.id as string,
+      slot_id: s.slot_id as string,
+      lens_class_constraint: (s.lens_class_constraint as string | null) ?? null,
+      eligible_composition_types: (s.eligible_composition_types as string[] | null) ?? null,
+      same_room_as_slot: (s.same_room_as_slot as string | null) ?? null,
+    });
   }
 
   const projectTier: 'standard' | 'premium' = args.propertyTier === 'premium' ? 'premium' : 'standard';
 
+  // W11.6.7 P1-4 + P1-5: pre-resolve winner stems → group_ids so the
+  // validator can apply lens_class / composition_type / same_room_as_slot
+  // checks before we build the persistence rows.
+  const validatorInputs = args.slotDecisions
+    .filter((d) => typeof d.slot_id === 'string')
+    .map((d) => {
+      const winner = (d.winner as Record<string, unknown> | undefined);
+      const stem = winner && typeof winner.stem === 'string' ? winner.stem : null;
+      const gid = stem ? (stemToGroup.get(stem) ?? null) : null;
+      return {
+        slot_id: d.slot_id as string,
+        winner_group_id: gid,
+        winner_stem: stem,
+        raw: d,
+      };
+    });
+  const validation = validateSlotConstraints({
+    decisions: validatorInputs,
+    slotsBySlotId,
+    classificationsByGroupId: classByGroup,
+  });
+  // Append rejection rows to the stage_4_overrides[] audit + log + warn for
+  // operator visibility.
+  if (validation.rejections.length > 0) {
+    console.warn(
+      `[${GENERATOR}] persistSlotDecisions slot-constraint rejections: ` +
+        `${validation.rejections.length} (round=${args.roundId})`,
+    );
+    for (const rej of validation.rejections) {
+      args.warnings.push(`slot_constraint_reject ${rej.stem}: ${rej.reason}`);
+    }
+    // Persist as audit rows in shortlisting_stage4_overrides + mirror to
+    // composition_classification_overrides via the existing path. We do this
+    // inline (rather than batch with the model's stage_4_overrides[]) because
+    // these are deterministic engine-side rejections, not model proposals.
+    const auditRows = validation.rejections.map((r) => ({
+      round_id: args.roundId,
+      group_id: stemToGroup.get(r.stem) ?? null,
+      stem: r.stem,
+      field: r.field,
+      stage_1_value: r.stage_1_value,
+      stage_4_value: r.stage_4_value,
+      reason: r.reason,
+    }));
+    if (auditRows.length > 0) {
+      const { error: auditErr } = await args.admin
+        .from('shortlisting_stage4_overrides')
+        .insert(auditRows);
+      if (auditErr) {
+        args.warnings.push(`shortlisting_stage4_overrides slot-constraint insert failed: ${auditErr.message}`);
+      }
+    }
+  }
+  // Reduce slotDecisions to only those that passed the validator. The original
+  // raw decisions are stashed on `validatorInputs[i].raw`; iterate accepted.
+  const acceptedRawDecisions = validation.acceptedDecisions.map((d) => d.raw as Record<string, unknown>);
+
   const rowsToInsert: Array<Record<string, unknown>> = [];
   let droppedUnrecognised = 0;
-  for (const decision of args.slotDecisions) {
+  for (const decision of acceptedRawDecisions) {
     // W11.7.1 hygiene: normalise slot_id through the alias map, then validate
     // against the canonical enum. STRICT: drop the row when neither the raw
     // value nor the aliased form is canonical — better to surface drift loudly
