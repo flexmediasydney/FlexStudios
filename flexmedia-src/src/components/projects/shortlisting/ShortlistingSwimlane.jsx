@@ -1,5 +1,5 @@
 /**
- * ShortlistingSwimlane — Wave 6 Phase 6 SHORTLIST
+ * ShortlistingSwimlane — Wave 6 Phase 6 SHORTLIST + W11.6.1 operator UX.
  *
  * The 3-column swimlane review UI. Per spec §20:
  *   ┌──────────────────┬──────────────────┬──────────────────┐
@@ -26,10 +26,11 @@
  *   3. POST to shortlisting-overrides edge function
  *   4. On error: revert + toast
  *
- * Top of swimlane:
- *   - Lock & Reorganize button (calls shortlist-lock)
- *   - Round metadata (status, ceiling, package_type, started_at)
- *   - Coverage summary
+ * Top of swimlane (W11.6.1):
+ *   - SwimlaneToolbar      — sort/filter/preview-size/group/timer
+ *   - SwimlaneSlotCounter  — Phase 1/2/3 filled-vs-expected banner
+ *   - Round metadata strip — status, ceiling, package_type, started_at
+ *   - Lock & Reorganize    — calls shortlist-lock
  *
  * DnD library: @hello-pangea/dnd (already used in KanbanBoard).
  */
@@ -44,7 +45,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -59,6 +59,8 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   X,
 } from "lucide-react";
 import { format } from "date-fns";
@@ -70,6 +72,17 @@ import SignalAttributionModal from "./SignalAttributionModal";
 import ShapeDEngineBanner from "./ShapeDEngineBanner";
 import DispatcherPanel from "./DispatcherPanel";
 import Stage4CorrectionsLane from "./Stage4CorrectionsLane";
+import SwimlaneToolbar, {
+  SwimlaneSlotCounter,
+  useSwimlaneElapsedTimer,
+} from "./SwimlaneToolbar";
+import { useSwimlaneSettings } from "@/hooks/useSwimlaneSettings";
+import {
+  PHASE_OF_SLOT,
+  SLOT_DISPLAY_NAMES,
+  slotImportanceKey,
+} from "@/lib/swimlaneSlots";
+import { useAuth } from "@/lib/AuthContext";
 
 // Column definitions
 const COLUMNS = [
@@ -144,6 +157,63 @@ function humaniseCameraSource(slug) {
   return head ? head[0].toUpperCase() + head.slice(1) : "Unknown camera";
 }
 
+/**
+ * W11.6.1 — comparator factory for the swimlane toolbar's sort dropdown.
+ *
+ * Operates on decorated composition rows of the shape:
+ *   { id, group_index, slot: { slot_id, phase } | null,
+ *     classification: { combined_score, ... } | null,
+ *     primary_file_stem | rep_filename | ... }
+ *
+ * Falls back to group_index → id whenever the primary key is missing so the
+ * sort is total (no React reconciliation churn from unstable orderings).
+ */
+function buildSwimlaneComparator(sortKey) {
+  const tieBreak = (a, b) => {
+    const gi = (a.group_index ?? 0) - (b.group_index ?? 0);
+    if (gi !== 0) return gi;
+    return String(a.id || "").localeCompare(String(b.id || ""));
+  };
+  switch (sortKey) {
+    case "filename": {
+      return (a, b) => {
+        const an = (a.primary_file_stem || a.rep_filename || a.id || "").toLowerCase();
+        const bn = (b.primary_file_stem || b.rep_filename || b.id || "").toLowerCase();
+        const c = an.localeCompare(bn);
+        return c !== 0 ? c : tieBreak(a, b);
+      };
+    }
+    case "combined_score": {
+      // Descending — highest score first.
+      return (a, b) => {
+        const as = a.classification?.combined_score ?? -Infinity;
+        const bs = b.classification?.combined_score ?? -Infinity;
+        if (bs !== as) return bs - as;
+        return tieBreak(a, b);
+      };
+    }
+    case "group_index": {
+      return (a, b) => tieBreak(a, b);
+    }
+    case "slot_importance":
+    default: {
+      // Phase asc → canonical-slot order → score desc → group_index/id.
+      return (a, b) => {
+        const ap = a.slot?.phase ?? 9;
+        const bp = b.slot?.phase ?? 9;
+        if (ap !== bp) return ap - bp;
+        const ai = slotImportanceKey(a.slot?.slot_id);
+        const bi = slotImportanceKey(b.slot?.slot_id);
+        if (ai !== bi) return ai - bi;
+        const as = a.classification?.combined_score ?? -Infinity;
+        const bs = b.classification?.combined_score ?? -Infinity;
+        if (bs !== as) return bs - as;
+        return tieBreak(a, b);
+      };
+    }
+  }
+}
+
 function deriveHumanAction(fromColumn, toColumn) {
   if (fromColumn === toColumn) return null;
   if (fromColumn === "proposed" && toColumn === "approved")
@@ -170,6 +240,25 @@ export default function ShortlistingSwimlane({
   project,
 }) {
   const queryClient = useQueryClient();
+
+  // W11.6.1 — operator UX state (sort / filter / preview-size / group / timer).
+  // The auth user drives the per-user persistence keys. While auth is still
+  // bootstrapping, `userId` is undefined and the hook falls back to defaults
+  // — once auth lands, a re-render reads the persisted choice from
+  // localStorage. Keys are intentionally per-user so two operators sharing a
+  // browser don't stomp on each other's preferences.
+  const { user } = useAuth();
+  const userId = user?.id;
+  const {
+    sort,
+    setSort,
+    previewSize,
+    setPreviewSize,
+    groupBySlot,
+    setGroupBySlot,
+    filter,
+    setFilter,
+  } = useSwimlaneSettings({ userId, roundId });
 
   // Track when the reviewer landed on this page so we can compute review_duration_seconds.
   // Phase 7 follow-up: reset on round switch — if the parent reuses a single
@@ -612,30 +701,120 @@ export default function ShortlistingSwimlane({
     return { proposed, rejected, approved };
   }, [initialColumns, overrides, pendingOverrides]);
 
+  // W11.6.1 — distinct slot_ids and room_types for the toolbar's filter
+  // dropdown. We expose only values that actually appear in this round so
+  // the operator never picks a filter that yields zero cards.
+  const availableSlotIds = useMemo(() => {
+    const set = new Set();
+    for (const slotInfo of slotByGroupId.values()) {
+      if (slotInfo?.slot_id) set.add(slotInfo.slot_id);
+    }
+    return [...set].sort((a, b) => slotImportanceKey(a) - slotImportanceKey(b));
+  }, [slotByGroupId]);
+
+  const availableRoomTypes = useMemo(() => {
+    const set = new Set();
+    for (const c of classifications) {
+      if (c?.room_type) set.add(c.room_type);
+    }
+    return [...set].sort();
+  }, [classifications]);
+
+  // W11.6.1 — sub-feature 4 input. Set of slot_ids actively counted as
+  // filled (cards in PROPOSED + APPROVED columns). Phase 3 sentinel is
+  // counted via the SwimlaneSlotCounter component itself.
+  const proposedSlotIds = useMemo(() => {
+    const s = new Set();
+    for (const groupId of computedColumns.proposed) {
+      const slotInfo = slotByGroupId.get(groupId);
+      if (slotInfo?.slot_id) s.add(slotInfo.slot_id);
+    }
+    for (const groupId of computedColumns.approved) {
+      const slotInfo = slotByGroupId.get(groupId);
+      if (slotInfo?.slot_id) s.add(slotInfo.slot_id);
+    }
+    return s;
+  }, [computedColumns, slotByGroupId]);
+
   // Build column-keyed arrays of composition objects, decorated for the card.
+  // W11.6.1 — sort + filter applied here so all three columns reflect the
+  // toolbar state. Filtering hides cards (they remain in DB / overrides) but
+  // do NOT show in the rendered columns; counters in the column headers
+  // show post-filter counts so the operator sees "1/12 visible" semantics
+  // implicitly.
   const columnItems = useMemo(() => {
     const out = { rejected: [], proposed: [], approved: [] };
+    const slotFilterActive = filter.slotIds.size > 0;
+    const roomFilterActive = filter.roomTypes.size > 0;
     for (const g of groups) {
+      const cls = classByGroupId.get(g.id) || null;
+      const slotInfo = slotByGroupId.get(g.id) || null;
+      // Filter — applied BEFORE column dispatch so all 3 columns share the
+      // same visibility rule. A card with no slot can never satisfy a slot
+      // filter (treated as "doesn't match").
+      if (slotFilterActive) {
+        if (!slotInfo?.slot_id || !filter.slotIds.has(slotInfo.slot_id)) {
+          continue;
+        }
+      }
+      if (roomFilterActive) {
+        if (!cls?.room_type || !filter.roomTypes.has(cls.room_type)) {
+          continue;
+        }
+      }
       const decorated = {
         ...g,
-        classification: classByGroupId.get(g.id) || null,
-        slot: slotByGroupId.get(g.id) || null,
+        classification: cls,
+        slot: slotInfo,
       };
       if (computedColumns.approved.has(g.id)) out.approved.push(decorated);
       else if (computedColumns.proposed.has(g.id)) out.proposed.push(decorated);
       else out.rejected.push(decorated);
     }
-    // Stable sort: approved first by slot-phase, proposed by slot-phase,
-    // rejected by group_index.
-    const slotKey = (d) =>
-      d.slot
-        ? `${(d.slot.phase ?? 9)}-${d.slot.slot_id || "z"}`
-        : "z-" + (d.group_index ?? 999);
-    out.proposed.sort((a, b) => slotKey(a).localeCompare(slotKey(b)));
-    out.approved.sort((a, b) => slotKey(a).localeCompare(slotKey(b)));
-    out.rejected.sort((a, b) => (a.group_index ?? 0) - (b.group_index ?? 0));
+    // Comparator factory — same comparator drives all three columns so a
+    // dragged card lands in the column at a stable position.
+    const cmp = buildSwimlaneComparator(sort);
+    out.proposed.sort(cmp);
+    out.approved.sort(cmp);
+    // REJECTED retains its group_index ordering by default — operators scan
+    // it sequentially and the group_index is the natural shoot order. Only
+    // explicit non-default sorts override it.
+    if (sort === "slot_importance") {
+      out.rejected.sort((a, b) => (a.group_index ?? 0) - (b.group_index ?? 0));
+    } else {
+      out.rejected.sort(cmp);
+    }
     return out;
-  }, [groups, classByGroupId, slotByGroupId, computedColumns]);
+  }, [groups, classByGroupId, slotByGroupId, computedColumns, sort, filter]);
+
+  // W11.6.1 — group-by-slot grouping for the AI PROPOSED column. Keyed by
+  // slot_id; a card with no slot lands under a synthetic "no slot" bucket
+  // so nothing falls off the rendered list. Order matches the canonical
+  // slot importance so Phase 1 hero slots lead.
+  const proposedGroupedBySlot = useMemo(() => {
+    if (!groupBySlot) return null;
+    const bySlot = new Map();
+    for (const item of columnItems.proposed) {
+      const slotId = item.slot?.slot_id || "__no_slot__";
+      if (!bySlot.has(slotId)) bySlot.set(slotId, []);
+      bySlot.get(slotId).push(item);
+    }
+    const orderedSlots = [...bySlot.keys()].sort((a, b) => {
+      // Pin "no slot" bucket to the end.
+      if (a === "__no_slot__" && b !== "__no_slot__") return 1;
+      if (b === "__no_slot__" && a !== "__no_slot__") return -1;
+      return slotImportanceKey(a) - slotImportanceKey(b);
+    });
+    return orderedSlots.map((slotId) => ({
+      slotId,
+      label:
+        slotId === "__no_slot__"
+          ? "Unassigned"
+          : SLOT_DISPLAY_NAMES[slotId] || slotId,
+      phase: slotId === "__no_slot__" ? null : PHASE_OF_SLOT[slotId] ?? null,
+      items: bySlot.get(slotId),
+    }));
+  }, [groupBySlot, columnItems.proposed]);
 
   // ── Override capture ────────────────────────────────────────────────────
   // Send to shortlisting-overrides edge function. Supports batching but for
@@ -998,6 +1177,32 @@ export default function ShortlistingSwimlane({
           before the swimlane itself. */}
       <DispatcherPanel projectId={projectId} roundId={round?.id} />
 
+      {/* W11.6.1 — operator UX toolbar: sort / filter / preview-size /
+          group-by-slot / live elapsed timer. Sits ABOVE the round
+          metadata strip per Joseph's Round 2 review (P3 #3, #5, #6, #7,
+          #9). Persistence lives in `useSwimlaneSettings`. */}
+      <SwimlaneToolbarController
+        sort={sort}
+        onSortChange={setSort}
+        filter={filter}
+        onFilterChange={setFilter}
+        previewSize={previewSize}
+        onPreviewSizeChange={setPreviewSize}
+        groupBySlot={groupBySlot}
+        onGroupBySlotChange={setGroupBySlot}
+        availableSlotIds={availableSlotIds}
+        availableRoomTypes={availableRoomTypes}
+        roundId={roundId}
+        isProcessing={isProcessing}
+      />
+
+      {/* W11.6.1 sub-feature 4 — Phase 1/2/3 filled-vs-expected banner.
+          Reactive to overrides + AI proposals. */}
+      <SwimlaneSlotCounter
+        proposedSlotIds={proposedSlotIds}
+        packageCeiling={ceiling}
+      />
+
       {/* Round metadata strip */}
       <Card>
         <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
@@ -1149,17 +1354,29 @@ export default function ShortlistingSwimlane({
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] gap-3">
           {COLUMNS.map((col) => {
             const items = columnItems[col.key] || [];
+            // W11.6.1 — group-by-slot only applies to AI PROPOSED. The other
+            // two columns retain their flat list because grouping rejected /
+            // approved by slot would break the operator's mental model:
+            //   - REJECTED is a chronological scan (group_index), not a
+            //     slot-driven view; grouping by slot would scatter the
+            //     visual flow.
+            //   - HUMAN APPROVED is small and curated; an extra header per
+            //     row adds clutter without value.
+            const grouped =
+              groupBySlot && col.key === "proposed" ? proposedGroupedBySlot : null;
             return (
               <SwimlaneColumn
                 key={col.key}
                 column={col}
                 items={items}
+                grouped={grouped}
                 isLocked={isReadOnly}
                 onSwapAlternative={handleSwapAlternative}
                 altsBySlotId={altsBySlotId}
                 classByGroupId={classByGroupId}
                 registerCardObserver={registerCardObserver}
                 onAltsDrawerOpen={handleAltsDrawerOpen}
+                previewSize={previewSize}
               />
             );
           })}
@@ -1232,16 +1449,62 @@ export default function ShortlistingSwimlane({
   );
 }
 
+/**
+ * SwimlaneToolbarController — thin shim that joins the elapsed-timer hook to
+ * the toolbar component so the parent doesn't need to know about polling.
+ * The hook returns a string label or null; the toolbar simply renders it.
+ *
+ * Kept as a dedicated component so the elapsed-timer hook only fires while
+ * the round is actively processing — when the round is locked / proposed,
+ * the hook is gated by `isActive` and never enqueues a polling query.
+ */
+function SwimlaneToolbarController({
+  sort,
+  onSortChange,
+  filter,
+  onFilterChange,
+  previewSize,
+  onPreviewSizeChange,
+  groupBySlot,
+  onGroupBySlotChange,
+  availableSlotIds,
+  availableRoomTypes,
+  roundId,
+  isProcessing,
+}) {
+  const timerLabel = useSwimlaneElapsedTimer({
+    roundId,
+    isActive: !!isProcessing,
+  });
+  return (
+    <SwimlaneToolbar
+      sort={sort}
+      onSortChange={onSortChange}
+      filter={filter}
+      onFilterChange={onFilterChange}
+      previewSize={previewSize}
+      onPreviewSizeChange={onPreviewSizeChange}
+      groupBySlot={groupBySlot}
+      onGroupBySlotChange={onGroupBySlotChange}
+      availableSlotIds={availableSlotIds}
+      availableRoomTypes={availableRoomTypes}
+      timerLabel={timerLabel}
+    />
+  );
+}
+
 // ── Column ────────────────────────────────────────────────────────────────
 function SwimlaneColumn({
   column,
   items,
+  grouped,
   isLocked,
   onSwapAlternative,
   altsBySlotId,
   classByGroupId,
   registerCardObserver,
   onAltsDrawerOpen,
+  previewSize,
 }) {
   return (
     <Droppable droppableId={column.key} isDropDisabled={isLocked}>
@@ -1272,57 +1535,209 @@ function SwimlaneColumn({
                     ? "Drag from Proposed or Rejected"
                     : "Empty"}
               </div>
+            ) : grouped ? (
+              <SwimlaneGroupedList
+                grouped={grouped}
+                column={column}
+                isLocked={isLocked}
+                onSwapAlternative={onSwapAlternative}
+                altsBySlotId={altsBySlotId}
+                classByGroupId={classByGroupId}
+                registerCardObserver={registerCardObserver}
+                onAltsDrawerOpen={onAltsDrawerOpen}
+                previewSize={previewSize}
+              />
             ) : (
-              items.map((item, index) => {
-                const slotId = item.slot?.slot_id;
-                const altsRaw = slotId ? altsBySlotId.get(slotId) || [] : [];
-                // Show top 2 alts, decorated for ShortlistingCard.
-                const alternatives = altsRaw.slice(0, 2).map((alt) => ({
-                  group_id: alt.group_id,
-                  stem: alt.stem,
-                  combined_score: alt.combined_score,
-                  analysis: alt.analysis,
-                }));
-                return (
-                  <Draggable
-                    key={item.id}
-                    draggableId={item.id}
-                    index={index}
-                    isDragDisabled={isLocked}
-                  >
-                    {(dragProvided, dragSnapshot) => (
-                      <div
-                        ref={dragProvided.innerRef}
-                        {...dragProvided.draggableProps}
-                        {...dragProvided.dragHandleProps}
-                        className={cn(
-                          !isLocked && "cursor-grab active:cursor-grabbing",
-                        )}
-                      >
-                        <ShortlistingCard
-                          composition={item}
-                          column={column.key}
-                          alternatives={alternatives}
-                          isDragging={dragSnapshot.isDragging}
-                          onSwapAlternative={
-                            column.key !== "rejected"
-                              ? (altGroupId) =>
-                                  onSwapAlternative(item.id, altGroupId)
-                              : null
-                          }
-                          registerCardObserver={registerCardObserver}
-                          onAltsDrawerOpen={onAltsDrawerOpen}
-                        />
-                      </div>
-                    )}
-                  </Draggable>
-                );
-              })
+              items.map((item, index) => (
+                <SwimlaneCardRenderer
+                  key={item.id}
+                  item={item}
+                  index={index}
+                  column={column}
+                  isLocked={isLocked}
+                  onSwapAlternative={onSwapAlternative}
+                  altsBySlotId={altsBySlotId}
+                  classByGroupId={classByGroupId}
+                  registerCardObserver={registerCardObserver}
+                  onAltsDrawerOpen={onAltsDrawerOpen}
+                  previewSize={previewSize}
+                />
+              ))
             )}
             {provided.placeholder}
           </div>
         </div>
       )}
     </Droppable>
+  );
+}
+
+/**
+ * W11.6.1 sub-feature 5 — group-by-slot list. Renders each slot as a
+ * collapsible sub-row inside the AI PROPOSED column. Each sub-row carries
+ * `data-slot-id` so W11.6.3's slot-aware lightbox can read the active
+ * slot context via DOM traversal — that's the integration handshake.
+ *
+ * Drag indices are preserved across the whole flat-list (the @hello-pangea
+ * Draggable index is still 0..N-1 — the visual grouping doesn't need to
+ * partition the DnD index).
+ */
+function SwimlaneGroupedList({
+  grouped,
+  column,
+  isLocked,
+  onSwapAlternative,
+  altsBySlotId,
+  classByGroupId,
+  registerCardObserver,
+  onAltsDrawerOpen,
+  previewSize,
+}) {
+  // Track per-slot expansion locally — collapsed by default per spec, so the
+  // operator sees a compact stack of slot headers and expands the ones they
+  // care about.
+  const [expanded, setExpanded] = useState(() => new Set());
+  const toggle = (slotId) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(slotId)) next.delete(slotId);
+      else next.add(slotId);
+      return next;
+    });
+
+  let runningIndex = 0;
+  return (
+    <div className="space-y-1">
+      {grouped.map((subLane) => {
+        const isOpen = expanded.has(subLane.slotId);
+        const startIndex = runningIndex;
+        runningIndex += subLane.items.length;
+        return (
+          <div
+            key={subLane.slotId}
+            data-slot-id={subLane.slotId}
+            className="rounded-sm border bg-background"
+          >
+            <button
+              type="button"
+              onClick={() => toggle(subLane.slotId)}
+              aria-expanded={isOpen}
+              data-testid={`swimlane-sublane-toggle-${subLane.slotId}`}
+              className="w-full flex items-center justify-between px-2 py-1 text-[11px] font-medium hover:bg-muted/50 rounded-sm"
+            >
+              <span className="flex items-center gap-1">
+                {isOpen ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+                <span>{subLane.label}</span>
+                {subLane.phase != null && (
+                  <span className="ml-1 text-muted-foreground">
+                    P{subLane.phase}
+                  </span>
+                )}
+              </span>
+              <span className="tabular-nums text-muted-foreground">
+                {subLane.items.length}
+              </span>
+            </button>
+            {isOpen && (
+              <div className="p-1 space-y-1">
+                {subLane.items.map((item, i) => (
+                  <SwimlaneCardRenderer
+                    key={item.id}
+                    item={item}
+                    index={startIndex + i}
+                    column={column}
+                    isLocked={isLocked}
+                    onSwapAlternative={onSwapAlternative}
+                    altsBySlotId={altsBySlotId}
+                    classByGroupId={classByGroupId}
+                    registerCardObserver={registerCardObserver}
+                    onAltsDrawerOpen={onAltsDrawerOpen}
+                    previewSize={previewSize}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Renders a single Draggable card. Extracted so both the flat list and the
+ * grouped sub-lanes share the same DnD wiring. `previewSize` is forwarded
+ * to the card via a wrapping div (CSS custom property) so we don't need
+ * to teach `ShortlistingCard` about the toolbar — that file is owned by
+ * W11.6.2 and we don't touch it here.
+ */
+function SwimlaneCardRenderer({
+  item,
+  index,
+  column,
+  isLocked,
+  onSwapAlternative,
+  altsBySlotId,
+  registerCardObserver,
+  onAltsDrawerOpen,
+  previewSize,
+}) {
+  const slotId = item.slot?.slot_id;
+  const altsRaw = slotId ? altsBySlotId.get(slotId) || [] : [];
+  // Show top 2 alts, decorated for ShortlistingCard.
+  const alternatives = altsRaw.slice(0, 2).map((alt) => ({
+    group_id: alt.group_id,
+    stem: alt.stem,
+    combined_score: alt.combined_score,
+    analysis: alt.analysis,
+  }));
+  // Map preview size to a CSS variable on the wrapping div. The card adapts
+  // via existing object-cover styles; the variable is exposed in case a
+  // future polish pass wants to read it inside the card. Per the spec only
+  // the wrapping size changes — we don't reach into the W11.6.2-owned card.
+  const sizePx =
+    previewSize === "sm" ? 96 : previewSize === "lg" ? 256 : 192;
+  return (
+    <Draggable
+      key={item.id}
+      draggableId={item.id}
+      index={index}
+      isDragDisabled={isLocked}
+    >
+      {(dragProvided, dragSnapshot) => (
+        <div
+          ref={dragProvided.innerRef}
+          {...dragProvided.draggableProps}
+          {...dragProvided.dragHandleProps}
+          className={cn(
+            !isLocked && "cursor-grab active:cursor-grabbing",
+          )}
+          style={{
+            ...dragProvided.draggableProps.style,
+            "--swimlane-preview-px": `${sizePx}px`,
+          }}
+          data-preview-size={previewSize}
+          data-slot-id={slotId || undefined}
+        >
+          <ShortlistingCard
+            composition={item}
+            column={column.key}
+            alternatives={alternatives}
+            isDragging={dragSnapshot.isDragging}
+            onSwapAlternative={
+              column.key !== "rejected"
+                ? (altGroupId) => onSwapAlternative(item.id, altGroupId)
+                : null
+            }
+            registerCardObserver={registerCardObserver}
+            onAltsDrawerOpen={onAltsDrawerOpen}
+          />
+        </div>
+      )}
+    </Draggable>
   );
 }
