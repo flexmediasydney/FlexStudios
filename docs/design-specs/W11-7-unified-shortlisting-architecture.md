@@ -647,6 +647,63 @@ The source-context preamble is a **pure quality lift with zero cost or latency i
 
 ---
 
+## Photographer techniques (added 2026-05-01, post-Rainbow Cres)
+
+### The bug Rainbow Cres surfaced
+
+Real estate photographers use deliberate in-camera techniques to PROTECT image quality. Without explicit prompting, both Gemini 2.5 Pro and Anthropic Opus 4.7 read these techniques as flaws and emit `major_reject` / `photographer_error` / `requires_reshoot` verdicts that destroy good work.
+
+Motivating case: **Rainbow Cres `034A7990` (delivery_ref `034A7991`), 2026-05-01.** Photographer's hand was visible at the upper-right of frame, deliberately positioned to block the sun.
+
+| Stage | Verdict | Scores |
+|---|---|---|
+| Stage 1 | `clutter_severity = "major_reject"` ("the photographer's finger... catastrophic technical failure... unusable... must be rejected") | tech 1.0 / aes 1.5 / comp 1.0 / light 2.5 |
+| Stage 4 | `stage_4_overrides[].field=clutter, stage_1_value=major_reject, stage_4_value=photographer_error` ("the primary issue is the photographer's finger obstructing the top right of the frame... a technical error... should be rejected on that basis") | — |
+
+**Reality**: photographer was using **hand-block sunflare suppression** — a standard craft move. WITHOUT the technique, the same frame would have suffered major sunflare ghosts, lifted blacks, contrast loss, and a magenta cast. The technique PROTECTED a 9/10 architectural image. Joseph (CEO, master photographer):
+
+> "the fingers in the shot is actually a tick photographers use to cover the sun, so the sunflare doesn't impact the fidelity of the image and contrast/sharpness etc stay intact - this is a good thing... the image should be evaluated ignoring the fingers. in fact, you could potentially have a brilliant 9/10 image but with fingers covering the sun, where the same shot without the fingers would have caused potentially major sunflare artifacts impacting quality."
+
+### The block
+
+`_shared/visionPrompts/blocks/photographerTechniquesBlock.ts` — a W7.6 block exporting `photographerTechniquesBlock(): string` plus `PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION`. It catalogues five deliberate techniques and tells the model how to score them:
+
+| # | Technique | Visual cue | Engine rule |
+|---|---|---|---|
+| 1 | Fingers / hand blocking the sun | Fingers/knuckles at upper edge, partially silhouetted, exactly where sun would sit; backlit scene | NOT clutter, NOT photographer_error; score AS IF the hand isn't there; optionally label `deliberate_sunflare_block` in `observed_objects` |
+| 2 | Leg / foot / shadow in frame for safety or scale | Limb at lower edge, often on stairs/balcony/uneven terrain | Same — score as if the limb isn't there; post-crop fixes it |
+| 3 | Intentional tripod shadow at noon sun | Thin tripod-leg shadow on driveway/deck at high solar angles | Minor retouch flag acceptable; do NOT call photographer_error or reject |
+| 4 | Flag / gobo / diffuser visible at frame edge | Soft black/white panel just inside edge, often near windows | Technique mark, not a flaw; score as if the panel isn't there |
+| 5 | Intentional bloom on a single ugly window | One window deliberately blown to white while others are properly exposed | NOT a flaw — the composition decision is correct (blown pane > ugly view) |
+
+The block closes with a general rule: *"would removing this object in post reveal a strong image? If yes, the object is a transient occluder and should NOT depress the per-image scores."*
+
+### Where it injects
+
+- **Stage 1 user prompt**: AFTER `sourceContextBlock`, BEFORE `voiceAnchorBlock`. So the model reads the source context (RAW vs finals) first, then the technique recognition, then scoring instructions.
+- **Stage 4 user prompt**: same order — source context → photographer techniques → voice anchor → property facts → Stage 1 JSON → image previews.
+- **Pass 0 (Haiku hard-reject)**: not needed — Pass 0 rejects only corrupt frames + agent headshots, which are technique-agnostic.
+
+### Versioning + cache stamps
+
+Block stamps both prompt-block-versions maps:
+- `stage1PromptBlockVersions().photographer_techniques` → `composition_classifications.prompt_block_versions`
+- `stage4PromptBlockVersions().photographer_techniques` → `engine_run_audit.prompt_block_versions`
+
+Version baseline: `v1.0`. Bump on any rule addition or wording change so prompt-cache invalidation tracks block changes.
+
+### Tests
+
+`photographerTechniquesBlock.test.ts` — 6 tests covering: fingers-over-sun rule, photographer_error/requires_reshoot proscription, all 5 technique sections present, positive label `deliberate_sunflare_block` available to the model, decision rule closes the block, version constant is `v1.0`. All pass under `deno test`.
+
+### Production W11.7.1 implication
+
+`shortlisting-shape-d` and `shortlisting-shape-d-stage4` orchestrators MUST inject `photographerTechniquesBlock()` after `sourceContextBlock()` on every Stage 1 + Stage 4 prompt. Both stages now plumb the block-version stamp into their `prompt_block_versions` map.
+
+Validation: post-deployment, group `d4cf591a` on Rainbow Cres round `c55374b1` (the originating bug case) was deleted from `composition_classifications` + `shortlisting_stage4_overrides`, then re-classified under the new prompt to confirm the verdict change. See deployment log entry "W11.7.1: photographerTechniquesBlock — recognise sunflare-block + 4 other techniques as craft, not flaws" (commit 92f6978).
+
+---
+
 ## Cost model
 
 Per-call, average:
