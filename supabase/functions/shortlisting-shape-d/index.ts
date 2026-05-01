@@ -605,7 +605,10 @@ async function runShapeDStage1Core(
   //   so the model prefers canonical_ids when emitting observed_objects.
   //   Returns '' when the registry is empty — safe to wire unconditionally.
   const [projectMemoryText, fewShotText, canonicalRegistryText] = await Promise.all([
-    projectMemoryBlock({ project_id: ctx.project_id, current_round_id: roundId }),
+    // W11.6.19: pass voice.tier so the block applies tier-aware caps
+    // (premium=50, standard=30, approachable=20) to bound prompt growth as
+    // operator corrections accumulate per project.
+    projectMemoryBlock({ project_id: ctx.project_id, current_round_id: roundId, tier: voice.tier }),
     fewShotLibraryBlock({ property_tier: voice.tier }),
     canonicalRegistryBlock(),
   ]);
