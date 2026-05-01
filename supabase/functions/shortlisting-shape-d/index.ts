@@ -117,6 +117,19 @@ interface RequestBody {
   _health_check?: boolean;
 }
 
+// Wave 11.7.1 immediate-ack contract:
+// The dispatcher's invokeFunction has a 120s AbortSignal timeout. Stage 1 with
+// 4 parallel batches × 50 imgs takes 3-5 min wall, so a synchronous return
+// blows the gateway. We adopt the same `EdgeRuntime.waitUntil` pattern as
+// `shortlist-lock` and `vendor-retroactive-compare`: validate + mutex + cost
+// cap synchronously, kick the heavy work into a background promise, return
+// HTTP 200 immediately with `mode: 'background'`. The background work then
+// self-updates `shortlisting_jobs.status='succeeded'|'failed'` when it
+// finishes — the dispatcher MUST NOT auto-mark on the HTTP 200 ack (it
+// honors the `mode === 'background'` flag in the response body, see
+// shortlisting-job-dispatcher::callEdgeFunction).
+const BACKGROUND_MODE_RESPONSE = 'background';
+
 interface CompositionRow {
   group_id: string;
   group_index: number;
@@ -191,14 +204,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
   }
 
-  // Resolve round_id from job_id if dispatcher invoked us.
+  // Resolve round_id from job_id if dispatcher invoked us. We capture the
+  // job_id explicitly so the background worker can self-update the row on
+  // completion (the dispatcher relies on this when mode='background').
   let roundId = body.round_id || null;
-  if (!roundId && body.job_id) {
+  const jobId = body.job_id || null;
+  if (!roundId && jobId) {
     const admin = getAdminClient();
     const { data: job } = await admin
       .from('shortlisting_jobs')
       .select('round_id')
-      .eq('id', body.job_id)
+      .eq('id', jobId)
       .maybeSingle();
     if (job?.round_id) roundId = job.round_id;
   }
@@ -220,14 +236,44 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
+  // ── Synchronous pre-flight ────────────────────────────────────────────────
+  // We do everything that can fail fast (auth, mode gate, cost cap, mutex
+  // acquisition) BEFORE returning the immediate-ack so the dispatcher can
+  // surface those failures via the standard HTTP error path. Only after these
+  // succeed do we kick the long-running Stage 1 batches into the background.
+  let preflight: PreflightOk;
   try {
-    const result = await runShapeDStage1(roundId);
-    return jsonResponse({ ok: true, round_id: roundId, ...result }, 200, req);
+    preflight = await preflightShapeDStage1(roundId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[${GENERATOR}] failed for round ${roundId}: ${msg}`);
-    return errorResponse(`shortlisting-shape-d failed: ${msg}`, 500, req);
+    console.error(`[${GENERATOR}] preflight failed for round ${roundId}: ${msg}`);
+    return errorResponse(`shortlisting-shape-d preflight failed: ${msg}`, 400, req);
   }
+
+  // ── Background dispatch ───────────────────────────────────────────────────
+  const startedIso = new Date().toISOString();
+  const bgWork = runShapeDStage1Background({ roundId, jobId, preflight })
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[${GENERATOR}] background work failed for round ${roundId}: ${msg}`);
+    });
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).EdgeRuntime?.waitUntil?.(bgWork);
+
+  // The dispatcher inspects `mode === 'background'` and skips auto-marking
+  // the job row as succeeded — bgWork persists status='succeeded' or
+  // 'failed' on completion.
+  return jsonResponse(
+    {
+      ok: true,
+      mode: BACKGROUND_MODE_RESPONSE,
+      round_id: roundId,
+      job_id: jobId,
+      started_at: startedIso,
+    },
+    200,
+    req,
+  );
 });
 
 // ─── Core orchestration ──────────────────────────────────────────────────────
@@ -249,15 +295,41 @@ interface RoundResult {
   warnings: string[];
 }
 
-async function runShapeDStage1(roundId: string): Promise<RoundResult> {
+// PreflightOk carries everything the synchronous pre-flight resolved so
+// bgWork doesn't redo the work. Notably, the mutex is already acquired —
+// bgWork's finally MUST release it.
+interface PreflightOk {
+  ctx: RoundContext;
+  settings: EngineSettings;
+  compositions: CompositionRow[];
+  groupsToRun: CompositionRow[];
+  batches: CompositionRow[][];
+  primedGroupIds: Set<string>;
+  voice: VoiceAnchorOpts;
+  sourceType: SourceType;
+  preflightWarnings: string[];
+  lockName: string;
+  tickId: string;
+  startedAt: number;
+}
+
+/**
+ * Synchronous pre-flight: run everything that can fail fast (engine settings,
+ * round context, mode gate, cost cap, mutex acquisition) BEFORE returning
+ * the immediate-ack. Throws on any failure; the handler converts that to a
+ * 400 so the dispatcher gets a fast unambiguous failure rather than a
+ * timeout. On success, the mutex IS HELD — the caller is responsible for
+ * releasing it via bgWork's finally block.
+ */
+async function preflightShapeDStage1(roundId: string): Promise<PreflightOk> {
   const startedAt = Date.now();
   const admin = getAdminClient();
-  const warnings: string[] = [];
+  const preflightWarnings: string[] = [];
 
-  // ── 1. Engine settings + mode gate ─────────────────────────────────────────
+  // 1. Engine settings
   const settings = await loadEngineSettings(admin);
 
-  // ── 2. Round bootstrap ─────────────────────────────────────────────────────
+  // 2. Round bootstrap
   const ctx = await loadRoundContext(admin, roundId);
   if (ctx.status !== 'processing') {
     throw new Error(
@@ -265,8 +337,7 @@ async function runShapeDStage1(roundId: string): Promise<RoundResult> {
     );
   }
 
-  // Engine-mode gate: per-round engine_mode column overrides global setting.
-  // Global setting is the default; per-round 'shape_d_*' value forces this fn.
+  // 3. Engine-mode gate
   const roundEngineMode = await loadRoundEngineMode(admin, roundId);
   const wantsShapeD = roundEngineMode?.startsWith('shape_d')
     || (settings.engine_mode === 'shape_d' && (!roundEngineMode || roundEngineMode === 'two_pass'));
@@ -278,9 +349,48 @@ async function runShapeDStage1(roundId: string): Promise<RoundResult> {
     );
   }
 
-  // ── 3. Mutex (per-round) ───────────────────────────────────────────────────
-  // Lock name is bounded by round id so two rounds can run in parallel without
-  // blocking each other. The W7.5 row-based mutex matches the dispatcher pattern.
+  // 4. Composition groups
+  const compositions = await loadCompositionGroups(admin, roundId);
+  if (compositions.length === 0) {
+    throw new Error(`round ${roundId} has no composition_groups — Pass 0 must run first`);
+  }
+
+  // 5. Idempotency: prime from existing classifications
+  const primedGroupIds = await loadPrimedGroupIds(admin, roundId);
+  const groupsToRun = compositions.filter((c) => !primedGroupIds.has(c.group_id));
+  if (groupsToRun.length === 0) {
+    preflightWarnings.push(
+      `all ${compositions.length} compositions already classified — re-dispatching Stage 4 only`,
+    );
+  } else if (primedGroupIds.size > 0) {
+    preflightWarnings.push(
+      `${primedGroupIds.size} compositions already classified (primed); re-classifying ${groupsToRun.length}`,
+    );
+  }
+
+  // 6. Cost cap pre-flight (BEFORE we acquire the mutex — no need to hold
+  // the lock if we're going to bail).
+  const batches = partitionBatches(groupsToRun, settings.stage1_batch_size);
+  const preflightUsd = estimateStage1Cost(batches.length);
+  if (preflightUsd > settings.cost_cap_per_round_usd) {
+    throw new Error(
+      `Stage 1 pre-flight cost $${preflightUsd.toFixed(4)} exceeds cap ` +
+      `$${settings.cost_cap_per_round_usd.toFixed(4)} (${batches.length} batches at ~$0.66 each). ` +
+      `Increase engine_settings.cost_cap_per_round_usd to override.`,
+    );
+  }
+
+  // 7. Voice + source type
+  const voice: VoiceAnchorOpts = {
+    tier: ctx.property_tier,
+    override: ctx.property_voice_anchor_override,
+  };
+  const sourceType: SourceType = 'internal_raw';
+
+  // 8. Acquire mutex synchronously — this MUST happen before we return the
+  // immediate-ack so a concurrent re-trigger by the dispatcher (or a manual
+  // retry) gets a clean rejection rather than double-firing Stage 1.
+  // bgWork's finally is responsible for the release.
   const lockName = `shape-d-stage1:${roundId}`;
   const tickId = crypto.randomUUID();
   const acquired = await tryAcquireMutex(admin, lockName, tickId);
@@ -288,48 +398,101 @@ async function runShapeDStage1(roundId: string): Promise<RoundResult> {
     throw new Error(`round ${roundId} Shape D Stage 1 already running (mutex held)`);
   }
 
+  return {
+    ctx,
+    settings,
+    compositions,
+    groupsToRun,
+    batches,
+    primedGroupIds,
+    voice,
+    sourceType,
+    preflightWarnings,
+    lockName,
+    tickId,
+    startedAt,
+  };
+}
+
+interface BackgroundArgs {
+  roundId: string;
+  jobId: string | null;
+  preflight: PreflightOk;
+}
+
+/**
+ * Background worker: runs Stage 1 batches, persists results, dispatches
+ * Stage 4 chain row, and self-updates the dispatching shortlisting_jobs row
+ * (when invoked via dispatcher). Always releases the mutex in its finally.
+ *
+ * Idempotency: the success path inserts a stage4_synthesis chain row guarded
+ * by an existence check + a unique partial index (mig 377). Re-running this
+ * fn after a partial completion will re-classify only the missing groups
+ * (loadPrimedGroupIds filters them out) and skip the chain insert.
+ */
+async function runShapeDStage1Background(args: BackgroundArgs): Promise<void> {
+  const admin = getAdminClient();
+  const { roundId, jobId, preflight } = args;
+  const { lockName, tickId } = preflight;
+
   try {
-    // ── 4. Composition groups ────────────────────────────────────────────────
-    const compositions = await loadCompositionGroups(admin, roundId);
-    if (compositions.length === 0) {
-      throw new Error(`round ${roundId} has no composition_groups — Pass 0 must run first`);
+    const result = await runShapeDStage1Core(roundId, preflight);
+    // Self-update the dispatching job row. The dispatcher saw mode='background'
+    // and skipped its auto-mark; we own the row state from here.
+    if (jobId) {
+      const { error: updErr } = await admin
+        .from('shortlisting_jobs')
+        .update({
+          status: 'succeeded',
+          finished_at: new Date().toISOString(),
+          error_message: null,
+          result: { ok: true, round_id: roundId, ...result },
+        })
+        .eq('id', jobId);
+      if (updErr) {
+        console.warn(`[${GENERATOR}] job self-update succeeded write failed: ${updErr.message}`);
+      }
     }
-
-    // ── 5. Idempotency: prime from existing classifications ──────────────────
-    // If retry, only re-fire batches for groups that don't already have a row
-    // in composition_classifications. Matches the harness primed-cache pattern.
-    const primedGroupIds = await loadPrimedGroupIds(admin, roundId);
-    const groupsToRun = compositions.filter((c) => !primedGroupIds.has(c.group_id));
-    if (groupsToRun.length === 0) {
-      warnings.push(
-        `all ${compositions.length} compositions already classified — re-dispatching Stage 4 only`,
-      );
-    } else if (primedGroupIds.size > 0) {
-      warnings.push(
-        `${primedGroupIds.size} compositions already classified (primed); re-classifying ${groupsToRun.length}`,
-      );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[${GENERATOR}] background Stage 1 failed for round ${roundId}: ${msg}`);
+    if (jobId) {
+      const { error: updErr } = await admin
+        .from('shortlisting_jobs')
+        .update({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          error_message: msg.slice(0, 1000),
+        })
+        .eq('id', jobId);
+      if (updErr) {
+        console.warn(`[${GENERATOR}] job self-update failed write failed: ${updErr.message}`);
+      }
     }
+  } finally {
+    await releaseMutex(admin, lockName, tickId).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[${GENERATOR}] mutex release failed: ${msg}`);
+    });
+  }
+}
 
-    // ── 6. Cost cap pre-flight ───────────────────────────────────────────────
-    const batches = partitionBatches(groupsToRun, settings.stage1_batch_size);
-    const preflightUsd = estimateStage1Cost(batches.length);
-    if (preflightUsd > settings.cost_cap_per_round_usd) {
-      throw new Error(
-        `Stage 1 pre-flight cost $${preflightUsd.toFixed(4)} exceeds cap ` +
-        `$${settings.cost_cap_per_round_usd.toFixed(4)} (${batches.length} batches at ~$0.66 each). ` +
-        `Increase engine_settings.cost_cap_per_round_usd to override.`,
-      );
-    }
+/**
+ * Core Stage 1 work. Receives the resolved preflight context so it doesn't
+ * redo round / settings / group lookups. Returns the result payload that is
+ * either echoed in the dispatcher response (legacy-direct invocation) or
+ * persisted into shortlisting_jobs.result (dispatcher path).
+ */
+async function runShapeDStage1Core(
+  roundId: string,
+  preflight: PreflightOk,
+): Promise<RoundResult> {
+  const admin = getAdminClient();
+  const { ctx, settings, compositions, groupsToRun, batches, primedGroupIds, voice, sourceType, startedAt } = preflight;
+  const warnings: string[] = [...preflight.preflightWarnings];
 
-    // ── 7. Voice resolution ──────────────────────────────────────────────────
-    const voice: VoiceAnchorOpts = {
-      tier: ctx.property_tier,
-      override: ctx.property_voice_anchor_override,
-    };
-    const sourceType: SourceType = 'internal_raw';
-
-    // ── 8. Run Stage 1 batches in parallel ───────────────────────────────────
-    const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
+  // Run Stage 1 batches in parallel
+  const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
     const batchResults: Stage1BatchResult[] = [];
     if (batches.length > 0) {
       const promises = batches.map((batch, idx) =>
@@ -518,12 +681,6 @@ async function runShapeDStage1(roundId: string): Promise<RoundResult> {
       audit_dropbox_path: auditPath,
       warnings,
     };
-  } finally {
-    await releaseMutex(admin, lockName, tickId).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[${GENERATOR}] mutex release failed: ${msg}`);
-    });
-  }
 }
 
 // ─── Engine settings loader ──────────────────────────────────────────────────

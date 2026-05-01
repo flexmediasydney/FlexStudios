@@ -108,6 +108,14 @@ interface RequestBody {
   _health_check?: boolean;
 }
 
+// Wave 11.7.1 immediate-ack contract (mirrors shortlisting-shape-d Stage 1):
+// Stage 4 is typically ~70s but worst case (3 primary retries × 240s timeout
+// + 14s backoff before Anthropic failover) can exceed the 120s gateway.
+// We adopt the same EdgeRuntime.waitUntil pattern: validate + mutex + cost
+// cap synchronously, return HTTP 200 ack with `mode: 'background'`, and
+// self-update the dispatching shortlisting_jobs row when the work completes.
+const BACKGROUND_MODE_RESPONSE = 'background';
+
 interface RoundContext {
   round_id: string;
   project_id: string;
@@ -152,12 +160,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   let roundId = body.round_id || null;
-  if (!roundId && body.job_id) {
+  const jobId = body.job_id || null;
+  if (!roundId && jobId) {
     const admin = getAdminClient();
     const { data: job } = await admin
       .from('shortlisting_jobs')
       .select('round_id')
-      .eq('id', body.job_id)
+      .eq('id', jobId)
       .maybeSingle();
     if (job?.round_id) roundId = job.round_id;
   }
@@ -178,14 +187,39 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
+  // Synchronous pre-flight (engine_mode gate, cost cap, mutex). Anything that
+  // can fail fast surfaces as a 400 to the dispatcher BEFORE we kick the
+  // bgWork — this preserves the dispatcher's retry/backoff for legitimate
+  // failures like "round not in shape_d state" or "cost cap exceeded".
+  let preflight: Stage4PreflightOk;
   try {
-    const result = await runStage4(roundId);
-    return jsonResponse({ round_id: roundId, ...result }, 200, req);
+    preflight = await preflightStage4(roundId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[${GENERATOR}] failed for round ${roundId}: ${msg}`);
-    return errorResponse(`shortlisting-shape-d-stage4 failed: ${msg}`, 500, req);
+    console.error(`[${GENERATOR}] preflight failed for round ${roundId}: ${msg}`);
+    return errorResponse(`shortlisting-shape-d-stage4 preflight failed: ${msg}`, 400, req);
   }
+
+  const startedIso = new Date().toISOString();
+  const bgWork = runStage4Background({ roundId, jobId, preflight })
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[${GENERATOR}] background work failed for round ${roundId}: ${msg}`);
+    });
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).EdgeRuntime?.waitUntil?.(bgWork);
+
+  return jsonResponse(
+    {
+      ok: true,
+      mode: BACKGROUND_MODE_RESPONSE,
+      round_id: roundId,
+      job_id: jobId,
+      started_at: startedIso,
+    },
+    200,
+    req,
+  );
 });
 
 // ─── Core ───────────────────────────────────────────────────────────────────
@@ -203,17 +237,39 @@ interface Stage4RunResult {
   warnings: string[];
 }
 
-async function runStage4(roundId: string): Promise<Stage4RunResult> {
+interface Stage4PreflightOk {
+  ctx: RoundContext;
+  settings: EngineSettings;
+  voice: VoiceAnchorOpts;
+  sourceType: SourceType;
+  preflightWarnings: string[];
+  lockName: string;
+  tickId: string;
+  startedAt: number;
+}
+
+interface Stage4BackgroundArgs {
+  roundId: string;
+  jobId: string | null;
+  preflight: Stage4PreflightOk;
+}
+
+/**
+ * Synchronous Stage 4 pre-flight: engine-mode gate, mutex acquisition, and
+ * voice/source resolution. Stage 1 merged JSON load + cost cap deferred to
+ * bgWork because they only matter once we're committed (the row counts and
+ * preview fetch are part of Stage 4's wall budget anyway).
+ *
+ * On success, the per-round mutex IS HELD — bgWork's finally must release it.
+ */
+async function preflightStage4(roundId: string): Promise<Stage4PreflightOk> {
   const startedAt = Date.now();
   const admin = getAdminClient();
-  const warnings: string[] = [];
+  const preflightWarnings: string[] = [];
 
   const settings = await loadEngineSettings(admin);
   const ctx = await loadRoundContext(admin, roundId);
 
-  // Verify round is in the expected state. Stage 4 only runs after Stage 1
-  // succeeded; engine_mode should be shape_d_*. If pass1/pass2 produced this
-  // round, stage4 is the wrong fn — fail loudly.
   const { data: roundCheck } = await admin
     .from('shortlisting_rounds')
     .select('engine_mode, status, stage_4_completed_at')
@@ -226,12 +282,17 @@ async function runStage4(roundId: string): Promise<Stage4RunResult> {
     );
   }
   if (roundCheck?.stage_4_completed_at) {
-    warnings.push(
+    preflightWarnings.push(
       `round ${roundId} stage_4_completed_at=${roundCheck.stage_4_completed_at} — re-running Stage 4 (will overwrite)`,
     );
   }
 
-  // Per-round mutex (different lock name from Stage 1 so they can never share).
+  const voice: VoiceAnchorOpts = {
+    tier: ctx.property_tier,
+    override: ctx.property_voice_anchor_override,
+  };
+  const sourceType: SourceType = 'internal_raw';
+
   const lockName = `shape-d-stage4:${roundId}`;
   const tickId = crypto.randomUUID();
   const acquired = await tryAcquireMutex(admin, lockName, tickId);
@@ -239,7 +300,68 @@ async function runStage4(roundId: string): Promise<Stage4RunResult> {
     throw new Error(`round ${roundId} Stage 4 already running (mutex held)`);
   }
 
+  return { ctx, settings, voice, sourceType, preflightWarnings, lockName, tickId, startedAt };
+}
+
+/**
+ * Background worker: heavy Stage 4 vision call + persistence. Self-updates
+ * the dispatching shortlisting_jobs row on completion (the dispatcher saw
+ * mode='background' and skipped its auto-mark). Always releases the mutex.
+ */
+async function runStage4Background(args: Stage4BackgroundArgs): Promise<void> {
+  const admin = getAdminClient();
+  const { roundId, jobId, preflight } = args;
+  const { lockName, tickId } = preflight;
+
   try {
+    const result = await runStage4Core(roundId, preflight);
+    if (jobId) {
+      const { error: updErr } = await admin
+        .from('shortlisting_jobs')
+        .update({
+          status: 'succeeded',
+          finished_at: new Date().toISOString(),
+          error_message: null,
+          result: { round_id: roundId, ...result },
+        })
+        .eq('id', jobId);
+      if (updErr) {
+        console.warn(`[${GENERATOR}] job self-update succeeded write failed: ${updErr.message}`);
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[${GENERATOR}] background Stage 4 failed for round ${roundId}: ${msg}`);
+    if (jobId) {
+      const { error: updErr } = await admin
+        .from('shortlisting_jobs')
+        .update({
+          status: 'failed',
+          finished_at: new Date().toISOString(),
+          error_message: msg.slice(0, 1000),
+        })
+        .eq('id', jobId);
+      if (updErr) {
+        console.warn(`[${GENERATOR}] job self-update failed write failed: ${updErr.message}`);
+      }
+    }
+  } finally {
+    await releaseMutex(admin, lockName, tickId).catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[${GENERATOR}] mutex release failed: ${msg}`);
+    });
+  }
+}
+
+async function runStage4Core(
+  roundId: string,
+  preflight: Stage4PreflightOk,
+): Promise<Stage4RunResult> {
+  const admin = getAdminClient();
+  const { ctx, settings, voice, sourceType, startedAt } = preflight;
+  const warnings: string[] = [...preflight.preflightWarnings];
+
+  {
     // Load Stage 1 merged JSON from composition_classifications + groups.
     const stage1Merged = await loadStage1Merged(admin, roundId);
     if (stage1Merged.length === 0) {
@@ -261,13 +383,6 @@ async function runStage4(roundId: string): Promise<Stage4RunResult> {
         `$${settings.cost_cap_per_round_usd.toFixed(4)}`,
       );
     }
-
-    // Voice resolution
-    const voice: VoiceAnchorOpts = {
-      tier: ctx.property_tier,
-      override: ctx.property_voice_anchor_override,
-    };
-    const sourceType: SourceType = 'internal_raw';
 
     // Fetch all preview images for the round.
     const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
@@ -433,11 +548,6 @@ async function runStage4(roundId: string): Promise<Stage4RunResult> {
       audit_dropbox_path: auditPath,
       warnings,
     };
-  } finally {
-    await releaseMutex(admin, lockName, tickId).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[${GENERATOR}] mutex release failed: ${msg}`);
-    });
   }
 }
 

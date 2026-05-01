@@ -132,6 +132,17 @@ const BACKOFF_SECONDS = [60, 300, 1800];
 // is 120s — anything still 'running' past 5min is truly stranded.
 const STALE_CLAIM_MIN = 5;
 
+// Wave 11.7.1 background-mode kinds: shortlisting-shape-d returns a fast
+// HTTP ack and runs Stage 1 inside EdgeRuntime.waitUntil for 3-5 minutes
+// (200-angle shoot, 4 batches × ~50s, plus Dropbox preview fetches +
+// classification persistence). The ordinary 5-minute stale sweep would
+// reset the row mid-run and trigger a phantom retry, even though bgWork
+// is still alive and holding the per-round mutex. Background kinds get a
+// longer leash — bgWork's per-round mutex (20-minute auto-expiry) is the
+// upstream backstop against truly orphaned rows.
+const BACKGROUND_MODE_KINDS = new Set(["shape_d_stage1", "stage4_synthesis"]);
+const STALE_CLAIM_MIN_BACKGROUND = 15;
+
 type ShortlistingJob = {
   id: string;
   // claim_shortlisting_jobs() (mig 288) returns project_id + round_id +
@@ -260,28 +271,47 @@ async function runDispatcherTick(
   // when it claimed the job, so the sweep refunds the attempt via the
   // shortlisting_jobs_decrement_attempts RPC (mig 292) so platform timeouts
   // don't burn the retry budget. Mirrors drone-job-dispatcher (audit #30).
-  const { data: stale } = await admin
+  //
+  // Wave 11.7.1: BACKGROUND_MODE_KINDS get a longer threshold (15 min) —
+  // shape-d Stage 1 legitimately runs 3-5 min inside EdgeRuntime.waitUntil,
+  // and the ordinary 5-min sweep would phantom-retry it mid-run.
+  const fastCutoff = new Date(
+    Date.now() - STALE_CLAIM_MIN * 60 * 1000,
+  ).toISOString();
+  const slowCutoff = new Date(
+    Date.now() - STALE_CLAIM_MIN_BACKGROUND * 60 * 1000,
+  ).toISOString();
+  const backgroundKindsArr = Array.from(BACKGROUND_MODE_KINDS);
+  // Two queries since supabase-js doesn't compose conditional cutoffs in a
+  // single update; the alternative would be a SQL RPC. Each runs <50ms.
+  const { data: staleFast } = await admin
     .from("shortlisting_jobs")
     .update({ status: "pending", started_at: null })
     .eq("status", "running")
-    .lt(
-      "started_at",
-      new Date(Date.now() - STALE_CLAIM_MIN * 60 * 1000).toISOString(),
-    )
+    .not("kind", "in", `(${backgroundKindsArr.map((k) => `"${k}"`).join(",")})`)
+    .lt("started_at", fastCutoff)
     .select("id");
-  if ((stale?.length ?? 0) > 0) {
-    const ids = stale!.map((r) => r.id);
+  const { data: staleSlow } = await admin
+    .from("shortlisting_jobs")
+    .update({ status: "pending", started_at: null })
+    .eq("status", "running")
+    .in("kind", backgroundKindsArr)
+    .lt("started_at", slowCutoff)
+    .select("id");
+  const stale = [...(staleFast || []), ...(staleSlow || [])];
+  if (stale.length > 0) {
+    const ids = stale.map((r) => r.id);
     const { error: decErr } = await admin.rpc(
       "shortlisting_jobs_decrement_attempts",
       { p_ids: ids },
     );
     if (decErr) {
       console.warn(
-        `[${GENERATOR}] reset ${stale!.length} stale-claim job(s) older than ${STALE_CLAIM_MIN}m, but attempt-decrement RPC failed: ${decErr.message}`,
+        `[${GENERATOR}] reset ${stale.length} stale-claim job(s) (fast=${staleFast?.length ?? 0}/slow=${staleSlow?.length ?? 0}), but attempt-decrement RPC failed: ${decErr.message}`,
       );
     } else {
       console.warn(
-        `[${GENERATOR}] reset ${stale!.length} stale-claim job(s) older than ${STALE_CLAIM_MIN}m and refunded their attempt`,
+        `[${GENERATOR}] reset ${stale.length} stale-claim job(s) (fast=${staleFast?.length ?? 0}/slow=${staleSlow?.length ?? 0}) and refunded their attempts`,
       );
     }
   }
@@ -337,43 +367,66 @@ async function runDispatcherTick(
     try {
       const ok = await dispatchOne(job);
       if (ok.ok) {
-        // Audit defect #1 (contract): the dispatched edge function's full
-        // HTTP response body is persisted into shortlisting_jobs.result. Any
-        // pass function MUST include its complete result payload (cost,
-        // counts, warnings, etc.) in the JSON it returns — Pass 3 reads
-        // job.result during retries to compute pass3_run_count, and ops
-        // queries `result` for cost rollups. Fan-out kinds (e.g. extract)
-        // also expect result to be readable by the chain logic below.
-        // Changing this to a synthesised summary would silently break those
-        // consumers; we keep the verbatim-body contract.
-        await admin
-          .from("shortlisting_jobs")
-          .update({
-            status: "succeeded",
-            finished_at: new Date().toISOString(),
-            error_message: null,
-            result: ok.result ?? null,
-          })
-          .eq("id", job.id);
-        dispatched++;
-        results.push({ id: job.id, kind: job.kind, ok: true });
-
-        // ── Job chaining (post-success) ───────────────────────────────────
-        // Each pass-kind enqueues exactly one job for the next pass when it
-        // succeeds. Extract is the only fan-out kind: pass0 only fires once
-        // ALL of a round's extract jobs are 'succeeded' (no pending/running
-        // siblings remain).
-        try {
-          await chainNextKind(admin, job);
-        } catch (chainErr) {
-          // A chain failure shouldn't fail the parent job (already marked
-          // succeeded above). Just log and let the next dispatcher tick
-          // notice the gap (or a manual re-run will re-evaluate).
-          const msg =
-            chainErr instanceof Error ? chainErr.message : String(chainErr);
-          console.warn(
-            `[${GENERATOR}] chain after ${job.kind} ${job.id} failed: ${msg}`,
+        if (ok.background_mode) {
+          // Wave 11.7.1 immediate-ack contract: the called fn (currently
+          // shortlisting-shape-d) returned a fast 200 ack and is now running
+          // the heavy work inside EdgeRuntime.waitUntil. The bgWork will
+          // self-update the shortlisting_jobs row with status='succeeded' or
+          // 'failed' when it finishes. The dispatcher MUST NOT touch the row
+          // here — doing so would race with bgWork and either (a) prematurely
+          // mark a still-running job as succeeded (breaking chain idempotency
+          // checks) or (b) clobber bgWork's persisted error_message.
+          //
+          // Job chaining is also bgWork's responsibility (the orchestrator
+          // inserts the stage4_synthesis row inline so it can carry round-
+          // state context). Skip the chain attempt here.
+          //
+          // Stale-claim sweep at the top of the next tick (>5min in 'running')
+          // is the safety net if bgWork crashes before persisting status.
+          dispatched++;
+          results.push({ id: job.id, kind: job.kind, ok: true });
+          console.log(
+            `[${GENERATOR}] ${job.kind} ${job.id} ack'd in background mode — bgWork owns row state`,
           );
+        } else {
+          // Audit defect #1 (contract): the dispatched edge function's full
+          // HTTP response body is persisted into shortlisting_jobs.result. Any
+          // pass function MUST include its complete result payload (cost,
+          // counts, warnings, etc.) in the JSON it returns — Pass 3 reads
+          // job.result during retries to compute pass3_run_count, and ops
+          // queries `result` for cost rollups. Fan-out kinds (e.g. extract)
+          // also expect result to be readable by the chain logic below.
+          // Changing this to a synthesised summary would silently break those
+          // consumers; we keep the verbatim-body contract.
+          await admin
+            .from("shortlisting_jobs")
+            .update({
+              status: "succeeded",
+              finished_at: new Date().toISOString(),
+              error_message: null,
+              result: ok.result ?? null,
+            })
+            .eq("id", job.id);
+          dispatched++;
+          results.push({ id: job.id, kind: job.kind, ok: true });
+
+          // ── Job chaining (post-success) ───────────────────────────────────
+          // Each pass-kind enqueues exactly one job for the next pass when it
+          // succeeds. Extract is the only fan-out kind: pass0 only fires once
+          // ALL of a round's extract jobs are 'succeeded' (no pending/running
+          // siblings remain).
+          try {
+            await chainNextKind(admin, job);
+          } catch (chainErr) {
+            // A chain failure shouldn't fail the parent job (already marked
+            // succeeded above). Just log and let the next dispatcher tick
+            // notice the gap (or a manual re-run will re-evaluate).
+            const msg =
+              chainErr instanceof Error ? chainErr.message : String(chainErr);
+            console.warn(
+              `[${GENERATOR}] chain after ${job.kind} ${job.id} failed: ${msg}`,
+            );
+          }
         }
       } else {
         await markFailed(admin, job, ok.error || "unknown");
@@ -411,6 +464,14 @@ type DispatchResult = {
   ok: boolean;
   error?: string;
   result?: Record<string, unknown> | null;
+  // Wave 11.7.1: When the called function returns `{ ok: true, mode: 'background', ... }`
+  // it has kicked the heavy work into EdgeRuntime.waitUntil and will self-update
+  // the shortlisting_jobs row when bgWork completes. The dispatcher must NOT
+  // auto-mark the row as 'succeeded' on the HTTP 200 ack — the row is still
+  // 'running' from the dispatcher's perspective until bgWork writes its
+  // terminal state. Used by shortlisting-shape-d (Stage 1 takes 3-5 min for
+  // 200-angle shoots, well past the 120s gateway timeout).
+  background_mode?: boolean;
 };
 
 /**
@@ -748,6 +809,12 @@ async function callEdgeFunction(
           error: `${fnName}: success=false, error=${bodyJson.error || "unknown"}`,
         };
       }
+      // Wave 11.7.1 background-mode contract: the function returned a fast
+      // ack and is running the real work inside EdgeRuntime.waitUntil. It
+      // will self-update shortlisting_jobs.status when bgWork finishes, so
+      // we surface the flag and let the caller skip the auto-mark.
+      const isBackground = bodyJson.mode === "background";
+      return { ok: true, result: bodyJson, background_mode: isBackground };
     }
     return { ok: true, result: bodyJson };
   } catch (err) {
