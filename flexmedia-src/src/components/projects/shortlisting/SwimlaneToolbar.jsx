@@ -421,9 +421,20 @@ function PhaseBadge({ phase, filled, expected }) {
   } else if (filled > 0) {
     tone = "text-amber-700 dark:text-amber-300";
   }
+  // W11.6.1-hotfix-2 BUG #1: data-testid attributes so smoke tests + Joseph's
+  // live verification can read filled/expected without parsing the rendered
+  // string.
   return (
-    <span className={cn("font-medium tabular-nums", tone)}>
-      Phase {phase}: {filled}/{expected}
+    <span
+      className={cn("font-medium tabular-nums", tone)}
+      data-testid={`slot-counter-phase-${phase}`}
+      data-filled={filled}
+      data-expected={expected}
+    >
+      Phase {phase}:{" "}
+      <span data-testid={`slot-counter-phase-${phase}-filled`}>{filled}</span>
+      /
+      <span data-testid={`slot-counter-phase-${phase}-expected`}>{expected}</span>
     </span>
   );
 }

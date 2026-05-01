@@ -145,8 +145,16 @@ function GroupedCorrectionCard({
     <Card className="transition-colors">
       <CardContent className="p-3">
         <div className="flex items-start gap-3">
-          {/* Real Dropbox thumbnail (single per stem). */}
-          <div className="w-20 h-20 flex-shrink-0 rounded border overflow-hidden">
+          {/* Real Dropbox thumbnail (single per stem).
+              W11.6.1-hotfix-2 BUG #5: drop the fixed h-20 so the inner
+              DroneThumbnail's aspect-square drives height from wrapper
+              width. The `w-20 h-20` parent forced the inner flex/aspect
+              layout into a degenerate state where the spinner stuck.
+              Width-only sizing → 80px wide + derived 80px from aspect. */}
+          <div
+            className="w-20 flex-shrink-0 rounded border overflow-hidden"
+            data-testid="stage4-correction-thumb"
+          >
             {previewPath ? (
               <DroneThumbnail
                 dropboxPath={previewPath}
@@ -155,7 +163,7 @@ function GroupedCorrectionCard({
                 aspectRatio="aspect-square"
               />
             ) : (
-              <div className="w-full h-full bg-muted/40 flex items-center justify-center text-[9px] text-muted-foreground">
+              <div className="aspect-square w-full bg-muted/40 flex items-center justify-center text-[9px] text-muted-foreground">
                 no preview
               </div>
             )}
@@ -440,8 +448,15 @@ export default function Stage4CorrectionsLane({ roundId }) {
   const groupedByStem = useMemo(() => {
     const m = new Map();
     for (const r of rows) {
-      const key = r.stem;
-      if (!key) continue;
+      // W11.6.1-hotfix-2 BUG #4: be defensive about rows with missing
+      // stem. The unique index is (round_id, stem, field) so stem is
+      // non-null at the DB level — but a malformed row from a partial
+      // migration shouldn't silently disappear. Bucket stem-less rows
+      // under a fallback key derived from row id so they still render.
+      let key = r.stem;
+      if (!key) {
+        key = `__missing_stem__:${r.id || Math.random().toString(36).slice(2, 8)}`;
+      }
       if (!m.has(key)) m.set(key, []);
       m.get(key).push(r);
     }

@@ -494,9 +494,59 @@ export default function ShortlistingSwimlane({
     return m;
   }, [classifications]);
 
-  // Per-group slot info from pass2 events: { slot_id, phase, rank }
+  // Per-group slot info: { slot_id, phase, rank }.
+  //
+  // W11.6.1-hotfix-2 BUG #2: Shape D rounds don't emit pass2_slot_assigned
+  // events — the canonical (slot_id, group_id) pairs live on
+  // shortlisting_overrides ai_proposed rows. Pre-Shape-D rounds wrote pass2
+  // events. We read BOTH so legacy + Shape D rounds populate the same map
+  // shape, and the AI PROPOSED column header / sub-grouping renders the
+  // correct slot label instead of "Unassigned".
+  //
+  // Resolution priority (most recent wins on hybrid rounds):
+  //   1. shortlisting_overrides.ai_proposed (Shape D primary)
+  //   2. shortlisting_overrides.swapped/added_from_rejects/approved_as_proposed
+  //      — re-binds slot to the human-picked group via human_selected_*
+  //   3. shortlisting_events pass2_slot_assigned rank=1 (legacy)
+  //   4. shortlisting_events pass2_phase3_recommendation (legacy)
   const slotByGroupId = useMemo(() => {
     const m = new Map();
+
+    // PASS 1 — Shape D ai_proposed rows (PRIMARY for Shape D rounds).
+    for (const ov of overrides) {
+      if (ov.human_action !== "ai_proposed") continue;
+      const groupId = ov.ai_proposed_group_id;
+      const slotId = ov.ai_proposed_slot_id;
+      if (!groupId || !slotId) continue;
+      if (m.has(groupId)) continue;
+      m.set(groupId, {
+        slot_id: slotId,
+        phase: PHASE_OF_SLOT[slotId] ?? null,
+        rank: 1,
+      });
+    }
+
+    // PASS 2 — Shape D operator override actions.
+    for (const ov of overrides) {
+      if (
+        ov.human_action !== "swapped" &&
+        ov.human_action !== "added_from_rejects" &&
+        ov.human_action !== "approved_as_proposed"
+      ) {
+        continue;
+      }
+      const slotId = ov.human_selected_slot_id ?? ov.ai_proposed_slot_id;
+      const groupId = ov.human_selected_group_id ?? ov.ai_proposed_group_id;
+      if (!groupId || !slotId) continue;
+      if (m.has(groupId)) continue;
+      m.set(groupId, {
+        slot_id: slotId,
+        phase: PHASE_OF_SLOT[slotId] ?? null,
+        rank: 1,
+      });
+    }
+
+    // PASS 3 — legacy pass2 events (pre-Shape-D fallback).
     for (const ev of slotEvents) {
       if (!ev.group_id) continue;
       const p = ev.payload || {};
@@ -521,7 +571,7 @@ export default function ShortlistingSwimlane({
       }
     }
     return m;
-  }, [slotEvents]);
+  }, [overrides, slotEvents]);
 
   // Alternatives map: slot_id -> [{ group_id, stem, combined_score, room_type, analysis }]
   // From pass2_slot_assigned events with rank in (2, 3).
@@ -597,9 +647,17 @@ export default function ShortlistingSwimlane({
     }
   }, [bannerDismissKey]);
 
-  // Initial AI shortlist set + classification-based rejection set
+  // Initial AI shortlist set + classification-based rejection set.
+  //
+  // W11.6.1-hotfix-2 BUG #1+#2: pre-seed PROPOSED with Shape D ai_proposed
+  // override rows. Without this seeding, every group lands in REJECTED on
+  // a Shape D round (legacy slotEvents are empty), and the override-
+  // application loop below re-routes them to PROPOSED. Seeding here keeps
+  // the data flow honest — `initialColumns` is referenced in places that
+  // don't always re-apply overrides (future analytics derivations).
   const initialColumns = useMemo(() => {
     const proposed = new Set();
+    // Legacy pass2 events (pre-Shape-D rounds).
     for (const ev of slotEvents) {
       if (!ev.group_id) continue;
       if (ev.event_type === "pass2_phase3_recommendation") {
@@ -609,13 +667,18 @@ export default function ShortlistingSwimlane({
         if (rank === 1 || rank === undefined) proposed.add(ev.group_id);
       }
     }
+    // Shape D ai_proposed override rows.
+    for (const ov of overrides) {
+      if (ov.human_action !== "ai_proposed") continue;
+      if (ov.ai_proposed_group_id) proposed.add(ov.ai_proposed_group_id);
+    }
     const rejected = new Set();
     for (const g of groups) {
       if (proposed.has(g.id)) continue;
       rejected.add(g.id);
     }
     return { proposed, rejected, approved: new Set() };
-  }, [slotEvents, groups]);
+  }, [slotEvents, overrides, groups]);
 
   // Apply overrides on top of initial assignment, in chronological order.
   // Local override state (for pending optimistic moves before server acks).
@@ -1735,6 +1798,7 @@ function SwimlaneCardRenderer({
             }
             registerCardObserver={registerCardObserver}
             onAltsDrawerOpen={onAltsDrawerOpen}
+            previewSize={previewSize}
           />
         </div>
       )}

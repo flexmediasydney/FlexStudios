@@ -164,6 +164,10 @@ function useIsExpanded(cardId) {
  *   time the editor expands the alternatives drawer for this card. Wired to
  *   the swimlane's seenAltsBySlotId tracking so analytics can distinguish
  *   "drawer rendered" from "drawer actively viewed".
+ * @param {'sm'|'md'|'lg'} [props.previewSize]  W11.6.1-hotfix-2 BUG #3:
+ *   thumbnail size from the toolbar's SM/MD/LG toggle. Switches the
+ *   thumbnail wrapper width so the visual size actually changes when the
+ *   operator clicks the toggle. Defaults to 'md'.
  */
 export default function ShortlistingCard({
   composition,
@@ -173,6 +177,7 @@ export default function ShortlistingCard({
   onSwapAlternative,
   registerCardObserver,
   onAltsDrawerOpen,
+  previewSize = "md",
 }) {
   const [altsExpanded, setAltsExpanded] = useState(false);
   // W11.6.2 P3 #2: which alt is "expanded in place" inside the tray.
@@ -515,9 +520,18 @@ export default function ShortlistingCard({
       )}
     >
       {/* Thumbnail — W11.6.2: 3:2 (Canon R5 native is 6240x4160 = 1.5).
-          aspect-[4/3] cropped vertical edges, destroying the compositional
-          fidelity that Stage 1 spent 1,700 chars analysing. */}
-      <div className="relative">
+          W11.6.1-hotfix-2 BUG #3: switch wrapper width on previewSize so
+          the toolbar's SM/MD/LG toggle visibly changes the thumbnail size.
+          aspect-[3/2] inside DroneThumbnail derives the height; we pin a
+          max-width on the wrapper so the parent column flexes around it. */}
+      <div
+        className={cn(
+          "relative",
+          previewSize === "sm" && "max-w-[96px]",
+          previewSize === "lg" && "max-w-[256px]",
+        )}
+        data-testid={`shortlisting-card-thumb-${previewSize}`}
+      >
         <DroneThumbnail
           dropboxPath={previewPath}
           mode="thumb"
