@@ -41,6 +41,38 @@
  * in _shared/overrideAnnotate.ts (pure helper); this fn wires it to the DB
  * UPDATE + project-access guard. Response: { ok: true, override_id: UUID }.
  *
+ * Wave 11.6.9 — reclassify path:
+ *
+ *   POST { reclassify: {
+ *     group_id: UUID,
+ *     round_id: UUID,
+ *     override_source?: 'stage1_correction' (default) | 'stage4_visual_override' | 'master_admin_correction',
+ *     human_room_type?: string,
+ *     human_composition_type?: string,
+ *     human_vantage_point?: 'interior_looking_out' | 'exterior_looking_in' | 'neutral',
+ *     human_combined_score?: number,
+ *     human_eligible_slot_ids?: string[],
+ *     ai_room_type?: string,             // optional baseline for replay/audit
+ *     ai_composition_type?: string,
+ *     ai_vantage_point?: string,
+ *     ai_combined_score?: number,
+ *     override_reason?: string,           // optional free-text note
+ *   } }
+ *
+ * Used by the ShortlistingCard's "Why?" expander reclassify form. The card
+ * surfaces Stage 1 + Stage 4 reasoning, the operator clicks an inline edit
+ * pencil, fixes the field, saves. Each save UPSERTs a row in
+ * `composition_classification_overrides` keyed on (group_id, round_id,
+ * override_source). The override feeds the projectMemoryBlock on the next
+ * Stage 1 run for the same project — closing the engine learning loop.
+ *
+ * Validation lives in _shared/reclassifyValidate.ts (pure helper). This fn
+ * wires it to the DB upsert + project-access guard + audit-event emission.
+ * Response: { ok: true, override: <row>, action: 'inserted' | 'updated' }.
+ *
+ * RLS guard for master_admin_correction: only master_admin can write that
+ * source. admin/manager attempts are rejected 403.
+ *
  * Auth: master_admin / admin / manager (humans hit this directly).
  *
  * Response: { ok: true, received: N, ids: UUID[] }
@@ -56,6 +88,7 @@ import {
   callerHasProjectAccess,
 } from '../_shared/supabase.ts';
 import { validateAnnotate } from '../_shared/overrideAnnotate.ts';
+import { validateReclassify } from '../_shared/reclassifyValidate.ts';
 
 const GENERATOR = 'shortlisting-overrides';
 
@@ -126,6 +159,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   let body: {
     events?: OverrideEventInput[];
     annotate?: unknown;
+    reclassify?: unknown;
     _health_check?: boolean;
   } = {};
   try {
@@ -136,6 +170,260 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   if (body._health_check) {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
+  }
+
+  // ── Reclassify path (Wave 11.6.9) ───────────────────────────────────────
+  // Operator corrects Stage 1 / Stage 4 per-image judgements (room_type,
+  // composition_type, vantage_point, combined_score, slot eligibility) from
+  // inside the swimlane card's "Why?" expander. Each save UPSERTs a row in
+  // composition_classification_overrides keyed on (group_id, round_id,
+  // override_source). The override feeds projectMemoryBlock on subsequent
+  // Stage 1 runs for the same project — closing the engine learning loop.
+  if (body.reclassify !== undefined) {
+    const validation = validateReclassify(body.reclassify);
+    if (!validation.ok) {
+      return jsonResponse(
+        { ok: false, error: validation.message, error_code: validation.error_code },
+        400,
+        req,
+      );
+    }
+
+    // RLS guard: master_admin_correction is master_admin-only. admin/manager
+    // get a structured 403. Service-role calls bypass (used by automation that
+    // cross-writes through this fn). Note that this is BEFORE the project-
+    // access guard — wrong-role callers should not even reach the round
+    // lookup.
+    if (validation.override_source === 'master_admin_correction'
+        && !isService
+        && user?.role !== 'master_admin') {
+      return jsonResponse(
+        {
+          ok: false,
+          error: 'Forbidden — only master_admin can write override_source=master_admin_correction',
+          error_code: 'RECLASSIFY_MASTER_ADMIN_ONLY',
+        },
+        403,
+        req,
+      );
+    }
+
+    const admin = getAdminClient();
+
+    // Resolve project_id via the round, used by the project-access guard +
+    // audit event. We fetch in a single round-trip rather than two; the round
+    // table is small and uncached.
+    const { data: round, error: roundErr } = await admin
+      .from('shortlisting_rounds')
+      .select('id, project_id')
+      .eq('id', validation.round_id)
+      .maybeSingle();
+    if (roundErr) {
+      return errorResponse(`reclassify round lookup failed: ${roundErr.message}`, 500, req);
+    }
+    if (!round) {
+      return jsonResponse(
+        { ok: false, error: `round ${validation.round_id} not found`, error_code: 'RECLASSIFY_ROUND_NOT_FOUND' },
+        404,
+        req,
+      );
+    }
+    const projectId = round.project_id as string;
+
+    if (!isService) {
+      const ok = await callerHasProjectAccess(user!, projectId);
+      if (!ok) {
+        return errorResponse(
+          `Forbidden — caller has no access to project ${projectId}`,
+          403,
+          req,
+        );
+      }
+    }
+
+    // Confirm group belongs to the round (cheap consistency check — without
+    // this, a malicious payload could write an override row tying an
+    // unrelated group to a round on a project the caller has access to).
+    const { data: group, error: groupErr } = await admin
+      .from('composition_groups')
+      .select('id, round_id')
+      .eq('id', validation.group_id)
+      .maybeSingle();
+    if (groupErr) {
+      return errorResponse(`reclassify group lookup failed: ${groupErr.message}`, 500, req);
+    }
+    if (!group) {
+      return jsonResponse(
+        { ok: false, error: `group ${validation.group_id} not found`, error_code: 'RECLASSIFY_GROUP_NOT_FOUND' },
+        404,
+        req,
+      );
+    }
+    if (group.round_id !== validation.round_id) {
+      return jsonResponse(
+        {
+          ok: false,
+          error: `group ${validation.group_id} is not part of round ${validation.round_id}`,
+          error_code: 'RECLASSIFY_GROUP_ROUND_MISMATCH',
+        },
+        400,
+        req,
+      );
+    }
+
+    // Resolve actor_user_id. Per the W11.5 actor_required_chk constraint
+    // (mig 379a), actor_user_id MUST be non-NULL when override_source IN
+    // ('stage1_correction', 'master_admin_correction'). Service-role callers
+    // for those sources need an explicit acting_user_id passed in the body
+    // — but our reclassify path is operator-driven only (the swimlane is the
+    // sole caller), so non-service is the expected path here.
+    const actorUserId: string | null = isService ? null : (user?.id ?? null);
+    if (actorUserId === null
+        && validation.override_source !== 'stage4_visual_override') {
+      return jsonResponse(
+        {
+          ok: false,
+          error: `actor_user_id required for override_source='${validation.override_source}'`,
+          error_code: 'RECLASSIFY_ACTOR_REQUIRED',
+        },
+        400,
+        req,
+      );
+    }
+
+    // Idempotent UPSERT keyed on (group_id, round_id, override_source) per
+    // mig 373's UNIQUE constraint. Read-then-write so we can return the
+    // pre-image (action='updated') vs fresh insert (action='inserted'),
+    // and accumulate human_* fields across saves on the same row.
+    const { data: existing, error: existingErr } = await admin
+      .from('composition_classification_overrides')
+      .select('*')
+      .eq('group_id', validation.group_id)
+      .eq('round_id', validation.round_id)
+      .eq('override_source', validation.override_source)
+      .maybeSingle();
+    if (existingErr) {
+      return errorResponse(`reclassify existing-row lookup failed: ${existingErr.message}`, 500, req);
+    }
+
+    // master_admin combined_score reclassifications are weighted authoritative
+    // per W11.5 §"Q2 — score override authority". The flag tells W14
+    // calibration to weight these higher than admin/manager corrections.
+    const isMasterAdminOverride = !isService && user?.role === 'master_admin';
+    const scoreAuthoritative = validation.human_combined_score != null
+      && (validation.override_source === 'master_admin_correction' || isMasterAdminOverride);
+
+    // Build the row from the validated payload. We populate ai_*/human_* in
+    // pairs so the W11.6 dashboard can replay each correction; null fields
+    // stay null (== "accept AI"). A multi-field reclassify may set several
+    // human_* in one go.
+    const newCols: Record<string, unknown> = {
+      override_reason: validation.override_reason,
+      actor_user_id: actorUserId,
+      actor_at: new Date().toISOString(),
+    };
+    if (validation.human_room_type !== null) {
+      newCols.ai_room_type = validation.ai_room_type;
+      newCols.human_room_type = validation.human_room_type;
+    }
+    if (validation.human_composition_type !== null) {
+      newCols.ai_composition_type = validation.ai_composition_type;
+      newCols.human_composition_type = validation.human_composition_type;
+    }
+    if (validation.human_vantage_point !== null) {
+      newCols.ai_vantage_point = validation.ai_vantage_point;
+      newCols.human_vantage_point = validation.human_vantage_point;
+    }
+    if (validation.human_combined_score !== null) {
+      newCols.ai_combined_score = validation.ai_combined_score;
+      newCols.human_combined_score = validation.human_combined_score;
+      newCols.human_combined_score_authoritative = scoreAuthoritative;
+    }
+    if (validation.human_eligible_slot_ids !== null) {
+      newCols.human_eligible_slot_ids = validation.human_eligible_slot_ids;
+    }
+
+    // Capture before-values for audit (only the fields that actually changed).
+    const existingRow = existing as Record<string, unknown> | null;
+    const beforeValues: Record<string, unknown> = {};
+    const afterValues: Record<string, unknown> = {};
+    for (const f of validation.changed_fields) {
+      const aiKey = `ai_${f}`;
+      const humanKey = `human_${f}`;
+      const prevHuman = existingRow ? existingRow[humanKey] : undefined;
+      const prevAi = existingRow ? existingRow[aiKey] : undefined;
+      beforeValues[f] = (prevHuman ?? prevAi ?? newCols[aiKey]) ?? null;
+      afterValues[f] = newCols[humanKey] ?? null;
+    }
+
+    let savedRow: Record<string, unknown> | null = null;
+    let action: 'inserted' | 'updated';
+
+    if (existingRow) {
+      // UPDATE: merge — preserve any human_* fields the new request didn't
+      // touch (e.g. an earlier save corrected room_type, this save corrects
+      // vantage_point; we want both stored). The non-touched ai_* fields
+      // also stay so we don't lose the engine baseline.
+      const { data: updated, error: updErr } = await admin
+        .from('composition_classification_overrides')
+        .update(newCols)
+        .eq('id', existingRow.id as string)
+        .select('*')
+        .maybeSingle();
+      if (updErr) {
+        return errorResponse(`reclassify UPDATE failed: ${updErr.message}`, 500, req);
+      }
+      savedRow = updated as Record<string, unknown> | null;
+      action = 'updated';
+    } else {
+      const insertRow: Record<string, unknown> = {
+        group_id: validation.group_id,
+        round_id: validation.round_id,
+        override_source: validation.override_source,
+        ...newCols,
+      };
+      const { data: inserted, error: insErr } = await admin
+        .from('composition_classification_overrides')
+        .insert(insertRow)
+        .select('*')
+        .maybeSingle();
+      if (insErr) {
+        return errorResponse(`reclassify INSERT failed: ${insErr.message}`, 500, req);
+      }
+      savedRow = inserted as Record<string, unknown> | null;
+      action = 'inserted';
+    }
+
+    // Emit a shortlisting_events row for the audit trail. Soft-fail: don't
+    // block the override on event-insert error.
+    //
+    // actor_type is constrained to ('system','user','worker') by the table
+    // CHECK; we use 'user' for non-service callers and 'system' for service-
+    // role automation. actor_id is the resolved actor_user_id.
+    const { error: evErr } = await admin
+      .from('shortlisting_events')
+      .insert({
+        project_id: projectId,
+        round_id: validation.round_id,
+        group_id: validation.group_id,
+        event_type: 'stage1_correction',
+        actor_type: isService ? 'system' : 'user',
+        actor_id: actorUserId,
+        payload: {
+          override_id: savedRow?.id ?? null,
+          override_source: validation.override_source,
+          changed_fields: validation.changed_fields,
+          before: beforeValues,
+          after: afterValues,
+          override_reason: validation.override_reason,
+          action,
+        },
+      });
+    if (evErr) {
+      console.warn(`[${GENERATOR}] reclassify event insert failed (non-fatal): ${evErr.message}`);
+    }
+
+    return jsonResponse({ ok: true, override: savedRow, action }, 200, req);
   }
 
   // ── Annotate path (Wave 10.3 P1-16) ─────────────────────────────────────
