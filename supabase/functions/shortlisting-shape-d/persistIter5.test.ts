@@ -153,6 +153,8 @@ Deno.test('iter-5 persistence: all 17 enrichment fields land when Gemini emits t
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
 
@@ -208,6 +210,8 @@ Deno.test('iter-5 persistence: missing fields degrade to safe defaults (null/[] 
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
 
@@ -251,6 +255,8 @@ Deno.test('iter-5 persistence: listing_copy flattening — nested object split i
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
 
@@ -282,6 +288,8 @@ Deno.test('iter-5 persistence: listing_copy fallback — top-level flat fields u
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
 
@@ -309,6 +317,8 @@ Deno.test('iter-5 persistence: requires_human_review preserves explicit false (v
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
   assertStrictEquals(captured1.row!.requires_human_review, false);
@@ -328,6 +338,8 @@ Deno.test('iter-5 persistence: requires_human_review preserves explicit false (v
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
   assertStrictEquals(captured2.row!.requires_human_review, null);
@@ -355,6 +367,8 @@ Deno.test('iter-5 persistence: confidence_per_field stored as-is when object emi
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
 
@@ -385,6 +399,8 @@ Deno.test('iter-5 persistence: retouch_estimate_minutes coerced to integer (trun
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
     warnings: [],
   });
 
