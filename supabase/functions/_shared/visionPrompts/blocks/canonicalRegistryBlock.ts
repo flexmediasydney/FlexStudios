@@ -22,15 +22,26 @@
  * invalidation tracks block changes (W7.6 pattern). Persisted in
  * `composition_classifications.prompt_block_versions`.
  *
- * Coordination note: Agent 2 owns Stage 1 prompt composition
- * (shortlisting-shape-d/index.ts). This file is the helper Agent 2 wires in.
- * If they're done before us they'll TODO it; we deliver the helper so the
- * wiring is a one-line import.
+ * ─── W12.A REFACTOR ─────────────────────────────────────────────────────────
+ *
+ * Split into pure renderer + DB loader so the rendering layer is testable
+ * without a Supabase client. Three exports now:
+ *
+ *   loadTopCanonicals(client, opts) → CanonicalRow[]   — DB query (impure)
+ *   renderCanonicalRegistryBlock(rows) → string        — pure renderer
+ *   canonicalRegistryBlock(opts) → Promise<string>     — back-compat composed
+ *
+ * Cost / latency: 200 rows × ~12 tokens each ≈ 2-3KB additional input tokens
+ * per call. Per Stage 1 call: 200 × 12 × $1.25/1M = $0.003. Per round (33
+ * Stage 1 calls): +$0.10. Per Stage 4 (12 calls): +$0.04. Negligible vs the
+ * cross-project consistency benefit of anchoring observations to a stable
+ * canonical_id vocabulary.
  */
 
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { getAdminClient } from '../../supabase.ts';
 
-export const CANONICAL_REGISTRY_BLOCK_VERSION = 'v1.0';
+export const CANONICAL_REGISTRY_BLOCK_VERSION = 'v1.1';
 
 export interface CanonicalRegistryBlockOpts {
   /** Number of canonicals to render. Default 200 per W11.7 spec. */
@@ -41,7 +52,8 @@ export interface CanonicalRegistryBlockOpts {
   min_frequency?: number;
 }
 
-interface RegistryRow {
+/** A single row from object_registry rendered into the registry block. */
+export interface CanonicalRow {
   canonical_id: string;
   display_name: string;
   description: string | null;
@@ -50,22 +62,31 @@ interface RegistryRow {
   signal_confidence: number | null;
 }
 
+// ─── DB loader (impure) ─────────────────────────────────────────────────────
+
 /**
- * Render the canonical feature registry block.
+ * Load the top-N canonical rows from `object_registry`.
  *
- * @returns text block ready to drop into a system prompt; empty string if
- *          the registry is empty.
+ * Filters on `status='canonical'` AND `is_active=true`. Sorted by
+ * `market_frequency DESC` so the model sees the most-photographed features
+ * first. RLS bypassed via the service-role client — registry rows are
+ * project-agnostic so we don't need per-project filtering.
+ *
+ * Returns `[]` on query error (logged) so the caller can render the empty
+ * block string gracefully.
  */
-export async function canonicalRegistryBlock(
+export async function loadTopCanonicals(
+  client: SupabaseClient,
   opts: CanonicalRegistryBlockOpts = {},
-): Promise<string> {
+): Promise<CanonicalRow[]> {
   const topN = Math.max(1, Math.min(opts.top_n ?? 200, 1000));
   const minFreq = Math.max(0, opts.min_frequency ?? 0);
 
-  const admin = getAdminClient();
-  const { data, error } = await admin
+  const { data, error } = await client
     .from('object_registry')
-    .select('canonical_id, display_name, description, market_frequency, signal_room_type, signal_confidence')
+    .select(
+      'canonical_id, display_name, description, market_frequency, signal_room_type, signal_confidence',
+    )
     .eq('status', 'canonical')
     .eq('is_active', true)
     .gte('market_frequency', minFreq)
@@ -74,10 +95,24 @@ export async function canonicalRegistryBlock(
 
   if (error) {
     console.warn(`[canonicalRegistryBlock] query failed: ${error.message}`);
-    return '';
+    return [];
   }
 
-  const rows = (data || []) as RegistryRow[];
+  return (data || []) as CanonicalRow[];
+}
+
+// ─── Pure renderer ──────────────────────────────────────────────────────────
+
+/**
+ * Render a list of canonical rows as a Gemini-friendly text block.
+ *
+ * Pure function — no DB access, no env reads. Given a fixed input array the
+ * output is deterministic. This is the seam unit tests target.
+ *
+ * Returns the empty string when `rows` is empty so callers can wire
+ * unconditionally.
+ */
+export function renderCanonicalRegistryBlock(rows: CanonicalRow[]): string {
   if (rows.length === 0) {
     return '';
   }
@@ -102,7 +137,7 @@ export async function canonicalRegistryBlock(
   return lines.join('\n');
 }
 
-function formatRow(row: RegistryRow): string {
+function formatRow(row: CanonicalRow): string {
   const desc = (row.description || '').trim();
   const descPart = desc ? ` (${desc})` : '';
   const obs = `${row.market_frequency} obs`;
@@ -116,4 +151,26 @@ function formatRow(row: RegistryRow): string {
   }
 
   return `- ${row.canonical_id}${descPart}: ${obs}`;
+}
+
+// ─── Back-compat composed entry point ──────────────────────────────────────
+
+/**
+ * Render the canonical feature registry block (back-compat wrapper).
+ *
+ * Loads via `loadTopCanonicals(getAdminClient(), opts)` then hands the rows
+ * to `renderCanonicalRegistryBlock`. Use this when you don't already have a
+ * Supabase client in scope. Existing Stage 1 + Stage 4 call sites use this
+ * form for ergonomics — passing a client through every block invocation
+ * would clutter the prompt assembly without changing behaviour.
+ *
+ * @returns text block ready to drop into a system prompt; empty string if
+ *          the registry is empty.
+ */
+export async function canonicalRegistryBlock(
+  opts: CanonicalRegistryBlockOpts = {},
+): Promise<string> {
+  const admin = getAdminClient();
+  const rows = await loadTopCanonicals(admin, opts);
+  return renderCanonicalRegistryBlock(rows);
 }
