@@ -357,6 +357,7 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsAI") && { name: "AI Settings", href: "SettingsAI", icon: Sparkles },
           can("AIAuditLog") && { name: "AI Audit", href: "AIAuditLog", icon: Activity },
           can("SettingsShortlistingSlots") && { name: "Shortlist · Slots", href: "SettingsShortlistingSlots", icon: Sparkles },
+          can("SettingsShortlistingRoomTypes") && { name: "Shortlist · Room Types", href: "SettingsShortlistingRoomTypes", icon: Sparkles },
           can("SettingsShortlistingStandards") && { name: "Shortlist · Standards", href: "SettingsShortlistingStandards", icon: Sparkles },
           can("SettingsShortlistingSignals") && { name: "Shortlist · Signals", href: "SettingsShortlistingSignals", icon: Sparkles },
           can("ShortlistingCalibration") && { name: "Shortlist · Calibration", href: "ShortlistingCalibration", icon: Sparkles },

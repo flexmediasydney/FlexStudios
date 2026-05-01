@@ -121,6 +121,7 @@ const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMa
 const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
 const ShortlistingCommandCenter = React.lazy(() => import('./pages/ShortlistingCommandCenter'));
 const SettingsShortlistingSlots = React.lazy(() => import('./pages/SettingsShortlistingSlots'));
+const SettingsShortlistingRoomTypes = React.lazy(() => import('./pages/SettingsShortlistingRoomTypes'));
 const SettingsShortlistingStandards = React.lazy(() => import('./pages/SettingsShortlistingStandards'));
 const SettingsShortlistingSignals = React.lazy(() => import('./pages/SettingsShortlistingSignals'));
 const ShortlistingCalibration = React.lazy(() => import('./pages/ShortlistingCalibration'));
@@ -207,6 +208,7 @@ export const PAGES = {
     "SettingsAutomationRules": SettingsAutomationRules,
     "ShortlistingCommandCenter": ShortlistingCommandCenter,
     "SettingsShortlistingSlots": SettingsShortlistingSlots,
+    "SettingsShortlistingRoomTypes": SettingsShortlistingRoomTypes,
     "SettingsShortlistingStandards": SettingsShortlistingStandards,
     "SettingsShortlistingSignals": SettingsShortlistingSignals,
     "ShortlistingCalibration": ShortlistingCalibration,

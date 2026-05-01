@@ -41,6 +41,7 @@ export const ROUTE_ACCESS = {
   // ── SHORTLISTING MODULE ───────────────────────────────────
   ShortlistingCommandCenter: ADMIN_AND_ABOVE,
   SettingsShortlistingSlots: OWNER_ONLY,
+  SettingsShortlistingRoomTypes: OWNER_ONLY,
   SettingsShortlistingStandards: OWNER_ONLY,
   SettingsShortlistingSignals: OWNER_ONLY,
   ShortlistingCalibration: OWNER_ONLY,

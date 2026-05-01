@@ -122,6 +122,11 @@ import {
   CANONICAL_REGISTRY_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/canonicalRegistryBlock.ts';
 import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
+import { roomTypeTaxonomyBlock } from '../_shared/visionPrompts/blocks/roomTypeTaxonomy.ts';
+import {
+  roomTypesFromDb,
+  ROOM_TYPES_FROM_DB_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/roomTypesFromDb.ts';
 import { getActiveStreamBAnchors } from '../_shared/streamBInjector.ts';
 
 const GENERATOR = 'shortlisting-shape-d';
@@ -537,8 +542,36 @@ async function runShapeDStage1Core(
   // composition pattern as the harness's `userPrefix`: pass1 system + Sydney
   // primer in system; source-context + voice anchor + self-critique +
   // per-image task instructions in user_text.
-  const anchors = await getActiveStreamBAnchors();
+  // W11.6.7 P1-3: room_type taxonomy is DB-driven via shortlisting_room_types
+  // (admin-editable, 60s in-memory cache, falls back to the static block on
+  // DB error). Fetch in parallel with Stream B anchors, then string-substitute
+  // the static block in the assembled prompt's userPrefix with the dynamic
+  // version. We keep `buildPass1Prompt` as a pure synchronous builder rather
+  // than threading async DB calls through it.
+  const [anchors, dynamicRoomTypes] = await Promise.all([
+    getActiveStreamBAnchors(),
+    roomTypesFromDb(),
+  ]);
   const basePrompt = buildPass1Prompt(anchors);
+  const staticRoomTypeText = roomTypeTaxonomyBlock();
+  if (basePrompt.userPrefix.includes(staticRoomTypeText)) {
+    basePrompt.userPrefix = basePrompt.userPrefix.replace(
+      staticRoomTypeText,
+      dynamicRoomTypes.text,
+    );
+    basePrompt.blockVersions['roomTypeTaxonomy'] = dynamicRoomTypes.version;
+  } else {
+    warnings.push(
+      `roomTypesFromDb: static block sentinel not found in pass1 userPrefix — ` +
+        `dynamic block NOT applied (using static fallback)`,
+    );
+  }
+  console.log(
+    `[${GENERATOR}] roomTypesFromDb version=${basePrompt.blockVersions['roomTypeTaxonomy']} ` +
+      `(dynamic=${
+        basePrompt.blockVersions['roomTypeTaxonomy'] === ROOM_TYPES_FROM_DB_BLOCK_VERSION ? 'yes' : 'no'
+      })`,
+  );
 
   // ── Closed-loop learning: project_memory + few_shot blocks (W11.5/11.7) ──
   // Both are async (DB lookups) — fetch in parallel. Either may return ''
