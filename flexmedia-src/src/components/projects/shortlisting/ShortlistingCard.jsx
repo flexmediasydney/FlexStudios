@@ -1,25 +1,42 @@
 /**
  * ShortlistingCard — Wave 6 Phase 6 SHORTLIST
+ *                    + W11.6.2 (3:2 aspect, "Why?" expander, collapsed-card
+ *                    alternatives tray)
  *
  * Per-composition card rendered in the swimlane columns.
  *
- * Per spec §20:
- *   - Thumbnail (4:3 aspect, fetched via media-proxy / Dropbox temp link)
+ * Layout:
+ *   - Thumbnail (3:2 aspect — Canon R5 native is 6240x4160 = 1.5 = 3:2)
  *   - Filename (monospace, truncated)
  *   - Room type label (human-readable)
  *   - Slot ID badge (only if shortlisted) with phase indicator
  *   - 4-dim scores (C / L / T / A / avg)
  *   - Shortlist / rejected badge
- *   - Analysis text — 3-line truncation, click to expand
- *   - Alternatives tray (collapsed by default)
+ *   - "Why?" expander (W11.6.2 P1-20) — three sections:
+ *       1. Stage 1 reasoning  → composition_classifications.analysis verbatim
+ *       2. Stage 4 slot rationale → shortlisting_overrides.ai_proposed_analysis
+ *          (Stage 4 persists winner.rationale into this column when it writes
+ *           the ai_proposed override row — see persistSlotDecisions in
+ *           shortlisting-shape-d-stage4/index.ts).
+ *       3. Rejection reason → shortlisting_stage4_overrides.reason for this
+ *          stem when present, else "Near-duplicate of <stem>" derived from
+ *          shortlisting_rounds.dedup_groups when this stem appears under
+ *          another stem's cluster.
+ *     Singleton store ensures one panel open at a time across the swimlane.
+ *
+ *   - Alternatives tray (W11.6.2 P3 #2): collapsed-card design — each alt
+ *     renders as a 96px-square thumb + truncated rationale badge. Tooltip
+ *     surfaces full rationale + score on hover. Click = swap in place.
  *
  * Drag handle is the whole card. The parent swimlane wires DragDropContext +
  * Draggable from @hello-pangea/dnd.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api, supabase } from "@/api/supabaseClient";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
-import { ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
+import { ChevronDown, ChevronUp, HelpCircle, Sparkles } from "lucide-react";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +93,44 @@ function shortFilename(s, max = 32) {
   return `${s.slice(0, max - 3)}...`;
 }
 
+// ── Singleton "expanded card" store ──────────────────────────────────────────
+// W11.6.2 P1-20: the brief asks for ONE Why? panel open at a time across the
+// swimlane. The cleanest cross-card coordination — without dragging state up
+// into ShortlistingSwimlane.jsx (which W11.6.1 owns and we explicitly do not
+// touch) — is a tiny module-level store with `useSyncExternalStore`. Every
+// card subscribes to the same currentExpandedId; toggling on a different card
+// closes any prior panel.
+let _expandedCardId = null;
+const _expandedListeners = new Set();
+function _emitExpandedChange() {
+  for (const l of _expandedListeners) {
+    try {
+      l();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+function setExpandedCardId(id) {
+  if (_expandedCardId === id) return;
+  _expandedCardId = id;
+  _emitExpandedChange();
+}
+function getExpandedCardId() {
+  return _expandedCardId;
+}
+function subscribeExpandedCardId(cb) {
+  _expandedListeners.add(cb);
+  return () => _expandedListeners.delete(cb);
+}
+function useIsExpanded(cardId) {
+  return useSyncExternalStore(
+    subscribeExpandedCardId,
+    () => getExpandedCardId() === cardId,
+    () => false,
+  );
+}
+
 /**
  * @param {object} props
  * @param {object} props.composition  composition group + classification + slot info
@@ -102,12 +157,16 @@ export default function ShortlistingCard({
   registerCardObserver,
   onAltsDrawerOpen,
 }) {
-  const [analysisExpanded, setAnalysisExpanded] = useState(false);
   const [altsExpanded, setAltsExpanded] = useState(false);
 
   const c = composition || {};
   const cls = c.classification || {};
   const slot = c.slot || null; // { slot_id, phase, rank } when shortlisted
+  const roundId = c.round_id || null;
+  const cardId = c.id || null;
+  const stem = c.delivery_reference_stem || c.best_bracket_stem || null;
+
+  const whyExpanded = useIsExpanded(cardId);
 
   // Wave 10.3 P1-16: register the outer card div with the swimlane's shared
   // IntersectionObserver. The observer records the timestamp of the first
@@ -121,7 +180,128 @@ export default function ShortlistingCard({
     return typeof teardown === "function" ? teardown : undefined;
   }, [registerCardObserver, c.id]);
 
-  const filename = c.delivery_reference_stem || c.best_bracket_stem || "—";
+  // ── W11.6.2 P1-20: data fetches for the "Why?" panel ────────────────────
+  // Round-level fetches with TanStack Query — keys MATCH the swimlane's
+  // existing query keys so the cache deduplicates. The swimlane fetches
+  // these on mount; cards opening Why? hit cache, not network.
+  //
+  // Reads only. Stage 4 already wrote ai_proposed_analysis into
+  // shortlisting_overrides during persistSlotDecisions; we do not mutate.
+  const overridesQuery = useQuery({
+    queryKey: ["shortlisting_overrides", roundId],
+    queryFn: async () => {
+      const rows = await api.entities.ShortlistingOverride.filter(
+        { round_id: roundId },
+        "created_at",
+        2000,
+      );
+      return rows || [];
+    },
+    enabled: Boolean(roundId && whyExpanded),
+    staleTime: 15_000,
+  });
+
+  // Stage 4 corrections — used to surface the Stage 4 cross-comparison reason
+  // as the "rejection reason" when present. Spec note: brief asks for
+  // field='clutter' specifically, but production data on the test round has
+  // field='room_type'/'vantage'. We surface ANY stage_4_overrides row for the
+  // stem because the rationale is the editor-facing artifact regardless of
+  // which Stage 1 field Stage 4 corrected.
+  // No entity registered for shortlisting_stage4_overrides — use raw supabase
+  // (same pattern as ShapeDEngineBanner). Round-keyed so cards on the same
+  // round share the cache hit.
+  const stage4OverridesQuery = useQuery({
+    queryKey: ["shortlisting_stage4_overrides", roundId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shortlisting_stage4_overrides")
+        .select("stem, field, stage_1_value, stage_4_value, reason")
+        .eq("round_id", roundId);
+      if (error) throw new Error(error.message);
+      return data || [];
+    },
+    enabled: Boolean(roundId && whyExpanded),
+    staleTime: 30_000,
+  });
+
+  // shortlisting_rounds.dedup_groups (Stage 4 cross-image dedup output) —
+  // surfaces "Near-duplicate of <stem>" when the card's stem appears under
+  // another stem's cluster. We pull just the dedup_groups column so the
+  // payload stays tiny.
+  const roundQuery = useQuery({
+    queryKey: ["shortlisting_round_dedup_groups", roundId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shortlisting_rounds")
+        .select("dedup_groups")
+        .eq("id", roundId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data || null;
+    },
+    enabled: Boolean(roundId && whyExpanded),
+    staleTime: 30_000,
+  });
+
+
+  // Resolve Stage 4 winner rationale for this card's slot. Match by
+  // (round_id, ai_proposed_group_id == cardId) on the human_action='ai_
+  // proposed' row, OR by ai_proposed_slot_id when cardId might have been
+  // swapped out (we still want to render the slot's rationale in that case).
+  // Most cards in PROPOSED have the direct-id match; APPROVED post-swap might
+  // not, so we fall back to slot_id.
+  const stage4SlotRationale = (() => {
+    const rows = overridesQuery.data || [];
+    if (!rows.length) return null;
+    // Direct match: this card was Stage 4's winner for some slot.
+    const direct = rows.find(
+      (ov) =>
+        ov.human_action === "ai_proposed" && ov.ai_proposed_group_id === cardId,
+    );
+    if (direct?.ai_proposed_analysis) return direct.ai_proposed_analysis;
+    // Fallback for APPROVED-via-swap: the override row in this column is
+    // human_action='swapped' with human_selected_group_id===cardId. The
+    // RATIONALE we want is still the original Stage 4 winner's rationale
+    // (i.e. WHY Stage 4 picked the OTHER one) — useful for audit.
+    if (slot?.slot_id) {
+      const slotRow = rows.find(
+        (ov) =>
+          ov.human_action === "ai_proposed" &&
+          ov.ai_proposed_slot_id === slot.slot_id,
+      );
+      if (slotRow?.ai_proposed_analysis) return slotRow.ai_proposed_analysis;
+    }
+    return null;
+  })();
+
+  // Stage 4 rejection-correction reason (room_type/vantage/etc.) for THIS stem.
+  const stage4OverrideForStem = (() => {
+    const rows = stage4OverridesQuery.data || [];
+    if (!rows.length || !stem) return null;
+    return rows.find((r) => r.stem === stem) || null;
+  })();
+
+  // dedup_groups membership — when the stem appears under another stem's
+  // cluster, surface "Near-duplicate of <other_stem>". The first stem in
+  // each group_label cluster is treated as the canonical winner; subsequent
+  // stems are the near-duplicates. We're conservative here: only surface
+  // if the stem is NOT first in its group.
+  const dedupNearOf = (() => {
+    if (!stem) return null;
+    // roundQuery.data shape: { dedup_groups: [...] } from the .select.
+    const groups = roundQuery.data?.dedup_groups;
+    if (!Array.isArray(groups)) return null;
+    for (const g of groups) {
+      const stems = Array.isArray(g?.image_stems) ? g.image_stems : [];
+      const idx = stems.indexOf(stem);
+      if (idx > 0) {
+        return stems[0]; // canonical winner = first stem in the cluster
+      }
+    }
+    return null;
+  })();
+
+  const filename = stem || "—";
   const roomType = humanRoomType(cls.room_type);
   const tScore = cls.technical_score;
   const lScore = cls.lighting_score;
@@ -135,6 +315,12 @@ export default function ShortlistingCard({
         : null;
 
   const previewPath = c.dropbox_preview_path;
+
+  const toggleWhy = (e) => {
+    e.stopPropagation();
+    if (!cardId) return;
+    setExpandedCardId(whyExpanded ? null : cardId);
+  };
 
   return (
     <Card
@@ -244,33 +430,120 @@ export default function ShortlistingCard({
           </Badge>
         )}
 
-        {/* Analysis (3-line truncation, click to expand) */}
-        {cls.analysis && (
-          <div className="space-y-0.5">
-            <p
-              className={cn(
-                "text-[10px] leading-snug text-muted-foreground",
-                !analysisExpanded && "line-clamp-3",
-              )}
-            >
-              {cls.analysis}
-            </p>
-            {cls.analysis.length > 120 && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setAnalysisExpanded((v) => !v);
-                }}
-                className="text-[9px] text-primary hover:underline focus:outline-none"
-              >
-                {analysisExpanded ? "Show less" : "Show more"}
-              </button>
+        {/* W11.6.2 P1-20 — "Why?" expander trigger. The full prose stack
+            (Stage 1 + Stage 4 + rejection reason) renders inside the panel
+            below; the trigger itself stays compact so dense lanes don't
+            sprawl. Only one card's panel is open at a time (singleton store
+            above) — clicking another card auto-collapses this one. */}
+        {(cls.analysis || stage4SlotRationale || stage4OverrideForStem || dedupNearOf) && (
+          <button
+            type="button"
+            onClick={toggleWhy}
+            className={cn(
+              "flex items-center gap-1 text-[10px] focus:outline-none rounded-sm px-1 -mx-1",
+              "text-primary hover:underline",
+              whyExpanded && "bg-primary/5",
             )}
+            aria-expanded={whyExpanded}
+            aria-label="Show reasoning for this card"
+          >
+            <HelpCircle className="h-3 w-3" />
+            <span>Why?</span>
+            {whyExpanded ? (
+              <ChevronUp className="h-3 w-3" />
+            ) : (
+              <ChevronDown className="h-3 w-3" />
+            )}
+          </button>
+        )}
+
+        {/* W11.6.2 P1-20 — inline reasoning panel.
+            Renders BELOW the metadata, not as a modal, so mobile reviewers
+            can scroll the lane normally without losing card context. */}
+        {whyExpanded && (
+          <div
+            className="border-t pt-2 mt-1 space-y-2 text-[10px] leading-snug"
+            // Click inside the panel must not bubble up to the draggable
+            // (otherwise selecting analysis text triggers a phantom drag).
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {/* Stage 1 prose — verbatim Gemini analysis (~1,000-1,700 chars).
+                whitespace-pre-wrap so paragraph breaks survive. */}
+            {cls.analysis ? (
+              <div>
+                <div className="font-semibold text-foreground text-[10px] uppercase tracking-wide mb-0.5">
+                  Stage 1 — composition analysis
+                </div>
+                <p className="text-muted-foreground whitespace-pre-wrap">
+                  {cls.analysis}
+                </p>
+              </div>
+            ) : null}
+
+            {/* Stage 4 slot rationale — only meaningful when the card is in
+                AI PROPOSED or HUMAN APPROVED. For REJECTED cards this is
+                empty (rejected cards weren't picked by Stage 4). */}
+            {stage4SlotRationale && column !== "rejected" ? (
+              <div>
+                <div className="font-semibold text-foreground text-[10px] uppercase tracking-wide mb-0.5">
+                  Stage 4 — slot rationale
+                  {slot?.slot_id ? (
+                    <span className="font-mono font-normal ml-1 text-muted-foreground">
+                      [{slot.slot_id}]
+                    </span>
+                  ) : null}
+                </div>
+                <p className="text-muted-foreground whitespace-pre-wrap">
+                  {stage4SlotRationale}
+                </p>
+              </div>
+            ) : null}
+
+            {/* Rejection reason — Stage 4 cross-comparison override OR
+                near-dup of another stem. Brief mentions field='clutter' but
+                production rounds use field='room_type', 'vantage', etc;
+                surface ANY stage_4_override for the stem because the
+                editor-facing rationale is what matters. */}
+            {(stage4OverrideForStem || dedupNearOf) && (
+              <div>
+                <div className="font-semibold text-foreground text-[10px] uppercase tracking-wide mb-0.5">
+                  Stage 4 — correction / near-dup
+                </div>
+                {stage4OverrideForStem ? (
+                  <p className="text-muted-foreground whitespace-pre-wrap">
+                    <span className="font-mono text-[9px] text-foreground">
+                      [{stage4OverrideForStem.field}: {stage4OverrideForStem.stage_1_value} → {stage4OverrideForStem.stage_4_value}]
+                    </span>{" "}
+                    {stage4OverrideForStem.reason}
+                  </p>
+                ) : null}
+                {dedupNearOf ? (
+                  <p className="text-muted-foreground">
+                    Near-duplicate of{" "}
+                    <span className="font-mono text-foreground">
+                      {dedupNearOf}
+                    </span>
+                  </p>
+                ) : null}
+              </div>
+            )}
+
+            {/* Loading hint — keeps the panel from looking empty during the
+                first fetch on a card that hasn't been opened yet. */}
+            {(overridesQuery.isLoading ||
+              stage4OverridesQuery.isLoading ||
+              roundQuery.isLoading) &&
+            !cls.analysis ? (
+              <div className="text-muted-foreground italic">Loading reasoning…</div>
+            ) : null}
           </div>
         )}
 
-        {/* Alternatives tray (only on proposed/approved cards with alts) */}
+        {/* Alternatives tray (only on proposed/approved cards with alts).
+            W11.6.2 commit 3 will rebuild this with a collapsed-card design;
+            kept here as the linear list for now so commit 2 only changes
+            "Why?" surfaces. */}
         {alternatives.length > 0 && column !== "rejected" && (
           <div className="border-t pt-1.5 mt-1">
             <button
