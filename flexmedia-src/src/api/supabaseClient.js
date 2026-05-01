@@ -103,6 +103,14 @@ function toTableName(entityName) {
     // rather than a count noun). Override so api.entities.ShortlistingQuarantine
     // resolves to the right table.
     'shortlisting_quarantines': 'shortlisting_quarantine',
+    // W15b QC fix: PulseListingVisionExtracts ends in 's', so the default
+    // pluraliser appends 'es' → 'pulse_listing_vision_extractses'. Real table
+    // (migration 400) is plural-as-typed.
+    'pulse_listing_vision_extractses': 'pulse_listing_vision_extracts',
+    // W15b QC fix: pulse_listing_missed_opportunity is intentionally singular
+    // (per migration 158 — one substrate row per missed-opportunity event).
+    // Default pluraliser would yield 'pulse_listing_missed_opportunities'.
+    'pulse_listing_missed_opportunities': 'pulse_listing_missed_opportunity',
   };
 
   snake = overrides[snake] || snake;
@@ -891,4 +899,8 @@ export const api = {
 // supabaseAdmin is intentionally NOT exported — it is always null in the frontend.
 // Admin operations go through the adminAuthActions edge function.
 export { supabase };
+
+// Exposed for unit tests — the entity-name → table-name pluraliser. Stable API
+// for assertions on edge-case overrides (e.g. PulseListingVisionExtracts).
+export { toTableName as entityNameToTable };
 // force rebuild 1773921131
