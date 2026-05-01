@@ -109,11 +109,20 @@ import {
   type PropertyTier,
   type VoiceAnchorOpts,
 } from '../_shared/visionPrompts/blocks/voiceAnchorBlock.ts';
+// W11.7.17 — Stage 1 prompt assembly swaps the legacy stage1ResponseSchema for
+// universalVisionResponseSchemaV2. The legacy file is left in place as
+// historical record (per W11.7.17 ticket — DO NOT DELETE). Stage 4's
+// STAGE4_TOOL_SCHEMA stays on its current schema (W11.7.17 spec is per-image
+// only; cross-image master_listing moved to a future W11.7 spec).
 import {
-  STAGE1_RESPONSE_SCHEMA,
-  STAGE1_RESPONSE_SCHEMA_VERSION,
-  STAGE1_RESPONSE_TOOL_NAME,
-} from '../_shared/visionPrompts/blocks/stage1ResponseSchema.ts';
+  UNIVERSAL_VISION_RESPONSE_SCHEMA,
+  UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
+  UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
+} from '../_shared/visionPrompts/blocks/universalVisionResponseSchemaV2.ts';
+import {
+  signalMeasurementBlock,
+  SIGNAL_MEASUREMENT_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/signalMeasurementBlock.ts';
 import { normaliseSignalScores } from '../_shared/visionPrompts/blocks/normaliseSignalScores.ts';
 import { getActiveTierConfig, type TierConfigRow } from '../_shared/tierConfig.ts';
 import { selectCombinedScore } from '../_shared/scoreRollup.ts';
@@ -613,12 +622,21 @@ async function runShapeDStage1Core(
     canonicalRegistryBlock(),
   ]);
 
-  // System prompt: pass1 system blocks + Sydney primer (anchor style_archetype
-  // + era_hint to Sydney typology) + project_memory at the END so it's the
-  // last authoritative directive before user content. canonical registry is
-  // appended at the very END as the authoritative cross-project feature
-  // vocabulary (W12 spec §"Canonical registry").
-  const systemBlocks = [basePrompt.system, '', '', SYDNEY_PRIMER_BLOCK];
+  // System prompt: pass1 system blocks (header + stepOrdering) + W11.7.17
+  // signalMeasurementBlock (source-aware 26-signal measurement prompts;
+  // injected right after `header` per W11.7.17 spec §11) + Sydney primer
+  // (anchor style_archetype + era_hint to Sydney typology) + project_memory
+  // at the END so it's the last authoritative directive before user content.
+  // canonical registry is appended at the very END as the authoritative
+  // cross-project feature vocabulary (W12 spec §"Canonical registry").
+  const systemBlocks = [
+    basePrompt.system,
+    '',
+    '── SIGNAL MEASUREMENT INSTRUCTIONS (W11.7.17 v2) ──',
+    signalMeasurementBlock(sourceType),
+    '',
+    SYDNEY_PRIMER_BLOCK,
+  ];
   if (projectMemoryText.length > 0) {
     systemBlocks.push('', '── PROJECT MEMORY (W11.5) ──', projectMemoryText);
   }
@@ -759,6 +777,10 @@ async function runShapeDStage1Core(
             // W11.6.18: per-round tier_config drives the W11 per-signal
             // weighted rollup when signal_weights is non-empty.
             tierConfig,
+            // W11.7.17 (v2): thread source_type so persist tags every row
+            // with the right discriminator + writes the matching *_specific
+            // JSONB block.
+            sourceType,
             warnings,
           });
         }
@@ -1236,11 +1258,12 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
   ].join('\n');
 
   // Single-image vision call. Schema returns the per-image object directly.
+  // W11.7.17: swapped legacy STAGE1_RESPONSE_SCHEMA for v2 universal schema.
   const baseReq: VisionRequest = {
     vendor: PRIMARY_VENDOR,
     model: PRIMARY_MODEL,
-    tool_name: STAGE1_RESPONSE_TOOL_NAME,
-    tool_input_schema: STAGE1_RESPONSE_SCHEMA,
+    tool_name: UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
+    tool_input_schema: UNIVERSAL_VISION_RESPONSE_SCHEMA,
     system: opts.systemText,
     user_text: userText,
     images: [{
@@ -1342,6 +1365,11 @@ interface PersistOneArgs {
    *  per-signal weighted rollup). Null when no active config is resolvable;
    *  persist falls back to the legacy 4-axis hardcoded blend. */
   tierConfig: TierConfigRow | null;
+  /** Wave 11.7.17 (v2): the source_type of THIS round (drives prompt
+   *  dimorphism and which *_specific JSONB block we expect populated).
+   *  Persisted to composition_classifications.source_type for downstream
+   *  routing (W15a/b/c dashboards, finals QA, competitor analysis). */
+  sourceType: SourceType;
   warnings: string[];
 }
 
@@ -1567,6 +1595,24 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
         : {};
       return str(lc.paragraphs) ?? str(out.listing_copy_paragraphs);
     })(),
+    // ─── W11.7.17 v2 universal schema columns ────────────────────────────
+    // schema_version + source_type tag every row with the v2 discriminator.
+    // image_type captures the 11-option taxonomy (Q1 binding).
+    // observed_objects[] / observed_attributes[] feed W12 registries; each
+    // observed_object has bounding_box populated by default (Q3 binding).
+    // The 4 *_specific JSONB blocks are nullable — only ONE is populated
+    // per row, gated by the round's source_type. The persist filters
+    // defensively so a model that emits the wrong *_specific block for a
+    // given source still lands clean (we accept what the model emits).
+    schema_version: 'v2.0',
+    source_type: args.sourceType,
+    image_type: str(out.image_type),
+    observed_objects: extractObservedObjects(out.observed_objects),
+    observed_attributes: extractObservedAttributes(out.observed_attributes),
+    raw_specific: extractObjectOrNull(out.raw_specific),
+    finals_specific: extractObjectOrNull(out.finals_specific),
+    external_specific: extractObjectOrNull(out.external_specific),
+    floorplan_specific: extractObjectOrNull(out.floorplan_specific),
   };
 
   // Use upsert on the unique (group_id) constraint so retries replace rather
@@ -1577,6 +1623,57 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
   if (insErr) {
     args.warnings.push(`classification upsert failed for ${args.result.group_id}: ${insErr.message}`);
   }
+}
+
+// ─── Wave 11.7.17 v2 schema persist helpers ────────────────────────────────
+
+/**
+ * Defensively extract a JSONB-ready object or null from a model emission.
+ * The v2 *_specific blocks (raw_specific, finals_specific, external_specific,
+ * floorplan_specific) are nullable per source — the model is instructed to
+ * leave 3 of them as null and populate only the one matching its source_type.
+ *
+ * Returns the object as-is when truthy + plain object; returns null otherwise
+ * (covers undefined, null, primitive, array, or wrong type). The DB column
+ * is JSONB nullable, so `null` lands cleanly.
+ */
+function extractObjectOrNull(v: unknown): Record<string, unknown> | null {
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    return v as Record<string, unknown>;
+  }
+  return null;
+}
+
+/**
+ * Extract observed_objects[] from a model emission. Each entry is required
+ * to have bounding_box populated (Q3 binding default ON), but persist is
+ * graceful — entries without bounding_box still land (we don't drop them),
+ * and entries that aren't plain objects are filtered out.
+ *
+ * The schema requires bounding_box; the model's responseSchema enforces it.
+ * If a future model regression drops bounding_box on some entries, we
+ * persist the entry as-is so downstream UIs can still render the raw_label
+ * without the overlay rectangle.
+ */
+function extractObservedObjects(v: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((entry): entry is Record<string, unknown> =>
+      entry !== null && typeof entry === 'object' && !Array.isArray(entry),
+    );
+}
+
+/**
+ * Extract observed_attributes[] from a model emission. Each entry is a
+ * { raw_label, canonical_attribute_id?, canonical_value_id?, confidence,
+ * object_anchor? } object. Filters non-object entries.
+ */
+function extractObservedAttributes(v: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(v)) return [];
+  return v
+    .filter((entry): entry is Record<string, unknown> =>
+      entry !== null && typeof entry === 'object' && !Array.isArray(entry),
+    );
 }
 
 // ─── engine_run_audit upsert ─────────────────────────────────────────────────
@@ -1890,7 +1987,10 @@ async function fetchPreviewBase64(
 
 function stage1PromptBlockVersions(): Record<string, string> {
   return {
-    stage1_response_schema: STAGE1_RESPONSE_SCHEMA_VERSION,
+    // W11.7.17 — replaces stage1_response_schema with the v2 universal
+    // schema + adds signal_measurement (source-aware 26-signal prompts).
+    universal_vision_response_schema: UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
+    signal_measurement: SIGNAL_MEASUREMENT_BLOCK_VERSION,
     source_context: SOURCE_CONTEXT_BLOCK_VERSION,
     photographer_techniques: PHOTOGRAPHER_TECHNIQUES_BLOCK_VERSION,
     exif_context: EXIF_CONTEXT_BLOCK_VERSION,
