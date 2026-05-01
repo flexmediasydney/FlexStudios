@@ -25,6 +25,9 @@
  *     level_4_detail?: string | null,
  *     aliases?: string[],
  *
+ *     // W12.6 (service-role only):
+ *     auto_promoted?: boolean,             // when true, sets object_registry.auto_promoted=TRUE
+ *
  *     // For reject:
  *     reason?: string,
  *
@@ -42,7 +45,11 @@
  *     the queue clears it from the pending list.
  *   - reject / defer: re-running on an already-resolved row returns 409.
  *
- * Auth: master_admin only.
+ * Auth: master_admin only — EXCEPT when `auto_promoted=true` is set in the
+ *       payload, in which case ONLY service-role callers are accepted (the
+ *       canonical-auto-suggest edge fn is the single legitimate caller; a
+ *       master_admin who passed auto_promoted=true would be misrepresenting
+ *       the audit trail). See W12.6 / mig 397.
  *
  * Note: the spec mentions `attribute_registry` as a separate target table,
  * but at v1 we surface attribute candidates through `attribute_values`
@@ -61,7 +68,7 @@ import {
 import { embedText, formatVectorLiteral } from '../_shared/canonicalRegistry/embeddings.ts';
 
 const FN_NAME = 'canonical-discovery-promote';
-const FN_VERSION = 'v1.0';
+const FN_VERSION = 'v1.1'; // W12.6 — accepts auto_promoted flag (service-role only)
 
 interface PromoteBody {
   event_id: string;
@@ -81,6 +88,15 @@ interface PromoteBody {
 
   reason?: string;
   defer_days?: number;
+
+  /**
+   * W12.6: when set TRUE, this promote was driven by the canonical-auto-suggest
+   * edge fn rather than a human operator. Sets object_registry.auto_promoted=
+   * TRUE + auto_promoted_at=now() instead of curated_by=user.id. ONLY service-
+   * role callers may set this — non-service-role caller passing the flag is
+   * rejected with 403 (would misrepresent the audit trail).
+   */
+  auto_promoted?: boolean;
 
   _health_check?: boolean;
 }
@@ -114,6 +130,17 @@ serveWithAudit(FN_NAME, async (req: Request): Promise<Response> => {
 
   if (!body.event_id) return errorResponse('event_id is required', 400, req);
   if (!body.action) return errorResponse('action is required', 400, req);
+
+  // W12.6: auto_promoted flag is service-role only. A master_admin caller
+  // passing auto_promoted=true would falsify the audit trail (the row would
+  // appear AI-promoted when in fact a human curated it). Reject with 403.
+  if (body.auto_promoted === true && !isServiceRole) {
+    return errorResponse(
+      'auto_promoted=true requires service-role auth (canonical-auto-suggest only)',
+      403,
+      req,
+    );
+  }
 
   const { kind, raw_id } = parseEventId(body.event_id);
   if (!kind) {
@@ -292,9 +319,14 @@ async function handlePromote(
     market_frequency: observedCount,
     status: 'canonical',
     is_active: true,
-    created_by: reviewerId,
-    curated_by: reviewerId,
-    curated_at: new Date().toISOString(),
+    // W12.6: AI auto-promotions clear curated_by + set auto_promoted instead.
+    // Human promotions clear auto_promoted + set curated_by. The two paths are
+    // mutually exclusive — see mig 397 doc-comment for the audit triplet rule.
+    created_by: body.auto_promoted ? null : reviewerId,
+    curated_by: body.auto_promoted ? null : reviewerId,
+    curated_at: body.auto_promoted ? null : new Date().toISOString(),
+    auto_promoted: body.auto_promoted === true,
+    auto_promoted_at: body.auto_promoted ? new Date().toISOString() : null,
     first_observed_at: firstObservedAt || new Date().toISOString(),
     last_observed_at: new Date().toISOString(),
   };
@@ -324,7 +356,10 @@ async function handlePromote(
     promoted_into_id: inserted.id,
     canonical_label: inserted.canonical_id,
     target_table: target,
-    message: `Promoted into object_registry as ${inserted.canonical_id}`,
+    auto_promoted: body.auto_promoted === true,
+    message: body.auto_promoted
+      ? `AI auto-promoted into object_registry as ${inserted.canonical_id}`
+      : `Promoted into object_registry as ${inserted.canonical_id}`,
   }, 200, req);
 }
 
