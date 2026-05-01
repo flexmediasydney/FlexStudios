@@ -685,8 +685,17 @@ async function runShapeDStage1Core(
 
       // Persist successes in this slice immediately (matches per-image
       // harness pattern — no batch-end barrier).
+      // W11.6.13 (rebase fix): build a quick lookup of group_id → composition
+      // row from the current batch slice so persistOneClassification can
+      // resolve the originating composition without an out-of-scope `c`.
+      const batchById = new Map(batch.map((c) => [c.group_id, c]));
       for (const r of batchResults) {
         if (r.output) {
+          const comp = batchById.get(r.group_id);
+          if (!comp) {
+            warnings.push(`persistOneClassification: composition row missing for group_id=${r.group_id}`);
+            continue;
+          }
           await persistOneClassification({
             admin,
             roundId,
@@ -695,7 +704,7 @@ async function runShapeDStage1Core(
             promptBlockVersions: stage1PromptBlockVersions(),
             modelVersion: r.model_used,
             // W11.6.7 P1-4: composition row carries exif_metadata for lens_class derivation.
-            composition: c,
+            composition: comp,
             warnings,
           });
         }
