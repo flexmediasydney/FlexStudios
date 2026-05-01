@@ -130,6 +130,10 @@ const SettingsShortlistingPrompts = React.lazy(() => import('./pages/SettingsSho
 const SettingsEngineSettings = React.lazy(() => import('./pages/SettingsEngineSettings'));
 const SettingsTierConfigs = React.lazy(() => import('./pages/SettingsTierConfigs'));
 const SettingsVendorComparison = React.lazy(() => import('./pages/SettingsVendorComparison'));
+// Wave 11.7.7 / W11.6 — Shape D operator UX surfaces.
+const MasterListingReview = React.lazy(() => import('./pages/MasterListingReview'));
+const Stage4Overrides = React.lazy(() => import('./pages/Stage4Overrides'));
+const EngineDashboard = React.lazy(() => import('./pages/EngineDashboard'));
 const SettingsPackageTierMapping = React.lazy(() => import('./pages/SettingsPackageTierMapping'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
@@ -208,6 +212,9 @@ export const PAGES = {
     "SettingsEngineSettings": SettingsEngineSettings,
     "SettingsTierConfigs": SettingsTierConfigs,
     "SettingsVendorComparison": SettingsVendorComparison,
+    "MasterListingReview": MasterListingReview,
+    "Stage4Overrides": Stage4Overrides,
+    "EngineDashboard": EngineDashboard,
     "SettingsPackageTierMapping": SettingsPackageTierMapping,
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,

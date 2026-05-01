@@ -67,6 +67,7 @@ import { cn } from "@/lib/utils";
 import ShortlistingCard from "./ShortlistingCard";
 import LockProgressDialog from "./LockProgressDialog";
 import SignalAttributionModal from "./SignalAttributionModal";
+import ShapeDEngineBanner from "./ShapeDEngineBanner";
 
 // Column definitions
 const COLUMNS = [
@@ -969,6 +970,11 @@ export default function ShortlistingSwimlane({
 
   return (
     <div className="space-y-3">
+      {/* Wave 11.7.7 — Shape D engine controls + audit banner.
+          Renders only when the round is shape_d_* OR has an engine_run_audit
+          row; legacy two-pass rounds keep the original UI clean. */}
+      <ShapeDEngineBanner round={round} projectId={projectId} />
+
       {/* Round metadata strip */}
       <Card>
         <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">

@@ -50,6 +50,10 @@ export const ROUTE_ACCESS = {
   SettingsEngineSettings: OWNER_ONLY,
   SettingsPackageTierMapping: OWNER_ONLY,
   SettingsVendorComparison: OWNER_ONLY,
+  // Wave 11.7.7 / W11.6 — Shape D operator UX surfaces.
+  MasterListingReview: ADMIN_AND_ABOVE,
+  Stage4Overrides: ADMIN_AND_ABOVE,
+  EngineDashboard: ADMIN_AND_ABOVE,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,
