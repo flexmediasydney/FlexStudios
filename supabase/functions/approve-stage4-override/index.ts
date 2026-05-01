@@ -1,72 +1,51 @@
 /**
  * approve-stage4-override
  * ───────────────────────
- * Wave 11.5 / W11.7 / W14 — graduate an operator-approved override into the
- * cross-project few-shot library.
+ * Wave 11.5 / W11.7 / W14 / W11.6.x — graduate an operator-approved Stage 4
+ * visual cross-correction into the cross-project few-shot library AND mark
+ * the source `shortlisting_stage4_overrides` audit row as approved so it
+ * disappears from the in-context review lane.
  *
  * Spec: docs/design-specs/W11-5-human-reclassification-capture.md §"Section 6
  *       — Few-shot library for Stage 1 (Wave 14 hook)"
  *       docs/design-specs/W11-7-unified-shortlisting-architecture.md
  *       §"Few-shot library (W14)"
  *
- * This is the curation graduation hook: an operator's project-scoped override
- * (lives in `composition_classification_overrides`) becomes a cross-project
- * pattern (lives in `engine_fewshot_examples` with `in_active_prompt=TRUE`)
- * via master_admin approval.
- *
- * Closed-loop wiring (W11.7 §"Project memory + canonical registry hooks"):
- *
- *   project A operator override
- *     ─→ composition_classification_overrides row
- *     ─→ master_admin reviews via the W11.6 dashboard / W11.5 review queue
- *     ─→ master_admin invokes this fn with override_id
- *     ─→ engine_fewshot_examples row inserted (in_active_prompt=TRUE)
- *     ─→ projects B, C, D... see the pattern in fewShotLibraryBlock
- *
- * Why master_admin only:
- *   The few-shot library is the cross-project knowledge base. A wrong
- *   pattern there pollutes EVERY future shoot. Raw observation does not
- *   auto-graduate; only deliberate master_admin curation.
- *
  * ─── INPUT ────────────────────────────────────────────────────────────────────
  *
- *   POST {
- *     override_id: UUID,                          // composition_classification_overrides.id
- *     example_kind?: 'room_type_correction'       // optional override; auto-derived from
- *                  | 'composition_correction'     // the override row's first non-null
- *                  | 'reject_pattern',            // human_* field
- *     property_tier?: 'premium' | 'standard'      // optional; default NULL = applies all tiers
- *                  | 'approachable',
- *     image_type?: 'interior' | 'exterior'        // optional; default NULL = applies all types
- *                | 'detail',
- *     description?: string,                        // optional override; default auto-generated
- *     evidence_keywords?: string[]                 // optional override; default sourced from
- *                                                   // the round's key_elements
- *   }
+ * Two accepted shapes (W11.6.x — backwards compat):
  *
- *   POST { _health_check: true } → 200 with version stamp.
+ *   A) NEW (preferred — the in-context lane):
+ *      POST { override_id: <shortlisting_stage4_overrides.id>, ... }
+ *
+ *      The fn detects the row in `shortlisting_stage4_overrides`, locates the
+ *      mirrored `composition_classification_overrides` row (matched by
+ *      round_id + group_id + override_source='stage4_visual_override'), runs
+ *      the graduation, and flips `review_status='approved'` on the source.
+ *
+ *   B) LEGACY (the old standalone /Stage4Overrides queue):
+ *      POST { override_id: <composition_classification_overrides.id>, ... }
+ *
+ *      Pre-existing behaviour. The fn graduates the row directly. No status
+ *      flip on `shortlisting_stage4_overrides` (the row may not even have an
+ *      audit twin if the old queue surfaced it from before the dual-write).
+ *
+ * Optional fields apply to both shapes:
+ *   example_kind?, property_tier?, image_type?, description?, evidence_keywords?
+ *
+ * POST { _health_check: true } → 200 with version stamp.
  *
  * ─── AUTH ─────────────────────────────────────────────────────────────────────
  *
  * master_admin / service_role ONLY. Cross-project pollution risk demands
- * single-role gating. (admin/manager can submit overrides via composition-
- * override; only master_admin promotes them to cross-project status.)
+ * single-role gating.
  *
  * ─── DUPLICATE HANDLING ───────────────────────────────────────────────────────
  *
  * If a similar few-shot example already exists (same example_kind + ai_value
  * + human_value + property_tier + image_type), we UPDATE its
  * `observation_count = observation_count + 1` and refresh `curated_at` /
- * `curated_by` to reflect the latest endorsement. Keeps the example library
- * dedup'd while strengthening empirical confidence per approval.
- *
- * ─── ALSO MARKS THE OVERRIDE ──────────────────────────────────────────────────
- *
- * The source override row gets its `actor_user_id` and `actor_at` updated to
- * the approving master_admin (per W11.5 schema — the actor field captures
- * the latest reviewer). This is harmless if the operator who originally
- * submitted is the same master_admin who approves; it captures the moment
- * of graduation.
+ * `curated_by`.
  */
 
 import {
@@ -89,6 +68,17 @@ const VALID_EXAMPLE_KINDS = new Set([
 const VALID_TIERS = new Set(['premium', 'standard', 'approachable']);
 const VALID_IMAGE_TYPES = new Set(['interior', 'exterior', 'detail']);
 
+// W11.6.x — fields written into shortlisting_stage4_overrides.field that
+// graduate cleanly into the few-shot library. The Stage 4 emitter uses
+// `vantage` (not `vantage_point`); we normalise here so both names work.
+const STAGE4_FIELD_TO_OVERRIDE_FIELD: Record<string, string> = {
+  room_type: 'room_type',
+  composition_type: 'composition_type',
+  vantage: 'vantage_point',
+  vantage_point: 'vantage_point',
+  combined_score: 'combined_score',
+};
+
 interface ApprovalRequest {
   override_id?: string;
   example_kind?: string;
@@ -96,6 +86,7 @@ interface ApprovalRequest {
   image_type?: string | null;
   description?: string;
   evidence_keywords?: string[];
+  review_notes?: string;
   _health_check?: boolean;
 }
 
@@ -125,7 +116,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse('Invalid JSON', 400, req);
   }
   if (body._health_check) {
-    return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
+    return jsonResponse({ _version: 'v1.1', _fn: GENERATOR }, 200, req);
   }
 
   if (!body.override_id || typeof body.override_id !== 'string') {
@@ -157,17 +148,121 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const admin = getAdminClient();
 
-  // ── Load the source override row ─────────────────────────────────────────
-  const { data: override, error: overrideErr } = await admin
-    .from('composition_classification_overrides')
-    .select('*')
-    .eq('id', body.override_id)
-    .maybeSingle();
-  if (overrideErr) {
-    return errorResponse(`override lookup failed: ${overrideErr.message}`, 500, req);
+  // ── W11.6.x: detect input shape ──────────────────────────────────────────
+  // The in-context lane (W11.6.x) sends shortlisting_stage4_overrides.id;
+  // the legacy /Stage4Overrides page sends composition_classification_
+  // overrides.id. We try the new shape first (more recent + Joseph's main
+  // path) and fall back to the legacy direct lookup.
+  const stage4AuditId = body.override_id;
+  let stage4Audit: Record<string, unknown> | null = null;
+  let override: Record<string, unknown> | null = null;
+  let inputShape: 'stage4_audit' | 'legacy_override' = 'legacy_override';
+
+  // Try shape A — shortlisting_stage4_overrides.id
+  {
+    const { data: row, error: stage4Err } = await admin
+      .from('shortlisting_stage4_overrides')
+      .select('id, round_id, group_id, stem, field, stage_1_value, stage_4_value, reason, review_status')
+      .eq('id', stage4AuditId)
+      .maybeSingle();
+    if (stage4Err) {
+      return errorResponse(`stage4_audit lookup failed: ${stage4Err.message}`, 500, req);
+    }
+    if (row) {
+      stage4Audit = row;
+      inputShape = 'stage4_audit';
+    }
   }
+
+  // Shape A path: locate the mirrored composition_classification_overrides row.
+  if (inputShape === 'stage4_audit' && stage4Audit) {
+    if (stage4Audit.review_status === 'approved') {
+      return errorResponse(
+        `Stage 4 override ${stage4AuditId} already approved`,
+        409,
+        req,
+      );
+    }
+    const groupId = stage4Audit.group_id as string | null;
+    const roundId = stage4Audit.round_id as string;
+    if (groupId) {
+      const { data: mirrorRow, error: mirrorErr } = await admin
+        .from('composition_classification_overrides')
+        .select('*')
+        .eq('round_id', roundId)
+        .eq('group_id', groupId)
+        .eq('override_source', 'stage4_visual_override')
+        .maybeSingle();
+      if (mirrorErr) {
+        return errorResponse(`mirror lookup failed: ${mirrorErr.message}`, 500, req);
+      }
+      override = mirrorRow ?? null;
+    }
+  }
+
+  // Shape B path (or shape A fallback when no mirror exists): direct override
+  // lookup. For shape A with no mirror, we synthesise a minimal pseudo-row
+  // from the stage4 audit so graduation can still proceed (e.g. when the
+  // Stage 4 emitter wrote an unsupported field like `vantage` that didn't
+  // mirror).
   if (!override) {
-    return errorResponse(`override ${body.override_id} not found`, 404, req);
+    if (inputShape === 'legacy_override') {
+      const { data: legacyRow, error: legacyErr } = await admin
+        .from('composition_classification_overrides')
+        .select('*')
+        .eq('id', stage4AuditId)
+        .maybeSingle();
+      if (legacyErr) {
+        return errorResponse(`override lookup failed: ${legacyErr.message}`, 500, req);
+      }
+      override = legacyRow ?? null;
+    } else if (stage4Audit) {
+      // Synthesise a pseudo-override row from the stage4 audit so the
+      // existing graduation path works without a mirror. Only the fields
+      // the picker reads are populated.
+      const fieldKey = String(stage4Audit.field ?? '');
+      const normalisedField = STAGE4_FIELD_TO_OVERRIDE_FIELD[fieldKey] ?? fieldKey;
+      const stage1 = stage4Audit.stage_1_value as string | null;
+      const stage4 = stage4Audit.stage_4_value as string | null;
+      const pseudo: Record<string, unknown> = {
+        id: null, // synthetic — no DB id
+        round_id: stage4Audit.round_id,
+        group_id: stage4Audit.group_id,
+        override_reason: stage4Audit.reason,
+        ai_room_type: null,
+        human_room_type: null,
+        ai_composition_type: null,
+        human_composition_type: null,
+        ai_vantage_point: null,
+        human_vantage_point: null,
+        ai_combined_score: null,
+        human_combined_score: null,
+      };
+      if (normalisedField === 'room_type') {
+        pseudo.ai_room_type = stage1;
+        pseudo.human_room_type = stage4;
+      } else if (normalisedField === 'composition_type') {
+        pseudo.ai_composition_type = stage1;
+        pseudo.human_composition_type = stage4;
+      } else if (normalisedField === 'vantage_point') {
+        pseudo.ai_vantage_point = stage1;
+        pseudo.human_vantage_point = stage4;
+      } else if (normalisedField === 'combined_score') {
+        const aiScore = stage1 != null ? Number(stage1) : NaN;
+        const humanScore = stage4 != null ? Number(stage4) : NaN;
+        if (!Number.isNaN(aiScore)) pseudo.ai_combined_score = aiScore;
+        if (!Number.isNaN(humanScore)) pseudo.human_combined_score = humanScore;
+      }
+      override = pseudo;
+    }
+  }
+
+  if (!override) {
+    return errorResponse(
+      `override ${body.override_id} not found (tried shortlisting_stage4_overrides + composition_classification_overrides)`,
+      404,
+      req,
+    );
   }
 
   // Determine the field that was overridden. Pick the first non-null human_*
@@ -199,18 +294,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Fetch evidence keywords from the round's key_elements ────────────────
-  // Unless the caller supplied them explicitly, we derive them from the
-  // composition_classifications.key_elements column for the same group.
-  // This is a lightweight heuristic; W12 canonical rollup will refine it
-  // further (mapping free-text key_elements → canonical_object_ids).
   let evidence: string[] = [];
   if (Array.isArray(body.evidence_keywords) && body.evidence_keywords.length > 0) {
     evidence = body.evidence_keywords.map(String).filter((s) => s.length > 0);
-  } else {
+  } else if (override.group_id) {
     const { data: classification } = await admin
       .from('composition_classifications')
       .select('key_elements')
-      .eq('group_id', override.group_id)
+      .eq('group_id', override.group_id as string)
       .maybeSingle();
     const ke = classification?.key_elements;
     if (Array.isArray(ke)) {
@@ -225,17 +316,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         field: fieldShape.field,
         ai_value: fieldShape.ai_value,
         human_value: fieldShape.human_value,
-        reason: override.override_reason as string | null,
+        reason: (override.override_reason as string | null) ?? null,
       });
 
   // ── Look for an existing similar example (dedup) ─────────────────────────
-  // Same kind + ai_value + human_value + property_tier + image_type → bump
-  // observation_count rather than insert a duplicate.
   const propertyTier = body.property_tier ?? null;
   const imageType = body.image_type ?? null;
 
-  // Build the dedup query. Postgrest doesn't have a clean IS-NULL comparator
-  // in chained eq calls so we use the .is() helper for null fields.
   let dedupQuery = admin
     .from('engine_fewshot_examples')
     .select('id, observation_count')
@@ -268,8 +355,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         observation_count: newCount,
         curated_by: approverUid,
         curated_at: approverIso,
-        // Refresh evidence + description with the latest snapshot when the
-        // approver opted to override — leave existing values otherwise.
         ...(body.evidence_keywords ? { evidence_keywords: evidence } : {}),
         ...(body.description ? { description } : {}),
       })
@@ -282,7 +367,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     resultRow = updated as Record<string, unknown>;
     action = 'updated';
   } else {
-    // INSERT a new graduate row.
     const insertRow: Record<string, unknown> = {
       example_kind: exampleKind,
       property_tier: propertyTier,
@@ -291,7 +375,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       human_value: fieldShape.human_value,
       evidence_keywords: evidence,
       description,
-      in_active_prompt: true,            // master_admin approval = active
+      in_active_prompt: true,
       observation_count: 1,
       source_session_id: override.round_id, // useful audit trail back to the round
       curated_by: approverUid,
@@ -310,18 +394,43 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Mark the source override row's actor_at / actor_user_id ──────────────
-  // Per the W11.5 schema, actor_user_id reflects the latest endorser. The
-  // approval moment is captured here. Soft-fail: don't block the graduation
-  // if this update fails.
-  const { error: markErr } = await admin
-    .from('composition_classification_overrides')
-    .update({
-      actor_user_id: approverUid ?? override.actor_user_id,
-      actor_at: approverIso,
-    })
-    .eq('id', body.override_id);
-  if (markErr) {
-    console.warn(`[${GENERATOR}] override actor mark failed (non-fatal): ${markErr.message}`);
+  // Only when we have a real composition_classification_overrides row (shape
+  // A with mirror, or shape B). Synthesised pseudo rows have id=null.
+  if (override.id) {
+    const { error: markErr } = await admin
+      .from('composition_classification_overrides')
+      .update({
+        actor_user_id: approverUid ?? override.actor_user_id,
+        actor_at: approverIso,
+      })
+      .eq('id', override.id as string);
+    if (markErr) {
+      console.warn(`[${GENERATOR}] override actor mark failed (non-fatal): ${markErr.message}`);
+    }
+  }
+
+  // W11.6.x — Shape A: flip the source shortlisting_stage4_overrides row to
+  // approved so the in-context lane filters it out. This is the bug Joseph
+  // reported: previously the UI invoked approve-stage4-override with the
+  // wrong id shape, so the row stayed pending forever. Now the audit row's
+  // status mirrors the curation decision.
+  if (inputShape === 'stage4_audit' && stage4Audit) {
+    const { error: statusErr } = await admin
+      .from('shortlisting_stage4_overrides')
+      .update({
+        review_status: 'approved',
+        reviewed_by: approverUid,
+        reviewed_at: approverIso,
+        review_notes: body.review_notes ?? null,
+      })
+      .eq('id', stage4AuditId);
+    if (statusErr) {
+      // Non-fatal — graduation already succeeded. Log the warning so we
+      // don't silently drift into a "graduated but still pending" state.
+      console.warn(
+        `[${GENERATOR}] stage4_overrides review_status update failed (non-fatal): ${statusErr.message}`,
+      );
+    }
   }
 
   // Emit a shortlisting_events row for audit. Use override.round_id +
@@ -330,7 +439,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     const { data: rd } = await admin
       .from('shortlisting_rounds')
       .select('project_id')
-      .eq('id', override.round_id)
+      .eq('id', override.round_id as string)
       .maybeSingle();
     if (rd?.project_id) {
       await admin
@@ -343,6 +452,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
           actor_user_id: approverUid,
           payload: {
             override_id: body.override_id,
+            input_shape: inputShape,
+            stage4_audit_id: inputShape === 'stage4_audit' ? stage4AuditId : null,
+            mirror_id: override.id ?? null,
             fewshot_id: resultRow?.id,
             example_kind: exampleKind,
             ai_value: fieldShape.ai_value,
@@ -357,7 +469,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   return jsonResponse(
-    { ok: true, fewshot_example: resultRow, action, source_override_id: body.override_id },
+    {
+      ok: true,
+      fewshot_example: resultRow,
+      action,
+      input_shape: inputShape,
+      source_override_id: body.override_id,
+      stage4_audit_id: inputShape === 'stage4_audit' ? stage4AuditId : null,
+    },
     200,
     req,
   );
@@ -375,9 +494,6 @@ interface FieldShape {
  * Pick the first non-null human_* field on the override row. Priority matches
  * projectMemoryBlock for consistency: room_type > composition_type >
  * vantage_point > combined_score.
- *
- * Returns null when no human_* field is set (the row is "accept AI" and has
- * nothing to graduate).
  */
 function pickOverriddenField(row: Record<string, unknown>): FieldShape | null {
   if (row.human_room_type) {
@@ -413,8 +529,7 @@ function pickOverriddenField(row: Record<string, unknown>): FieldShape | null {
 
 /**
  * Auto-generate a description for the few-shot example when the approver
- * doesn't supply one. Format mirrors how fewShotLibraryBlock will render
- * the example so the description reads naturally in prompt context.
+ * doesn't supply one.
  */
 function autoDescription(opts: {
   field: string;

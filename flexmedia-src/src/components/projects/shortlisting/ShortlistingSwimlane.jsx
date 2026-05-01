@@ -69,6 +69,7 @@ import LockProgressDialog from "./LockProgressDialog";
 import SignalAttributionModal from "./SignalAttributionModal";
 import ShapeDEngineBanner from "./ShapeDEngineBanner";
 import DispatcherPanel from "./DispatcherPanel";
+import Stage4CorrectionsLane from "./Stage4CorrectionsLane";
 
 // Column definitions
 const COLUMNS = [
@@ -1164,6 +1165,13 @@ export default function ShortlistingSwimlane({
           })}
         </div>
       </DragDropContext>
+
+      {/* W11.6.x — Stage 4 visual corrections lane (in-context replacement
+          for the buggy standalone /Stage4Overrides page). Shows ONLY this
+          round's pending Stage 4 corrections so the operator can review
+          alongside the 3-column swimlane. Cross-round bulk review still
+          available via the link in the lane header. */}
+      <Stage4CorrectionsLane roundId={roundId} />
 
       {/* Confirm Lock dialog */}
       <Dialog open={confirmLockOpen} onOpenChange={setConfirmLockOpen}>
