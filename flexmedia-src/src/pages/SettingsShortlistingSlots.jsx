@@ -88,6 +88,30 @@ const ENGINE_ROLE_OPTIONS = [
   "agent_portraits",
 ];
 
+// W11.6.7 P1-4: lens_class_constraint enum. Mirrors _shared/lensClass.ts
+// LENS_CLASSES — keep in sync.
+const LENS_CLASS_OPTIONS = [
+  "wide_angle",
+  "standard",
+  "telephoto",
+  "tilt_shift",
+  "drone",
+];
+
+// W11.6.7 P1-5: common composition_type suggestions for the autocomplete chip
+// multiselect. The DB doesn't enforce a fixed enum here either — admins can
+// type any value. Mirror canonical compositions for hint quality.
+const COMPOSITION_TYPE_SUGGESTIONS = [
+  "hero_wide",
+  "corner_two_point",
+  "axial_one_point",
+  "detail_corner",
+  "detail_material",
+  "compressed_telephoto",
+  "elevated_overview",
+  "lifestyle",
+];
+
 // Common eligible_room_types autocomplete suggestions, derived from the
 // seeded slot definitions. The DB doesn't enforce a fixed enum, so the
 // list is suggestion-only — admins can type any room key.
@@ -129,6 +153,13 @@ function emptyForm() {
     eligible_room_types: [],
     max_images: 1,
     min_images: 0,
+    // W11.6.7 P1-4: optional lens_class constraint. Values: 'wide_angle' |
+    //   'standard' | 'telephoto' | 'tilt_shift' | 'drone' | null.
+    lens_class_constraint: null,
+    // W11.6.7 P1-5: optional composition_type allow-list. NULL/empty = any.
+    eligible_composition_types: [],
+    // W11.6.7 P1-5: optional same-room linkage to another slot's id (UUID).
+    same_room_as_slot: null,
     notes: "",
   };
 }
@@ -314,6 +345,9 @@ function EditSlotDialog({
   onSave,
   isSaving,
   currentVersion,
+  // W11.6.7 P1-5: list of (id, slot_id, display_name) for the
+  // same_room_as_slot picker. Excludes the current slot being edited.
+  otherActiveSlots,
 }) {
   const [form, setForm] = useState(initialForm);
   const errors = useMemo(
@@ -467,6 +501,69 @@ function EditSlotDialog({
           </div>
 
           <div className="space-y-1.5">
+            <Label className="text-xs">Lens class constraint (optional)</Label>
+            <Select
+              value={form.lens_class_constraint || "__any__"}
+              onValueChange={(v) =>
+                update("lens_class_constraint", v === "__any__" ? null : v)
+              }
+            >
+              <SelectTrigger className="h-9 text-xs">
+                <SelectValue placeholder="Any (no constraint)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__any__">Any (no constraint)</SelectItem>
+                {LENS_CLASS_OPTIONS.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[10px] text-muted-foreground">
+              W11.6.7 P1-4: Stage 4 rejects winners whose <code className="font-mono">lens_class</code> doesn't match. Leave on &ldquo;Any&rdquo; for no constraint.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Eligible composition types (optional)</Label>
+            <ChipMultiselect
+              value={form.eligible_composition_types}
+              onChange={(v) => update("eligible_composition_types", v)}
+              options={COMPOSITION_TYPE_SUGGESTIONS}
+              placeholder="e.g. hero_wide"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              W11.6.7 P1-5: when set, Stage 4 rejects winners whose <code className="font-mono">composition_type</code> isn't in the list. Empty = any.
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-xs">Same room as slot (optional)</Label>
+            <Select
+              value={form.same_room_as_slot || "__none__"}
+              onValueChange={(v) =>
+                update("same_room_as_slot", v === "__none__" ? null : v)
+              }
+            >
+              <SelectTrigger className="h-9 text-xs">
+                <SelectValue placeholder="None — independent of other slots" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None — independent</SelectItem>
+                {(otherActiveSlots || []).map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.slot_id} — {s.display_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[10px] text-muted-foreground">
+              W11.6.7 P1-5: when set, Stage 4 enforces that THIS slot's winner has the same physical <code className="font-mono">room_type</code> as the linked anchor slot's winner (e.g. <code className="font-mono">bathroom_detail</code> must match the room of <code className="font-mono">bathroom_main</code>).
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
             <Label className="text-xs">Notes (optional)</Label>
             <Textarea
               value={form.notes || ""}
@@ -578,6 +675,12 @@ export default function SettingsShortlistingSlots() {
           eligible_room_types: form.eligible_room_types,
           max_images: Number(form.max_images),
           min_images: Number(form.min_images),
+          // W11.6.7 P1-4 / P1-5: new constraint fields.
+          lens_class_constraint: form.lens_class_constraint || null,
+          eligible_composition_types: Array.isArray(form.eligible_composition_types) && form.eligible_composition_types.length > 0
+            ? form.eligible_composition_types
+            : null,
+          same_room_as_slot: form.same_room_as_slot || null,
           notes: form.notes?.trim() || null,
           version: 1,
           is_active: true,
@@ -596,6 +699,12 @@ export default function SettingsShortlistingSlots() {
         eligible_room_types: form.eligible_room_types,
         max_images: Number(form.max_images),
         min_images: Number(form.min_images),
+        // W11.6.7 P1-4 / P1-5: new constraint fields.
+        lens_class_constraint: form.lens_class_constraint || null,
+        eligible_composition_types: Array.isArray(form.eligible_composition_types) && form.eligible_composition_types.length > 0
+          ? form.eligible_composition_types
+          : null,
+        same_room_as_slot: form.same_room_as_slot || null,
         notes: form.notes?.trim() || null,
         version: nextVersion,
         is_active: true,
@@ -685,6 +794,11 @@ export default function SettingsShortlistingSlots() {
             : [],
           max_images: row.max_images ?? 1,
           min_images: row.min_images ?? 0,
+          lens_class_constraint: row.lens_class_constraint ?? null,
+          eligible_composition_types: Array.isArray(row.eligible_composition_types)
+            ? [...row.eligible_composition_types]
+            : [],
+          same_room_as_slot: row.same_room_as_slot ?? null,
           notes: row.notes || "",
         },
         currentVersion: row.version || 1,
@@ -915,6 +1029,9 @@ export default function SettingsShortlistingSlots() {
             existingSlotIds={existingSlotIds}
             currentVersion={editorState.currentVersion}
             isSaving={saveMutation.isPending}
+            otherActiveSlots={activeRows
+              .filter((r) => r.slot_id !== editorState.editingSlotId)
+              .map((r) => ({ id: r.id, slot_id: r.slot_id, display_name: r.display_name }))}
             onSave={(form) => {
               const currentRow = editorState.editingSlotId
                 ? (bySlotId.get(editorState.editingSlotId) || []).find(
