@@ -79,9 +79,9 @@ import {
   SIGNAL_MEASUREMENT_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/signalMeasurementBlock.ts';
 import {
-  UNIVERSAL_VISION_RESPONSE_SCHEMA,
   UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
   UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
+  universalSchemaForSource,
 } from '../_shared/visionPrompts/blocks/universalVisionResponseSchemaV2.ts';
 import { buildPass1Prompt } from '../_shared/pass1Prompt.ts';
 import { getActiveStreamBAnchors } from '../_shared/streamBInjector.ts';
@@ -516,11 +516,15 @@ async function runFinalsPerImage(opts: RunFinalsPerImageOpts): Promise<FinalsRes
     };
   }
 
+  // W11.7.17 hotfix-4: finals-qa always classifies finished delivery images,
+  // so source_type is fixed at 'internal_finals'. Pick the matching per-source
+  // schema variant (only finals_specific block is declared) to stay under
+  // Gemini's responseSchema FSM state-count limit.
   const baseReq: VisionRequest = {
     vendor: PRIMARY_VENDOR,
     model: PRIMARY_MODEL,
     tool_name: UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
-    tool_input_schema: UNIVERSAL_VISION_RESPONSE_SCHEMA,
+    tool_input_schema: universalSchemaForSource('internal_finals'),
     system: opts.systemText,
     user_text: opts.userText,
     images: [{

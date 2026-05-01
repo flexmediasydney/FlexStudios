@@ -116,9 +116,9 @@ import {
 // only; cross-image master_listing moved to a future W11.7 spec).
 import {
   UNIVERSAL_SIGNAL_KEYS,
-  UNIVERSAL_VISION_RESPONSE_SCHEMA,
   UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
   UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
+  universalSchemaForSource,
 } from '../_shared/visionPrompts/blocks/universalVisionResponseSchemaV2.ts';
 import {
   signalMeasurementBlock,
@@ -734,6 +734,7 @@ async function runShapeDStage1Core(
           userTextSuffix,
           settings,
           previewsBase,
+          sourceType,
         }).catch((err): PerImageResult => {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[${GENERATOR}] per-image ${c.stem} failed wholesale: ${msg}`);
@@ -1189,6 +1190,11 @@ interface RunStage1PerImageOpts {
   userTextSuffix: string;
   settings: EngineSettings;
   previewsBase: string;
+  // W11.7.17 hotfix-4: source_type drives the per-source Gemini responseSchema
+  // variant. Stage 1 production is always 'internal_raw' but we thread the
+  // value explicitly so future sources (W15a finals, W15b external) reuse the
+  // same runner with the matching variant.
+  sourceType: SourceType;
 }
 
 /**
@@ -1261,11 +1267,17 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
 
   // Single-image vision call. Schema returns the per-image object directly.
   // W11.7.17: swapped legacy STAGE1_RESPONSE_SCHEMA for v2 universal schema.
+  // W11.7.17 hotfix-4: pick the per-source schema variant matching this
+  // round's source_type. The single-schema universal contract had all 4
+  // *_specific blocks declared at once, which blew Gemini's responseSchema
+  // FSM state-count limit ("too many states for serving"). Per-source
+  // variants ship only the relevant *_specific block, keeping the FSM
+  // state count well under the serving ceiling.
   const baseReq: VisionRequest = {
     vendor: PRIMARY_VENDOR,
     model: PRIMARY_MODEL,
     tool_name: UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
-    tool_input_schema: UNIVERSAL_VISION_RESPONSE_SCHEMA,
+    tool_input_schema: universalSchemaForSource(opts.sourceType),
     system: opts.systemText,
     user_text: userText,
     images: [{

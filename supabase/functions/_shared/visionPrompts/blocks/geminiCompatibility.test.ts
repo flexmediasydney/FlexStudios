@@ -1,5 +1,5 @@
 /**
- * geminiCompatibility.test.ts — Wave 11.7.17 hotfix-3 schema-tree audit.
+ * geminiCompatibility.test.ts — Wave 11.7.17 hotfix-3/4 schema-tree audit.
  *
  * Walks every JSON Schema we hand to Gemini's `responseSchema` and asserts
  * the OpenAPI 3.0 subset that Gemini actually accepts. Pre-fix this would
@@ -16,16 +16,29 @@
  *   - `patternProperties`, `additionalProperties`
  *   - `nullable: true` without a primary `type` set
  *
- * Schemas under audit:
- *   1. UNIVERSAL_VISION_RESPONSE_SCHEMA (W11.7.17 v2.1 universal)
- *   2. STAGE4_TOOL_SCHEMA (Stage 4 visual master synthesis)
+ * Schemas under audit (W11.7.17 hotfix-4):
+ *   1. universalSchemaForSource('internal_raw')      — Stage 1 RAW
+ *   2. universalSchemaForSource('internal_finals')   — W15a finals QA
+ *   3. universalSchemaForSource('external_listing')  — W15b external (future)
+ *   4. universalSchemaForSource('floorplan_image')   — W15c floorplan (future)
+ *   5. STAGE4_TOOL_SCHEMA — Stage 4 visual master synthesis (single-source)
+ *
+ * Hotfix-4 note: the previous single `UNIVERSAL_VISION_RESPONSE_SCHEMA` had
+ * all four `*_specific` blocks declared at once, which Gemini rejected with
+ * `"too many states for serving"` (FSM state-count limit). Each variant
+ * below ships only its own `*_specific` block, keeping FSM state count
+ * well under the serving ceiling. We add a serialized-size smoke test as
+ * a rough proxy for state count.
  *
  * signalMeasurementBlock is a STRING renderer, not a JSON Schema, so it has
  * no responseSchema surface to audit (it ships as part of `system` text).
  */
 
 import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
-import { UNIVERSAL_VISION_RESPONSE_SCHEMA } from './universalVisionResponseSchemaV2.ts';
+import {
+  universalSchemaForSource,
+  type SourceType,
+} from './universalVisionResponseSchemaV2.ts';
 import { STAGE4_TOOL_SCHEMA } from '../../../shortlisting-shape-d-stage4/stage4Prompt.ts';
 
 interface Violation {
@@ -114,16 +127,54 @@ function auditSchema(name: string, schema: Record<string, unknown>): Violation[]
   return violations;
 }
 
-Deno.test('geminiCompat: UNIVERSAL_VISION_RESPONSE_SCHEMA — no forbidden patterns', () => {
-  const violations = auditSchema('UNIVERSAL_VISION_RESPONSE_SCHEMA', UNIVERSAL_VISION_RESPONSE_SCHEMA);
-  if (violations.length > 0) {
-    const msg = violations
-      .map((v) => `  - ${v.path}: [${v.rule}] ${v.detail ?? ''}`)
-      .join('\n');
-    throw new Error(`Found ${violations.length} Gemini-incompat violations:\n${msg}`);
-  }
-  assertEquals(violations.length, 0);
-});
+// W11.7.17 hotfix-4: walk EACH of the 4 source variants individually. All 4
+// must pass the no-`type-as-array` / no-`oneOf` / no-`$ref` checks.
+const ALL_SOURCE_TYPES: SourceType[] = [
+  'internal_raw',
+  'internal_finals',
+  'external_listing',
+  'floorplan_image',
+];
+
+for (const source_type of ALL_SOURCE_TYPES) {
+  Deno.test(`geminiCompat: universalSchemaForSource('${source_type}') — no forbidden patterns`, () => {
+    const schema = universalSchemaForSource(source_type);
+    const violations = auditSchema(`universalSchema(${source_type})`, schema);
+    if (violations.length > 0) {
+      const msg = violations
+        .map((v) => `  - ${v.path}: [${v.rule}] ${v.detail ?? ''}`)
+        .join('\n');
+      throw new Error(`Found ${violations.length} Gemini-incompat violations:\n${msg}`);
+    }
+    assertEquals(violations.length, 0);
+  });
+}
+
+// W11.7.17 hotfix-4: serialized JSON size smoke as a rough proxy for FSM
+// state count. The pre-fix single-schema universal was ~38KB serialized and
+// hit Gemini's "too many states for serving" wall. Each per-source variant
+// must come in under 32KB to keep a comfortable margin under the limit.
+//
+// This is not a guarantee (Gemini's state count is not strictly proportional
+// to byte size — nested arrays + enums weigh more than flat primitives) but
+// it catches the obvious regression where someone adds a new deeply-nested
+// block to UNIVERSAL_CORE_PROPERTIES that pushes the schema back over the
+// edge.
+const SCHEMA_SIZE_BUDGET_BYTES = 32_000;
+
+for (const source_type of ALL_SOURCE_TYPES) {
+  Deno.test(`geminiCompat: universalSchemaForSource('${source_type}') — serialized size under FSM-state proxy budget`, () => {
+    const schema = universalSchemaForSource(source_type);
+    const size = JSON.stringify(schema).length;
+    if (size > SCHEMA_SIZE_BUDGET_BYTES) {
+      throw new Error(
+        `Schema for '${source_type}' is ${size} bytes serialized, ` +
+        `exceeds the ${SCHEMA_SIZE_BUDGET_BYTES}-byte FSM-state proxy budget. ` +
+        `Gemini's responseSchema FSM may reject with "too many states for serving".`,
+      );
+    }
+  });
+}
 
 Deno.test('geminiCompat: STAGE4_TOOL_SCHEMA — no forbidden patterns', () => {
   const violations = auditSchema('STAGE4_TOOL_SCHEMA', STAGE4_TOOL_SCHEMA);

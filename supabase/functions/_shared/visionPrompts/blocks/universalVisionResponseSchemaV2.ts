@@ -103,14 +103,46 @@
  * `nullable: true` next to a single primary `type`. The `geminiCompatibility`
  * test walks the schema tree and FAILS the build if any of the forbidden
  * patterns reappear.
+ *
+ * ─── PER-SOURCE SCHEMA VARIANTS (W11.7.17 hotfix-4) ─────────────────────────
+ *
+ * Hotfix-3 fixed the nullable annotation form (type-array → nullable: true)
+ * but Gemini still rejected the schema with `"too many states for serving"`.
+ * Root cause: Gemini's responseSchema validator runs the schema as an FSM and
+ * has a hard state-count limit. The single-schema universal contract had FOUR
+ * deeply-nested `*_specific` blocks (raw, finals, external, floorplan), each
+ * with its own properties tree. Per emission only ONE block is populated, but
+ * the schema declared all four → FSM blew the state ceiling.
+ *
+ * SOLUTION: per-source schema variants. We build FOUR separate Gemini
+ * responseSchemas — one per source_type — each containing only its own
+ * `*_specific` block plus the universal core. Caller picks the variant via
+ * `universalSchemaForSource(source_type)`. The TypeScript discriminated union
+ * `UniversalVisionResponseV2` is unchanged so downstream consumers (persist
+ * layer, dimensionRollup, scoreRollup) read identical row shapes regardless
+ * of which variant produced them. The DB columns are unchanged: all four
+ * `*_specific` JSONB columns remain; persist writes whichever block the
+ * variant emitted, leaves the others null.
  */
 
-// W11.7.17 hotfix-3: bumped from v2.0 to v2.1 for Gemini-compatible nullable
-// annotation. Schema shape unchanged; only the encoding of nullable changed
-// (type-array union → nullable: true). Breaking for downstream prompt-cache
-// invalidation, hence the version bump.
-export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.1';
+// W11.7.17 hotfix-4: bumped from v2.1 to v2.2 for per-source schema variants
+// (Gemini FSM state-count fix). Schema SHAPE per variant is identical to v2.1
+// for the populated *_specific block; the only change is splitting the single
+// schema into 4 source-keyed variants. Bumped for downstream prompt-cache
+// invalidation.
+export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.2';
 export const UNIVERSAL_VISION_RESPONSE_TOOL_NAME = 'classify_image';
+
+/**
+ * Source discriminator. Defined locally to keep this block self-contained —
+ * sourceContextBlock.ts re-exports the same union, but importing from there
+ * would couple a pure schema block to a prompt-string renderer.
+ */
+export type SourceType =
+  | 'internal_raw'
+  | 'internal_finals'
+  | 'external_listing'
+  | 'floorplan_image';
 
 /**
  * 26 per-signal measurement keys (0-10 scale).
@@ -754,199 +786,257 @@ const LISTING_COPY_SCHEMA: Record<string, unknown> = {
   required: ['headline', 'paragraphs'],
 };
 
-export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    schema_version: {
-      type: 'string',
-      description: "Echo '2.1' — Wave 11.7.17 hotfix-3 (Gemini-compatible nullable annotation).",
-    },
-    source: SOURCE_SCHEMA,
-    analysis: {
-      type: 'string',
-      description:
-        'Write 5-7 detailed sentences (~250 words minimum) covering: ' +
-        '(1) composition geometry, vantage and depth layering; ' +
-        '(2) lighting condition, exposure stage, tonal balance; ' +
-        '(3) distinguishing architectural features and materials with specific ' +
-        'descriptors (e.g. "Corinthian column with capital", "terracotta hipped ' +
-        'roof", "shaker cabinetry"); ' +
-        '(4) styling state, distractions, clutter, retouch concerns; ' +
-        '(5) hero-shot vs supporting-angle judgement with reasoning. ' +
-        'Floorplan images: describe the LAYOUT (rooms, flow, archetype) ' +
-        'rather than aesthetics.',
-    },
-    image_type: {
-      type: 'string',
-      description:
-        'Q1 binding (11 options): is_day | is_dusk | is_drone | ' +
-        'is_agent_headshot | is_test_shot | is_bts | is_floorplan | ' +
-        'is_video_frame | is_detail_shot | is_facade_hero | is_other.',
-    },
-    image_classification: IMAGE_CLASSIFICATION_SCHEMA,
-    room_classification: ROOM_CLASSIFICATION_SCHEMA,
-    observed_objects: OBSERVED_OBJECTS_SCHEMA,
-    observed_attributes: OBSERVED_ATTRIBUTES_SCHEMA,
-    signal_scores: SIGNAL_SCORES_SCHEMA,
-    technical_score: { type: 'number' },
-    lighting_score: { type: 'number' },
-    composition_score: { type: 'number' },
-    aesthetic_score: { type: 'number' },
-    combined_score: { type: 'number' },
-    quality_flags: QUALITY_FLAGS_SCHEMA,
-    key_elements: {
-      type: 'array',
-      minItems: 0,
-      description:
-        'List specific architectural and styling elements visible in the frame. ' +
-        'Use multi-noun phrases including a material or descriptor. ' +
-        'Floorplan: room labels and dimensions when visible. Empty array OK ' +
-        'for sources where this does not apply.',
-      items: { type: 'string' },
-    },
-    zones_visible: {
-      type: 'array',
-      minItems: 0,
-      description:
-        'Distinct functional zones visible in the frame (e.g. "kitchen", ' +
-        '"alfresco_through_doors"). Different from key_elements — these ' +
-        'are AREAS, not objects.',
-      items: { type: 'string' },
-    },
-    listing_copy: LISTING_COPY_SCHEMA,
-    appeal_signals: {
-      type: 'array',
-      description:
-        'Marketing-relevant positives. snake_case tokens. Empty array if none.',
-      items: { type: 'string' },
-    },
-    concern_signals: {
-      type: 'array',
-      description:
-        'Marketing-relevant negatives. snake_case tokens. Empty array if none.',
-      items: { type: 'string' },
-    },
-    buyer_persona_hints: {
-      type: 'array',
-      description: 'Up to 3 likely buyer personas. snake_case tokens.',
-      items: { type: 'string' },
-    },
-    retouch_priority: {
-      type: 'string',
-      description:
-        'One of: urgent | recommended | none. external_listing: always "none". ' +
-        'floorplan_image: always "none".',
-    },
-    retouch_estimate_minutes: { type: 'number', nullable: true },
-    gallery_position_hint: {
-      type: 'string',
-      description:
-        'One of: lead_image | early_gallery | late_gallery | archive_only. ' +
-        'external_listing: always "archive_only". floorplan_image: ' +
-        'always "archive_only".',
-    },
-    social_first_friendly: { type: 'boolean', nullable: true },
-    requires_human_review: { type: 'boolean' },
-    confidence_per_field: {
-      type: 'object',
-      description:
-        '0-1 self-reported confidence. Use 1.0 only when the evidence is ' +
-        'unambiguous. Drop below 0.7 when an operator should eyeball this row.',
-      properties: {
-        room_type: { type: 'number' },
-        scoring: { type: 'number' },
-        classification: { type: 'number' },
-      },
-      required: ['room_type', 'scoring', 'classification'],
-    },
-    style_archetype: { type: 'string', nullable: true },
-    era_hint: { type: 'string', nullable: true },
-    material_palette_summary: {
-      type: 'array',
-      description:
-        'Top materials by visual weight. Specific phrases ("face brick", ' +
-        '"Caesarstone benchtop"). Empty array if no materials visible.',
-      items: { type: 'string' },
-    },
-    embedding_anchor_text: {
-      type: 'string',
-      description:
-        '~50-word concise summary optimised for vector embedding. Lead with ' +
-        'the most distinctive content tokens.',
-    },
-    searchable_keywords: {
-      type: 'array',
-      description: '5-12 lowercase snake_case or single-word tokens.',
-      items: { type: 'string' },
-    },
-    shot_intent: {
-      type: 'string',
-      nullable: true,
-      description:
-        'One of: hero_establishing | scale_clarification | lifestyle_anchor | ' +
-        'material_proof | indoor_outdoor_connection | detail_specimen | ' +
-        'record_only | reshoot_candidate | null.',
-    },
-    raw_specific: RAW_SPECIFIC_SCHEMA,
-    finals_specific: FINALS_SPECIFIC_SCHEMA,
-    external_specific: EXTERNAL_SPECIFIC_SCHEMA,
-    floorplan_specific: FLOORPLAN_SPECIFIC_SCHEMA,
-    prompt_block_versions: {
-      type: 'object',
-      description:
-        'Echo of the caller-injected prompt-block version map for replay ' +
-        'reproducibility. The caller (Stage 1 orchestrator) populates this; ' +
-        'the model is asked to echo it verbatim.',
-    },
-    vendor: {
-      type: 'string',
-      description: "Caller-injected vendor tag. One of: gemini | anthropic.",
-    },
-    model_version: {
-      type: 'string',
-      description: 'Caller-injected model version tag.',
-    },
+/**
+ * Universal core properties shared by ALL 4 source variants.
+ *
+ * The properties below are present in every variant of the schema regardless
+ * of source_type. Source-specific blocks (raw_specific / finals_specific /
+ * external_specific / floorplan_specific) are added by `universalSchemaForSource`
+ * — only the variant matching the caller's source_type ships in the
+ * Gemini responseSchema, keeping the FSM state count under the serving limit.
+ */
+const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
+  schema_version: {
+    type: 'string',
+    description: "Echo '2.2' — Wave 11.7.17 hotfix-4 (per-source schema variants for Gemini FSM state limit).",
   },
-  required: [
-    'schema_version',
-    'source',
-    'analysis',
-    'image_type',
-    'image_classification',
-    'signal_scores',
-    'technical_score',
-    'lighting_score',
-    'composition_score',
-    'aesthetic_score',
-    'combined_score',
-    'quality_flags',
-    'key_elements',
-    'zones_visible',
-    'appeal_signals',
-    'concern_signals',
-    'retouch_priority',
-    'gallery_position_hint',
-    'requires_human_review',
-    'confidence_per_field',
-    'style_archetype',
-    'era_hint',
-    'material_palette_summary',
-    'embedding_anchor_text',
-    'shot_intent',
-    'observed_objects',
-    'observed_attributes',
-    'prompt_block_versions',
-    'vendor',
-    'model_version',
-  ],
+  source: SOURCE_SCHEMA,
+  analysis: {
+    type: 'string',
+    description:
+      'Write 5-7 detailed sentences (~250 words minimum) covering: ' +
+      '(1) composition geometry, vantage and depth layering; ' +
+      '(2) lighting condition, exposure stage, tonal balance; ' +
+      '(3) distinguishing architectural features and materials with specific ' +
+      'descriptors (e.g. "Corinthian column with capital", "terracotta hipped ' +
+      'roof", "shaker cabinetry"); ' +
+      '(4) styling state, distractions, clutter, retouch concerns; ' +
+      '(5) hero-shot vs supporting-angle judgement with reasoning. ' +
+      'Floorplan images: describe the LAYOUT (rooms, flow, archetype) ' +
+      'rather than aesthetics.',
+  },
+  image_type: {
+    type: 'string',
+    description:
+      'Q1 binding (11 options): is_day | is_dusk | is_drone | ' +
+      'is_agent_headshot | is_test_shot | is_bts | is_floorplan | ' +
+      'is_video_frame | is_detail_shot | is_facade_hero | is_other.',
+  },
+  image_classification: IMAGE_CLASSIFICATION_SCHEMA,
+  room_classification: ROOM_CLASSIFICATION_SCHEMA,
+  observed_objects: OBSERVED_OBJECTS_SCHEMA,
+  observed_attributes: OBSERVED_ATTRIBUTES_SCHEMA,
+  signal_scores: SIGNAL_SCORES_SCHEMA,
+  technical_score: { type: 'number' },
+  lighting_score: { type: 'number' },
+  composition_score: { type: 'number' },
+  aesthetic_score: { type: 'number' },
+  combined_score: { type: 'number' },
+  quality_flags: QUALITY_FLAGS_SCHEMA,
+  key_elements: {
+    type: 'array',
+    minItems: 0,
+    description:
+      'List specific architectural and styling elements visible in the frame. ' +
+      'Use multi-noun phrases including a material or descriptor. ' +
+      'Floorplan: room labels and dimensions when visible. Empty array OK ' +
+      'for sources where this does not apply.',
+    items: { type: 'string' },
+  },
+  zones_visible: {
+    type: 'array',
+    minItems: 0,
+    description:
+      'Distinct functional zones visible in the frame (e.g. "kitchen", ' +
+      '"alfresco_through_doors"). Different from key_elements — these ' +
+      'are AREAS, not objects.',
+    items: { type: 'string' },
+  },
+  listing_copy: LISTING_COPY_SCHEMA,
+  appeal_signals: {
+    type: 'array',
+    description:
+      'Marketing-relevant positives. snake_case tokens. Empty array if none.',
+    items: { type: 'string' },
+  },
+  concern_signals: {
+    type: 'array',
+    description:
+      'Marketing-relevant negatives. snake_case tokens. Empty array if none.',
+    items: { type: 'string' },
+  },
+  buyer_persona_hints: {
+    type: 'array',
+    description: 'Up to 3 likely buyer personas. snake_case tokens.',
+    items: { type: 'string' },
+  },
+  retouch_priority: {
+    type: 'string',
+    description:
+      'One of: urgent | recommended | none. external_listing: always "none". ' +
+      'floorplan_image: always "none".',
+  },
+  retouch_estimate_minutes: { type: 'number', nullable: true },
+  gallery_position_hint: {
+    type: 'string',
+    description:
+      'One of: lead_image | early_gallery | late_gallery | archive_only. ' +
+      'external_listing: always "archive_only". floorplan_image: ' +
+      'always "archive_only".',
+  },
+  social_first_friendly: { type: 'boolean', nullable: true },
+  requires_human_review: { type: 'boolean' },
+  confidence_per_field: {
+    type: 'object',
+    description:
+      '0-1 self-reported confidence. Use 1.0 only when the evidence is ' +
+      'unambiguous. Drop below 0.7 when an operator should eyeball this row.',
+    properties: {
+      room_type: { type: 'number' },
+      scoring: { type: 'number' },
+      classification: { type: 'number' },
+    },
+    required: ['room_type', 'scoring', 'classification'],
+  },
+  style_archetype: { type: 'string', nullable: true },
+  era_hint: { type: 'string', nullable: true },
+  material_palette_summary: {
+    type: 'array',
+    description:
+      'Top materials by visual weight. Specific phrases ("face brick", ' +
+      '"Caesarstone benchtop"). Empty array if no materials visible.',
+    items: { type: 'string' },
+  },
+  embedding_anchor_text: {
+    type: 'string',
+    description:
+      '~50-word concise summary optimised for vector embedding. Lead with ' +
+      'the most distinctive content tokens.',
+  },
+  searchable_keywords: {
+    type: 'array',
+    description: '5-12 lowercase snake_case or single-word tokens.',
+    items: { type: 'string' },
+  },
+  shot_intent: {
+    type: 'string',
+    nullable: true,
+    description:
+      'One of: hero_establishing | scale_clarification | lifestyle_anchor | ' +
+      'material_proof | indoor_outdoor_connection | detail_specimen | ' +
+      'record_only | reshoot_candidate | null.',
+  },
+  prompt_block_versions: {
+    type: 'object',
+    description:
+      'Echo of the caller-injected prompt-block version map for replay ' +
+      'reproducibility. The caller (Stage 1 orchestrator) populates this; ' +
+      'the model is asked to echo it verbatim.',
+  },
+  vendor: {
+    type: 'string',
+    description: "Caller-injected vendor tag. One of: gemini | anthropic.",
+  },
+  model_version: {
+    type: 'string',
+    description: 'Caller-injected model version tag.',
+  },
 };
+
+/**
+ * `required` keys universal to every variant. Each variant's `required`
+ * array is identical: only one `*_specific` block is declared per variant
+ * and we do not require it (the field name itself depends on source_type).
+ */
+const UNIVERSAL_CORE_REQUIRED: string[] = [
+  'schema_version',
+  'source',
+  'analysis',
+  'image_type',
+  'image_classification',
+  'signal_scores',
+  'technical_score',
+  'lighting_score',
+  'composition_score',
+  'aesthetic_score',
+  'combined_score',
+  'quality_flags',
+  'key_elements',
+  'zones_visible',
+  'appeal_signals',
+  'concern_signals',
+  'retouch_priority',
+  'gallery_position_hint',
+  'requires_human_review',
+  'confidence_per_field',
+  'style_archetype',
+  'era_hint',
+  'material_palette_summary',
+  'embedding_anchor_text',
+  'shot_intent',
+  'observed_objects',
+  'observed_attributes',
+  'prompt_block_versions',
+  'vendor',
+  'model_version',
+];
+
+/**
+ * Build the Gemini-compatible responseSchema for a specific source_type.
+ *
+ * Returns ONLY the universal core + the single matching `*_specific` block
+ * (or no `*_specific` block at all in the unlikely event the FSM is still
+ * tight — but all four are tried). The TypeScript discriminated union shape
+ * for downstream consumers (`UniversalVisionResponseV2`) still includes all
+ * four blocks as nullable members; the persist layer keys off
+ * `composition_classifications.source_type` to choose which JSONB column to
+ * populate.
+ *
+ * Hotfix-4 motivation: Gemini's responseSchema validator runs the full
+ * schema as an FSM and capped the state count when all four nested
+ * `*_specific` blocks were declared together. Per-source variants drop the
+ * three irrelevant blocks per call → FSM stays under budget.
+ */
+export function universalSchemaForSource(source_type: SourceType): Record<string, unknown> {
+  const properties: Record<string, unknown> = { ...UNIVERSAL_CORE_PROPERTIES };
+  switch (source_type) {
+    case 'internal_raw':
+      properties.raw_specific = RAW_SPECIFIC_SCHEMA;
+      break;
+    case 'internal_finals':
+      properties.finals_specific = FINALS_SPECIFIC_SCHEMA;
+      break;
+    case 'external_listing':
+      properties.external_specific = EXTERNAL_SPECIFIC_SCHEMA;
+      break;
+    case 'floorplan_image':
+      properties.floorplan_specific = FLOORPLAN_SPECIFIC_SCHEMA;
+      break;
+  }
+  return {
+    type: 'object',
+    properties,
+    required: [...UNIVERSAL_CORE_REQUIRED],
+  };
+}
+
+/**
+ * @deprecated Use `universalSchemaForSource(source_type)` instead.
+ *
+ * Kept as a backwards-compat default for tests / fixtures that have not yet
+ * migrated. Resolves to the `internal_raw` variant — the production hot path
+ * for Stage 1 RAW classification. New callers MUST pick a variant explicitly
+ * via `universalSchemaForSource`; emitting all four `*_specific` blocks at
+ * once is what triggered the Gemini FSM state-count rejection in hotfix-4.
+ */
+export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = universalSchemaForSource('internal_raw');
 
 /**
  * v2 schema TypeScript shape — exported for unit-test fixtures and the
  * persist-layer typing in `shortlisting-shape-d/index.ts`.
  */
 export interface UniversalVisionResponseV2 {
-  schema_version: '2.0' | '2.1';
+  schema_version: '2.0' | '2.1' | '2.2';
   source: {
     type: 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image';
     media_kind: 'still_image' | 'video_frame' | 'drone_image' | 'floorplan_image';
