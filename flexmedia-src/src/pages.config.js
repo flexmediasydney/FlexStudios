@@ -134,6 +134,8 @@ const SettingsVendorComparison = React.lazy(() => import('./pages/SettingsVendor
 const MasterListingReview = React.lazy(() => import('./pages/MasterListingReview'));
 const Stage4Overrides = React.lazy(() => import('./pages/Stage4Overrides'));
 const EngineDashboard = React.lazy(() => import('./pages/EngineDashboard'));
+// Wave 14 — engine calibration runner / drift dashboard.
+const CalibrationDashboard = React.lazy(() => import('./pages/CalibrationDashboard'));
 const SettingsPackageTierMapping = React.lazy(() => import('./pages/SettingsPackageTierMapping'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
@@ -215,6 +217,7 @@ export const PAGES = {
     "MasterListingReview": MasterListingReview,
     "Stage4Overrides": Stage4Overrides,
     "EngineDashboard": EngineDashboard,
+    "CalibrationDashboard": CalibrationDashboard,
     "SettingsPackageTierMapping": SettingsPackageTierMapping,
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,

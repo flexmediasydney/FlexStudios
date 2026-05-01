@@ -54,6 +54,8 @@ export const ROUTE_ACCESS = {
   MasterListingReview: ADMIN_AND_ABOVE,
   Stage4Overrides: ADMIN_AND_ABOVE,
   EngineDashboard: ADMIN_AND_ABOVE,
+  // Wave 14 — engine calibration runner / drift dashboard.
+  CalibrationDashboard: OWNER_ONLY,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,
