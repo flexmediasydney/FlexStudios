@@ -79,6 +79,7 @@ export const ROUTE_ACCESS = {
   ProspectDetails: MANAGER_AND_ABOVE,
   ClientMonitor: MANAGER_AND_ABOVE,
   IndustryPulse: MANAGER_AND_ABOVE,
+  PulseListingDetail: MANAGER_AND_ABOVE,
   SalesCommand: MANAGER_AND_ABOVE,
   SalesMap: MANAGER_AND_ABOVE,
   TalentPulse: MANAGER_AND_ABOVE,

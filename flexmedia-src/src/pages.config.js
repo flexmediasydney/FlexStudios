@@ -81,6 +81,8 @@ const ClientAgents = React.lazy(() => import('./pages/ClientAgents'));
 const ClientGallery = React.lazy(() => import('./pages/ClientGallery'));
 const ClientMonitor = React.lazy(() => import('./pages/ClientMonitor'));
 const IndustryPulse = React.lazy(() => import('./pages/IndustryPulse'));
+// W15b.8 — per-listing detail page hosting the Vision Analysis tab.
+const PulseListingDetail = React.lazy(() => import('./pages/PulseListingDetail'));
 const SalesCommand = React.lazy(() => import('./pages/SalesCommand'));
 const SalesMap = React.lazy(() => import('./pages/SalesMap'));
 const Dashboard = React.lazy(() => import('./pages/Dashboard'));
@@ -168,6 +170,7 @@ export const PAGES = {
     "ClientGallery": ClientGallery,
     "ClientMonitor": ClientMonitor,
     "IndustryPulse": IndustryPulse,
+    "PulseListingDetail": PulseListingDetail,
     "SalesCommand": SalesCommand,
     "SalesMap": SalesMap,
     "Dashboard": Dashboard,
