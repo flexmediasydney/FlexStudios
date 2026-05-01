@@ -137,6 +137,8 @@ const Stage4Overrides = React.lazy(() => import('./pages/Stage4Overrides'));
 const EngineDashboard = React.lazy(() => import('./pages/EngineDashboard'));
 // Wave 14 — engine calibration runner / drift dashboard.
 const CalibrationDashboard = React.lazy(() => import('./pages/CalibrationDashboard'));
+// Wave 15a — internal finals scoring QA dashboard.
+const FinalsQADashboard = React.lazy(() => import('./pages/FinalsQADashboard'));
 // Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
 const SettingsObjectRegistryDiscovery = React.lazy(() => import('./pages/SettingsObjectRegistryDiscovery'));
 // W11.6.10 — engine override patterns analytics dashboard.
@@ -224,6 +226,7 @@ export const PAGES = {
     "Stage4Overrides": Stage4Overrides,
     "EngineDashboard": EngineDashboard,
     "CalibrationDashboard": CalibrationDashboard,
+    "FinalsQADashboard": FinalsQADashboard,
     "SettingsObjectRegistryDiscovery": SettingsObjectRegistryDiscovery,
     "SettingsEngineOverridePatterns": SettingsEngineOverridePatterns,
     "SettingsPackageTierMapping": SettingsPackageTierMapping,
