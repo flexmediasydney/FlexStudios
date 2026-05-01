@@ -560,6 +560,19 @@ export default function ShortlistingSwimlane({
       const aiId = ov.ai_proposed_group_id;
       const humanId = ov.human_selected_group_id;
       switch (ov.human_action) {
+        case "ai_proposed":
+          // W11.7.1 (2026-05-01): Stage 4 writes shortlisting_overrides rows
+          // with human_action='ai_proposed' so the swimlane has a
+          // first-class data source for the AI's slot picks. The card
+          // belongs in the PROPOSED column — same as if no override row
+          // existed at all. Idempotent: ensure it's in proposed and not
+          // already in approved/rejected from a stale state.
+          if (aiId) {
+            rejected.delete(aiId);
+            approved.delete(aiId);
+            proposed.add(aiId);
+          }
+          break;
         case "approved_as_proposed":
           if (aiId) {
             proposed.delete(aiId);

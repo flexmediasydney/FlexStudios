@@ -1393,8 +1393,16 @@ interface PersistSlotDecisionsArgs {
  * Stage 4 succeeds but the swimlane renders empty.
  *
  * Schema:
- *   - One row per (slot_id, winner) — human_action='approved_as_proposed'
- *     until operator interacts (swap/remove/add).
+ *   - One row per (slot_id, winner) — human_action='ai_proposed' so the
+ *     swimlane reads it as "AI's pick" and renders it in the PROPOSED column,
+ *     NOT the APPROVED column. The operator's own approve/swap/remove drag
+ *     transitions human_action to one of the existing legacy values
+ *     (approved_as_proposed | swapped | removed | added_from_rejects).
+ *   - REGRESSION FIX 2026-05-01: previous default was 'approved_as_proposed',
+ *     which the swimlane interprets as "human approved this proposal" and
+ *     auto-moved every AI pick to the APPROVED column without the operator
+ *     touching anything. Joseph caught this on Rainbow Cres — 8 cards in
+ *     HUMAN APPROVED before he'd interacted with the project.
  *   - Alternatives are NOT persisted as overrides today (the legacy pass2
  *     pattern keeps alternatives in audit JSON only). When the operator
  *     "swap"s in the swimlane, the frontend reads alternatives from the
@@ -1477,7 +1485,12 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
       ai_proposed_slot_id: slotId, // canonical form
       ai_proposed_score: score,
       ai_proposed_analysis: rationale,
-      human_action: 'approved_as_proposed', // default until operator interacts
+      // REGRESSION FIX 2026-05-01: was 'approved_as_proposed' which the
+      // swimlane interprets as "human approved" and auto-moved cards to the
+      // APPROVED column without operator interaction. 'ai_proposed' is the
+      // correct semantic — the AI chose this, the human has not yet decided.
+      // Swimlane handles 'ai_proposed' as a no-op (card stays in PROPOSED).
+      human_action: 'ai_proposed',
       slot_group_id: slotId, // legacy field — same as slot_id under shape_d
       project_tier: projectTier,
     });
@@ -1495,13 +1508,15 @@ async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Promise<num
   }
 
   // Idempotent: delete any existing AI-proposed rows for this round (only
-  // those with no operator interaction yet — human_action='approved_as_proposed')
-  // so a regenerate doesn't double-stack. Operator-edited rows are preserved.
+  // those with no operator interaction yet — human_action='ai_proposed')
+  // so a regenerate doesn't double-stack. Operator-edited rows
+  // (approved_as_proposed / swapped / removed / added_from_rejects) are
+  // preserved.
   const { error: delErr } = await args.admin
     .from('shortlisting_overrides')
     .delete()
     .eq('round_id', args.roundId)
-    .eq('human_action', 'approved_as_proposed');
+    .eq('human_action', 'ai_proposed');
   if (delErr) {
     args.warnings.push(`shortlisting_overrides delete-prior failed: ${delErr.message}`);
     // continue anyway — INSERT may succeed if there were no prior rows
