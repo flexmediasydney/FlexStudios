@@ -72,7 +72,7 @@
  *
  * Style mirrors PulseMissedOpportunityCommandCenter (W15b.9).
  */
-import React, { Suspense } from "react";
+import React, { Suspense, lazy } from "react";
 import { useSearchParams } from "react-router-dom";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
 import {
@@ -104,30 +104,74 @@ import {
   Wrench,
 } from "lucide-react";
 
+// F-3B-006 — Default tab (overview) stays eager: operators land on it; lazy
+// would create a flash on every Command Center entry. All other 20 tab
+// containers are split into their own chunks via React.lazy + Suspense
+// (the page-level <Suspense fallback={<TabFallback />}> already exists
+// around each TabsContent below, which gives us the loading skeleton).
 import OverviewTab from "@/components/settings/shortlisting/OverviewTab";
-import SettingsTierConfigs from "@/pages/SettingsTierConfigs";
-import SettingsPackageTierMapping from "@/pages/SettingsPackageTierMapping";
-import SettingsShortlistingSlots from "@/pages/SettingsShortlistingSlots";
-import SettingsObjectRegistry from "@/pages/SettingsObjectRegistry";
-import SettingsAISuggestions from "@/pages/SettingsAISuggestions";
-import SettingsRejectionReasonsDashboard from "@/pages/SettingsRejectionReasonsDashboard";
-import SettingsCalibrationSessions from "@/pages/SettingsCalibrationSessions";
-import SettingsEngineOverridePatterns from "@/pages/SettingsEngineOverridePatterns";
-import SettingsObjectRegistryDiscovery from "@/pages/SettingsObjectRegistryDiscovery";
+
+const SettingsTierConfigs = lazy(() => import("@/pages/SettingsTierConfigs"));
+const SettingsPackageTierMapping = lazy(() =>
+  import("@/pages/SettingsPackageTierMapping"),
+);
+const SettingsShortlistingSlots = lazy(() =>
+  import("@/pages/SettingsShortlistingSlots"),
+);
+const SettingsObjectRegistry = lazy(() =>
+  import("@/pages/SettingsObjectRegistry"),
+);
+const SettingsAISuggestions = lazy(() =>
+  import("@/pages/SettingsAISuggestions"),
+);
+const SettingsRejectionReasonsDashboard = lazy(() =>
+  import("@/pages/SettingsRejectionReasonsDashboard"),
+);
+const SettingsCalibrationSessions = lazy(() =>
+  import("@/pages/SettingsCalibrationSessions"),
+);
+const SettingsEngineOverridePatterns = lazy(() =>
+  import("@/pages/SettingsEngineOverridePatterns"),
+);
+const SettingsObjectRegistryDiscovery = lazy(() =>
+  import("@/pages/SettingsObjectRegistryDiscovery"),
+);
 // W11.6.21b — second consolidation wave.
-import SettingsShortlistingRoomTypes from "@/pages/SettingsShortlistingRoomTypes";
-import SettingsShortlistingStandards from "@/pages/SettingsShortlistingStandards";
-import SettingsShortlistingSignals from "@/pages/SettingsShortlistingSignals";
-import ShortlistingCalibration from "@/pages/ShortlistingCalibration";
-import SettingsShortlistingTraining from "@/pages/SettingsShortlistingTraining";
-import SettingsShortlistingOverrides from "@/pages/SettingsShortlistingOverrides";
-import SettingsShortlistingPrompts from "@/pages/SettingsShortlistingPrompts";
-import SettingsEngineSettings from "@/pages/SettingsEngineSettings";
-import SettingsVendorComparison from "@/pages/SettingsVendorComparison";
+const SettingsShortlistingRoomTypes = lazy(() =>
+  import("@/pages/SettingsShortlistingRoomTypes"),
+);
+const SettingsShortlistingStandards = lazy(() =>
+  import("@/pages/SettingsShortlistingStandards"),
+);
+const SettingsShortlistingSignals = lazy(() =>
+  import("@/pages/SettingsShortlistingSignals"),
+);
+const ShortlistingCalibration = lazy(() =>
+  import("@/pages/ShortlistingCalibration"),
+);
+const SettingsShortlistingTraining = lazy(() =>
+  import("@/pages/SettingsShortlistingTraining"),
+);
+const SettingsShortlistingOverrides = lazy(() =>
+  import("@/pages/SettingsShortlistingOverrides"),
+);
+const SettingsShortlistingPrompts = lazy(() =>
+  import("@/pages/SettingsShortlistingPrompts"),
+);
+const SettingsEngineSettings = lazy(() =>
+  import("@/pages/SettingsEngineSettings"),
+);
+const SettingsVendorComparison = lazy(() =>
+  import("@/pages/SettingsVendorComparison"),
+);
 // W11.6.23 — Architecture & Data Explorer tab.
-import ArchitectureTab from "@/components/settings/architecture/ArchitectureTab";
+const ArchitectureTab = lazy(() =>
+  import("@/components/settings/architecture/ArchitectureTab"),
+);
 // W11.6.25 — Slot Recipes editor tab.
-import SlotRecipesTab from "@/components/settings/shortlisting/SlotRecipesTab";
+const SlotRecipesTab = lazy(() =>
+  import("@/components/settings/shortlisting/SlotRecipesTab"),
+);
 
 // Tab keys (URL query value `?tab=<key>`). Default = overview.
 export const VALID_TABS = [
