@@ -522,11 +522,55 @@ const KIND_TO_FUNCTION: Record<string, string> = {
   floorplan_extract: "floorplan-ocr-extractor",
 };
 
+/**
+ * QC-iter2 W8 (F-B-015): Per-kind fetch timeout. Previously a flat 120s applied
+ * to every kind — too tight for Stage 4 (which declares an internal 240s budget)
+ * and too loose for fast paths like pass0. The map below tunes each kind to its
+ * realistic worst case while leaving generous headroom for the Edge Function to
+ * mark the job + emit a response before the per-tick wall budget closes.
+ *
+ * Ceilings derived from production telemetry (engine_run_audit.{stageN}_total_wall_ms
+ * P95 + safety margin):
+ *   - pass0:                ~30s typical, 90s ceiling. Slot decisions only.
+ *   - extract:              ~85s typical, 120s ceiling (Modal photos-extract,
+ *                           up to 50 files per chunk).
+ *   - shape_d_stage1:       background mode (immediate ack), 30s socket
+ *                           timeout — bgWork takes 3-5 min inside waitUntil.
+ *   - stage4_synthesis:     internal 240s budget; map at 240s so the dispatcher
+ *                           waits the full window.
+ *   - canonical_rollup:     ~45s typical, 120s ceiling. Round-level normaliser.
+ *   - pulse_description_extract / floorplan_extract: background mode.
+ *   - default:              120s for any unmapped kind (preserves old behaviour).
+ *
+ * The dispatcher's TICK_LOOP_SAFETY_MS (130s) was sized against the old flat
+ * 120s; for kinds whose timeout exceeds that (Stage 4 at 240s), the dispatcher's
+ * TICK_BUDGET_MS (240s) leaves no headroom, which is fine because Stage 4 is
+ * background-mode in practice — it returns a fast 200 ack and self-updates.
+ * The 240s timeout is purely a safety net for the synchronous fallback path.
+ */
+export const KIND_TIMEOUT_MS: Record<string, number> = {
+  ingest: 60_000,
+  extract: 120_000,
+  pass0: 90_000,
+  pass3: 90_000,
+  shape_d_stage1: 30_000, // background mode; ack only
+  stage4_synthesis: 240_000, // declared internal budget
+  canonical_rollup: 120_000,
+  pulse_description_extract: 30_000, // background mode; ack only
+  floorplan_extract: 30_000, // background mode; ack only
+};
+const DEFAULT_TIMEOUT_MS = 120_000;
+
+export function timeoutForKind(kind: string): number {
+  return KIND_TIMEOUT_MS[kind] ?? DEFAULT_TIMEOUT_MS;
+}
+
 async function dispatchOne(job: ShortlistingJob): Promise<DispatchResult> {
   const fnName = KIND_TO_FUNCTION[job.kind];
   if (!fnName) {
     return { ok: false, error: `unknown kind: ${job.kind}` };
   }
+  const timeoutMs = timeoutForKind(job.kind);
   // Wave 12: canonical-rollup parses `{ round_id }` from its body (it's a
   // round-level Stage 1.5 normalisation pass, not a per-job pass). Send
   // round_id alongside job_id so the fn sees what it expects without breaking
@@ -540,9 +584,9 @@ async function dispatchOne(job: ShortlistingJob): Promise<DispatchResult> {
         error: `canonical_rollup job ${job.id} missing round_id`,
       };
     }
-    return await callEdgeFunction(fnName, { job_id: job.id, round_id: roundId });
+    return await callEdgeFunction(fnName, { job_id: job.id, round_id: roundId }, timeoutMs);
   }
-  return await callEdgeFunction(fnName, { job_id: job.id });
+  return await callEdgeFunction(fnName, { job_id: job.id }, timeoutMs);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -822,6 +866,7 @@ async function enqueueNextPassJob(
 async function callEdgeFunction(
   fnName: string,
   body: Record<string, unknown>,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<DispatchResult> {
   const url = `${SUPABASE_URL}/functions/v1/${fnName}`;
   // Audit defect #13: SHORTLISTING_DISPATCHER_JWT is the ONLY accepted secret
@@ -839,12 +884,11 @@ async function callEdgeFunction(
     return { ok: false, error: errMsg };
   }
   try {
-    // Burst 17 GG1: bound the per-call wait so a hanging downstream function
-    // doesn't burn the dispatcher's entire wall budget. 120s gives Pass 2
-    // (the slowest, with 8192-token output + Stream B universe) headroom
-    // while leaving the dispatcher ~30s to cleanly mark the timed-out job
-    // and exit. Pairs with TICK_LOOP_SAFETY_MS (130s) so the loop can always
-    // close the in-flight call before the per-tick wall budget closes.
+    // QC-iter2 W8 (F-B-015): per-kind timeout map. Bound the per-call wait so a
+    // hanging downstream function doesn't burn the dispatcher's entire wall
+    // budget. The KIND_TIMEOUT_MS map (above) tunes each kind to realistic
+    // worst-case + headroom; the previous flat 120s was too tight for Stage 4
+    // (240s declared internal budget) and over-generous for pass0 (~30s P95).
     const resp = await fetch(url, {
       method: "POST",
       headers: {
@@ -853,7 +897,7 @@ async function callEdgeFunction(
         "x-caller-context": GENERATOR,
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120 * 1000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     // Single-read body (mirrors drone dispatcher audit #35).

@@ -163,15 +163,38 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
   // doesn't filter by package_type any more.
   const packageType: string = round.package_type || 'unknown';
 
-  // 2. Read slot assignments from shortlisting_events (Pass 2 output).
-  // We reconstruct the proposed shortlist from event payloads instead of a
-  // shortlist_proposals table. Multiple rounds for the same project can
-  // coexist — filter strictly by round_id.
-  const { data: slotEvents, error: evtErr } = await admin
-    .from('shortlisting_events')
-    .select('group_id, payload, event_type')
-    .eq('round_id', roundId)
-    .in('event_type', ['pass2_slot_assigned', 'pass2_phase3_recommendation']);
+  // QC-iter2 W8 (F-B-017): the four reads below have no inter-dependencies
+  // beyond the already-resolved roundId/projectId, so we fire them in parallel
+  // via Promise.all instead of the previous sequential await chain. Real-world
+  // gain: pass 3 is fast (DB-only) but each round-trip is ~25-40ms; collapsing
+  // four serial reads to one parallel batch saves ~75-120ms on the round's
+  // critical path. Larger gain on retries where the dispatcher already paid
+  // claim/lock latency.
+  //   1. slot-assignment events (driven by Pass 2 output)
+  //   2. active slot definitions (independent)
+  //   3. project engine roles (needs projectId only)
+  //   4. classification count (needs roundId only)
+  const [
+    { data: slotEvents, error: evtErr },
+    { data: slotDefsRaw, error: slotErr },
+    projectEngineRoles,
+    { count: classCount, error: classCountErr },
+  ] = await Promise.all([
+    admin
+      .from('shortlisting_events')
+      .select('group_id, payload, event_type')
+      .eq('round_id', roundId)
+      .in('event_type', ['pass2_slot_assigned', 'pass2_phase3_recommendation']),
+    admin
+      .from('shortlisting_slot_definitions')
+      .select('slot_id, phase, eligible_when_engine_roles, is_active')
+      .eq('is_active', true),
+    resolveProjectEngineRolesForCoverage(admin, projectId),
+    admin
+      .from('composition_classifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('round_id', roundId),
+  ]);
   if (evtErr) throw new Error(`pass2 events fetch failed: ${evtErr.message}`);
 
   const events = slotEvents || [];
@@ -203,19 +226,15 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
     }
   }
 
-  // 3. Fetch active slot definitions for this round.
+  // 3. Slot definitions (already fetched in the parallel batch above).
   // W7.7: package_types column dropped (mig 339). Slot eligibility is
   // strictly product-driven via eligible_when_engine_roles; we re-resolve
   // the project's engine roles to filter coverage against the same slot set
   // that Pass 2 used.
-  const { data: slotDefs, error: slotErr } = await admin
-    .from('shortlisting_slot_definitions')
-    .select('slot_id, phase, eligible_when_engine_roles, is_active')
-    .eq('is_active', true);
   if (slotErr) throw new Error(`slot_definitions fetch failed: ${slotErr.message}`);
+  const slotDefs = slotDefsRaw;
 
-  // Resolve project engine roles for eligibility filter (mirrors Pass 2).
-  const projectEngineRoles = await resolveProjectEngineRolesForCoverage(admin, projectId);
+  // Project engine roles already resolved (in parallel above).
   const projectRoleSet = new Set<string>(projectEngineRoles);
   // deno-lint-ignore no-explicit-any
   const activeSlots = ((slotDefs || []) as any[]).filter((row) => {
@@ -258,11 +277,7 @@ async function runPass3(roundId: string): Promise<Pass3Result> {
     (mandatoryRatio * 0.6 + conditionalRatio * 0.4) * 100,
   );
 
-  // 5. Total classifications + total compositions for the run summary.
-  const { count: classCount, error: classCountErr } = await admin
-    .from('composition_classifications')
-    .select('id', { count: 'exact', head: true })
-    .eq('round_id', roundId);
+  // 5. Classification count (already fetched in the parallel batch above).
   if (classCountErr) {
     warnings.push(`classification count failed: ${classCountErr.message}`);
   }

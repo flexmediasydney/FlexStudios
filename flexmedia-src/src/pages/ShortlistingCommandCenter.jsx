@@ -1291,7 +1291,10 @@ export default function ShortlistingCommandCenter() {
         }),
       );
     } catch (e) {
-      console.warn("[ShortlistingCommandCenter] ShortlistingRound subscribe failed:", e);
+      // QC-iter2 W8 (F-F-015): dev-only diagnostic; the subscribe failure is
+      // recovered via the periodic refetch tick, so we don't need to surface
+      // it in production logs.
+      if (import.meta.env.DEV) console.warn("[ShortlistingCommandCenter] ShortlistingRound subscribe failed:", e);
     }
     try {
       unsubs.push(
@@ -1302,7 +1305,7 @@ export default function ShortlistingCommandCenter() {
         }),
       );
     } catch (e) {
-      console.warn("[ShortlistingCommandCenter] ShortlistingEvent subscribe failed:", e);
+      if (import.meta.env.DEV) console.warn("[ShortlistingCommandCenter] ShortlistingEvent subscribe failed:", e);
     }
     try {
       unsubs.push(
@@ -1312,7 +1315,7 @@ export default function ShortlistingCommandCenter() {
         }),
       );
     } catch (e) {
-      console.warn("[ShortlistingCommandCenter] ShortlistingJob subscribe failed:", e);
+      if (import.meta.env.DEV) console.warn("[ShortlistingCommandCenter] ShortlistingJob subscribe failed:", e);
     }
     return () => {
       for (const u of unsubs) {

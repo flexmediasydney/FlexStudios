@@ -502,7 +502,8 @@ export default function ProjectDetails() {
        data: { ...project, status: newStatus },
        actor_id: user?.id || null,
        actor_name: user?.full_name || null,
-     }).catch(err => console.warn('trackProjectStageChange failed:', err?.message));
+     // QC-iter2 W8 (F-F-015): dev-only diagnostic; the remote tracking is best-effort.
+     }).catch(err => { if (import.meta.env.DEV) console.warn('trackProjectStageChange failed:', err?.message); });
 
      // Recalculate task deadlines + unblock tasks triggered by this stage
      // (e.g., "project_onsite" trigger unblocks Upload Raws when moving to onsite)
@@ -511,7 +512,7 @@ export default function ProjectDetails() {
        trigger_event: `status_${newStatus}`,
      }).then(() => {
        queryClient.invalidateQueries({ queryKey: ['project-tasks-scoped', projectId] });
-     }).catch(err => console.warn('Task deadline recalc failed:', err?.message));
+     }).catch(err => { if (import.meta.env.DEV) console.warn('Task deadline recalc failed:', err?.message); });
 
      logActivity('status_change',
        `Stage changed from ${stageLabel(oldStatus)} to ${stageLabel(newStatus)}`,
@@ -635,7 +636,7 @@ export default function ProjectDetails() {
        api.functions.invoke('logOnsiteEffortOnUpload', {
          project_id: projectId,
          old_status: oldStatus,
-       }).catch(err => console.warn('logOnsiteEffortOnUpload failed:', err?.message));
+       }).catch(err => { if (import.meta.env.DEV) console.warn('logOnsiteEffortOnUpload failed:', err?.message); });
      }
 
      // Mark all active tasks as cancelled when project is cancelled
@@ -856,7 +857,7 @@ export default function ProjectDetails() {
       if (projectId) {
         api.functions.invoke('recalculateProjectPricingServerSide', {
           project_id: projectId,
-        }).catch((err) => console.warn('Pricing recalc after agent change failed:', err?.message));
+        }).catch((err) => { if (import.meta.env.DEV) console.warn('Pricing recalc after agent change failed:', err?.message); });
       }
 
       refetchEntityList("Project");
@@ -916,7 +917,7 @@ export default function ProjectDetails() {
           }).catch(() => {})
         ));
       } catch (err) {
-        console.warn('Stopping timers before archive failed (proceeding):', err?.message);
+        if (import.meta.env.DEV) console.warn('Stopping timers before archive failed (proceeding):', err?.message);
       }
 
       // Audit: log archive to team feed
@@ -971,7 +972,7 @@ export default function ProjectDetails() {
       user_name: user?.full_name || user?.email || 'Unknown',
       user_email: user?.email || '',
       ...extra,
-    }).catch(err => console.warn('[activity]', err?.message));
+    }).catch(err => { if (import.meta.env.DEV) console.warn('[activity]', err?.message); });
   };
 
   if (isLoading) {

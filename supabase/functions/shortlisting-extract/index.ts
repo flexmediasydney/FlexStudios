@@ -63,6 +63,65 @@ export function evaluateExtractRoleGate(
   return { allow: true };
 }
 
+// QC-iter2 W8 (F-B-016): Redact secrets from any object before it lands in
+// shortlisting_jobs.result. The Modal photos-extract response carries the same
+// dropbox_access_token + service-role-token + signed-URL fields we send to it,
+// and the job table's result column is queryable by anyone with read access to
+// shortlisting_jobs (manager+). Without redaction, a token leak follows from a
+// single role compromise — defence in depth says: don't persist them at all.
+//
+// Strategy: deep-clone the object, replacing any value at known-secret keys
+// with the literal string "[REDACTED]". Case-insensitive key match so we catch
+// `dropbox_access_token`, `_token`, `signed_url`, `Authorization`, and any
+// future variant. We don't redact based on value heuristics (looks-like-a-JWT)
+// because tokens-stripped-and-named-something-else would slip through; key-
+// based is deterministic and easy to extend.
+//
+// Exported pure helper so the test suite can pin behaviour without booting
+// the whole edge function. Mirrors the F-B-007 evaluateExtractRoleGate pattern.
+const SECRET_KEY_PATTERNS: RegExp[] = [
+  /^_token$/i,
+  /access[_-]?token$/i,
+  /refresh[_-]?token$/i,
+  /signed[_-]?url$/i,
+  /^authorization$/i,
+  /^api[_-]?key$/i,
+  /service[_-]?role[_-]?key$/i,
+  /^bearer$/i,
+];
+
+function isSecretKey(key: string): boolean {
+  for (const re of SECRET_KEY_PATTERNS) {
+    if (re.test(key)) return true;
+  }
+  return false;
+}
+
+export function redactSecrets<T>(obj: T): T {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) {
+    // deno-lint-ignore no-explicit-any
+    return obj.map((item) => redactSecrets(item)) as any;
+  }
+  if (typeof obj === 'object') {
+    // deno-lint-ignore no-explicit-any
+    const out: Record<string, any> = {};
+    // deno-lint-ignore no-explicit-any
+    for (const [key, value] of Object.entries(obj as any)) {
+      if (isSecretKey(key)) {
+        out[key] = '[REDACTED]';
+      } else if (value && typeof value === 'object') {
+        out[key] = redactSecrets(value);
+      } else {
+        out[key] = value;
+      }
+    }
+    // deno-lint-ignore no-explicit-any
+    return out as any;
+  }
+  return obj;
+}
+
 interface ExtractInput {
   jobId: string | null;
   projectId: string;
@@ -266,6 +325,10 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
   }
 
   // 4. Persist the result onto the job row (when we have one).
+  // QC-iter2 W8 (F-B-016): redactSecrets strips dropbox_access_token, _token,
+  // signed_url, etc. from anything we drop into shortlisting_jobs.result. The
+  // Modal response sometimes echoes our tokens back; the job table is reachable
+  // by manager+ so a single role compromise must not leak credentials.
   const finishedAt = new Date().toISOString();
   if (input.jobId) {
     if (modalOk) {
@@ -274,10 +337,10 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
         .update({
           status: 'succeeded',
           finished_at: finishedAt,
-          result: {
+          result: redactSecrets({
             modal_response: modalResponse,
             http_status: httpStatus,
-          },
+          }),
           error_message: null,
         })
         .eq('id', input.jobId);
@@ -301,26 +364,34 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
       // HTTP 200 with body.ok=false — Modal ran but reported failure.
       // Don't burn retry budget; record the result and mark succeeded so the
       // Pass 0 orchestrator can still see the per-file errors.
+      // F-B-016: redactSecrets — see comment at line above.
       await admin
         .from('shortlisting_jobs')
         .update({
           status: 'succeeded',
           finished_at: finishedAt,
-          result: {
+          result: redactSecrets({
             modal_response: modalResponse,
             http_status: httpStatus,
             modal_ok: false,
-          },
+          }),
         })
         .eq('id', input.jobId);
     }
   }
 
+  // F-B-016: redact modalResponse before it goes back over the wire to the
+  // dispatcher. The dispatcher persists this body verbatim into
+  // shortlisting_jobs.result (see callEdgeFunction's `result: bodyJson` path).
+  // Without redaction here, the in-process redact above would be undone by the
+  // dispatcher's overwrite.
+  const safeModalResponse = modalResponse ? redactSecrets(modalResponse) : undefined;
+
   if (errorMsg && !modalOk) {
     return {
       ok: false,
       error: errorMsg,
-      modal_response: modalResponse || undefined,
+      modal_response: safeModalResponse,
       job_id: input.jobId,
       round_id: input.roundId,
     };
@@ -332,7 +403,7 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
       ok: true,
       modal_ok: false,
       error: typeof modalResponse?.error === 'string' ? modalResponse.error : 'modal reported ok=false',
-      modal_response: modalResponse || undefined,
+      modal_response: safeModalResponse,
       job_id: input.jobId,
       round_id: input.roundId,
     };
@@ -352,7 +423,10 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
     // P-fix-1: include the full modal_response so the dispatcher's overwrite of
     // shortlisting_jobs.result preserves per-file detail. Without this, pass0
     // reads job.result.modal_response.files and finds nothing — round dies.
-    modal_response: modalResponse || undefined,
+    // F-B-016: redacted copy of modalResponse — same shape, secret values
+    // replaced with "[REDACTED]". Pass 0 only reads modal_response.files which
+    // doesn't contain secret keys, so this is a transparent change for it.
+    modal_response: safeModalResponse,
     job_id: input.jobId,
     round_id: input.roundId,
   };

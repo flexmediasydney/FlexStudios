@@ -699,7 +699,8 @@ function InFlightPipelinesSection() {
         });
       });
     } catch (e) {
-      console.warn("[InFlightPipelinesSection] DroneJob subscribe failed:", e);
+      // QC-iter2 W8 (F-F-015): dev-only diagnostic; recovered via periodic refetch.
+      if (import.meta.env.DEV) console.warn("[InFlightPipelinesSection] DroneJob subscribe failed:", e);
     }
     return () => {
       try {
@@ -1081,7 +1082,7 @@ export default function DroneCommandCenter() {
           throttledInvalidate(["drone_dashboard_stats"]);
         }),
       );
-    } catch (e) { console.warn("[DroneCommandCenter] DroneEvent subscribe failed:", e); }
+    } catch (e) { if (import.meta.env.DEV) console.warn("[DroneCommandCenter] DroneEvent subscribe failed:", e); }
     try {
       unsubs.push(
         api.entities.DroneShoot.subscribe(() => {
@@ -1093,7 +1094,7 @@ export default function DroneCommandCenter() {
           queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
         }),
       );
-    } catch (e) { console.warn("[DroneCommandCenter] DroneShoot subscribe failed:", e); }
+    } catch (e) { if (import.meta.env.DEV) console.warn("[DroneCommandCenter] DroneShoot subscribe failed:", e); }
     try {
       // drone_jobs realtime — primary signal for "X running" / "K failed"
       // updating live without waiting on the 20s polling fallback. Also
@@ -1106,7 +1107,7 @@ export default function DroneCommandCenter() {
           queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
         }),
       );
-    } catch (e) { console.warn("[DroneCommandCenter] DroneJob subscribe failed:", e); }
+    } catch (e) { if (import.meta.env.DEV) console.warn("[DroneCommandCenter] DroneJob subscribe failed:", e); }
     try {
       // drone_renders realtime — render row inserts are the most direct
       // signal that "X/Y rendered" should tick up.
@@ -1115,14 +1116,14 @@ export default function DroneCommandCenter() {
           queryClient.invalidateQueries({ queryKey: ["drone_shoot_live_progress"] });
         }),
       );
-    } catch (e) { console.warn("[DroneCommandCenter] DroneRender subscribe failed:", e); }
+    } catch (e) { if (import.meta.env.DEV) console.warn("[DroneCommandCenter] DroneRender subscribe failed:", e); }
     try {
       unsubs.push(
         api.entities.ProjectFolderEvent.subscribe(() => {
           throttledInvalidate(["project_folder_events_recent_global"]);
         }),
       );
-    } catch (e) { console.warn("[DroneCommandCenter] ProjectFolderEvent subscribe failed:", e); }
+    } catch (e) { if (import.meta.env.DEV) console.warn("[DroneCommandCenter] ProjectFolderEvent subscribe failed:", e); }
     try {
       unsubs.push(
         api.entities.DroneSfmRun.subscribe(() => {
@@ -1130,7 +1131,7 @@ export default function DroneCommandCenter() {
           throttledInvalidate(["drone_dashboard_stats"]);
         }),
       );
-    } catch (e) { console.warn("[DroneCommandCenter] DroneSfmRun subscribe failed:", e); }
+    } catch (e) { if (import.meta.env.DEV) console.warn("[DroneCommandCenter] DroneSfmRun subscribe failed:", e); }
 
     return () => {
       for (const u of unsubs) {
