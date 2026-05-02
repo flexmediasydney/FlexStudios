@@ -69,6 +69,11 @@ export const ROUTE_ACCESS = {
   // proposals). master_admin only because approve/merge mutations extend
   // the canonical slot/room-type taxonomies.
   SettingsAISuggestions: OWNER_ONLY,
+  // Wave 14 — 50-project structured calibration session admin (editor-vs-AI
+  // ground-truth diff capture). master_admin only because a calibration
+  // session burns ~$1.50 + 25 editor hours, and the disagreement corpus
+  // tunes Wave 8 tier weights + drives Wave 11 few-shot example library.
+  SettingsCalibrationSessions: OWNER_ONLY,
   // W11.6.10 — engine override patterns analytics dashboard.
   SettingsEngineOverridePatterns: ADMIN_AND_ABOVE,
 

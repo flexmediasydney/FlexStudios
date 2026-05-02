@@ -873,3 +873,10 @@ verify_jwt = false
 # canonical coverage). master_admin / admin only via getUserFromReq().
 [functions.engine-override-analytics]
 verify_jwt = false
+
+# W14 — calibration-run-ai-batch wrapper. master_admin only — validates
+# calibration session + each round's lock state, then invokes
+# shortlisting-benchmark-runner with trigger='calibration'. Returns
+# immediately (running=true) — runner is fire-and-forget.
+[functions.calibration-run-ai-batch]
+verify_jwt = false

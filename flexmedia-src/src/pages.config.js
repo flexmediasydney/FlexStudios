@@ -147,6 +147,8 @@ const SettingsObjectRegistryDiscovery = React.lazy(() => import('./pages/Setting
 const SettingsObjectRegistry = React.lazy(() => import('./pages/SettingsObjectRegistry'));
 // Wave 12.7-12.8 — AI suggestion engine review surface (slot + room-type proposals).
 const SettingsAISuggestions = React.lazy(() => import('./pages/SettingsAISuggestions'));
+// Wave 14 — calibration session admin (editor-vs-AI ground-truth diff capture).
+const SettingsCalibrationSessions = React.lazy(() => import('./pages/SettingsCalibrationSessions'));
 // W11.6.10 — engine override patterns analytics dashboard.
 const SettingsEngineOverridePatterns = React.lazy(() => import('./pages/SettingsEngineOverridePatterns'));
 const SettingsPackageTierMapping = React.lazy(() => import('./pages/SettingsPackageTierMapping'));
@@ -241,6 +243,7 @@ export const PAGES = {
     "SettingsObjectRegistryDiscovery": SettingsObjectRegistryDiscovery,
     "SettingsObjectRegistry": SettingsObjectRegistry,
     "SettingsAISuggestions": SettingsAISuggestions,
+    "SettingsCalibrationSessions": SettingsCalibrationSessions,
     "SettingsEngineOverridePatterns": SettingsEngineOverridePatterns,
     "SettingsPackageTierMapping": SettingsPackageTierMapping,
     "SocialMedia": SocialMedia,

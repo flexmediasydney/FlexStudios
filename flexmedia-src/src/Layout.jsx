@@ -369,6 +369,7 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsRejectionReasonsDashboard") && { name: "Shortlist · Rejection Reasons", href: "SettingsRejectionReasonsDashboard", icon: Activity },
           can("SettingsObjectRegistry") && { name: "Object Registry", href: "SettingsObjectRegistry", icon: Sparkles },
           can("SettingsAISuggestions") && { name: "AI Suggestions", href: "SettingsAISuggestions", icon: Sparkles },
+          can("SettingsCalibrationSessions") && { name: "Calibration Sessions", href: "SettingsCalibrationSessions", icon: Sparkles },
           can("SettingsPackageTierMapping") && { name: "Shortlist · Tier Mapping", href: "SettingsPackageTierMapping", icon: Sparkles },
           can("SettingsVendorComparison") && { name: "Shortlist · Vendor Comparison", href: "SettingsVendorComparison", icon: Sparkles },
         ].filter(Boolean)
