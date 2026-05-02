@@ -89,4 +89,32 @@ describe('entityNameToTable — pluraliser overrides', () => {
       'raw_attribute_observations'
     );
   });
+
+  // ─── W12.7-12.8: shortlisting suggestion entities ──────────────────────────
+  it('maps ShortlistingSlotSuggestion → shortlisting_slot_suggestions', () => {
+    expect(entityNameToTable('ShortlistingSlotSuggestion')).toBe(
+      'shortlisting_slot_suggestions'
+    );
+  });
+
+  it('maps ShortlistingRoomTypeSuggestion → shortlisting_room_type_suggestions', () => {
+    expect(entityNameToTable('ShortlistingRoomTypeSuggestion')).toBe(
+      'shortlisting_room_type_suggestions'
+    );
+  });
+
+  // ─── W14: calibration session entities (mig 407) ──────────────────────────
+  it('maps CalibrationSession → calibration_sessions', () => {
+    expect(entityNameToTable('CalibrationSession')).toBe('calibration_sessions');
+  });
+
+  it('maps CalibrationEditorShortlist → calibration_editor_shortlists', () => {
+    expect(entityNameToTable('CalibrationEditorShortlist')).toBe(
+      'calibration_editor_shortlists'
+    );
+  });
+
+  it('maps CalibrationDecision → calibration_decisions', () => {
+    expect(entityNameToTable('CalibrationDecision')).toBe('calibration_decisions');
+  });
 });

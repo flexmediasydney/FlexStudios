@@ -119,6 +119,19 @@ function toTableName(entityName) {
     // default pluraliser produces the correct table name; we add the explicit
     // identity entry so a smoke test can guard against silent drift.
     'object_registry_candidates': 'object_registry_candidates',
+    // W12.7-12.8: shortlisting suggestion tables. Default pluraliser yields
+    // the correct names but we add explicit identity entries so a future
+    // rename / typo is caught by the smoke test rather than silently 404'ing
+    // the AI Suggestions admin page.
+    'shortlisting_slot_suggestions': 'shortlisting_slot_suggestions',
+    'shortlisting_room_type_suggestions': 'shortlisting_room_type_suggestions',
+    // W14: calibration session tables (mig 407). All three table names already
+    // resolve correctly under the default pluraliser, but identity entries
+    // here guard against the W15b.9 / W12.B silent-404 class of bug if a
+    // future rename / typo creeps in.
+    'calibration_sessions': 'calibration_sessions',
+    'calibration_editor_shortlists': 'calibration_editor_shortlists',
+    'calibration_decisions': 'calibration_decisions',
   };
 
   snake = overrides[snake] || snake;
