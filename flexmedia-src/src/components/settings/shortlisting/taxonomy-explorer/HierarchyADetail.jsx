@@ -3,8 +3,11 @@
  * object_registry node.
  *
  * Shows the full row, slot eligibility (signal_room_type → slots), and the
- * 25 most-recent classifications referencing this canonical_id via the
- * observed_objects jsonb.
+ * recent classifications referencing this canonical_id via observed_objects.
+ *
+ * Mig 441: each observation row now carries full source attribution. Rendering
+ * is delegated to ObservationsPanel — same control pattern is reused on the
+ * Hierarchy B side.
  */
 
 import React from "react";
@@ -16,8 +19,8 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { AlertCircle, Eye } from "lucide-react";
+import ObservationsPanel from "./ObservationsPanel.jsx";
 
 export default function HierarchyADetail({ selected, query }) {
   if (!selected) {
@@ -189,45 +192,14 @@ export default function HierarchyADetail({ selected, query }) {
 
           <div className="pt-2 border-t">
             <div className="text-muted-foreground text-[11px] mb-1">
-              Recent observations (top 25)
+              Recent observations
             </div>
-            {observations.length === 0 ? (
-              <div className="text-muted-foreground italic">
-                No classifications reference this canonical_id yet.
-              </div>
-            ) : (
-              <ScrollArea className="h-48 pr-2">
-                <div className="space-y-1">
-                  {observations.map((o) => (
-                    <div
-                      key={`obs:${o.classification_id}`}
-                      className="grid grid-cols-12 gap-1 items-center text-[11px] border-b border-dashed border-border/50 pb-0.5"
-                    >
-                      <div className="col-span-3 truncate text-muted-foreground">
-                        {fmtDate(o.classified_at)}
-                      </div>
-                      <div className="col-span-3 truncate">
-                        {o.space_type || (
-                          <span className="text-muted-foreground italic">
-                            —
-                          </span>
-                        )}
-                      </div>
-                      <div className="col-span-3 truncate">
-                        {o.zone_focus || (
-                          <span className="text-muted-foreground italic">
-                            —
-                          </span>
-                        )}
-                      </div>
-                      <div className="col-span-3 truncate text-muted-foreground">
-                        {o.image_type || ""}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-            )}
+            <ObservationsPanel
+              rows={observations}
+              totalCount={data.observation_count ?? observations.length}
+              emptyMessage="No classifications reference this canonical_id yet."
+              testId="taxonomy-a-observations"
+            />
           </div>
         </CardContent>
       </Card>

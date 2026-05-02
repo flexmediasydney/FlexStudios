@@ -6,7 +6,7 @@
  *   - axis + value
  *   - n_compositions count
  *   - eligible slots whose eligible_<axis> array contains this value
- *   - up to 12 recent sample classifications
+ *   - recent sample classifications (mig 441: with source attribution)
  */
 
 import React from "react";
@@ -18,8 +18,8 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { AlertCircle, Eye } from "lucide-react";
+import ObservationsPanel from "./ObservationsPanel.jsx";
 
 export default function HierarchyBDetail({ selected, query }) {
   if (!selected) {
@@ -104,56 +104,14 @@ export default function HierarchyBDetail({ selected, query }) {
           <CardTitle className="text-sm">Recent samples</CardTitle>
         </CardHeader>
         <CardContent className="text-xs">
-          {samples.length === 0 ? (
-            <div className="text-muted-foreground italic">
-              No sample classifications yet.
-            </div>
-          ) : (
-            <ScrollArea className="h-72 pr-2">
-              <div className="space-y-1">
-                {samples.map((s) => (
-                  <div
-                    key={`b-sample:${s.classification_id}`}
-                    className="grid grid-cols-12 gap-1 items-start text-[11px] border-b border-dashed border-border/50 pb-1"
-                  >
-                    <div className="col-span-3 truncate text-muted-foreground">
-                      {fmtDate(s.classified_at)}
-                    </div>
-                    <div className="col-span-3 truncate">
-                      {s.space_type || (
-                        <span className="text-muted-foreground italic">
-                          —
-                        </span>
-                      )}
-                    </div>
-                    <div className="col-span-3 truncate">
-                      {s.zone_focus || (
-                        <span className="text-muted-foreground italic">
-                          —
-                        </span>
-                      )}
-                    </div>
-                    <div className="col-span-3 truncate text-muted-foreground">
-                      {s.image_type || ""}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </ScrollArea>
-          )}
+          <ObservationsPanel
+            rows={samples}
+            totalCount={data.n_compositions ?? samples.length}
+            emptyMessage="No sample classifications yet."
+            testId="taxonomy-b-samples"
+          />
         </CardContent>
       </Card>
     </div>
   );
-}
-
-function fmtDate(v) {
-  if (!v) return "";
-  try {
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) return v;
-    return d.toISOString().slice(0, 16).replace("T", " ");
-  } catch {
-    return v;
-  }
 }

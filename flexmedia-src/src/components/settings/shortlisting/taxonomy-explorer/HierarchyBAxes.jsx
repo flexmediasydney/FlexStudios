@@ -1,8 +1,8 @@
 /**
  * HierarchyBAxes — left column for the orthogonal classification axes.
  *
- * Renders one card per axis (image_type / room_type / space_type /
- * zone_focus / composition_type). Each card pulls its distribution from
+ * Renders one card per primary axis (image_type / space_type / zone_focus /
+ * composition_type). Each card pulls its distribution from
  * taxonomy_b_axis_distribution(<axis>) and shows a compact bar list:
  *
  *   master_bedroom         [████████▒░] 248 · 31.4%
@@ -10,9 +10,13 @@
  *   …
  *
  * Click a row to select { axis, value } — drives the right-column detail.
+ *
+ * Mig 441: `room_type` is demoted into a collapsible "Legacy axes" section
+ * at the bottom. Closed by default. Same axis card renders inside; only
+ * the framing changes.
  */
 
-import React from "react";
+import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import {
@@ -22,12 +26,20 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ChartBar, AlertCircle } from "lucide-react";
+import {
+  ChartBar,
+  AlertCircle,
+  Archive,
+  ChevronDown,
+  ChevronRight,
+} from "lucide-react";
 
 const STALE_MS = 60_000;
 const BAR_WIDTH = 10;
 
-export default function HierarchyBAxes({ axes, selected, onSelect }) {
+export default function HierarchyBAxes({ axes, legacyAxes, selected, onSelect }) {
+  const [legacyOpen, setLegacyOpen] = useState(false);
+
   return (
     <div className="space-y-3" data-testid="taxonomy-b-axes">
       {axes.map((a) => (
@@ -38,11 +50,75 @@ export default function HierarchyBAxes({ axes, selected, onSelect }) {
           onSelect={onSelect}
         />
       ))}
+
+      {Array.isArray(legacyAxes) && legacyAxes.length > 0 && (
+        <Card className="border-dashed" data-testid="taxonomy-b-legacy-section">
+          <CardHeader
+            className="pb-2 cursor-pointer select-none"
+            onClick={() => setLegacyOpen((v) => !v)}
+            data-testid="taxonomy-b-legacy-toggle"
+            data-open={legacyOpen ? "true" : "false"}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setLegacyOpen((v) => !v);
+              }
+            }}
+          >
+            <CardTitle className="text-sm flex items-center justify-between">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                {legacyOpen ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5" />
+                )}
+                <Archive className="h-3.5 w-3.5" />
+                Legacy axes
+                <span className="text-[10px] font-normal">
+                  (kept for slot eligibility compat)
+                </span>
+              </span>
+              <span className="text-[10px] font-normal text-muted-foreground">
+                {legacyAxes.length} axis{legacyAxes.length === 1 ? "" : "es"}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          {legacyOpen && (
+            <CardContent
+              className="space-y-3 pt-0"
+              data-testid="taxonomy-b-legacy-content"
+            >
+              <p className="text-[11px] text-muted-foreground italic leading-relaxed">
+                <code className="text-[10px]">room_type</code> is the
+                pre-W11.6.13 single-axis classification. New rows still emit it
+                for backwards compat with{" "}
+                <code className="text-[10px]">
+                  slot_definitions.eligible_room_types[]
+                </code>
+                . Use <code className="text-[10px]">space_type</code> +{" "}
+                <code className="text-[10px]">zone_focus</code> for new
+                diagnostics.
+              </p>
+              {legacyAxes.map((a) => (
+                <AxisCard
+                  key={a.key}
+                  axis={a}
+                  selected={selected}
+                  onSelect={onSelect}
+                  legacy
+                />
+              ))}
+            </CardContent>
+          )}
+        </Card>
+      )}
     </div>
   );
 }
 
-function AxisCard({ axis, selected, onSelect }) {
+function AxisCard({ axis, selected, onSelect, legacy = false }) {
   const q = useQuery({
     queryKey: ["taxonomy-b-axis-distribution", axis.key],
     queryFn: async () => {
@@ -60,7 +136,11 @@ function AxisCard({ axis, selected, onSelect }) {
   );
 
   return (
-    <Card data-testid={`taxonomy-b-axis-${axis.key}`}>
+    <Card
+      data-testid={`taxonomy-b-axis-${axis.key}`}
+      data-legacy={legacy ? "true" : "false"}
+      className={legacy ? "bg-muted/20" : undefined}
+    >
       <CardHeader className="pb-2">
         <CardTitle className="text-sm flex items-center justify-between">
           <span className="flex items-center gap-1.5">
@@ -69,6 +149,11 @@ function AxisCard({ axis, selected, onSelect }) {
             <code className="text-[10px] text-muted-foreground">
               {axis.key}
             </code>
+            {legacy && (
+              <span className="text-[10px] text-muted-foreground italic">
+                (legacy)
+              </span>
+            )}
           </span>
           <span className="text-xs font-normal text-muted-foreground">
             {q.data ? `${q.data.length} values` : ""}

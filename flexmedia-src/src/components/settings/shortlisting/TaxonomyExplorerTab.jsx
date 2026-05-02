@@ -68,12 +68,28 @@ const STALE_MS = 60_000; // brief cache as required
 
 // Hierarchy B axes — keep as plain text constants (no closed enum;
 // codebase discipline post v2.4 schema drop).
-const B_AXES = [
+//
+// Mig 441 (W11.6.27): demoted `room_type` into a collapsible Legacy section.
+// `room_type` is the pre-W11.6.13 single-axis classification. New rows still
+// emit it for backwards compat with `slot_definitions.eligible_room_types[]`,
+// but the engine has moved to `space_type` + `zone_focus` as the primary
+// orthogonal axes for new diagnostics.
+//
+// TODO(C1 / mig 441-followup): when `shot_scale`, `perspective_compression`,
+// and `orientation` columns ship, register them here in B_AXES_PRIMARY:
+//   shot_scale            — between space_type and zone_focus
+//   perspective_compression — after composition_type
+//   orientation           — after perspective_compression
+// Track owner: agent-af724a488e18c08a9 (this commit) — small follow-up.
+const B_AXES_PRIMARY = [
   { key: "image_type",       label: "Image type" },
-  { key: "room_type",        label: "Room type (legacy)" },
   { key: "space_type",       label: "Space type" },
   { key: "zone_focus",       label: "Zone focus" },
   { key: "composition_type", label: "Composition type" },
+];
+
+const B_AXES_LEGACY = [
+  { key: "room_type",        label: "Room type" },
 ];
 
 export default function TaxonomyExplorerTab() {
@@ -328,7 +344,8 @@ function HierarchyBView({ bSelected, setBSelected, valueDetailQuery }) {
     <div className="grid grid-cols-12 gap-3">
       <div className="col-span-12 lg:col-span-7">
         <HierarchyBAxes
-          axes={B_AXES}
+          axes={B_AXES_PRIMARY}
+          legacyAxes={B_AXES_LEGACY}
           selected={bSelected}
           onSelect={setBSelected}
         />
