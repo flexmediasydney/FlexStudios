@@ -109,6 +109,105 @@ export function previewGridStyle(previewSize) {
   };
 }
 
+/**
+ * W11.6.22c — pure helper: collect distinct slot_ids referenced by an array
+ * of shortlisting_overrides rows. The lightbox Position panel needs the
+ * matching shortlisting_slot_position_preferences for these slot_ids; the
+ * swimlane uses this to drive a TanStack Query that filters by slot_id IN (...).
+ *
+ * Output is sorted so a re-render with the same set produces a stable query
+ * key (cache-hit on identical rounds; re-fetch when an alt swap introduces a
+ * new slot_id).
+ *
+ * Exported for unit tests so the slot-set extraction can be asserted without
+ * mounting the swimlane.
+ */
+export function extractSlotIdsForPositionPrefs(overrideRows) {
+  if (!Array.isArray(overrideRows)) return [];
+  const set = new Set();
+  for (const ov of overrideRows) {
+    // A swap row carries TWO slot_ids — the original AI-picked slot AND the
+    // human-selected target. We collect both so the position-prefs fetch
+    // covers both sides of the swap (the lightbox might surface either as
+    // the active slot decision depending on which override action lands
+    // first in the resolution priority chain).
+    if (ov?.ai_proposed_slot_id) set.add(ov.ai_proposed_slot_id);
+    if (ov?.human_selected_slot_id) set.add(ov.human_selected_slot_id);
+  }
+  return [...set].sort();
+}
+
+/**
+ * W11.6.22c — pure helper: build a (slot_id, position_index) → criteria
+ * lookup Map from a list of shortlisting_slot_position_preferences rows.
+ * Skips rows missing slot_id or position_index. Returns an empty Map when
+ * input is empty/null (graceful — the lightbox renders just position_index
+ * + filled_via without criteria when the map yields nothing).
+ *
+ * Exported for unit tests + future swimlane-adjacent surfaces (e.g. an
+ * analytics page) that need the same lookup shape.
+ */
+export function buildPositionCriteriaMap(positionPrefs) {
+  const m = new Map();
+  if (!Array.isArray(positionPrefs)) return m;
+  for (const p of positionPrefs) {
+    if (!p?.slot_id || p?.position_index == null) continue;
+    m.set(`${p.slot_id}:${p.position_index}`, {
+      display_label: p.display_label,
+      preferred_composition_type: p.preferred_composition_type,
+      preferred_zone_focus: p.preferred_zone_focus,
+      preferred_space_type: p.preferred_space_type,
+      preferred_lighting_state: p.preferred_lighting_state,
+      preferred_image_type: p.preferred_image_type,
+      preferred_signal_emphasis: p.preferred_signal_emphasis,
+      is_required: p.is_required,
+      ai_backfill_on_gap: p.ai_backfill_on_gap,
+    });
+  }
+  return m;
+}
+
+/**
+ * W11.6.22c — pure helper: resolve the position fields for a slot decision.
+ * Looks up the matching criteria from the position-criteria map and returns
+ * the shape the lightbox Position panel reads:
+ *   { position_index, position_filled_via, position_label, position_criteria }
+ *
+ * Returns all-nulls when slot_id or position_index is missing (legacy
+ * ai_decides slots — the lightbox panel hides itself in that case).
+ *
+ * Exported for unit tests so the lightbox-criteria join can be asserted at
+ * function level rather than only at the rendered DOM level.
+ */
+export function resolvePositionFields(positionCriteriaMap, slotId, positionIndex, positionFilledVia) {
+  if (slotId == null || positionIndex == null) {
+    return {
+      position_index: null,
+      position_filled_via: null,
+      position_label: null,
+      position_criteria: null,
+    };
+  }
+  const criteria = positionCriteriaMap?.get
+    ? positionCriteriaMap.get(`${slotId}:${positionIndex}`) || null
+    : null;
+  return {
+    position_index: typeof positionIndex === "number" ? positionIndex : null,
+    position_filled_via:
+      positionFilledVia === "curated_match" || positionFilledVia === "ai_backfill"
+        ? positionFilledVia
+        : null,
+    position_label: criteria?.display_label || null,
+    position_criteria: criteria
+      ? (() => {
+          const { display_label, ...rest } = criteria;
+          void display_label;
+          return rest;
+        })()
+      : null,
+  };
+}
+
 // Column definitions
 const COLUMNS = [
   {
@@ -515,6 +614,41 @@ export default function ShortlistingSwimlane({
     staleTime: 15_000,
   });
 
+  // W11.6.22c — position-criteria fetch. Pulls
+  // shortlisting_slot_position_preferences for every slot referenced by this
+  // round's overrides (post-W11.6.22b position-aware decisions). The lightbox's
+  // Position panel reads slot.position_criteria to render the curated label /
+  // composition / zone / lighting / signal-emphasis list. We fetch lazily —
+  // only after the overrides query has resolved — so a round with zero
+  // curated_positions slots makes ZERO requests (the in-clause is empty).
+  // Keyed on the sorted slot_ids so a re-render with the same set hits the
+  // cache, but a slot getting added (e.g. operator picks an alt) re-fetches.
+  const slotIdsForPositionPrefs = useMemo(
+    () => extractSlotIdsForPositionPrefs(overridesQuery.data || []),
+    [overridesQuery.data],
+  );
+
+  const positionPrefsQuery = useQuery({
+    queryKey: [
+      "shortlisting_slot_position_preferences",
+      roundId,
+      slotIdsForPositionPrefs.join("|"),
+    ],
+    queryFn: async () => {
+      if (slotIdsForPositionPrefs.length === 0) return [];
+      const rows = await api.entities.ShortlistingSlotPositionPreference.filter(
+        { slot_id: { $in: slotIdsForPositionPrefs } },
+        "position_index",
+        2000,
+      );
+      return rows || [];
+    },
+    // Fire only once we know which slot_ids are in play. Round still loads
+    // even if this query never runs (no curated_positions slots → empty set).
+    enabled: Boolean(roundId) && slotIdsForPositionPrefs.length > 0,
+    staleTime: 60_000,
+  });
+
   const isLoading =
     groupsQuery.isLoading ||
     classificationsQuery.isLoading ||
@@ -530,6 +664,16 @@ export default function ShortlistingSwimlane({
   const classifications = classificationsQuery.data || [];
   const slotEvents = slotEventsQuery.data || [];
   const overrides = overridesQuery.data || [];
+  const positionPrefs = positionPrefsQuery.data || [];
+
+  // W11.6.22c — (slot_id, position_index) → criteria lookup. Built once per
+  // positionPrefs change. Empty Map when the round has no curated_positions
+  // slots (graceful: lightbox falls back to showing just position_index +
+  // filled_via without criteria — the W11.6.22b panel handles that branch).
+  const positionCriteriaMap = useMemo(
+    () => buildPositionCriteriaMap(positionPrefs),
+    [positionPrefs],
+  );
 
   // ── Build columns from data ─────────────────────────────────────────────
   // Per-group classification lookup
@@ -539,7 +683,8 @@ export default function ShortlistingSwimlane({
     return m;
   }, [classifications]);
 
-  // Per-group slot info: { slot_id, phase, rank }.
+  // Per-group slot info: { slot_id, phase, rank, position_index?,
+  // position_filled_via?, position_label?, position_criteria? }.
   //
   // W11.6.1-hotfix-2 BUG #2: Shape D rounds don't emit pass2_slot_assigned
   // events — the canonical (slot_id, group_id) pairs live on
@@ -547,6 +692,12 @@ export default function ShortlistingSwimlane({
   // events. We read BOTH so legacy + Shape D rounds populate the same map
   // shape, and the AI PROPOSED column header / sub-grouping renders the
   // correct slot label instead of "Unassigned".
+  //
+  // W11.6.22c: pull position_index + position_filled_via from override rows
+  // (curated_positions slots) AND attach the matching criteria from the
+  // positionCriteriaMap so the lightbox's Position panel can render the
+  // curated label / composition / zone / lighting / signal-emphasis list
+  // without a separate plumbing step at the lightbox boundary.
   //
   // Resolution priority (most recent wins on hybrid rounds):
   //   1. shortlisting_overrides.ai_proposed (Shape D primary)
@@ -568,6 +719,12 @@ export default function ShortlistingSwimlane({
         slot_id: slotId,
         phase: PHASE_OF_SLOT[slotId] ?? null,
         rank: 1,
+        ...resolvePositionFields(
+          positionCriteriaMap,
+          slotId,
+          ov.position_index ?? null,
+          ov.position_filled_via ?? null,
+        ),
       });
     }
 
@@ -588,6 +745,12 @@ export default function ShortlistingSwimlane({
         slot_id: slotId,
         phase: PHASE_OF_SLOT[slotId] ?? null,
         rank: 1,
+        ...resolvePositionFields(
+          positionCriteriaMap,
+          slotId,
+          ov.position_index ?? null,
+          ov.position_filled_via ?? null,
+        ),
       });
     }
 
@@ -616,7 +779,7 @@ export default function ShortlistingSwimlane({
       }
     }
     return m;
-  }, [overrides, slotEvents]);
+  }, [overrides, slotEvents, positionCriteriaMap]);
 
   // Alternatives map: slot_id -> [{ group_id, stem, combined_score, room_type, analysis }]
   // From pass2_slot_assigned events with rank in (2, 3).

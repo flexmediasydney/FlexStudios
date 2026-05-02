@@ -117,4 +117,16 @@ describe('entityNameToTable — pluraliser overrides', () => {
   it('maps CalibrationDecision → calibration_decisions', () => {
     expect(entityNameToTable('CalibrationDecision')).toBe('calibration_decisions');
   });
+
+  // ─── W11.6.22c: shortlisting_slot_position_preferences (mig 417) ──────────
+  // Pluraliser smoke test — guards against the silent-404 class of bug if a
+  // future rename / typo breaks the lightbox Position panel data wiring.
+  // Default pluraliser already gets it right (preference → preferences,
+  // e+s), but the explicit identity entry in `overrides` makes the contract
+  // load-bearing and visible in this test.
+  it('maps ShortlistingSlotPositionPreference → shortlisting_slot_position_preferences', () => {
+    expect(entityNameToTable('ShortlistingSlotPositionPreference')).toBe(
+      'shortlisting_slot_position_preferences'
+    );
+  });
 });

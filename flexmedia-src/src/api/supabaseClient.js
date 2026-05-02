@@ -132,6 +132,11 @@ function toTableName(entityName) {
     'calibration_sessions': 'calibration_sessions',
     'calibration_editor_shortlists': 'calibration_editor_shortlists',
     'calibration_decisions': 'calibration_decisions',
+    // W11.6.22 / W11.6.22c: shortlisting_slot_position_preferences resolves
+    // correctly under the default pluraliser (preference → preferences, e+s),
+    // but identity entry here protects against future drift now that the
+    // table is hot in the swimlane lightbox path.
+    'shortlisting_slot_position_preferences': 'shortlisting_slot_position_preferences',
   };
 
   snake = overrides[snake] || snake;
