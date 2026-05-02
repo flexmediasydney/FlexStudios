@@ -7,8 +7,7 @@
  *   kind='ingest'  → POST shortlisting-ingest    payload: { job_id }
  *   kind='extract' → POST shortlisting-extract   payload: { job_id }
  *   kind='pass0'   → POST shortlisting-pass0     payload: { job_id }
- *   kind='pass1'   → POST shortlisting-pass1     payload: { job_id }
- *   kind='pass2'   → POST shortlisting-pass2     payload: { job_id }
+ *   (pass1 + pass2 deleted by W11.7.10 sunset on 2026-05-02 — Shape D-only)
  *   kind='pass3'   → POST shortlisting-pass3     payload: { job_id }
  *
  *     Chain: ingest → (ingest internally enqueues N×extract) → pass0 → pass1
@@ -505,8 +504,10 @@ const KIND_TO_FUNCTION: Record<string, string> = {
   ingest: "shortlisting-ingest",
   extract: "shortlisting-extract",
   pass0: "shortlisting-pass0",
-  pass1: "shortlisting-pass1",
-  pass2: "shortlisting-pass2",
+  // pass1 + pass2 removed by W11.7.10 sunset (legacy two-pass engine deprecated
+  // 2026-05-02, ~24h after the W11.7.17 keystone cutover validated successfully).
+  // Historical rounds with engine_mode='two_pass' remain immutable; new rounds
+  // route pass0 → shape_d_stage1 unconditionally.
   pass3: "shortlisting-pass3",
   shape_d_stage1: "shortlisting-shape-d",
   stage4_synthesis: "shortlisting-shape-d-stage4",
@@ -671,39 +672,22 @@ async function chainNextKind(
   }
   let nextKind: string;
   if (job.kind === "pass0") {
-    // Look up the round's engine_mode. If 'shape_d_*' → route to
-    // shape_d_stage1; if 'two_pass' or null → route to legacy pass1.
-    const { data: roundRow } = await admin
-      .from("shortlisting_rounds")
-      .select("engine_mode")
-      .eq("id", roundId)
-      .maybeSingle();
-    const roundMode = (roundRow?.engine_mode as string | null) || null;
-    let useShapeD = roundMode?.startsWith("shape_d") ?? false;
-    if (!roundMode || roundMode === "two_pass") {
-      // No per-round override → check the global default.
-      const { data: gs } = await admin
-        .from("engine_settings")
-        .select("value")
-        .eq("key", "engine_mode")
-        .maybeSingle();
-      const globalMode = typeof gs?.value === "string"
-        ? gs.value
-        : (typeof gs?.value === "object" && gs?.value !== null
-          ? (gs.value as Record<string, unknown>).value
-          : null);
-      if (globalMode === "shape_d") useShapeD = true;
-    }
-    nextKind = useShapeD ? "shape_d_stage1" : "pass1";
-    if (useShapeD) {
-      console.log(
-        `[${GENERATOR}] pass0 ${job.id} → routing round ${roundId} to Shape D (engine_mode=${roundMode ?? "global_shape_d"})`,
-      );
-    }
+    // W11.7.10 sunset: pass0 → shape_d_stage1 always. Legacy two_pass routing
+    // (pass0 → pass1) was removed when pass1 + pass2 edge fns were deleted.
+    // Historical rounds with engine_mode='two_pass' are immutable and don't
+    // re-enter the dispatcher; only new rounds reach this code path.
+    nextKind = "shape_d_stage1";
+    console.log(
+      `[${GENERATOR}] pass0 ${job.id} → routing round ${roundId} to Shape D`,
+    );
   } else {
+    // pass3 is the only remaining post-pass0 chain target after W11.7.10.
+    // Shape D's stage4_synthesis is dispatched standalone by the orchestrator
+    // and does its own terminal status transition — no chain here.
     const nextMap: Record<string, string> = {
-      pass1: "pass2",
-      pass2: "pass3",
+      // pass1 / pass2 removed by W11.7.10. Legacy chains pass1→pass2→pass3 no
+      // longer exist; if any historical job rows still claim pass1/pass2 they
+      // will be flagged as unknown kinds at dispatch and skipped.
     };
     const mapped = nextMap[job.kind];
     if (!mapped) return;
