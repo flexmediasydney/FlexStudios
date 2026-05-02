@@ -70,7 +70,10 @@ export interface CohortCell {
  * cell, count the AI proposals (composition_classifications joined to round)
  * and divide by overrides (shortlisting_overrides where action != 'confirm').
  *
- * engine_role is derived from engine_mode: 'shape_d_*' → 'shape_d', else 'two_pass'.
+ * mig 439: engine_role is always 'shape_d'. The legacy two-pass engine is
+ * retired and no production rounds carry engine_mode='two_pass'; the
+ * `engine_role` axis is preserved on the output shape for downstream UI
+ * compatibility but is constant.
  */
 export function buildCohortGrid(
   rounds: CohortInputRound[],
@@ -95,7 +98,8 @@ export function buildCohortGrid(
     if (!round) continue;
     const room_type = c.room_type || 'unknown';
     const property_tier = round.property_tier || 'unspecified';
-    const engine_role = (round.engine_mode || '').startsWith('shape_d') ? 'shape_d' : 'two_pass';
+    // mig 439: hardcoded — Shape D is the only engine.
+    const engine_role = 'shape_d';
     const key = `${room_type}|${property_tier}|${engine_role}`;
     if (!cells.has(key)) {
       cells.set(key, {
@@ -121,7 +125,8 @@ export function buildCohortGrid(
     if (!round) continue;
     const room_type = (o.ai_proposed_group_id && groupRoom.get(o.ai_proposed_group_id)) || 'unknown';
     const property_tier = round.property_tier || 'unspecified';
-    const engine_role = (round.engine_mode || '').startsWith('shape_d') ? 'shape_d' : 'two_pass';
+    // mig 439: hardcoded — Shape D is the only engine.
+    const engine_role = 'shape_d';
     const key = `${room_type}|${property_tier}|${engine_role}`;
     if (!cells.has(key)) {
       cells.set(key, {

@@ -101,30 +101,22 @@ function CostSummaryWidget() {
 
   const summary = useMemo(() => {
     const rows = auditQuery.data || [];
+    // mig 439: pass1/pass2 + twoPassCount stripped — Shape D is the only engine.
     let stage1Total = 0;
     let stage4Total = 0;
-    let pass1Total = 0;
-    let pass2Total = 0;
     let totalCost = 0;
     let shapeDCount = 0;
-    let twoPassCount = 0;
     for (const r of rows) {
       if (r.stage1_total_cost_usd) stage1Total += Number(r.stage1_total_cost_usd);
       if (r.stage4_total_cost_usd) stage4Total += Number(r.stage4_total_cost_usd);
-      if (r.legacy_pass1_total_cost_usd) pass1Total += Number(r.legacy_pass1_total_cost_usd);
-      if (r.legacy_pass2_total_cost_usd) pass2Total += Number(r.legacy_pass2_total_cost_usd);
       if (r.total_cost_usd) totalCost += Number(r.total_cost_usd);
       if ((r.engine_mode || "").startsWith("shape_d")) shapeDCount++;
-      else if (r.engine_mode === "two_pass") twoPassCount++;
     }
     return {
       stage1Total,
       stage4Total,
-      pass1Total,
-      pass2Total,
       totalCost,
       shapeDCount,
-      twoPassCount,
       avgPerRound: rows.length > 0 ? totalCost / rows.length : 0,
       totalRounds: rows.length,
     };
@@ -150,7 +142,7 @@ function CostSummaryWidget() {
           </div>
         ) : (
           <div className="space-y-3">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div className="grid grid-cols-3 gap-2 text-xs">
               <div className="border rounded p-2">
                 <div className="text-muted-foreground text-[10px]">Stage 1</div>
                 <div className="font-mono text-sm font-semibold">
@@ -167,15 +159,6 @@ function CostSummaryWidget() {
                 </div>
                 <div className="text-[10px] text-muted-foreground">
                   Visual master synthesis
-                </div>
-              </div>
-              <div className="border rounded p-2">
-                <div className="text-muted-foreground text-[10px]">Pass 1+2 (legacy)</div>
-                <div className="font-mono text-sm font-semibold">
-                  {fmtUsd(summary.pass1Total + summary.pass2Total)}
-                </div>
-                <div className="text-[10px] text-muted-foreground">
-                  Two-pass legacy
                 </div>
               </div>
               <div className="border rounded p-2 bg-emerald-50 dark:bg-emerald-950/20">
@@ -195,10 +178,6 @@ function CostSummaryWidget() {
               <span>·</span>
               <span>
                 <span className="font-mono">{summary.shapeDCount}</span> Shape D
-              </span>
-              <span>·</span>
-              <span>
-                <span className="font-mono">{summary.twoPassCount}</span> two-pass
               </span>
             </div>
           </div>

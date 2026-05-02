@@ -39,14 +39,14 @@ Deno.test('decideChain: extract returns extract_chain for sibling-aware logic', 
   assertEquals(decideChain('extract'), { action: 'extract_chain' });
 });
 
-Deno.test('decideChain: pass0 chains to shape_d_stage1 (W11.7.10 sunset path)', () => {
+Deno.test('decideChain: pass0 chains to shape_d_stage1', () => {
   assertEquals(decideChain('pass0'), { action: 'chain', next: 'shape_d_stage1' });
 });
 
-Deno.test('F-B-012: legacy two_pass kinds (pass1, pass2) return unknown so the warn fires', () => {
-  // These were sunset by W11.7.10; any historical job rows still claiming
-  // pass1/pass2 must surface as warnings so ops can clean them up rather than
-  // silently orphaning the round.
+Deno.test('F-B-012: retired kinds (pass1, pass2) return unknown so the warn fires', () => {
+  // pass1/pass2 are retired (mig 439). Any stray historical job row still
+  // claiming these kinds must surface as a warning so ops can clean it up
+  // rather than silently orphaning the round.
   assertEquals(decideChain('pass1'), { action: 'unknown' });
   assertEquals(decideChain('pass2'), { action: 'unknown' });
 });

@@ -70,9 +70,11 @@ Deno.test('buildCohortGrid: empty inputs yield empty grid', () => {
 });
 
 Deno.test('buildCohortGrid: counts proposals + overrides per cell', () => {
+  // mig 439: engine_role is hardcoded 'shape_d'; engine_mode input is ignored
+  // for the cohort axis.
   const rounds = [
     { round_id: 'r1', property_tier: 'standard', engine_mode: 'shape_d_full' },
-    { round_id: 'r2', property_tier: 'premium', engine_mode: 'two_pass' },
+    { round_id: 'r2', property_tier: 'premium', engine_mode: 'shape_d_full' },
   ];
   // 5 classifications: 4 in r1/master_bedroom, 1 in r2/kitchen
   const classifications = [
@@ -112,10 +114,11 @@ Deno.test('buildCohortGrid: confirms are NOT counted as overrides', () => {
 });
 
 Deno.test('buildCohortGrid: 100 rounds yields plausible cell distribution', () => {
+  // mig 439: engine_role hardcoded; only property_tier × room_type axes vary.
   const rounds = Array.from({ length: 100 }, (_, i) => ({
     round_id: `r${i}`,
     property_tier: i % 2 === 0 ? 'standard' : 'premium',
-    engine_mode: i % 3 === 0 ? 'shape_d_full' : 'two_pass',
+    engine_mode: 'shape_d_full',
   }));
   // Each round has 5 classifications across 2 room types
   const classifications: Array<{ round_id: string; group_id: string; room_type: string }> = [];
@@ -139,9 +142,10 @@ Deno.test('buildCohortGrid: 100 rounds yields plausible cell distribution', () =
   assertEquals(totalProposals, 500);
   assertEquals(totalOverrides, 50);
   assertAlmostEquals(totalOverrides / totalProposals, 0.1, 0.01);
-  // Should have 4 cells: kitchen × {standard,premium} × {shape_d,two_pass} = 4
-  // Plus same for master_bedroom = 4. Total 8 cells.
-  assertEquals(cells.length, 8);
+  // mig 439: engine_role axis collapsed to a single value ('shape_d').
+  // Cells: kitchen × {standard,premium} × shape_d = 2; same for
+  // master_bedroom = 2. Total 4 cells.
+  assertEquals(cells.length, 4);
 });
 
 // ─── Section B — timeline ──────────────────────────────────────────────────

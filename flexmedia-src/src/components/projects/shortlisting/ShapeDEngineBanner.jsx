@@ -2,7 +2,8 @@
  * ShapeDEngineBanner — Wave 11.7.7 / W11.6 operator UX
  *
  * Round detail banner showing:
- *   - engine_mode (shape_d_full / two_pass) + 1-click toggle (master_admin)
+ *   - engine_mode (shape_d_full / shape_d_partial) — display only since
+ *     mig 439 (Shape D is the only engine; legacy two_pass mode is retired)
  *   - voice tier picker (premium / standard / approachable)
  *   - engine_run_audit summary (cost per stage + vendor + total)
  *   - Stage 4 override count → links into the override review queue
@@ -20,13 +21,11 @@
  *   - engine_run_audit (per-round rollup)
  *
  * Edge fns:
- *   - round-engine-controls (master_admin toggle / tier picker)
+ *   - round-engine-controls (master_admin tier picker)
  *
  * Render strategy:
- *   The component is purely additive — it renders only when the round is
- *   shape_d_* or when an engine_run_audit row exists (legacy two_pass rounds
- *   simply don't show it). Keeps clutter low for the legacy pipeline that
- *   most operators still use during the W11.7 coexistence period.
+ *   The component renders when the round has engine_mode='shape_d_*' or when
+ *   an engine_run_audit row exists.
  */
 
 import { useState } from "react";
@@ -90,17 +89,16 @@ const ENGINE_MODE_TONE = {
   shape_d_full: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
   shape_d_partial: "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
   shape_d_textfallback: "bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300",
-  unified_anthropic_failover: "bg-purple-100 text-purple-800 dark:bg-purple-950/40 dark:text-purple-300",
-  two_pass: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
 };
 
 const ENGINE_MODE_LABEL = {
   shape_d_full: "Shape D · full",
   shape_d_partial: "Shape D · partial",
   shape_d_textfallback: "Shape D · text fallback",
-  unified_anthropic_failover: "Anthropic failover",
-  two_pass: "Two-pass (legacy)",
 };
+
+const ENGINE_MODE_FALLBACK_TONE =
+  "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200";
 
 function fmtUsd(n) {
   if (n == null || !isFinite(Number(n))) return "$0.00";
@@ -126,7 +124,9 @@ export default function ShapeDEngineBanner({ round, projectId }) {
   );
 
   const roundId = round?.id;
-  const engineMode = round?.engine_mode || "two_pass";
+  // mig 439: 'two_pass' retired; default to shape_d_full when engine_mode is
+  // missing on the round row (post-mig 439 every new round stamps shape_d_*).
+  const engineMode = round?.engine_mode || "shape_d_full";
   const isShapeD = engineMode.startsWith("shape_d");
 
   // engine_run_audit rollup — single row per round.
@@ -140,7 +140,10 @@ export default function ShapeDEngineBanner({ round, projectId }) {
           "round_id, engine_mode, vendor_used, model_used, failover_triggered, " +
             "stages_completed, stages_failed, stage1_total_cost_usd, stage1_total_wall_ms, " +
             "stage4_total_cost_usd, stage4_total_wall_ms, " +
-            "legacy_pass1_total_cost_usd, legacy_pass2_total_cost_usd, " +
+            // mig 439: legacy_pass1/pass2 cost columns no longer rendered
+            // (every production row has them as 0 since the W11.7.10 sunset
+            // and pass1/pass2 deletion this hour). Columns retained on the
+            // table as immutable history.
             "total_cost_usd, total_wall_ms, error_summary, completed_at",
         )
         .eq("round_id", roundId)
@@ -220,8 +223,9 @@ export default function ShapeDEngineBanner({ round, projectId }) {
   const masterListing = masterListingQuery.data;
   const overrideCounts = overrideCountsQuery.data;
 
-  // Decide whether to render. Hide on legacy two-pass rounds without an audit
-  // row to keep the existing UI clean during coexistence.
+  // Decide whether to render. Renders for any shape_d_* mode or when an
+  // engine_run_audit row exists (covers the rare post-mig-439 case of a
+  // stranded legacy row that's never re-stamped).
   const shouldRender = isShapeD || audit;
   if (!shouldRender) return null;
 
@@ -245,7 +249,7 @@ export default function ShapeDEngineBanner({ round, projectId }) {
           <Badge
             className={cn(
               "text-[10px] h-5 px-1.5",
-              ENGINE_MODE_TONE[engineMode] || ENGINE_MODE_TONE.two_pass,
+              ENGINE_MODE_TONE[engineMode] || ENGINE_MODE_FALLBACK_TONE,
             )}
           >
             {ENGINE_MODE_LABEL[engineMode] || engineMode}
@@ -288,24 +292,9 @@ export default function ShapeDEngineBanner({ round, projectId }) {
               </SelectContent>
             </Select>
 
-            {/* Engine mode toggle (Shape D ↔ legacy two-pass) */}
-            <Select
-              value={engineMode === "two_pass" ? "two_pass" : "shape_d_full"}
-              onValueChange={(value) => patchControlsMutation.mutate({ engine_mode: value })}
-              disabled={patchControlsMutation.isPending}
-            >
-              <SelectTrigger className="h-8 text-xs w-[150px]">
-                <SelectValue placeholder="Engine mode" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="shape_d_full" className="text-xs">
-                  Shape D (full)
-                </SelectItem>
-                <SelectItem value="two_pass" className="text-xs">
-                  Two-pass (legacy)
-                </SelectItem>
-              </SelectContent>
-            </Select>
+            {/* mig 439: engine-mode toggle removed — Shape D is the only
+                engine, so there's nothing to toggle. The badge above still
+                shows the per-round shape_d_full / shape_d_partial state. */}
 
             <Button
               size="sm"
@@ -362,22 +351,9 @@ export default function ShapeDEngineBanner({ round, projectId }) {
               </span>
             </>
           )}
-          {audit.legacy_pass1_total_cost_usd != null && (
-            <>
-              <span className="text-muted-foreground">·</span>
-              <span>
-                Pass 1 <span className="font-mono">{fmtUsd(audit.legacy_pass1_total_cost_usd)}</span>
-              </span>
-            </>
-          )}
-          {audit.legacy_pass2_total_cost_usd != null && (
-            <>
-              <span className="text-muted-foreground">·</span>
-              <span>
-                Pass 2 <span className="font-mono">{fmtUsd(audit.legacy_pass2_total_cost_usd)}</span>
-              </span>
-            </>
-          )}
+          {/* mig 439: legacy Pass 1/Pass 2 cost surfaces removed (the
+              two-pass engine was sunset in W11.7.10 and the columns are 0
+              on every production row). */}
           {totalCost != null && (
             <>
               <span className="text-muted-foreground">·</span>

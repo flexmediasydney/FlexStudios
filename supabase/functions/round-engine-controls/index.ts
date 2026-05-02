@@ -18,7 +18,7 @@
  *
  * POST body:
  *   { round_id: string,
- *     engine_mode?: 'shape_d_full' | 'two_pass',
+ *     engine_mode?: 'shape_d_full' | 'shape_d_partial',  // mig 439: 'two_pass' rejected
  *     property_tier?: 'premium' | 'standard' | 'approachable',
  *     property_voice_anchor_override?: string | null  // null clears the override
  *   }
@@ -38,9 +38,11 @@ import {
 
 const GENERATOR = 'round-engine-controls';
 
+// mig 439: 'two_pass' removed from the allowed set — Shape D is the only
+// engine. Inbound 'two_pass' values are now rejected with a 400.
 const ALLOWED_ENGINE_MODES = new Set([
   'shape_d_full',
-  'two_pass',
+  'shape_d_partial',
 ]);
 const ALLOWED_TIERS = new Set(['premium', 'standard', 'approachable']);
 const VOICE_ANCHOR_MAX_CHARS = 2000;

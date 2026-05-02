@@ -9,10 +9,8 @@
  * Actions per row:
  *   - "View" → switch to Swimlane sub-tab with this round selected
  *
- * W11.7.10 sunset: the "Re-run Pass 2" button was removed when the legacy
- * two-pass engine was retired. Operators now use Shape D's re-fire path
- * (DispatcherPanel) to re-run a round through the unified Stage 1/Stage 4
- * pipeline.
+ * Operators re-fire a round via the DispatcherPanel (Shape D Stage 1 /
+ * Stage 4 pipeline).
  */
 import {
   Table,

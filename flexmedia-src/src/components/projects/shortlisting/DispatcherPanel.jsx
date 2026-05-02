@@ -62,8 +62,6 @@ import { toast } from "sonner";
 
 // Stages we visualise in the mini-timeline. Ordering reflects the canonical
 // Shape D pipeline so the strip reads left→right as "first run → last run".
-// Legacy two-pass kinds (pass1, pass2) are excluded from the strip but still
-// render in the active/recent lists.
 const TIMELINE_STAGES = [
   { kind: "ingest", label: "Ingest" },
   { kind: "extract", label: "Extract" },
@@ -77,8 +75,6 @@ const KIND_LABEL = {
   ingest: "Ingest",
   extract: "Extract",
   pass0: "Pass 0",
-  pass1: "Pass 1",
-  pass2: "Pass 2",
   pass3: "Pass 3",
   shape_d_stage1: "Shape D · Stage 1",
   stage4_synthesis: "Shape D · Stage 4",

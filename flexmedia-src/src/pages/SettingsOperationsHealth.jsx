@@ -58,11 +58,6 @@ const SHORTLISTING_FUNCTIONS = [
     description: "per-bracket EXIF/JPEG via Modal" },
   { name: "shortlisting-pass0", critical: false,
     description: "technical filter (sharpness/exposure)" },
-  // W11.7.10 sunset: shortlisting-pass1 + shortlisting-pass2 removed when the
-  // legacy two-pass engine was retired. Shape D Stage 1 + Stage 4 replace
-  // them. shortlisting-shape-d / shortlisting-shape-d-stage4 are not health-
-  // probed here yet — they expose `_health_check` but the next pass on this
-  // page will add them.
   { name: "shortlisting-pass3", critical: false,
     description: "coverage check + notification dispatch" },
   { name: "shortlist-lock", critical: false,

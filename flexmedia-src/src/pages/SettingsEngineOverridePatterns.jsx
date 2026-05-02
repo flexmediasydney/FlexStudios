@@ -106,7 +106,7 @@ function SectionACohortGrid({data}){
     {(data?.cells||[]).length===0 ? <div className="text-sm text-muted-foreground italic">No proposals in window.</div> : (
       <div className="overflow-x-auto"><table className="w-full text-xs">
         <thead><tr><th className="text-left p-1 font-medium text-muted-foreground">Room type</th>
-          {colKeys.map(c=><th key={c} className="text-center p-1 font-medium text-muted-foreground capitalize">{c.replace("|"," · ").replace("shape_d","Shape D").replace("two_pass","Two-pass")}</th>)}
+          {colKeys.map(c=><th key={c} className="text-center p-1 font-medium text-muted-foreground capitalize">{c.replace("|"," · ").replace("shape_d","Shape D")}</th>)}
         </tr></thead>
         <tbody>{rowKeys.map(row=>(<tr key={row}>
           <td className="p-1 font-medium capitalize">{row.replace(/_/g," ")}</td>

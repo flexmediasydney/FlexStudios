@@ -124,12 +124,10 @@ export default function ShortlistingQuarantine({ roundId }) {
       // return this group as eligible for re-classification (it filters
       // out groups with a quarantine row).
       await api.entities.ShortlistingQuarantine.delete(restoreDialog.id);
-      // W11.7.10 sunset: previously invoked `shortlisting-pass1` here. The
-      // legacy two-pass engine is retired — restore now re-classifies via
-      // the Shape D Stage 1 orchestrator. Shape D's idempotency loader
-      // skips already-classified groups, so it'll pick up just the restored
-      // composition. Direct invoke is best-effort; if it fails the operator
-      // can re-fire from the DispatcherPanel.
+      // Restore re-classifies via the Shape D Stage 1 orchestrator. Shape D's
+      // idempotency loader skips already-classified groups, so it'll pick up
+      // just the restored composition. Direct invoke is best-effort; if it
+      // fails the operator can re-fire from the DispatcherPanel.
       try {
         await api.functions.invoke("shortlisting-shape-d", {
           round_id: roundId,

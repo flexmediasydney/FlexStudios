@@ -487,9 +487,9 @@ type DispatchResult = {
  * and use it to look up round_id / payload server-side. Centralising the
  * mapping here means new kinds only need a single line added.
  *
- * Wave 11.7.1: Shape D adds `shape_d_stage1` + `stage4_synthesis`. The chain
- * `pass0 → ?` reads engine_mode at chain time and picks pass1 (two_pass) or
- * shape_d_stage1 (shape_d). Stage 4 is dispatched as a standalone job by
+ * Wave 11.7.1: Shape D adds `shape_d_stage1` + `stage4_synthesis`. The
+ * `pass0 → shape_d_stage1` chain is unconditional (mig 439: legacy
+ * two-pass routing retired). Stage 4 is dispatched as a standalone job by
  * the shape-d orchestrator at the end of Stage 1 — the dispatcher does not
  * chain it.
  *
@@ -504,10 +504,6 @@ const KIND_TO_FUNCTION: Record<string, string> = {
   ingest: "shortlisting-ingest",
   extract: "shortlisting-extract",
   pass0: "shortlisting-pass0",
-  // pass1 + pass2 removed by W11.7.10 sunset (legacy two-pass engine deprecated
-  // 2026-05-02, ~24h after the W11.7.17 keystone cutover validated successfully).
-  // Historical rounds with engine_mode='two_pass' remain immutable; new rounds
-  // route pass0 → shape_d_stage1 unconditionally.
   pass3: "shortlisting-pass3",
   shape_d_stage1: "shortlisting-shape-d",
   stage4_synthesis: "shortlisting-shape-d-stage4",
@@ -599,10 +595,9 @@ async function dispatchOne(job: ShortlistingJob): Promise<DispatchResult> {
  * full chainNextKind() flow (which makes DB queries for sibling counting +
  * idempotency).
  *
- * QC-iter2 W6b (F-B-012): the legacy two_pass kinds (pass1, pass2) and any
- * future kind not yet wired to the dispatcher both fall through to 'unknown'
- * — the caller logs a warn so ops can see stuck rounds rather than having
- * the dispatcher silently swallow them.
+ * QC-iter2 W6b (F-B-012): any kind not wired to the dispatcher falls
+ * through to 'unknown' — the caller logs a warn so ops can see stuck
+ * rounds rather than having the dispatcher silently swallow them.
  */
 export type ChainDecision =
   | { action: 'terminal' }
@@ -751,23 +746,16 @@ async function chainNextKind(
   }
   let nextKind: string;
   if (job.kind === "pass0") {
-    // W11.7.10 sunset: pass0 → shape_d_stage1 always. Legacy two_pass routing
-    // (pass0 → pass1) was removed when pass1 + pass2 edge fns were deleted.
-    // Historical rounds with engine_mode='two_pass' are immutable and don't
-    // re-enter the dispatcher; only new rounds reach this code path.
+    // pass0 → shape_d_stage1 always (mig 439).
     nextKind = "shape_d_stage1";
     console.log(
       `[${GENERATOR}] pass0 ${job.id} → routing round ${roundId} to Shape D`,
     );
   } else {
-    // pass3 is the only remaining post-pass0 chain target after W11.7.10.
-    // Shape D's stage4_synthesis is dispatched standalone by the orchestrator
-    // and does its own terminal status transition — no chain here.
-    const nextMap: Record<string, string> = {
-      // pass1 / pass2 removed by W11.7.10. Legacy chains pass1→pass2→pass3 no
-      // longer exist; if any historical job rows still claim pass1/pass2 they
-      // will be flagged as unknown kinds at dispatch and skipped.
-    };
+    // pass3 is the only remaining post-pass0 chain target. Shape D's
+    // stage4_synthesis is dispatched standalone by the orchestrator and does
+    // its own terminal status transition — no chain here.
+    const nextMap: Record<string, string> = {};
     const mapped = nextMap[job.kind];
     if (!mapped) {
       // QC-iter2 W6b (F-B-012): warn loudly so ops can spot stuck rounds.
