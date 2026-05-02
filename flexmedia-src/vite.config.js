@@ -29,10 +29,7 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'], // Prevents duplicate React in worktrees
   },
   esbuild: {
-    // Keep console.error/warn for ErrorBoundary diagnostics in prod while we
-    // hunt the residual TDZ. console.log/info/debug still drop via `pure`.
-    pure: ['console.log', 'console.info', 'console.debug', 'console.trace'],
-    drop: ['debugger'],
+    drop: ['console', 'debugger'],
   },
   build: {
     target: 'es2020',
