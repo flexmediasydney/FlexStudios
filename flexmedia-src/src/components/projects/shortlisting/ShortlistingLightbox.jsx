@@ -54,6 +54,7 @@ import {
 } from "lucide-react";
 import { fetchMediaProxy } from "@/utils/mediaPerf";
 import { cn } from "@/lib/utils";
+import useLightboxAnnotations from "@/hooks/useLightboxAnnotations";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 import CanonicalObjectPanel from "./CanonicalObjectPanel";
 
@@ -116,10 +117,14 @@ export default function ShortlistingLightbox({
   const item = total > 0 ? items[safeIndex] : null;
 
   // ── Annotations / bbox overlay state ────────────────────────────────────
-  // Default ON (per the brief — "Click image → lightbox opens" with bbox
-  // visible). The toggle disables itself when the current image has no
-  // observed_objects[].
-  const [overlayOn, setOverlayOn] = useState(true);
+  // 'shortlist' scope — separate from drone + pulse so each surface keeps
+  // its own toggle / threshold / category-filter preferences (different
+  // engines, different operator workflows). Persisted via localStorage so
+  // the operator's preference survives across sessions on this surface.
+  const annotations = useLightboxAnnotations("shortlist");
+  const overlayOn = annotations.settings.enabled;
+  const setOverlayOn = (next) =>
+    annotations.setEnabled(typeof next === "function" ? next(overlayOn) : next);
   const [selectedObject, setSelectedObject] = useState(null);
   const imageContainerRef = useRef(null);
 

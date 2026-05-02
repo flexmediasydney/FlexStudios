@@ -241,7 +241,10 @@ export default function DroneLightbox({
   const item = total > 0 ? items[safeIndex] : null;
 
   // ── W11.6.20: annotations state + per-image data resolution ────────────
-  const annotations = useLightboxAnnotations();
+  // 'drone' scope — separate from shortlist + pulse so each surface keeps
+  // its own toggle / threshold / category-filter preferences (different
+  // engines, different operator workflows).
+  const annotations = useLightboxAnnotations("drone");
   // Selected object — opens the side panel. Reset on image change.
   const [selectedObject, setSelectedObject] = useState(null);
   // Image-container ref for the SVG overlay's coordinate math.
