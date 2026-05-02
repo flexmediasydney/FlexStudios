@@ -442,6 +442,21 @@ normaliser that maps drift back to the canonical set (or drops the value
 with a warning). See `slotEnumeration.ts::normaliseSlotId()` for the
 pattern: collapse aliases, log unrecognised, never crash.
 
+### Build-time enforcement (W11.7.17 hotfix-6)
+
+After three enum-drop fixes in a single day (commits `a03ced9`, `bbb4337`,
+`9325f46`) the schema sat one new closed enum away from tripping again.
+`supabase/functions/_shared/visionPrompts/blocks/schemaStateCount.test.ts`
+computes a deterministic state-count proxy across every Gemini
+responseSchema in the tree — Stage 1 (all 4 source variants) and Stage 4 —
+and FAILS the build if the proxy exceeds the pinned `STAGE1_STATE_COUNT_LIMIT`
+or `STAGE4_STATE_COUNT_LIMIT`. The proxy sums enum cardinalities, node
+counts, `required` entries and weighted description chars; thresholds are
+today's known-good baseline + ~10% headroom. Bumping a threshold requires
+editing the test file with PR-visible rationale, so a regression cannot
+slip past review unannounced. See the test docstring for the full formula
+and the "how to bump" guidance.
+
 ## When in doubt
 
 If a migration touches a heavily-used table, a foreign key, or any column
