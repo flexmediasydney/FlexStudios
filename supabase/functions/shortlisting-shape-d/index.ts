@@ -1860,8 +1860,19 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     ? bool(imgClass.is_drone)
     : bool(out.is_drone);
 
-  const roomType = str(out.room_type);
-  const vantage = str(out.vantage_point);
+  // ─── W11.7.17 hotfix-5 (2026-05-02): room_type v2-nested read ──────────────
+  // v2 universal schema nests room composition under
+  // `out.room_classification.{room_type, composition_type, vantage_point,
+  // is_styled, indoor_outdoor_visible, eligible_for_exterior_rear}` — the
+  // pre-fix persist read top-level v1 keys that v2 NEVER emits, so 37/38 v2
+  // rows since the W11.7.17 cutover landed with NULL room_type. Same fix
+  // pattern as F-D-002 (image_classification): read nested first, fall back
+  // to top-level for backwards compat with any straggling v1 traffic.
+  const roomClassRaw = (out.room_classification && typeof out.room_classification === 'object')
+    ? out.room_classification as Record<string, unknown>
+    : null;
+  const roomType = str(roomClassRaw?.room_type ?? out.room_type);
+  const vantage = str(roomClassRaw?.vantage_point ?? out.vantage_point);
   const eligibleExtRear = roomType === 'alfresco' && vantage === 'exterior_looking_in';
 
   // clutter_severity must be one of the 4 enum values; coerce defensively.
@@ -1992,15 +2003,20 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     round_id: args.roundId,
     project_id: args.projectId,
     analysis: str(out.analysis),
+    // W11.7.17 hotfix-5: room_type / room_type_confidence / composition_type /
+    // is_styled / indoor_outdoor_visible all live under
+    // `out.room_classification.*` in v2 (see ROOM_CLASSIFICATION_SCHEMA in
+    // universalVisionResponseSchemaV2.ts). Read nested first, fall back to
+    // top-level for any straggling v1 traffic.
     room_type: roomType,
-    room_type_confidence: num(out.room_type_confidence),
+    room_type_confidence: num(roomClassRaw?.room_type_confidence ?? out.room_type_confidence),
     // W11.6.13 — new orthogonal fields. Always written, even when
     // null, so downstream readers get an explicit "absent" signal
     // rather than a missing column.
     space_type: spaceType,
     zone_focus: zoneFocus,
     space_zone_count: spaceZoneCount,
-    composition_type: str(out.composition_type),
+    composition_type: str(roomClassRaw?.composition_type ?? out.composition_type),
     vantage_point: vantageColumn,
     // W11.7.17 QC-iter2-W2 P0 (F-D-002): time_of_day / is_exterior /
     // is_detail_shot / is_drone now sourced from the v2-nested
@@ -2012,8 +2028,8 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     is_detail_shot: isDetailShot,
     zones_visible: arr(out.zones_visible),
     key_elements: arr(out.key_elements),
-    is_styled: bool(out.is_styled),
-    indoor_outdoor_visible: bool(out.indoor_outdoor_visible),
+    is_styled: bool(roomClassRaw?.is_styled ?? out.is_styled),
+    indoor_outdoor_visible: bool(roomClassRaw?.indoor_outdoor_visible ?? out.indoor_outdoor_visible),
     clutter_severity: clutter,
     clutter_detail: str(clutterDetailRaw),
     flag_for_retouching: flagForRetouching,

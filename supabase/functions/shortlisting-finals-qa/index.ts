@@ -680,8 +680,17 @@ export async function persistFinalsClassification(args: PersistArgs): Promise<vo
     ? (clutter === 'minor_photoshoppable' || clutter === 'moderate_retouch')
     : bool(flagForRetouchingRaw);
 
-  const roomType = str(out.room_type);
-  const vantage = str(out.vantage_point);
+  // ─── W11.7.17 hotfix-5 (2026-05-02): room_type v2-nested read ──────────────
+  // Mirrors the shape-d fix. Finals QA emits v2-shaped rows with
+  // out.room_classification.{room_type, composition_type, vantage_point,
+  // is_styled, indoor_outdoor_visible} — pre-fix this function read top-level
+  // v1 keys and landed NULL on the 5 finals rows in the W11.7.17 cutover
+  // window.
+  const roomClassRaw = (out.room_classification && typeof out.room_classification === 'object')
+    ? out.room_classification as Record<string, unknown>
+    : null;
+  const roomType = str(roomClassRaw?.room_type ?? out.room_type);
+  const vantage = str(roomClassRaw?.vantage_point ?? out.vantage_point);
   const eligibleExtRear = roomType === 'alfresco' && vantage === 'exterior_looking_in';
   const vantageColumn = vantage && ['interior_looking_out', 'exterior_looking_in', 'neutral']
     .includes(vantage)
@@ -710,14 +719,18 @@ export async function persistFinalsClassification(args: PersistArgs): Promise<vo
     round_id: null,
     project_id: args.projectId,
     analysis: str(out.analysis),
+    // W11.7.17 hotfix-5: room_type / room_type_confidence / composition_type /
+    // is_styled / indoor_outdoor_visible all live under
+    // out.room_classification.* in v2. Read nested first, fall back to
+    // top-level for backwards compat.
     room_type: roomType,
-    room_type_confidence: num(out.room_type_confidence),
+    room_type_confidence: num(roomClassRaw?.room_type_confidence ?? out.room_type_confidence),
     space_type: str(out.space_type),
     zone_focus: str(out.zone_focus),
     space_zone_count: typeof out.space_zone_count === 'number'
       ? Math.trunc(out.space_zone_count)
       : null,
-    composition_type: str(out.composition_type),
+    composition_type: str(roomClassRaw?.composition_type ?? out.composition_type),
     vantage_point: vantageColumn,
     time_of_day: str(out.time_of_day),
     is_drone: bool(out.is_drone),
@@ -725,8 +738,8 @@ export async function persistFinalsClassification(args: PersistArgs): Promise<vo
     is_detail_shot: bool(out.is_detail_shot),
     zones_visible: arr(out.zones_visible),
     key_elements: arr(out.key_elements),
-    is_styled: bool(out.is_styled),
-    indoor_outdoor_visible: bool(out.indoor_outdoor_visible),
+    is_styled: bool(roomClassRaw?.is_styled ?? out.is_styled),
+    indoor_outdoor_visible: bool(roomClassRaw?.indoor_outdoor_visible ?? out.indoor_outdoor_visible),
     clutter_severity: clutter,
     clutter_detail: str(clutterDetailRaw),
     flag_for_retouching: flagForRetouching,

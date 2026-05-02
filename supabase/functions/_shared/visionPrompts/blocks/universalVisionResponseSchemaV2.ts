@@ -125,12 +125,30 @@
  * variant emitted, leaves the others null.
  */
 
+// W11.7.17 hotfix-5 (2026-05-02): import the canonical SPACE/ZONE vocabulary
+// so the schema enum stays in lockstep with the prompt block + the SettingsUI
+// dropdown source-of-truth. Drift between prompt vocabulary and schema enum
+// would cause Gemini to reject the model's emission and silently fail over to
+// Anthropic at 12x the cost — exactly the scenario hotfix-3 fixed structurally.
+import {
+  SPACE_TYPE_OPTIONS,
+  ZONE_FOCUS_OPTIONS,
+} from './spaceZoneTaxonomy.ts';
+
 // W11.7.17 hotfix-4: bumped from v2.1 to v2.2 for per-source schema variants
 // (Gemini FSM state-count fix). Schema SHAPE per variant is identical to v2.1
 // for the populated *_specific block; the only change is splitting the single
 // schema into 4 source-keyed variants. Bumped for downstream prompt-cache
 // invalidation.
-export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.2';
+//
+// W11.7.17 hotfix-5 (2026-05-02): bumped to v2.3. Adds three top-level fields
+// the prompt has been teaching the model to emit since W11.6.13 but the closed
+// responseSchema silently stripped on emission: `space_type`, `zone_focus`,
+// `space_zone_count`. Persist read top-level keys that NEVER arrived → 100%
+// NULL on these columns since the W11.7.17 cutover. Same bug class as F-D-002
+// (image_classification gap fixed yesterday). Schema must DECLARE every field
+// the prompt asks for or Gemini drops it.
+export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.3';
 export const UNIVERSAL_VISION_RESPONSE_TOOL_NAME = 'classify_image';
 
 /**
@@ -839,7 +857,7 @@ const LISTING_COPY_SCHEMA: Record<string, unknown> = {
 const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
   schema_version: {
     type: 'string',
-    description: "Echo '2.2' — Wave 11.7.17 hotfix-4 (per-source schema variants for Gemini FSM state limit).",
+    description: "Echo '2.3' — Wave 11.7.17 hotfix-5 (space_type/zone_focus/space_zone_count fields restored after silent strip).",
   },
   source: SOURCE_SCHEMA,
   analysis: {
@@ -865,6 +883,48 @@ const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
   },
   image_classification: IMAGE_CLASSIFICATION_SCHEMA,
   room_classification: ROOM_CLASSIFICATION_SCHEMA,
+  // ─── W11.7.17 hotfix-5 (2026-05-02): SPACE/ZONE top-level triplet ──────────
+  // The spaceZoneTaxonomy prompt block (W11.6.13) has been teaching the model
+  // to emit these three fields for ~3 weeks, but the closed responseSchema
+  // never declared them — Gemini's structured-output mode silently strips any
+  // emitted property not in the schema → persist saw NULL on every row since
+  // the W11.7.17 cutover (2026-05-01). Declaring them here closes the loop.
+  // The enums mirror SPACE_TYPE_OPTIONS / ZONE_FOCUS_OPTIONS from
+  // spaceZoneTaxonomy.ts so the schema, prompt, and SettingsUI stay in lockstep.
+  space_type: {
+    type: 'string',
+    enum: [...SPACE_TYPE_OPTIONS],
+    description:
+      'W11.6.13 ARCHITECTURAL ENCLOSURE (the 4 walls). Pick the most-specific ' +
+      'match from the canonical taxonomy. Distinct from zone_focus: in studios ' +
+      'and open-plan apartments ONE space contains MANY zones. A shot of the ' +
+      'dining table inside a combined living/dining envelope is ' +
+      'space_type=living_dining_combined, zone_focus=dining_table — distinct ' +
+      'from a shot of a dedicated dining room (space_type=dining_room_dedicated). ' +
+      'See spaceZoneTaxonomyBlock for the canonical reasoning. Floorplan ' +
+      'images: pick the dominant enclosure type (often the open-plan envelope).',
+  },
+  zone_focus: {
+    type: 'string',
+    enum: [...ZONE_FOCUS_OPTIONS],
+    description:
+      'W11.6.13 COMPOSITIONAL SUBJECT of the shot — what the photographer is ' +
+      'actually showing inside the architectural enclosure. Even single-zone ' +
+      'shots benefit: a master bedroom shot is space_type=master_bedroom, ' +
+      'zone_focus=bed_focal vs wardrobe_built_in vs window_view depending on ' +
+      'what the frame highlights. The engine uses this alongside space_type ' +
+      'to drive slot eligibility and clean training data.',
+  },
+  space_zone_count: {
+    type: 'integer',
+    description:
+      'W11.6.13 integer hint for total distinct zones visible in the frame: ' +
+      '1 = single-purpose enclosed room (dedicated bedroom, dedicated ' +
+      'bathroom); 2-4 = multi-zone open plan (living/dining combined = 2; ' +
+      'kitchen+dining+living = 3); 5+ = studio-style (kitchen + bed + lounge ' +
+      '+ bathroom in one envelope). Optional — only emit when zones are ' +
+      'distinguishable. Floorplan: count rooms visible in the drawing.',
+  },
   observed_objects: OBSERVED_OBJECTS_SCHEMA,
   observed_attributes: OBSERVED_ATTRIBUTES_SCHEMA,
   signal_scores: SIGNAL_SCORES_SCHEMA,
@@ -989,12 +1049,20 @@ const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
  * array is identical: only one `*_specific` block is declared per variant
  * and we do not require it (the field name itself depends on source_type).
  */
-const UNIVERSAL_CORE_REQUIRED: string[] = [
+export const UNIVERSAL_CORE_REQUIRED: string[] = [
   'schema_version',
   'source',
   'analysis',
   'image_type',
   'image_classification',
+  // W11.7.17 hotfix-5: space_type / zone_focus are REQUIRED. The model has
+  // been emitting them via the prompt block since W11.6.13; making them
+  // schema-required guarantees Gemini will validate-or-retry rather than
+  // silently dropping them. space_zone_count remains optional — it's a hint,
+  // not a hard signal, and forcing it would over-constrain on shots where
+  // zone count is genuinely ambiguous (e.g. wide hallway-into-multiple-rooms).
+  'space_type',
+  'zone_focus',
   'signal_scores',
   'technical_score',
   'lighting_score',
@@ -1077,7 +1145,7 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = univers
  * persist-layer typing in `shortlisting-shape-d/index.ts`.
  */
 export interface UniversalVisionResponseV2 {
-  schema_version: '2.0' | '2.1' | '2.2';
+  schema_version: '2.0' | '2.1' | '2.2' | '2.3';
   source: {
     type: 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image';
     media_kind: 'still_image' | 'video_frame' | 'drone_image' | 'floorplan_image';
@@ -1124,6 +1192,14 @@ export interface UniversalVisionResponseV2 {
     indoor_outdoor_visible: boolean;
     eligible_for_exterior_rear: boolean;
   } | null;
+  // W11.7.17 hotfix-5: SPACE/ZONE top-level triplet. Required pair + optional
+  // count. Typed as `string` (not the canonical enum literal union) because
+  // the persist layer accepts any string and falls back to NULL on unknown
+  // tokens — over-strict typing here would force every test fixture to
+  // import the full SPACE_TYPE_OPTIONS / ZONE_FOCUS_OPTIONS arrays.
+  space_type: string;
+  zone_focus: string;
+  space_zone_count?: number | null;
   observed_objects: Array<{
     raw_label: string;
     proposed_canonical_id: string | null;
