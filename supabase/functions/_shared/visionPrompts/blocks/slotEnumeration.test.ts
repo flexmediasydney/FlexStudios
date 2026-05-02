@@ -105,8 +105,60 @@ Deno.test('slotEnumerationBlock: uses caller-supplied packageDisplayName for cei
   assertStringIncludes(txt, 'Package ceiling: 17 images (Custom à la carte maximum)');
 });
 
-Deno.test('slotEnumerationBlock: version bumped to v1.2 (W11.7.1 canonical-enum addition)', () => {
-  assertEquals(SLOT_ENUMERATION_BLOCK_VERSION, 'v1.2');
+Deno.test('slotEnumerationBlock: version bumped to v1.3 (W11.6.22 curated positions)', () => {
+  assertEquals(SLOT_ENUMERATION_BLOCK_VERSION, 'v1.3');
+});
+
+Deno.test('slotEnumerationBlock W11.6.22: curated footer appears when any slot uses curated_positions', () => {
+  const slot: Pass2SlotDefinition = {
+    slot_id: 'kitchen_hero',
+    display_name: 'Kitchen',
+    phase: 1,
+    eligible_room_types: ['kitchen_main'],
+    max_images: 3,
+    min_images: 3,
+    notes: null,
+    selection_mode: 'curated_positions',
+    curated_positions: [],
+  };
+  const txt = slotEnumerationBlock({
+    propertyAddress: 'X',
+    packageType: 'Premium',
+    packageDisplayName: 'Premium',
+    packageCeiling: 38,
+    pricingTier: 'premium',
+    engineRoles: ['photo_day_shortlist'],
+    totalCompositions: 60,
+    slotDefinitions: [slot],
+  });
+  assertStringIncludes(txt, 'CURATED POSITION CONTRACT (W11.6.22)');
+  assertStringIncludes(txt, 'position_filled_via');
+  assertStringIncludes(txt, 'curated_match');
+  assertStringIncludes(txt, 'ai_backfill');
+});
+
+Deno.test('slotEnumerationBlock W11.6.22: footer absent when all slots are ai_decides', () => {
+  const slot: Pass2SlotDefinition = {
+    slot_id: 'living_hero',
+    display_name: 'Living',
+    phase: 1,
+    eligible_room_types: ['living'],
+    max_images: 1,
+    min_images: 1,
+    notes: null,
+    selection_mode: 'ai_decides',
+  };
+  const txt = slotEnumerationBlock({
+    propertyAddress: 'X',
+    packageType: 'Standard',
+    packageDisplayName: 'Standard',
+    packageCeiling: 24,
+    pricingTier: 'standard',
+    engineRoles: ['photo_day_shortlist'],
+    totalCompositions: 30,
+    slotDefinitions: [slot],
+  });
+  assert(!txt.includes('CURATED POSITION CONTRACT'));
 });
 
 // ─── W11.7.1 hygiene: canonical slot vocabulary tests ───────────────────────

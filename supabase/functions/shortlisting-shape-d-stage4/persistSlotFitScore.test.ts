@@ -276,3 +276,164 @@ Deno.test('persistSlotDecisions: rejects non-numeric slot_fit_score (defensive)'
   assertStrictEquals(store.inserts[0].slot_fit_score, null);
   assertStrictEquals(store.inserts[1].slot_fit_score, 8.5);
 });
+
+// ─── W11.6.22: curated_positions schema + persistence tests ────────────────
+
+Deno.test('STAGE4_TOOL_SCHEMA W11.6.22: position_index + position_filled_via declared on slot_decisions item', () => {
+  // deno-lint-ignore no-explicit-any
+  const itemProps = (STAGE4_TOOL_SCHEMA as any).properties.slot_decisions.items.properties;
+
+  assertStrictEquals(typeof itemProps.position_index, 'object');
+  assertStrictEquals(itemProps.position_index.type, 'integer');
+  assertStrictEquals(itemProps.position_index.nullable, true);
+
+  assertStrictEquals(typeof itemProps.position_filled_via, 'object');
+  assertStrictEquals(itemProps.position_filled_via.type, 'string');
+  assertStrictEquals(itemProps.position_filled_via.nullable, true);
+  assertEquals(
+    [...itemProps.position_filled_via.enum].sort(),
+    ['ai_backfill', 'curated_match'],
+  );
+
+  // Critically — neither field is in the `required` list (legacy ai_decides
+  // responses must still validate without these fields).
+  // deno-lint-ignore no-explicit-any
+  const required = ((STAGE4_TOOL_SCHEMA as any).properties.slot_decisions.items.required) as string[];
+  assert(!required.includes('position_index'), 'position_index must NOT be required');
+  assert(!required.includes('position_filled_via'), 'position_filled_via must NOT be required');
+});
+
+Deno.test('persistSlotDecisions W11.6.22: writes position_index + position_filled_via=curated_match', async () => {
+  const store = freshStore();
+  // deno-lint-ignore no-explicit-any
+  const admin = makeFakeAdmin(store) as any;
+
+  const slotDecisions = [
+    {
+      slot_id: 'kitchen_hero',
+      phase: 1,
+      winner: {
+        stem: 'IMG_034A7961',
+        rationale: 'Hero corner vantage with island in foreground.',
+        slot_fit_score: 9.2,
+      },
+      alternatives: [],
+      position_index: 1,
+      position_filled_via: 'curated_match',
+    },
+  ];
+
+  const warnings: string[] = [];
+  await persistSlotDecisions({
+    admin,
+    roundId: ROUND_ID,
+    projectId: PROJECT_ID,
+    propertyTier: 'premium',
+    slotDecisions,
+    warnings,
+  });
+  assertStrictEquals(store.inserts[0].position_index, 1);
+  assertStrictEquals(store.inserts[0].position_filled_via, 'curated_match');
+});
+
+Deno.test('persistSlotDecisions W11.6.22: writes position_filled_via=ai_backfill marker', async () => {
+  const store = freshStore();
+  // deno-lint-ignore no-explicit-any
+  const admin = makeFakeAdmin(store) as any;
+
+  const slotDecisions = [
+    {
+      slot_id: 'kitchen_hero',
+      phase: 1,
+      winner: {
+        stem: 'IMG_034A8050',
+        rationale: 'Best AI-decided fallback when no candidate matched the position.',
+        slot_fit_score: 7.0,
+      },
+      alternatives: [],
+      position_index: 2,
+      position_filled_via: 'ai_backfill',
+    },
+  ];
+
+  const warnings: string[] = [];
+  await persistSlotDecisions({
+    admin,
+    roundId: ROUND_ID,
+    projectId: PROJECT_ID,
+    propertyTier: 'standard',
+    slotDecisions,
+    warnings,
+  });
+  assertStrictEquals(store.inserts[0].position_index, 2);
+  assertStrictEquals(store.inserts[0].position_filled_via, 'ai_backfill');
+});
+
+Deno.test('persistSlotDecisions W11.6.22: legacy ai_decides response writes nulls (back-compat)', async () => {
+  const store = freshStore();
+  // deno-lint-ignore no-explicit-any
+  const admin = makeFakeAdmin(store) as any;
+
+  const slotDecisions = [
+    {
+      slot_id: 'kitchen_hero',
+      phase: 1,
+      winner: { stem: 'IMG_034A7961', rationale: 'Strong hero.', slot_fit_score: 8.0 },
+      alternatives: [],
+      // No position_index, no position_filled_via — legacy path.
+    },
+  ];
+
+  const warnings: string[] = [];
+  await persistSlotDecisions({
+    admin,
+    roundId: ROUND_ID,
+    projectId: PROJECT_ID,
+    propertyTier: 'standard',
+    slotDecisions,
+    warnings,
+  });
+  assertStrictEquals(store.inserts[0].position_index, null);
+  assertStrictEquals(store.inserts[0].position_filled_via, null);
+});
+
+Deno.test('persistSlotDecisions W11.6.22: rejects non-canonical position_filled_via', async () => {
+  const store = freshStore();
+  // deno-lint-ignore no-explicit-any
+  const admin = makeFakeAdmin(store) as any;
+
+  const slotDecisions = [
+    {
+      slot_id: 'kitchen_hero',
+      phase: 1,
+      winner: { stem: 'IMG_034A7961', rationale: 'X', slot_fit_score: 8.0 },
+      alternatives: [],
+      position_index: 1,
+      position_filled_via: 'guessed',
+    },
+    {
+      slot_id: 'kitchen_secondary',
+      phase: 2,
+      winner: { stem: 'IMG_034A8050', rationale: 'Y', slot_fit_score: 7.0 },
+      alternatives: [],
+      position_index: 'nope', // non-number
+      position_filled_via: 'curated_match',
+    },
+  ];
+
+  const warnings: string[] = [];
+  await persistSlotDecisions({
+    admin,
+    roundId: ROUND_ID,
+    projectId: PROJECT_ID,
+    propertyTier: 'standard',
+    slotDecisions,
+    warnings,
+  });
+  // First row: bogus position_filled_via dropped to null; position_index 1 ok.
+  assertStrictEquals(store.inserts[0].position_index, 1);
+  assertStrictEquals(store.inserts[0].position_filled_via, null);
+  // Second row: bogus position_index dropped to null; position_filled_via ok.
+  assertStrictEquals(store.inserts[1].position_index, null);
+  assertStrictEquals(store.inserts[1].position_filled_via, 'curated_match');
+});
