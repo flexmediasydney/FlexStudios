@@ -298,6 +298,7 @@ function makeImg(over: Partial<ImageClassification> = {}): ImageClassification {
     space_type: over.space_type ?? null,
     zone_focus: over.zone_focus ?? null,
     room_type: over.room_type ?? null,
+    image_type: over.image_type ?? null,
   };
 }
 
@@ -463,6 +464,140 @@ Deno.test('filterImagesForSlot: real entry_hero verification scenario from spec'
     filterImagesForSlot(withNoise, tight).sort(),
     ['7956', '7958', '7960', '7961'],
   );
+});
+
+// ─── 6. W11.6.24 — eligible_image_types[] gate (Gate 1 + Tier 4) ─────────────
+
+Deno.test('imageMatchesSlot W11.6.24 Gate 1: image_type passes + spatial passes → match', () => {
+  const slot = makeSlot({
+    slot_id: 'kitchen_pendant_detail',
+    eligible_space_types: ['kitchen_dedicated', 'kitchen_dining_living_combined'],
+    eligible_zone_focuses: ['ceiling_detail'],
+    eligible_image_types: ['is_detail_shot'],
+  });
+  const match = makeImg({
+    space_type: 'kitchen_dedicated',
+    zone_focus: 'ceiling_detail',
+    image_type: 'is_detail_shot',
+  });
+  assert(imageMatchesSlot(match, slot));
+});
+
+Deno.test('imageMatchesSlot W11.6.24 Gate 1: image_type fails → false (even if spatial OK)', () => {
+  const slot = makeSlot({
+    slot_id: 'kitchen_pendant_detail',
+    eligible_space_types: ['kitchen_dedicated'],
+    eligible_zone_focuses: ['ceiling_detail'],
+    eligible_image_types: ['is_detail_shot'],
+  });
+  const wrongType = makeImg({
+    space_type: 'kitchen_dedicated',
+    zone_focus: 'ceiling_detail',
+    image_type: 'is_hero_shot',
+  });
+  assertEquals(imageMatchesSlot(wrongType, slot), false);
+});
+
+Deno.test('imageMatchesSlot W11.6.24 Gate 1: image_type missing on image → false', () => {
+  const slot = makeSlot({
+    slot_id: 'kitchen_pendant_detail',
+    eligible_space_types: ['kitchen_dedicated'],
+    eligible_zone_focuses: ['ceiling_detail'],
+    eligible_image_types: ['is_detail_shot'],
+  });
+  const noImageType = makeImg({
+    space_type: 'kitchen_dedicated',
+    zone_focus: 'ceiling_detail',
+  });
+  assertEquals(imageMatchesSlot(noImageType, slot), false);
+});
+
+Deno.test('imageMatchesSlot W11.6.24 Tier 4: image_type-only gate matches "any room" detail', () => {
+  const slot = makeSlot({
+    slot_id: 'joinery_detail',
+    eligible_space_types: [],
+    eligible_zone_focuses: [],
+    eligible_room_types: [],
+    eligible_image_types: ['is_detail_shot'],
+  });
+  const inKitchen = makeImg({
+    space_type: 'kitchen_dedicated',
+    zone_focus: 'kitchen_island',
+    image_type: 'is_detail_shot',
+  });
+  const inMaster = makeImg({
+    space_type: 'master_bedroom',
+    zone_focus: 'wardrobe_built_in',
+    image_type: 'is_detail_shot',
+  });
+  const wrongType = makeImg({
+    space_type: 'kitchen_dedicated',
+    image_type: 'is_hero_shot',
+  });
+  assert(imageMatchesSlot(inKitchen, slot));
+  assert(imageMatchesSlot(inMaster, slot));
+  assertEquals(imageMatchesSlot(wrongType, slot), false);
+});
+
+Deno.test('imageMatchesSlot W11.6.24: empty image_types[] = no filter (legacy slots unaffected)', () => {
+  const legacy = makeSlot({
+    slot_id: 'kitchen_hero',
+    eligible_space_types: ['kitchen_dedicated'],
+    eligible_zone_focuses: ['kitchen_island'],
+    eligible_image_types: [],
+  });
+  const wide = makeImg({
+    space_type: 'kitchen_dedicated',
+    zone_focus: 'kitchen_island',
+    image_type: 'is_hero_shot',
+  });
+  const detail = makeImg({
+    space_type: 'kitchen_dedicated',
+    zone_focus: 'kitchen_island',
+    image_type: 'is_detail_shot',
+  });
+  assert(imageMatchesSlot(wide, legacy));
+  assert(imageMatchesSlot(detail, legacy));
+});
+
+Deno.test('imageMatchesSlot W11.6.24: image_type gate ANDed with Tier 2 spatial', () => {
+  const slot = makeSlot({
+    slot_id: 'bathroom_tile_detail',
+    eligible_space_types: ['bathroom', 'ensuite'],
+    eligible_zone_focuses: [],
+    eligible_image_types: ['is_detail_shot'],
+  });
+  const detailInBath = makeImg({
+    space_type: 'bathroom',
+    image_type: 'is_detail_shot',
+  });
+  const heroInBath = makeImg({
+    space_type: 'bathroom',
+    image_type: 'is_hero_shot',
+  });
+  const detailInKitchen = makeImg({
+    space_type: 'kitchen_dedicated',
+    image_type: 'is_detail_shot',
+  });
+  assert(imageMatchesSlot(detailInBath, slot));
+  assertEquals(imageMatchesSlot(heroInBath, slot), false);
+  assertEquals(imageMatchesSlot(detailInKitchen, slot), false);
+});
+
+Deno.test('imageMatchesSlot W11.6.24: misconfigured slot (all gates empty) → still false', () => {
+  const broken = makeSlot({
+    slot_id: 'still_misconfigured',
+    eligible_space_types: [],
+    eligible_zone_focuses: [],
+    eligible_room_types: [],
+    eligible_image_types: [],
+  });
+  const img = makeImg({
+    space_type: 'master_bedroom',
+    zone_focus: 'bed_focal',
+    image_type: 'is_hero_shot',
+  });
+  assertEquals(imageMatchesSlot(img, broken), false);
 });
 
 Deno.test('imageMatchesSlot Tier 1: living_dining_combined dining_table — Joseph IMG_034A7916 case', () => {

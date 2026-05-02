@@ -73,6 +73,8 @@ export interface SlotDefinitionRow {
   // W11.6.13 — orthogonal SPACE/ZONE eligibility arrays.
   eligible_space_types?: string[] | null;
   eligible_zone_focuses?: string[] | null;
+  // W11.6.24 — image_type gate (e.g. 'is_detail_shot'). Empty = no gate.
+  eligible_image_types?: string[] | null;
   max_images?: number | null;
   min_images?: number | null;
   notes?: string | null;
@@ -237,6 +239,8 @@ export interface ImageClassification {
   zone_focus?: string | null;
   /** Legacy compatibility alias — kept until W11.6.13 deprecation wave. */
   room_type?: string | null;
+  /** W11.6.24: image_type label (e.g. 'is_detail_shot'). */
+  image_type?: string | null;
 }
 
 /**
@@ -272,6 +276,15 @@ export function imageMatchesSlot(
   const spaceTypes = Array.isArray(slot.eligible_space_types) ? slot.eligible_space_types : [];
   const zoneFocuses = Array.isArray(slot.eligible_zone_focuses) ? slot.eligible_zone_focuses : [];
   const roomTypes = Array.isArray(slot.eligible_room_types) ? slot.eligible_room_types : [];
+  const imageTypes = Array.isArray(slot.eligible_image_types) ? slot.eligible_image_types : [];
+
+  // Gate 1 (W11.6.24) — image_type filter when present. ANDed with the
+  // spatial gate below.
+  if (imageTypes.length > 0) {
+    if (image.image_type == null || !imageTypes.includes(image.image_type)) {
+      return false;
+    }
+  }
 
   // Tier 1 — both new arrays populated → AND-intersection.
   if (spaceTypes.length > 0 && zoneFocuses.length > 0) {
@@ -294,8 +307,15 @@ export function imageMatchesSlot(
     return image.room_type != null && roomTypes.includes(image.room_type);
   }
 
-  // Defensive: slot has no spatial constraints in any tier — treat as
-  // misconfigured and refuse to match.
+  // Tier 4 (W11.6.24) — no spatial gate but image_type gate already passed
+  // above. The image_type filter alone is sufficient for "any room" detail
+  // slots (joinery_detail, period_feature_detail).
+  if (imageTypes.length > 0) {
+    return true;
+  }
+
+  // Defensive: slot has no gates of any kind — treat as misconfigured and
+  // refuse to match.
   return false;
 }
 
