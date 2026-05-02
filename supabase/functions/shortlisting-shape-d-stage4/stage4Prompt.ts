@@ -113,16 +113,25 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
         properties: {
           slot_id: {
             type: 'string',
-            // W11.7.1 hygiene: closed enum sourced from CANONICAL_SLOT_IDS.
-            // Gemini honours JSON-schema `enum` in responseSchema and will
-            // refuse to emit anything outside the list. Drift like
-            // `living_dining_hero`, `exterior_rear_hero`, `master_bedroom`
-            // (vs `master_bedroom_hero`) is now structurally impossible.
-            enum: [...CANONICAL_SLOT_IDS],
+            // W11.7.x: closed `enum` (60 CANONICAL_SLOT_IDS) caused Gemini to
+            // 400 Stage 4 with "schema produces a constraint that has too
+            // many states for serving" — the cumulative state count of
+            // Stage 4's much-larger schema (master_listing's 17 string
+            // fields, slot_decisions array with nested objects, etc.) put
+            // it over Gemini's serving threshold even though Stage 1 with
+            // the same enum still fits. Drop the closed enum and teach the
+            // canonical list via description; normaliseSlotId() in the
+            // persistence layer already collapses drift / aliases and drops
+            // unrecognised ids with a warning, so the structural guarantee
+            // is preserved at write-time even when the schema-time guard
+            // is loosened. Same pattern landed earlier for
+            // photographer_techniques on the Stage 1 side.
             description:
-              'Slot identifier (canonical lowercase snake_case). Pick the ' +
-              'closest match from the enum. Use `ai_recommended` for Phase 3 ' +
-              'free recommendations not tied to a specific slot.',
+              'Slot identifier (canonical lowercase snake_case). Use ONE OF ' +
+              `the following ${CANONICAL_SLOT_IDS.length} canonical slot_ids ` +
+              '— anything else will be dropped with a warning at persist ' +
+              `time: ${CANONICAL_SLOT_IDS.join(', ')}. Use \`ai_recommended\` ` +
+              'for Phase 3 free recommendations not tied to a specific slot.',
           },
           phase: {
             type: 'integer',
