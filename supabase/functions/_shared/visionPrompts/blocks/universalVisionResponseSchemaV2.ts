@@ -148,7 +148,7 @@ import {
 // NULL on these columns since the W11.7.17 cutover. Same bug class as F-D-002
 // (image_classification gap fixed yesterday). Schema must DECLARE every field
 // the prompt asks for or Gemini drops it.
-export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.3';
+export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.4';
 export const UNIVERSAL_VISION_RESPONSE_TOOL_NAME = 'classify_image';
 
 /**
@@ -893,27 +893,38 @@ const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
   // spaceZoneTaxonomy.ts so the schema, prompt, and SettingsUI stay in lockstep.
   space_type: {
     type: 'string',
-    enum: [...SPACE_TYPE_OPTIONS],
+    // W11.7.x (2026-05-02): closed `enum: [...SPACE_TYPE_OPTIONS]` (32 entries)
+    // combined with ZONE_FOCUS_OPTIONS (29 entries) plus the rest of the v2
+    // schema tipped Gemini's "schema produces a constraint that has too many
+    // states for serving" threshold intermittently — Stage 1 succeeded for
+    // some rounds and 400'd for others depending on Gemini's serving-capacity
+    // weather. Same family of issue that bbb4337 fixed for Stage 4's slot_id
+    // enum. Drop the closed enum, teach the canonical list inline in the
+    // description (the spaceZoneTaxonomyBlock prompt also lists them in the
+    // user-prompt portion). Persistence-layer normalisation collapses any
+    // drift; non-canonical strings are tolerated rather than dropped.
     description:
-      'W11.6.13 ARCHITECTURAL ENCLOSURE (the 4 walls). Pick the most-specific ' +
-      'match from the canonical taxonomy. Distinct from zone_focus: in studios ' +
-      'and open-plan apartments ONE space contains MANY zones. A shot of the ' +
+      'W11.6.13 ARCHITECTURAL ENCLOSURE (the 4 walls). Use ONE OF the canonical ' +
+      `${SPACE_TYPE_OPTIONS.length} space_type values: ${SPACE_TYPE_OPTIONS.join(', ')}. ` +
+      'Pick the most-specific match. Distinct from zone_focus: in studios and ' +
+      'open-plan apartments ONE space contains MANY zones. A shot of the ' +
       'dining table inside a combined living/dining envelope is ' +
       'space_type=living_dining_combined, zone_focus=dining_table — distinct ' +
       'from a shot of a dedicated dining room (space_type=dining_room_dedicated). ' +
-      'See spaceZoneTaxonomyBlock for the canonical reasoning. Floorplan ' +
-      'images: pick the dominant enclosure type (often the open-plan envelope).',
+      'See spaceZoneTaxonomyBlock for canonical reasoning. Floorplan images: ' +
+      'pick the dominant enclosure type (often the open-plan envelope).',
   },
   zone_focus: {
     type: 'string',
-    enum: [...ZONE_FOCUS_OPTIONS],
+    // See space_type comment above for the closed-enum-drop rationale.
     description:
       'W11.6.13 COMPOSITIONAL SUBJECT of the shot — what the photographer is ' +
-      'actually showing inside the architectural enclosure. Even single-zone ' +
-      'shots benefit: a master bedroom shot is space_type=master_bedroom, ' +
-      'zone_focus=bed_focal vs wardrobe_built_in vs window_view depending on ' +
-      'what the frame highlights. The engine uses this alongside space_type ' +
-      'to drive slot eligibility and clean training data.',
+      `actually showing inside the architectural enclosure. Use ONE OF the ` +
+      `canonical ${ZONE_FOCUS_OPTIONS.length} zone_focus values: ${ZONE_FOCUS_OPTIONS.join(', ')}. ` +
+      'Even single-zone shots benefit: a master bedroom shot is ' +
+      'space_type=master_bedroom, zone_focus=bed_focal vs wardrobe_built_in vs ' +
+      'window_view depending on what the frame highlights. The engine uses ' +
+      'this alongside space_type to drive slot eligibility and clean training data.',
   },
   space_zone_count: {
     type: 'integer',
