@@ -28,7 +28,13 @@
 
 // ─── universalVisionResponseSchemaV2.ts ─────────────────────────────────────
 
-/** 11 image_type options surfaced as preferred_image_type dropdown values. */
+/**
+ * 10 image_type options surfaced as preferred_image_type dropdown values.
+ *
+ * Mig 442 (2026-05-02, schema v2.5): `is_detail_shot` REMOVED — replaced by
+ * the new `shot_scale` axis (wide | medium | tight | detail | vignette).
+ * Detail shots are now classified via shot_scale="detail" / "tight".
+ */
 export const IMAGE_TYPE_OPTIONS = [
   "is_day",
   "is_dusk",
@@ -38,10 +44,28 @@ export const IMAGE_TYPE_OPTIONS = [
   "is_bts",
   "is_floorplan",
   "is_video_frame",
-  "is_detail_shot",
   "is_facade_hero",
   "is_other",
 ];
+
+/** 5 shot_scale options (mig 442 / schema v2.5). */
+export const SHOT_SCALE_OPTIONS = [
+  "wide",
+  "medium",
+  "tight",
+  "detail",
+  "vignette",
+];
+
+/** 3 perspective_compression options (mig 442 / schema v2.5). */
+export const PERSPECTIVE_COMPRESSION_OPTIONS = [
+  "expanded",
+  "neutral",
+  "compressed",
+];
+
+/** 3 orientation options (mig 442 / schema v2.5; derived from EXIF at persist). */
+export const ORIENTATION_OPTIONS = ["landscape", "portrait", "square"];
 
 /** 4 lighting_state options for preferred_lighting_state dropdown. */
 export const LIGHTING_STATE_OPTIONS = ["day", "dusk", "twilight", "night"];

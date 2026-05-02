@@ -166,13 +166,16 @@ async function runPersist(
 
 // ─── Schema-level assertions (Piece 1) ───────────────────────────────────────
 
-Deno.test('schema version bumped to v2.4 (closed-enum drop)', () => {
+Deno.test('schema version bumped to v2.5 (mig 442 composition axes)', () => {
   // v2.3 (W11.7.17 hotfix-5) declared space_type / zone_focus with closed
   // enums. v2.4 (commit 9325f46, 2026-05-02) drops those enums to fit
   // Gemini's schema state-count limit; canonical lists are now taught via
-  // the property `description` instead. See universalVisionResponseSchemaV2.ts
-  // for the rationale block.
-  assertStrictEquals(UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION, 'v2.4');
+  // the property `description` instead.
+  // v2.5 (mig 442, 2026-05-02) adds three composition observability axes:
+  // shot_scale, perspective_compression (REQUIRED) + orientation (optional,
+  // derived from EXIF at persist time). is_detail_shot dropped from
+  // IMAGE_TYPE_OPTIONS — replaced by shot_scale="detail".
+  assertStrictEquals(UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION, 'v2.5');
 });
 
 Deno.test('schema declares space_type with canonical taxonomy in description (no closed enum)', () => {
@@ -408,4 +411,249 @@ Deno.test('hotfix-5: space_zone_count optional — null when omitted', async () 
   assertStrictEquals(row.space_zone_count, null);
   assertStrictEquals(row.space_type, 'powder_room');
   assertStrictEquals(row.zone_focus, 'vanity_detail');
+});
+
+// ─── Mig 442 (schema v2.5) — composition observability axes ─────────────────
+
+Deno.test('mig 442: schema declares shot_scale + perspective_compression as STRING properties with rich descriptions (no closed enum)', () => {
+  for (const src of ['internal_raw', 'internal_finals', 'external_listing', 'floorplan_image'] as const) {
+    const schema = universalSchemaForSource(src);
+    const props = (schema as { properties: Record<string, unknown> }).properties;
+
+    // shot_scale
+    if (!('shot_scale' in props)) {
+      throw new Error(`shot_scale missing from ${src} variant`);
+    }
+    const ss = props.shot_scale as { type?: string; enum?: string[]; description?: string };
+    assertStrictEquals(ss.type, 'string', `shot_scale.type should be string in ${src}`);
+    if (ss.enum !== undefined) {
+      throw new Error(`shot_scale.enum should NOT be declared in v2.5 (${src}) — taxonomy is taught via description`);
+    }
+    if (typeof ss.description !== 'string' || ss.description.length < 80) {
+      throw new Error(
+        `shot_scale.description must teach the canonical list (>=80 chars) in ${src}, got ${ss.description?.length ?? 0}`,
+      );
+    }
+    // Description must reference enough canonical SHOT_SCALE_OPTIONS values.
+    for (const required of ['wide', 'medium', 'tight', 'detail', 'vignette']) {
+      if (!ss.description.includes(required)) {
+        throw new Error(`shot_scale.description missing canonical token "${required}" in ${src}`);
+      }
+    }
+
+    // perspective_compression
+    if (!('perspective_compression' in props)) {
+      throw new Error(`perspective_compression missing from ${src} variant`);
+    }
+    const pc = props.perspective_compression as { type?: string; enum?: string[]; description?: string };
+    assertStrictEquals(pc.type, 'string', `perspective_compression.type should be string in ${src}`);
+    if (pc.enum !== undefined) {
+      throw new Error(`perspective_compression.enum should NOT be declared in v2.5 (${src})`);
+    }
+    if (typeof pc.description !== 'string' || pc.description.length < 80) {
+      throw new Error(
+        `perspective_compression.description must teach the canonical list (>=80 chars) in ${src}`,
+      );
+    }
+    for (const required of ['expanded', 'neutral', 'compressed']) {
+      if (!pc.description.includes(required)) {
+        throw new Error(`perspective_compression.description missing canonical token "${required}" in ${src}`);
+      }
+    }
+
+    // orientation — also string with rich description
+    if (!('orientation' in props)) {
+      throw new Error(`orientation missing from ${src} variant`);
+    }
+    const ori = props.orientation as { type?: string; enum?: string[]; description?: string; nullable?: boolean };
+    assertStrictEquals(ori.type, 'string', `orientation.type should be string in ${src}`);
+    if (ori.enum !== undefined) {
+      throw new Error(`orientation.enum should NOT be declared in v2.5 (${src})`);
+    }
+    if (typeof ori.description !== 'string' || ori.description.length < 80) {
+      throw new Error(`orientation.description must teach the canonical list (>=80 chars) in ${src}`);
+    }
+    for (const required of ['landscape', 'portrait', 'square']) {
+      if (!ori.description.includes(required)) {
+        throw new Error(`orientation.description missing canonical token "${required}" in ${src}`);
+      }
+    }
+  }
+});
+
+Deno.test('mig 442: shot_scale + perspective_compression are REQUIRED; orientation is OPTIONAL', () => {
+  if (!UNIVERSAL_CORE_REQUIRED.includes('shot_scale')) {
+    throw new Error('shot_scale missing from UNIVERSAL_CORE_REQUIRED');
+  }
+  if (!UNIVERSAL_CORE_REQUIRED.includes('perspective_compression')) {
+    throw new Error('perspective_compression missing from UNIVERSAL_CORE_REQUIRED');
+  }
+  if (UNIVERSAL_CORE_REQUIRED.includes('orientation')) {
+    throw new Error('orientation must NOT be required (it is derived from EXIF at persist)');
+  }
+  for (const src of ['internal_raw', 'internal_finals', 'external_listing', 'floorplan_image'] as const) {
+    const schema = universalSchemaForSource(src) as { required: string[] };
+    if (!schema.required.includes('shot_scale')) {
+      throw new Error(`shot_scale missing from required[] in ${src}`);
+    }
+    if (!schema.required.includes('perspective_compression')) {
+      throw new Error(`perspective_compression missing from required[] in ${src}`);
+    }
+    if (schema.required.includes('orientation')) {
+      throw new Error(`orientation must not be required in ${src}`);
+    }
+  }
+});
+
+Deno.test('mig 442: is_detail_shot REMOVED from image_type description (replaced by shot_scale)', () => {
+  for (const src of ['internal_raw', 'internal_finals', 'external_listing', 'floorplan_image'] as const) {
+    const schema = universalSchemaForSource(src);
+    const props = (schema as { properties: Record<string, unknown> }).properties;
+    const it = props.image_type as { description?: string };
+    if (typeof it.description !== 'string') {
+      throw new Error(`image_type.description missing in ${src}`);
+    }
+    if (it.description.includes('is_detail_shot |') || it.description.includes('| is_detail_shot')) {
+      throw new Error(`image_type.description still references is_detail_shot in ${src} (should be dropped in v2.5)`);
+    }
+  }
+});
+
+Deno.test('mig 442: persist normalises shot_scale + perspective_compression and writes is_detail_shot=false', async () => {
+  const out = baseV2Output({
+    space_type: 'kitchen_dedicated',
+    zone_focus: 'kitchen_island',
+    shot_scale: '  WIDE  ',                     // drift: caps + whitespace
+    perspective_compression: 'Compressed',       // drift: caps
+    orientation: 'landscape',                    // drift-free
+    room_classification: {
+      room_type: 'kitchen', room_type_confidence: 0.95,
+      composition_type: 'wide_establishing', vantage_point: 'neutral',
+      is_styled: true, indoor_outdoor_visible: false,
+      eligible_for_exterior_rear: false,
+    },
+  });
+  const row = await runPersist(out);
+  assertStrictEquals(row.shot_scale, 'wide');
+  assertStrictEquals(row.perspective_compression, 'compressed');
+  assertStrictEquals(row.orientation, 'landscape');
+  // is_detail_shot is always false post-mig-442 regardless of model emission.
+  assertStrictEquals(row.is_detail_shot, false);
+});
+
+Deno.test('mig 442: persist drops non-canonical shot_scale and emits warning', async () => {
+  const captured: Captured = { table: null, row: null, conflict: null };
+  const warnings: string[] = [];
+  await persistOneClassification({
+    // deno-lint-ignore no-explicit-any
+    admin: makeFakeAdmin(captured) as any,
+    roundId: ROUND_ID,
+    projectId: PROJECT_ID,
+    // deno-lint-ignore no-explicit-any
+    result: baseResult(baseV2Output({
+      space_type: 'kitchen_dedicated',
+      zone_focus: 'kitchen_island',
+      shot_scale: 'panoramic',           // non-canonical
+      perspective_compression: 'flat',   // non-canonical
+      room_classification: {
+        room_type: 'kitchen', room_type_confidence: 0.9,
+        composition_type: 'wide_establishing', vantage_point: 'neutral',
+        is_styled: true, indoor_outdoor_visible: false,
+        eligible_for_exterior_rear: false,
+      },
+    })) as any,
+    promptBlockVersions: { stage1: 'v2.5' },
+    modelVersion: 'gemini-2.5-pro',
+    // deno-lint-ignore no-explicit-any
+    composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
+    warnings,
+  });
+  const row = captured.row!;
+  assertStrictEquals(row.shot_scale, null);
+  assertStrictEquals(row.perspective_compression, null);
+  // 2 warnings emitted (one per non-canonical axis).
+  if (warnings.filter((w) => w.includes('mig 442')).length < 2) {
+    throw new Error(`expected at least 2 mig-442 warnings, got: ${JSON.stringify(warnings)}`);
+  }
+});
+
+Deno.test('mig 442: orientation derived from EXIF dims overrides model emission', async () => {
+  const captured: Captured = { table: null, row: null, conflict: null };
+  await persistOneClassification({
+    // deno-lint-ignore no-explicit-any
+    admin: makeFakeAdmin(captured) as any,
+    roundId: ROUND_ID,
+    projectId: PROJECT_ID,
+    // deno-lint-ignore no-explicit-any
+    result: baseResult(baseV2Output({
+      space_type: 'master_bedroom',
+      zone_focus: 'bed_focal',
+      shot_scale: 'wide',
+      perspective_compression: 'neutral',
+      orientation: 'portrait',  // model says portrait...
+      room_classification: {
+        room_type: 'bedroom', room_type_confidence: 0.9,
+        composition_type: 'wide_establishing', vantage_point: 'neutral',
+        is_styled: true, indoor_outdoor_visible: false,
+        eligible_for_exterior_rear: false,
+      },
+    })) as any,
+    promptBlockVersions: { stage1: 'v2.5' },
+    modelVersion: 'gemini-2.5-pro',
+    // ...but EXIF dims are clearly landscape (3:2 sensor)
+    composition: {
+      group_id: GROUP_ID,
+      best_bracket_stem: 'IMG_HOTFIX5',
+      delivery_reference_stem: 'IMG_HOTFIX5',
+      exif_metadata: {
+        IMG_HOTFIX5: { imageWidth: 6000, imageHeight: 4000 },
+      },
+      // deno-lint-ignore no-explicit-any
+    } as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
+    warnings: [],
+  });
+  // EXIF wins — landscape, not portrait.
+  assertStrictEquals(captured.row!.orientation, 'landscape');
+});
+
+Deno.test('mig 442: orientation falls back to model emission when EXIF dims missing', async () => {
+  const out = baseV2Output({
+    space_type: 'master_bedroom',
+    zone_focus: 'bed_focal',
+    shot_scale: 'wide',
+    perspective_compression: 'neutral',
+    orientation: 'portrait',
+    room_classification: {
+      room_type: 'bedroom', room_type_confidence: 0.9,
+      composition_type: 'wide_establishing', vantage_point: 'neutral',
+      is_styled: true, indoor_outdoor_visible: false,
+      eligible_for_exterior_rear: false,
+    },
+  });
+  // baseCompositionRow has empty exif_metadata → EXIF dims unavailable.
+  const row = await runPersist(out);
+  assertStrictEquals(row.orientation, 'portrait');
+});
+
+Deno.test('mig 442: orientation NULL when neither EXIF nor model emission available', async () => {
+  const out = baseV2Output({
+    space_type: 'master_bedroom',
+    zone_focus: 'bed_focal',
+    shot_scale: 'wide',
+    perspective_compression: 'neutral',
+    // no orientation field at all
+    room_classification: {
+      room_type: 'bedroom', room_type_confidence: 0.9,
+      composition_type: 'wide_establishing', vantage_point: 'neutral',
+      is_styled: true, indoor_outdoor_visible: false,
+      eligible_for_exterior_rear: false,
+    },
+  });
+  delete out.orientation;
+  const row = await runPersist(out);
+  assertStrictEquals(row.orientation, null);
 });

@@ -790,7 +790,11 @@ export async function persistFinalsClassification(args: PersistArgs): Promise<vo
     time_of_day: timeOfDay,
     is_drone: isDrone,
     is_exterior: isExterior,
-    is_detail_shot: isDetailShot,
+    // Mig 442 (2026-05-02): is_detail_shot DEPRECATED. Always FALSE going
+    // forward — replaced by shot_scale='detail' / 'tight' (column added in
+    // mig 442). The `isDetailShot` derivation above is no longer consulted;
+    // column kept for backwards compat with v1/v1.x/v2 readers.
+    is_detail_shot: false,
     zones_visible: arr(out.zones_visible),
     key_elements: arr(out.key_elements),
     is_styled: bool(roomClassRaw?.is_styled ?? out.is_styled),

@@ -148,7 +148,22 @@ import {
 // NULL on these columns since the W11.7.17 cutover. Same bug class as F-D-002
 // (image_classification gap fixed yesterday). Schema must DECLARE every field
 // the prompt asks for or Gemini drops it.
-export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.4';
+//
+// 2026-05-02 (mig 442): bumped to v2.5. Adds three composition observability
+// axes: `shot_scale`, `perspective_compression`, `orientation`.
+//   - shot_scale + perspective_compression are emitted by Gemini (top-level
+//     STRING properties, no closed enum, taxonomy taught via description —
+//     same pattern as space_type/zone_focus in v2.4). Both REQUIRED so we
+//     get 100% capture across production traffic.
+//   - orientation is DERIVED at persist time from EXIF (composition_groups.
+//     exif_metadata Width/Height) — NOT a vision call. The schema declares
+//     it as a top-level string property nullable so any model emission also
+//     lands cleanly, but the canonical source is EXIF.
+//   - is_detail_shot REMOVED from IMAGE_TYPE_OPTIONS (replaced by
+//     shot_scale='detail' / 'tight'). Column on composition_classifications
+//     stays for backwards-compat with v1/v1.x/v2 traffic; persist writes
+//     `false` going forward.
+export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.5';
 export const UNIVERSAL_VISION_RESPONSE_TOOL_NAME = 'classify_image';
 
 /**
@@ -218,12 +233,17 @@ export const UNIVERSAL_SIGNAL_KEYS = [
 export type UniversalSignalKey = typeof UNIVERSAL_SIGNAL_KEYS[number];
 
 /**
- * W11.6.22 — image_type 11-option enum (Q1 binding from this schema).
+ * W11.6.22 — image_type enum (Q1 binding from this schema).
  *
  * Exported as a frozen array so the per-slot curated-position editor in
  * SettingsShortlistingSlots can render the dropdown without re-declaring
  * the list. Mirrors the inline `image_type` description in
  * UNIVERSAL_CORE_PROPERTIES below — DO NOT diverge.
+ *
+ * 2026-05-02 (mig 442, schema v2.5): `is_detail_shot` REMOVED. The new
+ * `shot_scale` axis (wide | medium | tight | detail | vignette) replaces
+ * it cleanly. The `is_detail_shot` boolean column on composition_classifications
+ * stays for backwards-compat but is always false on rows after this migration.
  */
 export const IMAGE_TYPE_OPTIONS = [
   'is_day',
@@ -234,11 +254,53 @@ export const IMAGE_TYPE_OPTIONS = [
   'is_bts',
   'is_floorplan',
   'is_video_frame',
-  'is_detail_shot',
   'is_facade_hero',
   'is_other',
 ] as const;
 export type ImageTypeOption = typeof IMAGE_TYPE_OPTIONS[number];
+
+/**
+ * Mig 442 (schema v2.5) — shot_scale 5-option closed list.
+ *
+ * Exported so the SettingsShortlistingSlots admin can render the multi-select
+ * for `eligible_shot_scale[]` slot eligibility. Mirrors the inline `shot_scale`
+ * description in UNIVERSAL_CORE_PROPERTIES — DO NOT diverge. Persistence layer
+ * normalises drift via this list (lowercase + trim + filter to valid).
+ */
+export const SHOT_SCALE_OPTIONS = [
+  'wide',
+  'medium',
+  'tight',
+  'detail',
+  'vignette',
+] as const;
+export type ShotScaleOption = typeof SHOT_SCALE_OPTIONS[number];
+
+/**
+ * Mig 442 (schema v2.5) — perspective_compression 3-option closed list.
+ *
+ * Same admin-multiselect + persistence-normalisation pattern as SHOT_SCALE_OPTIONS.
+ */
+export const PERSPECTIVE_COMPRESSION_OPTIONS = [
+  'expanded',
+  'neutral',
+  'compressed',
+] as const;
+export type PerspectiveCompressionOption = typeof PERSPECTIVE_COMPRESSION_OPTIONS[number];
+
+/**
+ * Mig 442 (schema v2.5) — orientation 3-option closed list.
+ *
+ * orientation is DERIVED at persist time from EXIF (Width/Height with a 5%
+ * tolerance band → square). The model is taught to emit it via description
+ * for redundancy / cross-check, but the canonical source is EXIF.
+ */
+export const ORIENTATION_OPTIONS = [
+  'landscape',
+  'portrait',
+  'square',
+] as const;
+export type OrientationOption = typeof ORIENTATION_OPTIONS[number];
 
 /**
  * W11.6.22 — lighting_state 4-option enum (Q2 binding).
@@ -857,7 +919,7 @@ const LISTING_COPY_SCHEMA: Record<string, unknown> = {
 const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
   schema_version: {
     type: 'string',
-    description: "Echo '2.3' — Wave 11.7.17 hotfix-5 (space_type/zone_focus/space_zone_count fields restored after silent strip).",
+    description: "Echo 'v2.5' — Mig 442 adds shot_scale/perspective_compression/orientation composition observability axes.",
   },
   source: SOURCE_SCHEMA,
   analysis: {
@@ -877,9 +939,10 @@ const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
   image_type: {
     type: 'string',
     description:
-      'Q1 binding (11 options): is_day | is_dusk | is_drone | ' +
+      'Q1 binding (10 options post-mig-442): is_day | is_dusk | is_drone | ' +
       'is_agent_headshot | is_test_shot | is_bts | is_floorplan | ' +
-      'is_video_frame | is_detail_shot | is_facade_hero | is_other.',
+      'is_video_frame | is_facade_hero | is_other. Detail shots are ' +
+      'now classified via shot_scale="detail" instead — see shot_scale below.',
   },
   image_classification: IMAGE_CLASSIFICATION_SCHEMA,
   room_classification: ROOM_CLASSIFICATION_SCHEMA,
@@ -935,6 +998,73 @@ const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
       'kitchen+dining+living = 3); 5+ = studio-style (kitchen + bed + lounge ' +
       '+ bathroom in one envelope). Optional — only emit when zones are ' +
       'distinguishable. Floorplan: count rooms visible in the drawing.',
+  },
+  // ─── Mig 442 (schema v2.5, 2026-05-02): composition observability axes ───
+  // Three orthogonal axes that today's `composition_type` and `image_type`
+  // conflate. Premium-tier voice + slot eligibility need each axis separately.
+  // Same closed-enum-drop pattern as space_type/zone_focus (commit 9325f46):
+  // canonical list taught via `description`, no closed enum. Persistence layer
+  // normalises drift; non-canonical strings are dropped with a warning.
+  shot_scale: {
+    type: 'string',
+    description:
+      'How MUCH of the scene is framed (NOT how wide the lens is). Use ONE OF: ' +
+      'wide | medium | tight | detail | vignette. ' +
+      '"wide" = the whole space + context: a corner kitchen with the entire ' +
+      'island and splashback in frame; full living room with sofa, fireplace, ' +
+      'and window beyond; full facade with garden and driveway. ' +
+      '"medium" = a primary functional area without context creep: just the ' +
+      'kitchen island and rangehood; just the bed and bedhead wall; the ' +
+      'shower enclosure end-to-end. ' +
+      '"tight" = closing in on a feature: the rangehood + splashback, the ' +
+      'bath against the window wall, a single feature wall. ' +
+      '"detail" = a single object or material specimen at close range: the ' +
+      'tap mixer, a cabinetry handle, a tile pattern, a brass switchplate. ' +
+      '"vignette" = a curated still-life style fragment that is intentionally ' +
+      'narrow: a styled tray on a counter, a vase + book on a side table, a ' +
+      'cushion-and-throw arrangement. ' +
+      'CRITICAL: distinct from FOV / lens_class. A shot taken on a 16-24mm ' +
+      'wide-angle lens but framed close on a small bathroom can read ' +
+      'shot_scale="tight". Read the FRAMING, not the focal length. ' +
+      'Floorplan: shot_scale="wide" (the whole drawing).',
+  },
+  perspective_compression: {
+    type: 'string',
+    description:
+      'How depth RENDERS in the frame — separate axis from focal length. ' +
+      'Use ONE OF: expanded | neutral | compressed. ' +
+      '"expanded" = the wide-angle look: parallel walls splay outward; ' +
+      'foreground objects loom large; converging vanishing lines pull the ' +
+      'eye through the frame. Typical of 16-24mm shots in real estate. ' +
+      'Volume marketing voice biases this — feels open, airy, larger-than-life. ' +
+      '"neutral" = no obvious compression or expansion; depth feels natural. ' +
+      'Roughly the 24-35mm look; or wider lenses framed neutrally without ' +
+      'pushing depth. ' +
+      '"compressed" = the telephoto-flattening look: parallel walls stay ' +
+      'parallel; depth planes stack; objects at different distances feel ' +
+      'similar in size. Typical of 35-50mm framings, OR a wide lens framed ' +
+      'tight on a small space. Premium tier voice biases this — feels ' +
+      'intimate, considered, magazine-editorial. ' +
+      'CRITICAL: distinct from focal length. EXIF says 24mm but a shot ' +
+      'framed close on a small ensuite reads compressed. EXIF says 35mm ' +
+      'but a shot of a long hallway with strong vanishing lines reads expanded. ' +
+      'Cross-reference with depth cues: parallel walls = compressed; splaying ' +
+      'walls = expanded; converging vanishing lines pulling the eye = expanded. ' +
+      'Floorplan: perspective_compression="neutral" (architectural drawings ' +
+      'have no perspective).',
+  },
+  orientation: {
+    type: 'string',
+    nullable: true,
+    description:
+      'Mig 442: aspect orientation. One of: landscape | portrait | square | ' +
+      'null. CANONICAL SOURCE is EXIF (width vs height) — the persistence ' +
+      'layer derives this at ingest from composition_groups.exif_metadata, ' +
+      'overriding the model emission. Echo what you see in the frame as a ' +
+      'cross-check: landscape (frame wider than tall, the typical 3:2 / 16:9 ' +
+      'shoot orientation), portrait (frame taller than wide, e.g. social-' +
+      'first vertical crops), square (1:1, very rare in real estate finals). ' +
+      'Null is acceptable when the frame aspect is ambiguous.',
   },
   observed_objects: OBSERVED_OBJECTS_SCHEMA,
   observed_attributes: OBSERVED_ATTRIBUTES_SCHEMA,
@@ -1074,6 +1204,12 @@ export const UNIVERSAL_CORE_REQUIRED: string[] = [
   // zone count is genuinely ambiguous (e.g. wide hallway-into-multiple-rooms).
   'space_type',
   'zone_focus',
+  // Mig 442 (schema v2.5): shot_scale + perspective_compression are REQUIRED
+  // so we get 100% capture across production traffic. orientation is OPTIONAL
+  // — the canonical source is EXIF (derived at persist time), the model's
+  // emission is just a cross-check.
+  'shot_scale',
+  'perspective_compression',
   'signal_scores',
   'technical_score',
   'lighting_score',
@@ -1156,7 +1292,7 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = univers
  * persist-layer typing in `shortlisting-shape-d/index.ts`.
  */
 export interface UniversalVisionResponseV2 {
-  schema_version: '2.0' | '2.1' | '2.2' | '2.3';
+  schema_version: '2.0' | '2.1' | '2.2' | '2.3' | 'v2.5';
   source: {
     type: 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image';
     media_kind: 'still_image' | 'video_frame' | 'drone_image' | 'floorplan_image';
@@ -1172,7 +1308,7 @@ export interface UniversalVisionResponseV2 {
   image_type:
     | 'is_day' | 'is_dusk' | 'is_drone' | 'is_agent_headshot'
     | 'is_test_shot' | 'is_bts' | 'is_floorplan' | 'is_video_frame'
-    | 'is_detail_shot' | 'is_facade_hero' | 'is_other';
+    | 'is_facade_hero' | 'is_other';
   image_classification: {
     is_relevant_property_content: boolean;
     subject:
@@ -1211,6 +1347,11 @@ export interface UniversalVisionResponseV2 {
   space_type: string;
   zone_focus: string;
   space_zone_count?: number | null;
+  // Mig 442 (schema v2.5): three composition observability axes. Same string
+  // typing rationale as space_type/zone_focus above — persistence normalises.
+  shot_scale: string;
+  perspective_compression: string;
+  orientation?: string | null;
   observed_objects: Array<{
     raw_label: string;
     proposed_canonical_id: string | null;

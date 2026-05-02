@@ -271,9 +271,13 @@ Deno.test('F-3C-001 — image_type=is_drone derives is_drone=true even if bool u
   assertStrictEquals(captured.row!.is_drone, true);
 });
 
-// ─── F-3C-001 Test 7: detail subject ───────────────────────────────────────
+// ─── F-3C-001 Test 7: detail subject (mig 442 — column DEPRECATED) ─────────
 
-Deno.test('F-3C-001 — v2 detail subject: is_detail_shot=true', async () => {
+Deno.test('mig 442: v2 detail subject — is_detail_shot=false (column DEPRECATED)', async () => {
+  // Mig 442 (2026-05-02, schema v2.5): is_detail_shot column DEPRECATED —
+  // replaced by shot_scale='detail' / 'tight'. Persist now writes false on
+  // every new row regardless of model emission. Column kept for backwards-
+  // compat with v1/v1.x/v2 readers.
   const captured: Captured = { table: null, row: null, conflict: null };
   await persistFinalsClassification({
     // deno-lint-ignore no-explicit-any
@@ -281,7 +285,8 @@ Deno.test('F-3C-001 — v2 detail subject: is_detail_shot=true', async () => {
     projectId: PROJECT_ID,
     // deno-lint-ignore no-explicit-any
     result: baseFinalsResult(v2DayInterior({
-      image_type: 'is_detail_shot',
+      // v2.5 dropped 'is_detail_shot' from IMAGE_TYPE_OPTIONS — use 'is_other'.
+      image_type: 'is_other',
       image_classification: {
         is_relevant_property_content: true,
         subject: 'detail',
@@ -298,13 +303,16 @@ Deno.test('F-3C-001 — v2 detail subject: is_detail_shot=true', async () => {
   });
 
   const row = captured.row!;
-  assertStrictEquals(row.is_detail_shot, true);
+  // Mig 442: column always false post-migration.
+  assertStrictEquals(row.is_detail_shot, false);
   assertStrictEquals(row.is_exterior, false);
 });
 
-// ─── F-3C-001 Test 8: image_type=is_detail_shot fallback ───────────────────
+// ─── F-3C-001 Test 8: replay of pre-mig-442 image_type signal (still false) ─
 
-Deno.test('F-3C-001 — image_type=is_detail_shot derives is_detail_shot=true even if subject=interior', async () => {
+Deno.test('mig 442: legacy image_type=is_detail_shot replay — column still lands false', async () => {
+  // Backwards-compat: a replay of pre-mig-442 traffic still carrying
+  // image_type='is_detail_shot' must not light up the column either.
   const captured: Captured = { table: null, row: null, conflict: null };
   await persistFinalsClassification({
     // deno-lint-ignore no-explicit-any
@@ -315,7 +323,7 @@ Deno.test('F-3C-001 — image_type=is_detail_shot derives is_detail_shot=true ev
       image_type: 'is_detail_shot',
       image_classification: {
         is_relevant_property_content: true,
-        subject: 'interior', // not 'detail' — but image_type pinned
+        subject: 'interior',
         is_dusk: false,
         is_day: true,
         is_golden_hour: false,
@@ -328,7 +336,8 @@ Deno.test('F-3C-001 — image_type=is_detail_shot derives is_detail_shot=true ev
     warnings: [],
   });
 
-  assertStrictEquals(captured.row!.is_detail_shot, true);
+  // Mig 442: always false post-migration.
+  assertStrictEquals(captured.row!.is_detail_shot, false);
 });
 
 // ─── F-3C-001 Test 9: v1 fallback (image_classification absent) ────────────

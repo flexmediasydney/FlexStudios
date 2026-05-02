@@ -198,7 +198,9 @@ describe("SettingsShortlistingSlots — W11.6.22b dropdown vocabularies", () => 
   });
 
   it("canonical taxonomy exports match expected sizes (drift detector)", () => {
-    expect(IMAGE_TYPE_OPTIONS).toHaveLength(11);
+    // Mig 442 (2026-05-02): IMAGE_TYPE_OPTIONS dropped 'is_detail_shot' — now 10.
+    // shot_scale (5) / perspective_compression (3) / orientation (3) added.
+    expect(IMAGE_TYPE_OPTIONS).toHaveLength(10);
     expect(LIGHTING_STATE_OPTIONS).toHaveLength(4);
     expect(SPACE_TYPE_OPTIONS).toHaveLength(32);
     expect(ZONE_FOCUS_OPTIONS).toHaveLength(29);

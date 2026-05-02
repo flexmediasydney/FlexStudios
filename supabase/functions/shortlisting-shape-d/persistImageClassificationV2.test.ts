@@ -219,9 +219,15 @@ Deno.test('F-D-002: time_of_day = null when all 4 booleans are false (e.g. floor
 
 // ─── is_exterior / is_detail_shot derivation from subject + image_type ───────
 
-Deno.test('F-D-002: is_detail_shot = true when image_classification.subject = "detail"', async () => {
+Deno.test('mig 442: is_detail_shot = false even when image_classification.subject = "detail" (column DEPRECATED)', async () => {
+  // Mig 442 (2026-05-02): is_detail_shot is DEPRECATED — replaced by
+  // shot_scale="detail" / "tight". Schema v2.5 dropped 'is_detail_shot' from
+  // IMAGE_TYPE_OPTIONS, and persist now writes is_detail_shot=false on every
+  // row regardless of the model emission. Pre-mig-442 behaviour was to derive
+  // is_detail_shot from subject==='detail' OR image_type==='is_detail_shot';
+  // post-mig-442 the column always lands FALSE for backwards-compat readers.
   const out = baseV2Output({
-    image_type: 'is_detail_shot',
+    image_type: 'is_other',  // v2.5 no longer carries 'is_detail_shot' in IMAGE_TYPE_OPTIONS
     image_classification: {
       is_relevant_property_content: true, subject: 'detail',
       is_dusk: false, is_day: true, is_golden_hour: false, is_night: false,
@@ -230,12 +236,15 @@ Deno.test('F-D-002: is_detail_shot = true when image_classification.subject = "d
     },
   });
   const row = await runPersist(out);
-  assertStrictEquals(row.is_detail_shot, true);
+  assertStrictEquals(row.is_detail_shot, false);
   // detail subject is NOT exterior
   assertStrictEquals(row.is_exterior, false);
 });
 
-Deno.test('F-D-002: is_detail_shot = true when image_type = "is_detail_shot" even if subject is interior', async () => {
+Deno.test('mig 442: is_detail_shot always false even if image_type is legacy "is_detail_shot" (column DEPRECATED)', async () => {
+  // Backwards-compat: a replay of pre-mig-442 traffic still carrying
+  // image_type='is_detail_shot' must NOT light up is_detail_shot=true.
+  // Column is always false post-mig-442.
   const out = baseV2Output({
     image_type: 'is_detail_shot',
     image_classification: {
@@ -246,8 +255,8 @@ Deno.test('F-D-002: is_detail_shot = true when image_type = "is_detail_shot" eve
     },
   });
   const row = await runPersist(out);
-  // Detail shot of an interior surface — image_type is the secondary signal.
-  assertStrictEquals(row.is_detail_shot, true);
+  // Mig 442 behaviour — column DEPRECATED, always false.
+  assertStrictEquals(row.is_detail_shot, false);
   assertStrictEquals(row.is_exterior, false);
 });
 
@@ -297,7 +306,10 @@ Deno.test('F-D-002: defensive — image_classification non-object → falls back
   // Wrong-type image_classification is treated as absent → v1 path.
   assertStrictEquals(row.time_of_day, 'day');
   assertStrictEquals(row.is_exterior, false);
-  assertStrictEquals(row.is_detail_shot, true);
+  // Mig 442: is_detail_shot is DEPRECATED — always false post-mig-442 even
+  // when the v1-fallback signal would have set it true. Column kept for
+  // backwards compat with v1/v1.x/v2 readers.
+  assertStrictEquals(row.is_detail_shot, false);
 });
 
 // ─── Regression: pre-fix v2 emission would have written all-NULLs ──────────

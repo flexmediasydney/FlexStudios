@@ -121,6 +121,9 @@ import {
 // STAGE4_TOOL_SCHEMA stays on its current schema (W11.7.17 spec is per-image
 // only; cross-image master_listing moved to a future W11.7 spec).
 import {
+  ORIENTATION_OPTIONS,
+  PERSPECTIVE_COMPRESSION_OPTIONS,
+  SHOT_SCALE_OPTIONS,
   UNIVERSAL_SIGNAL_KEYS,
   UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
   UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
@@ -2225,6 +2228,56 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
         ? parseInt(spaceZoneCountRaw, 10)
         : null);
 
+  // ─── Mig 442 (schema v2.5): composition observability axes ───────────────
+  // shot_scale + perspective_compression: model-emitted, normalised against
+  // the canonical lists. Drift (e.g. "WIDE", " medium ", "telephoto") is
+  // trimmed/lowercased, then validated; non-canonical values land as null
+  // with a warning so we surface model-prompt drift on the dashboard rather
+  // than silently corrupting the column.
+  const shotScale = normaliseClosedAxis(
+    out.shot_scale,
+    SHOT_SCALE_OPTIONS,
+    'shot_scale',
+    args.result,
+    args.warnings,
+  );
+  const perspectiveCompression = normaliseClosedAxis(
+    out.perspective_compression,
+    PERSPECTIVE_COMPRESSION_OPTIONS,
+    'perspective_compression',
+    args.result,
+    args.warnings,
+  );
+
+  // orientation: DERIVED at persist time from EXIF (NOT from the model). The
+  // canonical source is composition_groups.exif_metadata Width/Height — we
+  // already have it loaded for lens_class derivation above. Compute via the
+  // 5% tolerance band (width >= height*1.05 = landscape; height >= width*1.05
+  // = portrait; else square). Falls back to the model's emission only when
+  // EXIF dims are missing entirely. NULL when neither source is available.
+  const exifWidth = num(exifEntry?.imageWidth)
+    ?? num(exifEntry?.exifImageWidth)
+    ?? num(exifEntry?.width);
+  const exifHeight = num(exifEntry?.imageHeight)
+    ?? num(exifEntry?.exifImageHeight)
+    ?? num(exifEntry?.height);
+  let orientation: string | null = deriveOrientationFromExifDims(
+    exifWidth,
+    exifHeight,
+  );
+  if (orientation == null) {
+    // Cross-check: model-emitted orientation as fallback. Same normalisation
+    // as the other closed axes — drift drops to null silently here (the
+    // model-emit path is best-effort cross-check, not the canonical source).
+    orientation = normaliseClosedAxis(
+      out.orientation,
+      ORIENTATION_OPTIONS,
+      'orientation',
+      args.result,
+      args.warnings,
+    );
+  }
+
   // W11.2 — per-signal 0-10 scores. The 22 canonical keys live in
   // STAGE1_SIGNAL_KEYS (stage1ResponseSchema.ts); the schema requires the
   // model emits all 22, but persistence is graceful — missing/malformed
@@ -2312,16 +2365,28 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     space_type: spaceType,
     zone_focus: zoneFocus,
     space_zone_count: spaceZoneCount,
+    // Mig 442 (schema v2.5): three composition observability axes. shot_scale
+    // and perspective_compression are model-emitted + normalised; orientation
+    // is derived from EXIF dims at persist time (with model emission as fallback).
+    shot_scale: shotScale,
+    perspective_compression: perspectiveCompression,
+    orientation: orientation,
     composition_type: str(roomClassRaw?.composition_type ?? out.composition_type),
     vantage_point: vantageColumn,
     // W11.7.17 QC-iter2-W2 P0 (F-D-002): time_of_day / is_exterior /
-    // is_detail_shot / is_drone now sourced from the v2-nested
-    // `image_classification` (with legacy top-level fallback). See
-    // derivation block above for full reasoning.
+    // is_drone now sourced from the v2-nested `image_classification` (with
+    // legacy top-level fallback). See derivation block above for full reasoning.
+    //
+    // Mig 442 (2026-05-02): is_detail_shot DEPRECATED — replaced by
+    // shot_scale='detail' / 'tight'. Schema v2.5 dropped 'is_detail_shot' from
+    // IMAGE_TYPE_OPTIONS, so the legacy `imageTypeRaw === 'is_detail_shot'`
+    // signal is gone. Always write FALSE going forward; column kept on the DB
+    // for backwards-compat with v1/v1.x/v2 traffic. The `isDetailShot`
+    // derivation above is no longer consulted here.
     time_of_day: timeOfDay,
     is_drone: isDrone,
     is_exterior: isExterior,
-    is_detail_shot: isDetailShot,
+    is_detail_shot: false,
     zones_visible: arr(out.zones_visible),
     key_elements: arr(out.key_elements),
     is_styled: bool(roomClassRaw?.is_styled ?? out.is_styled),
@@ -2458,6 +2523,77 @@ function extractObservedAttributes(v: unknown): Array<Record<string, unknown>> {
     .filter((entry): entry is Record<string, unknown> =>
       entry !== null && typeof entry === 'object' && !Array.isArray(entry),
     );
+}
+
+// ─── Mig 442 (schema v2.5) — composition axes normalisation helpers ─────────
+
+/**
+ * Normalise a model-emitted closed-list value against a canonical taxonomy.
+ *
+ * Same closed-list-drop pattern as space_type/zone_focus (commit 9325f46):
+ * the schema teaches the canonical list via description (no closed `enum`),
+ * and persist accepts what the model emits with light normalisation —
+ * trim, lowercase, then validate against the canonical list. Drift produces
+ * a warning so we surface model-prompt mismatches on the dashboard.
+ *
+ * Returns the canonical value when it matches; null otherwise (the column
+ * is nullable, so non-canonical lands cleanly).
+ *
+ * Exported for tests.
+ */
+export function normaliseClosedAxis(
+  raw: unknown,
+  options: readonly string[],
+  axisName: string,
+  result: { group_id?: string; stem?: string },
+  warnings: string[],
+): string | null {
+  if (raw == null) return null;
+  if (typeof raw !== 'string') {
+    warnings.push(
+      `mig 442 ${axisName}: non-string emission (${typeof raw}) for ${result.group_id}/${result.stem ?? '?'} — dropping`,
+    );
+    return null;
+  }
+  const normalised = raw.trim().toLowerCase();
+  if (normalised.length === 0) return null;
+  if (!options.includes(normalised)) {
+    warnings.push(
+      `mig 442 ${axisName}: non-canonical value "${raw}" for ${result.group_id}/${result.stem ?? '?'} — expected one of [${options.join(', ')}], dropping`,
+    );
+    return null;
+  }
+  return normalised;
+}
+
+/**
+ * Derive orientation from EXIF Width/Height with a 5% tolerance band for
+ * "square". Returns 'landscape' | 'portrait' | 'square' | null.
+ *
+ * Spec (mig 442):
+ *   width  >= height * 1.05  → landscape
+ *   height >= width  * 1.05  → portrait
+ *   else                     → square
+ *
+ * NULL when either dim is missing or non-positive — older rows where EXIF
+ * dims weren't extracted at ingest get a NULL here, which is acceptable per
+ * the migration design.
+ *
+ * Exported for tests.
+ */
+export function deriveOrientationFromExifDims(
+  width: number | null | undefined,
+  height: number | null | undefined,
+): string | null {
+  if (
+    typeof width !== 'number' || !Number.isFinite(width) || width <= 0
+    || typeof height !== 'number' || !Number.isFinite(height) || height <= 0
+  ) {
+    return null;
+  }
+  if (width >= height * 1.05) return 'landscape';
+  if (height >= width * 1.05) return 'portrait';
+  return 'square';
 }
 
 // ─── engine_run_audit upsert ─────────────────────────────────────────────────
