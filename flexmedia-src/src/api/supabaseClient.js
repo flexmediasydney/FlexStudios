@@ -137,6 +137,10 @@ function toTableName(entityName) {
     // but identity entry here protects against future drift now that the
     // table is hot in the swimlane lightbox path.
     'shortlisting_slot_position_preferences': 'shortlisting_slot_position_preferences',
+    // W11.6.25: Slot Recipes — shortlisting_slot_allocations resolves
+    // correctly under the default pluraliser, but identity entry here
+    // protects against future drift in the recipe editor tab.
+    'shortlisting_slot_allocations': 'shortlisting_slot_allocations',
   };
 
   snake = overrides[snake] || snake;

@@ -126,6 +126,8 @@ import SettingsEngineSettings from "@/pages/SettingsEngineSettings";
 import SettingsVendorComparison from "@/pages/SettingsVendorComparison";
 // W11.6.23 — Architecture & Data Explorer tab.
 import ArchitectureTab from "@/components/settings/architecture/ArchitectureTab";
+// W11.6.25 — Slot Recipes editor tab.
+import SlotRecipesTab from "@/components/settings/shortlisting/SlotRecipesTab";
 
 // Tab keys (URL query value `?tab=<key>`). Default = overview.
 export const VALID_TABS = [
@@ -152,6 +154,8 @@ export const VALID_TABS = [
   "vendor",
   // — W11.6.23 (added 1) —————————————————————————————————————————————————
   "architecture",
+  // — W11.6.25 (added 1) —————————————————————————————————————————————————
+  "recipes",
 ];
 
 const TAB_LABELS = {
@@ -178,6 +182,8 @@ const TAB_LABELS = {
   vendor: "Vendor Comparison",
   // W11.6.23
   architecture: "Architecture",
+  // W11.6.25
+  recipes: "Slot Recipes",
 };
 
 const TAB_ICONS = {
@@ -202,6 +208,8 @@ const TAB_ICONS = {
   vendor: Shuffle,
   // W11.6.23
   architecture: Network,
+  // W11.6.25
+  recipes: Layers,
 };
 
 /**
@@ -399,6 +407,13 @@ export default function SettingsShortlistingCommandCenter() {
           <TabsContent value="architecture" className="mt-0">
             <Suspense fallback={<TabFallback />}>
               <ArchitectureTab />
+            </Suspense>
+          </TabsContent>
+
+          {/* — W11.6.25 — Slot Recipes ————————————————— */}
+          <TabsContent value="recipes" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SlotRecipesTab />
             </Suspense>
           </TabsContent>
         </Tabs>

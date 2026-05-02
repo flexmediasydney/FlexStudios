@@ -190,7 +190,7 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     vi.clearAllMocks();
   });
 
-  it("renders all 20 tab triggers (W11.6.21 ten + W11.6.21b nine + W11.6.23 one)", () => {
+  it("renders all 21 tab triggers (W11.6.21 ten + W11.6.21b nine + W11.6.23 + W11.6.25)", () => {
     renderPage();
     // W11.6.21
     expect(screen.getByTestId("tab-overview")).toBeTruthy();
@@ -215,6 +215,8 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     expect(screen.getByTestId("tab-vendor")).toBeTruthy();
     // W11.6.23
     expect(screen.getByTestId("tab-architecture")).toBeTruthy();
+    // W11.6.25
+    expect(screen.getByTestId("tab-recipes")).toBeTruthy();
   });
 
   it("default tab is overview when no ?tab= query param", () => {
@@ -240,6 +242,7 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     ["prompts"],
     ["engine-settings"],
     ["vendor"],
+    ["recipes"],
   ])("?tab=%s mounts the umbrella without crashing", (key) => {
     renderPage(`/SettingsShortlistingCommandCenter?tab=${key}`);
     expect(
@@ -266,7 +269,7 @@ describe("resolveActiveTab", () => {
     expect(resolveActiveTab(42)).toBe("overview");
   });
 
-  it("VALID_TABS exports the expected 20-entry set (W11.6.21 + W11.6.21b + W11.6.23)", () => {
+  it("VALID_TABS exports the expected 21-entry set (W11.6.21 + W11.6.21b + W11.6.23 + W11.6.25)", () => {
     expect(VALID_TABS).toEqual([
       // W11.6.21
       "overview",
@@ -291,6 +294,8 @@ describe("resolveActiveTab", () => {
       "vendor",
       // W11.6.23
       "architecture",
+      // W11.6.25
+      "recipes",
     ]);
   });
 
