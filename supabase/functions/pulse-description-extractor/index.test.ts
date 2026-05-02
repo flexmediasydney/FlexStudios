@@ -263,3 +263,31 @@ Deno.test('full-corpus estimate: 28k rows × $0.007/row stays under $200 cap', (
   assertEquals(total < 200, true);
   assertEquals(total > 180, true);
 });
+
+// ─── 9. F-E-002: estimateGemini25ProCost matches canonical pricing.ts ────────
+//
+// QC-iter2 W6b (F-E-002): the inline Pro estimator collapsed to a thin wrapper
+// around `estimateCost('google', 'gemini-2.5-pro', ...)` from
+// _shared/visionAdapter/pricing.ts. The wrapper MUST stay byte-equal to a
+// direct estimateCost() call so a future drift in pricing.ts (e.g. Google
+// raising the rate) propagates through this fn unchanged.
+
+import { estimateCost } from '../_shared/visionAdapter/pricing.ts';
+
+Deno.test('F-E-002: estimateGemini25ProCost matches estimateCost(google, 2.5-pro)', () => {
+  // Spread of token mixes — each must produce identical output through
+  // the wrapper vs the canonical pricing fn.
+  for (const [input, output] of [[0, 0], [1500, 500], [10000, 5000], [200000, 50000]]) {
+    const wrapper = estimateGemini25ProCost(input, output);
+    const canonical = estimateCost('google', 'gemini-2.5-pro', {
+      input_tokens: input,
+      output_tokens: output,
+      cached_input_tokens: 0,
+    });
+    assertEquals(
+      wrapper,
+      canonical,
+      `mismatch at (${input}, ${output}): wrapper=${wrapper} canonical=${canonical}`,
+    );
+  }
+});
