@@ -14,7 +14,7 @@
  *                                               //  W12 candidate
  *     confidence:             number,           // 0–1 cosine similarity
  *     bounding_box: { x_pct: number, y_pct: number,
- *                     w_pct: number, h_pct: number },  // normalised 0–1
+ *                     w_pct: number, h_pct: number },  // percentage 0–100
  *     attributes:             Record<string, any> | null,
  *   }>
  *
@@ -86,9 +86,11 @@ export function styleForConfidence(confidence) {
 }
 
 // ── Coordinate math ────────────────────────────────────────────────────────
-// Normalised (0–1) box → pixel rect inside the container. Clamps to keep the
-// rect from spilling outside if the upstream Stage 1 produced slightly OOB
-// coords (rounding errors at the image edge).
+// Percentage (0–100) box → pixel rect inside the container. Clamps to keep
+// the rect from spilling outside if the upstream Stage 1 produced slightly
+// OOB coords (rounding errors at the image edge). Per W11.7.17 universal
+// vision schema v2, Gemini emits x_pct/y_pct/w_pct/h_pct as 0–100 percentages
+// of the frame width/height (NOT 0–1 fractions).
 export function normalisedToPixels(bbox, containerWidth, containerHeight) {
   if (!bbox || typeof bbox !== "object") return null;
   const { x_pct, y_pct, w_pct, h_pct } = bbox;
@@ -102,10 +104,10 @@ export function normalisedToPixels(bbox, containerWidth, containerHeight) {
   }
   const W = Math.max(0, Number(containerWidth) || 0);
   const H = Math.max(0, Number(containerHeight) || 0);
-  const x = Math.round(Math.max(0, Math.min(1, x_pct)) * W);
-  const y = Math.round(Math.max(0, Math.min(1, y_pct)) * H);
-  const w = Math.round(Math.max(0, Math.min(1 - x_pct, w_pct)) * W);
-  const h = Math.round(Math.max(0, Math.min(1 - y_pct, h_pct)) * H);
+  const x = Math.round((Math.max(0, Math.min(100, x_pct)) / 100) * W);
+  const y = Math.round((Math.max(0, Math.min(100, y_pct)) / 100) * H);
+  const w = Math.round((Math.max(0, Math.min(100 - x_pct, w_pct)) / 100) * W);
+  const h = Math.round((Math.max(0, Math.min(100 - y_pct, h_pct)) / 100) * H);
   return { x, y, w, h };
 }
 

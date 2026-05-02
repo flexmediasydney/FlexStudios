@@ -103,26 +103,38 @@ describe("styleForConfidence — opacity buckets + dashed", () => {
 });
 
 describe("normalisedToPixels — coordinate math", () => {
-  it("0.5/0.5/0.2/0.2 against 1000x600 → x=500 y=300 w=200 h=120", () => {
+  // W11.6.20 unit-scale fix: per W11.7.17 universal vision schema v2,
+  // bounding_box uses 0–100 percentages of the frame (NOT 0–1 fractions).
+  it("50/50/20/20 against 1000x600 → x=500 y=300 w=200 h=120", () => {
     const px = normalisedToPixels(
-      { x_pct: 0.5, y_pct: 0.5, w_pct: 0.2, h_pct: 0.2 },
+      { x_pct: 50, y_pct: 50, w_pct: 20, h_pct: 20 },
       1000,
       600,
     );
-    // The original spec said x=400 y=300 w=200 h=120; that places the
-    // bbox top-left at (0.4, 0.5) → x=400. Stage 1's bounding_box uses
-    // top-left as anchor, not center, so 0.5/0.5/0.2/0.2 actually gives
-    // x=500 y=300 w=200 h=120. Honour the schema-as-written.
+    // Stage 1's bounding_box uses top-left as anchor (not center), so
+    // 50/50/20/20 means: top-left at (50%, 50%) of frame → (500, 300),
+    // width 20% of 1000 = 200, height 20% of 600 = 120.
     expect(px).toEqual({ x: 500, y: 300, w: 200, h: 120 });
+  });
+  it("real DB sample (28, 15, 60, 60) against 1000x600 → x=280 y=90 w=600 h=360", () => {
+    // Eval-verified by QC team against composition_classifications row in
+    // round c55374b1: 33/33 rows emit x_pct/y_pct/w_pct/h_pct on the 0–100
+    // scale per universalVisionResponseSchemaV2.ts:490.
+    const px = normalisedToPixels(
+      { x_pct: 28, y_pct: 15, w_pct: 60, h_pct: 60 },
+      1000,
+      600,
+    );
+    expect(px).toEqual({ x: 280, y: 90, w: 600, h: 360 });
   });
   it("clamps x_pct + w_pct to stay inside the frame", () => {
     const px = normalisedToPixels(
-      { x_pct: 0.9, y_pct: 0.0, w_pct: 0.5, h_pct: 0.5 },
+      { x_pct: 90, y_pct: 0, w_pct: 50, h_pct: 50 },
       1000,
       600,
     );
-    // x_pct=0.9 + w_pct=0.5 would spill 40% past the right edge — we
-    // clamp w to the remaining 0.1 of frame width = 100px.
+    // x_pct=90 + w_pct=50 would spill 40% past the right edge — we
+    // clamp w to the remaining 10% of frame width = 100px.
     expect(px.x).toBe(900);
     expect(px.w).toBe(100);
   });
@@ -130,7 +142,7 @@ describe("normalisedToPixels — coordinate math", () => {
     expect(normalisedToPixels(null, 100, 100)).toBeNull();
     expect(normalisedToPixels({}, 100, 100)).toBeNull();
     expect(
-      normalisedToPixels({ x_pct: 0.1, y_pct: 0.1 }, 100, 100),
+      normalisedToPixels({ x_pct: 10, y_pct: 10 }, 100, 100),
     ).toBeNull();
   });
 });
@@ -152,13 +164,13 @@ describe("BoundingBoxOverlay — DOM rendering", () => {
         raw_label: "kitchen island",
         proposed_canonical_id: "obj_arch_kitchen_island_001",
         confidence: 0.9,
-        bounding_box: { x_pct: 0.1, y_pct: 0.1, w_pct: 0.3, h_pct: 0.3 },
+        bounding_box: { x_pct: 10, y_pct: 10, w_pct: 30, h_pct: 30 },
       },
       {
         raw_label: "dated wallpaper",
         proposed_canonical_id: "concern_dated_finishes",
         confidence: 0.7,
-        bounding_box: { x_pct: 0.5, y_pct: 0.5, w_pct: 0.2, h_pct: 0.2 },
+        bounding_box: { x_pct: 50, y_pct: 50, w_pct: 20, h_pct: 20 },
       },
     ];
     render(<HarnessOverlay observedObjects={objects} />);
@@ -176,7 +188,7 @@ describe("BoundingBoxOverlay — DOM rendering", () => {
         raw_label: "blurry pendant",
         proposed_canonical_id: "obj_styling_pendant_lamp_002",
         confidence: 0.3, // → 0.3 opacity + dashed
-        bounding_box: { x_pct: 0.1, y_pct: 0.1, w_pct: 0.2, h_pct: 0.2 },
+        bounding_box: { x_pct: 10, y_pct: 10, w_pct: 20, h_pct: 20 },
       },
     ];
     render(<HarnessOverlay observedObjects={objects} />);
@@ -192,7 +204,7 @@ describe("BoundingBoxOverlay — DOM rendering", () => {
         raw_label: "marble splashback",
         proposed_canonical_id: "obj_material_marble_007",
         confidence: 0.95,
-        bounding_box: { x_pct: 0.2, y_pct: 0.2, w_pct: 0.3, h_pct: 0.3 },
+        bounding_box: { x_pct: 20, y_pct: 20, w_pct: 30, h_pct: 30 },
       },
     ];
     render(
@@ -214,7 +226,7 @@ describe("BoundingBoxOverlay — DOM rendering", () => {
         raw_label: "tap fixture",
         proposed_canonical_id: "obj_fixture_tap_001",
         confidence: 0.88,
-        bounding_box: { x_pct: 0.1, y_pct: 0.1, w_pct: 0.2, h_pct: 0.2 },
+        bounding_box: { x_pct: 10, y_pct: 10, w_pct: 20, h_pct: 20 },
       },
     ];
     render(
@@ -234,7 +246,7 @@ describe("BoundingBoxOverlay — DOM rendering", () => {
         raw_label: "white shaker cabinets",
         proposed_canonical_id: "obj_arch_kitchen_cab_001",
         confidence: 0.92,
-        bounding_box: { x_pct: 0.1, y_pct: 0.1, w_pct: 0.4, h_pct: 0.4 },
+        bounding_box: { x_pct: 10, y_pct: 10, w_pct: 40, h_pct: 40 },
       },
     ];
     render(<HarnessOverlay observedObjects={objects} />);
@@ -251,7 +263,7 @@ describe("BoundingBoxOverlay — DOM rendering", () => {
         raw_label: "kitchen island",
         proposed_canonical_id: "obj_arch_kitchen_island_001",
         confidence: 0.9,
-        bounding_box: { x_pct: 0.1, y_pct: 0.1, w_pct: 0.3, h_pct: 0.3 },
+        bounding_box: { x_pct: 10, y_pct: 10, w_pct: 30, h_pct: 30 },
       },
     ];
     render(<HarnessOverlay observedObjects={objects} />);
@@ -285,7 +297,7 @@ describe("BoundingBoxOverlay — ResizeObserver re-renders", () => {
         raw_label: "tap",
         proposed_canonical_id: "obj_fixture_tap_001",
         confidence: 0.9,
-        bounding_box: { x_pct: 0.1, y_pct: 0.1, w_pct: 0.2, h_pct: 0.2 },
+        bounding_box: { x_pct: 10, y_pct: 10, w_pct: 20, h_pct: 20 },
       },
     ];
     render(<HarnessOverlay observedObjects={objects} />);

@@ -112,21 +112,23 @@ const DEV_MOCK_OBSERVED_OBJECTS = [
     raw_label: "white shaker cabinets",
     proposed_canonical_id: "obj_arch_kitchen_cab_001",
     confidence: 0.92,
-    bounding_box: { x_pct: 0.05, y_pct: 0.45, w_pct: 0.4, h_pct: 0.35 },
+    // W11.6.20 unit-scale fix: bounding_box uses 0–100 percentages per
+    // W11.7.17 universal vision schema v2 (NOT 0–1 fractions).
+    bounding_box: { x_pct: 5, y_pct: 45, w_pct: 40, h_pct: 35 },
     attributes: { color: "white", style: "shaker", handle_type: "cup_pull" },
   },
   {
     raw_label: "marble splashback",
     proposed_canonical_id: "obj_material_marble_007",
     confidence: 0.78,
-    bounding_box: { x_pct: 0.15, y_pct: 0.25, w_pct: 0.3, h_pct: 0.18 },
+    bounding_box: { x_pct: 15, y_pct: 25, w_pct: 30, h_pct: 18 },
     attributes: { material: "carrara_marble", finish: "polished" },
   },
   {
     raw_label: "dated pendant lamp",
     proposed_canonical_id: "concern_dated_finishes",
     confidence: 0.41,
-    bounding_box: { x_pct: 0.55, y_pct: 0.1, w_pct: 0.15, h_pct: 0.2 },
+    bounding_box: { x_pct: 55, y_pct: 10, w_pct: 15, h_pct: 20 },
     attributes: { era: "early_2000s" },
   },
 ];
