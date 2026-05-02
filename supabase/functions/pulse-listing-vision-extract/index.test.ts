@@ -266,6 +266,28 @@ Deno.test('estimateGemini25FlashCost: spec-aligned per-image cost ~ $0.0015', ()
   assert(cost > 0 && cost < 0.0025, `expected ~$0.0015-0.002, got ${cost}`);
 });
 
+// QC-iter2 W6b (F-E-002): the inline Flash estimator now thinly wraps
+// estimateCost('google', 'gemini-2.5-flash', ...). Pin the wrapper's output to
+// the canonical pricing.ts source so a future drift in pricing.ts (e.g. Google
+// raising the rate) propagates through this helper unchanged.
+import { estimateCost } from '../_shared/visionAdapter/pricing.ts';
+
+Deno.test('F-E-002: estimateGemini25FlashCost matches estimateCost(google, 2.5-flash)', () => {
+  for (const [input, output] of [[0, 0], [600, 600], [10000, 5000], [200000, 50000]]) {
+    const wrapper = estimateGemini25FlashCost(input, output);
+    const canonical = estimateCost('google', 'gemini-2.5-flash', {
+      input_tokens: input,
+      output_tokens: output,
+      cached_input_tokens: 0,
+    });
+    assertEquals(
+      wrapper,
+      canonical,
+      `mismatch at (${input}, ${output}): wrapper=${wrapper} canonical=${canonical}`,
+    );
+  }
+});
+
 // ─── 6. Photo breakdown rollup (smoke check on the aggregator) ───────────────
 
 Deno.test('computePhotoBreakdown: sums day/dusk/drone counts via image_type', () => {
