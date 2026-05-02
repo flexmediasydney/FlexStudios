@@ -49,11 +49,12 @@ Deno.test('buildScopeFilters: orders broadest to most specific', () => {
     price_tier_id: PRICE_TIER_ID,
     grade_id: GRADE_ID,
   });
-  assertStrictEquals(filters.length, 6);
+  assertStrictEquals(filters.length, 7);
   assertEquals(
     filters.map((f) => f.scope_type),
     [
       'project_type',
+      'package',
       'package_grade',
       'package_x_price_tier',
       'product',
@@ -64,22 +65,25 @@ Deno.test('buildScopeFilters: orders broadest to most specific', () => {
   // project_type
   assertStrictEquals(filters[0].scope_ref_id, PROJECT_TYPE_ID);
   assertStrictEquals(filters[0].scope_ref_id_2, null);
-  // package_grade
+  // package
   assertStrictEquals(filters[1].scope_ref_id, PACKAGE_ID);
-  assertStrictEquals(filters[1].scope_ref_id_2, GRADE_ID);
-  // package_x_price_tier
+  assertStrictEquals(filters[1].scope_ref_id_2, null);
+  // package_grade
   assertStrictEquals(filters[2].scope_ref_id, PACKAGE_ID);
-  assertStrictEquals(filters[2].scope_ref_id_2, PRICE_TIER_ID);
+  assertStrictEquals(filters[2].scope_ref_id_2, GRADE_ID);
+  // package_x_price_tier
+  assertStrictEquals(filters[3].scope_ref_id, PACKAGE_ID);
+  assertStrictEquals(filters[3].scope_ref_id_2, PRICE_TIER_ID);
   // product
-  assertStrictEquals(filters[3].scope_ref_id, PRODUCT_ID);
-  assertStrictEquals(filters[3].scope_ref_id_2, null);
-  // product_x_price_tier
   assertStrictEquals(filters[4].scope_ref_id, PRODUCT_ID);
-  assertStrictEquals(filters[4].scope_ref_id_2, PRICE_TIER_ID);
-  // package_x_price_tier_x_project_type — all 3 set
-  assertStrictEquals(filters[5].scope_ref_id, PACKAGE_ID);
+  assertStrictEquals(filters[4].scope_ref_id_2, null);
+  // product_x_price_tier
+  assertStrictEquals(filters[5].scope_ref_id, PRODUCT_ID);
   assertStrictEquals(filters[5].scope_ref_id_2, PRICE_TIER_ID);
-  assertStrictEquals(filters[5].scope_ref_id_3, PROJECT_TYPE_ID);
+  // package_x_price_tier_x_project_type — all 3 set
+  assertStrictEquals(filters[6].scope_ref_id, PACKAGE_ID);
+  assertStrictEquals(filters[6].scope_ref_id_2, PRICE_TIER_ID);
+  assertStrictEquals(filters[6].scope_ref_id_3, PROJECT_TYPE_ID);
 });
 
 Deno.test('buildScopeFilters: skips scopes with NULL inputs', () => {
@@ -92,8 +96,28 @@ Deno.test('buildScopeFilters: skips scopes with NULL inputs', () => {
     price_tier_id: PRICE_TIER_ID,
     grade_id: null,
   });
-  // Only package_x_price_tier should resolve
-  assertEquals(filters.map((f) => f.scope_type), ['package_x_price_tier']);
+  // package + package_x_price_tier (no grade) resolve — others skipped
+  assertEquals(
+    filters.map((f) => f.scope_type),
+    ['package', 'package_x_price_tier'],
+  );
+});
+
+Deno.test('buildScopeFilters: package scope resolves with only package_id', () => {
+  const filters = buildScopeFilters({
+    // deno-lint-ignore no-explicit-any
+    admin: {} as any,
+    project_type_id: null,
+    package_id: PACKAGE_ID,
+    product_id: null,
+    price_tier_id: null,
+    grade_id: null,
+  });
+  // Only the bare 'package' scope resolves when nothing else is set
+  assertEquals(filters.map((f) => f.scope_type), ['package']);
+  assertStrictEquals(filters[0].scope_ref_id, PACKAGE_ID);
+  assertStrictEquals(filters[0].scope_ref_id_2, null);
+  assertStrictEquals(filters[0].scope_ref_id_3, null);
 });
 
 Deno.test('mergePositionsByScope: last-wins per position_index', () => {

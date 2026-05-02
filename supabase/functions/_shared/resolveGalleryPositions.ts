@@ -29,6 +29,7 @@
  *   (scope_type, scope_ref_id, scope_ref_id_2, scope_ref_id_3)
  *
  *   'project_type'                          → ref_id=project_type_id
+ *   'package'                               → ref_id=package_id (simplest package scope)
  *   'package_grade'                         → ref_id=package_id, ref_id_2=grade_id
  *   'package_x_price_tier'                  → ref_id=package_id, ref_id_2=price_tier_id
  *   'product'                               → ref_id=product_id
@@ -38,11 +39,12 @@
  * ─── Resolver order (last wins per position_index) ─────────────────────────
  *
  *  1. project_type                                 (broadest)
- *  2. package_grade            — package_id + grade_id
- *  3. package_x_price_tier     — package_id + price_tier_id
- *  4. product                  — product_id
- *  5. product_x_price_tier     — product_id + price_tier_id
- *  6. package_x_price_tier_x_project_type — package_id + price_tier_id + project_type_id
+ *  2. package                  — package_id (no grade/tier qualifier)
+ *  3. package_grade            — package_id + grade_id
+ *  4. package_x_price_tier     — package_id + price_tier_id
+ *  5. product                  — product_id
+ *  6. product_x_price_tier     — product_id + price_tier_id
+ *  7. package_x_price_tier_x_project_type — package_id + price_tier_id + project_type_id
  *
  * Higher-specificity scopes overwrite earlier (lower-specificity) entries at
  * the same position_index. Within a scope, gallery_positions are ordered by
@@ -133,6 +135,21 @@ const SCOPE_ORDER: Array<{
         ? {
             scope_type: 'project_type',
             scope_ref_id: a.project_type_id,
+            scope_ref_id_2: null,
+            scope_ref_id_3: null,
+          }
+        : null,
+  },
+  {
+    // Simplest package scope — just package_id, no grade/tier qualifier.
+    // Matches gallery_positions seeded with scope_type='package' (R3v2 seed
+    // for Rainbow Cres uses this form for the 5 Silver Package positions).
+    scope_type: 'package',
+    build: (a) =>
+      a.package_id
+        ? {
+            scope_type: 'package',
+            scope_ref_id: a.package_id,
             scope_ref_id_2: null,
             scope_ref_id_3: null,
           }

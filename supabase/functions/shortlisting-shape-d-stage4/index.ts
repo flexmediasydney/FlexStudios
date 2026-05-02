@@ -126,6 +126,10 @@ import {
   renderGalleryPositionsBlock,
   type ResolvedGalleryPosition,
 } from '../_shared/resolveGalleryPositions.ts';
+import {
+  deriveRoundScope,
+  HARDCODED_STANDARD_PRICE_TIER_ID,
+} from '../_shared/deriveRoundScope.ts';
 
 const GENERATOR = 'shortlisting-shape-d-stage4';
 
@@ -193,6 +197,10 @@ interface RoundContext {
   // when the legacy column is null.
   package_type: string;
   package_ceiling: number;
+  // mig 444 fix: engine_grade_id from shortlisting_rounds — passes through
+  // to deriveRoundScope() so the gallery_positions resolver can match
+  // package_grade scopes. NULL for legacy rounds without an engine grade.
+  engine_grade_id: string | null;
   property_address: string | null;
   // W11.6.25 — frozen slot recipe snapshot from ingest. NULL for legacy
   // rounds; Stage 4 falls back to live slot definitions in that case.
@@ -652,25 +660,83 @@ async function runStage4Core(
     // the user prompt and Stage 4 emits position_decisions[] alongside
     // legacy slot_decisions[].
     //
-    // Scope ids are NULL for now — the Stage 4 round context doesn't yet
-    // carry project_type_id / package_id / product_id / price_tier_id /
-    // grade_id (engine grade per mig 443). A follow-up will hydrate those
-    // from shortlisting_rounds + projects, but the resolver is wired in now
-    // so the prompt + persistence paths are ready when the data is.
+    // mig 444 fix: derive scope IDs from the round's metadata (was previously
+    // all NULL → resolver short-circuited with "no scope filters could be
+    // derived"). The deriveRoundScope helper:
+    //   - looks up package_id from packages.name = round.package_type
+    //   - looks up project_type_id from projects.id = round.project_id
+    //   - passes engine_grade_id straight through as grade_id
+    //   - hardcodes price_tier_id to Standard (see TODO below)
+    //   - leaves product_id NULL (round-level product not yet defined)
+    //
+    // TODO(price_tier_on_rounds): shortlisting_rounds doesn't yet carry a
+    // price_tier_id. Hardcoding Standard for all rounds until Tonomo/booking
+    // data populates this. Per-package recipes that vary by price tier
+    // (Silver Standard vs Silver Premium) will all resolve to Silver Standard
+    // scope until this is fixed. See follow-up mig.
     let galleryPositions: ResolvedGalleryPosition[] = [];
     let galleryPositionsBlockText = '';
     try {
+      const scope = await deriveRoundScope({
+        admin,
+        round: {
+          id: roundId,
+          project_id: ctx.project_id,
+          package_type: ctx.package_type,
+          engine_grade_id: ctx.engine_grade_id,
+        },
+      });
+      for (const w of scope.warnings) warnings.push(w);
+
       const resolved = await resolveGalleryPositions({
         admin,
-        project_type_id: null,
-        package_id: null,
-        product_id: null,
-        price_tier_id: null,
-        grade_id: null,
+        project_type_id: scope.project_type_id,
+        package_id: scope.package_id,
+        product_id: scope.product_id,
+        price_tier_id: scope.price_tier_id,
+        grade_id: scope.grade_id,
       });
       for (const w of resolved.warnings) warnings.push(`resolveGalleryPositions: ${w}`);
       galleryPositions = resolved.positions;
       galleryPositionsBlockText = renderGalleryPositionsBlock(resolved.positions);
+
+      // Observability: when ANY of (package_id, project_type_id, grade_id) is
+      // NULL, fire a `resolve_scope_partial` event. We don't gate on whether
+      // gallery_positions HAS rows that could have matched (cheap to emit;
+      // gives ops visibility on the gap regardless). Wrapped in try/catch —
+      // event-write failures must never roll back Stage 4.
+      const missing: string[] = [];
+      if (!scope.package_id) missing.push('package_id');
+      if (!scope.project_type_id) missing.push('project_type_id');
+      if (!scope.grade_id) missing.push('grade_id');
+      if (missing.length > 0) {
+        try {
+          await admin.from('shortlisting_events').insert({
+            project_id: ctx.project_id,
+            round_id: roundId,
+            event_type: 'resolve_scope_partial',
+            actor_type: 'engine',
+            payload: {
+              stage: 'stage4',
+              round_package_type: ctx.package_type,
+              missing_scope_ids: missing,
+              derived_scope: {
+                package_id: scope.package_id,
+                project_type_id: scope.project_type_id,
+                grade_id: scope.grade_id,
+                price_tier_id: scope.price_tier_id,
+                price_tier_id_is_hardcoded: scope.price_tier_id === HARDCODED_STANDARD_PRICE_TIER_ID,
+                product_id: scope.product_id,
+              },
+              resolved_position_count: resolved.positions.length,
+              warnings: scope.warnings,
+            },
+          });
+        } catch (evErr) {
+          const m = evErr instanceof Error ? evErr.message : String(evErr);
+          warnings.push(`resolve_scope_partial event emit failed: ${m}`);
+        }
+      }
     } catch (posErr) {
       const m = posErr instanceof Error ? posErr.message : String(posErr);
       warnings.push(`resolveGalleryPositions failed: ${m}`);
@@ -1129,7 +1195,9 @@ async function loadRoundContext(
       // slotEnumerationBlock preamble (PHASE 1/2/3 + ceiling).
       // W11.6.25: also pull resolved_slot_recipe (NULL for legacy rounds —
       // Stage 4 falls back to live slot definitions when missing).
-      'id, project_id, status, property_tier, property_voice_anchor_override, package_type, package_ceiling, expected_count_target, resolved_slot_recipe',
+      // mig 444 fix: engine_grade_id is needed to drive deriveRoundScope so
+      // the gallery_positions resolver can match package_grade scopes.
+      'id, project_id, status, property_tier, property_voice_anchor_override, package_type, package_ceiling, expected_count_target, resolved_slot_recipe, engine_grade_id',
     )
     .eq('id', roundId)
     .maybeSingle();
@@ -1205,6 +1273,7 @@ async function loadRoundContext(
     property_facts,
     package_type: packageType,
     package_ceiling: packageCeiling,
+    engine_grade_id: (round.engine_grade_id as string | null) ?? null,
     property_address: propertyAddress,
     resolved_slot_recipe: resolvedRecipe,
   };
