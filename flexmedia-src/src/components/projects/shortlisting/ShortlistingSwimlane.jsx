@@ -1003,10 +1003,16 @@ export default function ShortlistingSwimlane({
     return [...set].sort((a, b) => slotImportanceKey(a) - slotImportanceKey(b));
   }, [slotByGroupId]);
 
+  // mig 439: derive the filter taxonomy as `space_type ?? room_type`. The
+  // engine emits both since W11.6.13 (space_type/zone_focus is the orthogonal
+  // canonical pair); room_type stays as a denormalised filter handle for
+  // legacy rows. The first non-null wins so newer rows show under their
+  // canonical space_type label.
   const availableRoomTypes = useMemo(() => {
     const set = new Set();
     for (const c of classifications) {
-      if (c?.room_type) set.add(c.room_type);
+      const display = c?.space_type ?? c?.room_type;
+      if (display) set.add(display);
     }
     return [...set].sort();
   }, [classifications]);
@@ -1093,7 +1099,10 @@ export default function ShortlistingSwimlane({
         }
       }
       if (roomFilterActive) {
-        if (!cls?.room_type || !filter.roomTypes.has(cls.room_type)) {
+        // mig 439: filter against `space_type ?? room_type` to mirror the
+        // availableRoomTypes derivation above.
+        const displayRoomType = cls?.space_type ?? cls?.room_type;
+        if (!displayRoomType || !filter.roomTypes.has(displayRoomType)) {
           continue;
         }
       }

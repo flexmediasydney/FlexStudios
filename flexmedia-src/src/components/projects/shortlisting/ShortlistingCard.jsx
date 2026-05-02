@@ -318,7 +318,11 @@ export default function ShortlistingCard({
     );
   })();
 
-  const effectiveRoomType = myOverride?.human_room_type ?? cls.room_type;
+  // mig 439: human override > space_type (canonical) > room_type (denormalised
+  // legacy handle). The engine has populated all three on every classification
+  // since W11.6.13; this preference order is the canonical display contract.
+  const effectiveRoomType =
+    myOverride?.human_room_type ?? cls.space_type ?? cls.room_type;
   const effectiveCompositionType = myOverride?.human_composition_type ?? cls.composition_type;
   const effectiveVantagePoint = myOverride?.human_vantage_point ?? cls.vantage_point;
   const effectiveCombinedScore = myOverride?.human_combined_score ?? cls.combined_score ?? null;
