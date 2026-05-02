@@ -15,12 +15,25 @@
  * Cost note: ~$0.03 per round → ~$1.50 per benchmark at limit=50. Default
  * limit is conservative; admins can raise it from the Calibration UI.
  *
- * POST { trigger?: 'manual' | 'quarterly_cron', limit?: number }
+ * Wave 14 extension (mig 407, W14-calibration-session.md §6):
+ *   - Accept trigger='calibration' + calibration_session_id + round_ids[].
+ *   - When in calibration mode, scope to the supplied round_ids (NOT
+ *     is_benchmark=TRUE), and after running Pass 2, derive per-slot AI
+ *     decisions and INSERT rows into `calibration_decisions` against the
+ *     editor's already-submitted shortlist (or leave editor_decision='unranked'
+ *     when the editor hasn't submitted yet — the editor UI fills the diff in
+ *     when it flips to phase 2).
+ *
+ * POST { trigger?: 'manual' | 'quarterly_cron' | 'calibration',
+ *        limit?: number,
+ *        round_ids?: string[],
+ *        calibration_session_id?: string }
  *
  * Auth: master_admin / admin OR service_role.
  *
  * Response: full benchmark result + the inserted shortlisting_benchmark_results
- *           row id.
+ *           row id, plus calibration_decisions_inserted count when in
+ *           calibration mode.
  */
 
 import {
@@ -44,6 +57,11 @@ import {
 import { validatePass2Output } from '../_shared/pass2Validator.ts';
 import { resolveProjectEngineRoles as resolveProjectEngineRolesPure } from '../_shared/projectEngineRoles.ts';
 import type { ProductRow } from '../_shared/slotEligibility.ts';
+import {
+  buildCalibrationDecisions,
+  pairSlotsForDiff,
+  type CalibrationDecisionRow,
+} from '../_shared/calibrationSessionMath.ts';
 
 const GENERATOR = 'shortlisting-benchmark-runner';
 const ENGINE_VERSION = 'wave-6-p8';
@@ -54,8 +72,22 @@ const DEFAULT_LIMIT = 50;
 const HARD_LIMIT_MAX = 200;
 
 interface RequestBody {
-  trigger?: 'manual' | 'quarterly_cron';
+  trigger?: 'manual' | 'quarterly_cron' | 'calibration';
   limit?: number;
+  /**
+   * W14 (mig 407): explicit round id list. When supplied, scopes the run to
+   * exactly those rounds — bypasses the is_benchmark=TRUE holdout filter.
+   * Required when trigger='calibration'.
+   */
+  round_ids?: string[];
+  /**
+   * W14 (mig 407): when set, after running Pass 2 the runner writes per-slot
+   * decisions to `calibration_decisions` joined against the session's
+   * `calibration_editor_shortlists` (so editor-vs-AI diff is captured even if
+   * the editor hasn't filled in reasoning yet — the UI flips to phase 2 with
+   * the AI side ready). Pairs with trigger='calibration'.
+   */
+  calibration_session_id?: string;
   _health_check?: boolean;
 }
 
@@ -71,6 +103,7 @@ interface BenchmarkRoundContext {
 
 interface RoundResult {
   round_id: string;
+  project_id: string;
   package_type: string;
   matched: number;
   total_confirmed: number;
@@ -78,6 +111,22 @@ interface RoundResult {
   per_slot: Record<string, number>; // slot_id → 1 (matched) | 0 (missed)
   cost_usd: number;
   warnings: string[];
+  /**
+   * W14 (mig 407): per-slot AI assignments + per-stem context. Populated only
+   * when `trigger='calibration'` so we can build calibration_decisions rows
+   * from the Pass 2 output without re-fetching anything.
+   */
+  ai_slot_assignments?: Record<string, string | null>;
+  ai_per_stem_context?: Record<
+    string,
+    {
+      ai_score?: number | null;
+      ai_per_dim_scores?:
+        | { technical: number; lighting: number; composition: number; aesthetic: number }
+        | null;
+      ai_analysis_excerpt?: string | null;
+    }
+  >;
 }
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -109,12 +158,39 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return jsonResponse({ _version: 'v1.0', _fn: GENERATOR }, 200, req);
   }
 
-  const trigger: 'manual' | 'quarterly_cron' =
-    body.trigger === 'quarterly_cron' ? 'quarterly_cron' : 'manual';
+  const trigger: 'manual' | 'quarterly_cron' | 'calibration' =
+    body.trigger === 'quarterly_cron'
+      ? 'quarterly_cron'
+      : body.trigger === 'calibration'
+        ? 'calibration'
+        : 'manual';
   const limit = Math.min(
     Math.max(Number(body.limit) || DEFAULT_LIMIT, 1),
     HARD_LIMIT_MAX,
   );
+
+  // W14 (mig 407): when calibration, validate the explicit round list +
+  // resolve the calibration session.
+  const calibrationSessionId = body.calibration_session_id ?? null;
+  const explicitRoundIds = Array.isArray(body.round_ids)
+    ? body.round_ids.filter((r) => typeof r === 'string' && r.length > 0)
+    : [];
+  if (trigger === 'calibration') {
+    if (!calibrationSessionId) {
+      return errorResponse(
+        "trigger='calibration' requires calibration_session_id",
+        400,
+        req,
+      );
+    }
+    if (explicitRoundIds.length === 0) {
+      return errorResponse(
+        "trigger='calibration' requires non-empty round_ids[]",
+        400,
+        req,
+      );
+    }
+  }
 
   const admin = getAdminClient();
 
@@ -163,15 +239,23 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Select holdout rounds ──────────────────────────────────────────────
-  const { data: rounds, error: rerr } = await admin
+  // W14 (mig 407): in calibration mode we scope to the explicit round_ids
+  // supplied by the calibration-run-ai-batch caller. Holdout `is_benchmark`
+  // filter is bypassed because calibration projects are stamped is_benchmark
+  // separately by the session-create flow (per spec §8.3).
+  const roundQuery = admin
     .from('shortlisting_rounds')
     .select(
       'id, project_id, status, package_type, package_ceiling, expected_count_target, engine_tier_id, confirmed_shortlist_group_ids',
     )
-    .eq('is_benchmark', true)
-    .eq('status', 'locked')
-    .order('locked_at', { ascending: false })
-    .limit(limit);
+    .eq('status', 'locked');
+  const { data: rounds, error: rerr } =
+    trigger === 'calibration'
+      ? await roundQuery.in('id', explicitRoundIds).limit(HARD_LIMIT_MAX)
+      : await roundQuery
+          .eq('is_benchmark', true)
+          .order('locked_at', { ascending: false })
+          .limit(limit);
   if (rerr) return errorResponse(`holdout lookup failed: ${rerr.message}`, 500, req);
 
   const eligible = (rounds || []).filter(
@@ -195,7 +279,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         sample_size: 0,
         match_rate: 0,
         improvement_vs_baseline: -0.78,
-        message: 'No eligible holdout rounds (need is_benchmark=TRUE, status=locked, non-empty confirmed_shortlist_group_ids).',
+        message:
+          trigger === 'calibration'
+            ? 'No eligible calibration rounds (round_ids must be status=locked with non-empty confirmed_shortlist_group_ids).'
+            : 'No eligible holdout rounds (need is_benchmark=TRUE, status=locked, non-empty confirmed_shortlist_group_ids).',
       },
       200,
       req,
@@ -220,6 +307,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const perSlotAgg = new Map<string, { matches: number; total: number }>();
   const perPackageAgg = new Map<string, { matches: number; total: number }>();
 
+  const wantsCalibrationData = trigger === 'calibration';
   const BENCH_CONCURRENCY = 8;
   let nextIdx = 0;
   async function benchWorker() {
@@ -228,7 +316,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       if (i >= eligible.length) return;
       const round = eligible[i];
       try {
-        const result = await runBlindBenchmark(round, anchors);
+        const result = await runBlindBenchmark(round, anchors, wantsCalibrationData);
         results[i] = result;
         // Accumulators are JS-single-threaded safe.
         totalMatches += result.matched;
@@ -251,6 +339,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         const totalConfirmed = (round.confirmed_shortlist_group_ids as string[])?.length || 0;
         results[i] = {
           round_id: round.id,
+          project_id: round.project_id,
           package_type: (round.package_type as string) || 'unknown',
           matched: 0,
           total_confirmed: totalConfirmed,
@@ -273,6 +362,94 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   const matchRate = totalSlots > 0 ? totalMatches / totalSlots : 0;
   const improvement = matchRate - 0.78;
+
+  // ── W14 (mig 407): persist calibration_decisions ───────────────────────
+  // For each round in the calibration session, build per-slot SlotPairings
+  // by joining the AI's slot_assignments (captured during runBlindBenchmark)
+  // against the editor's already-submitted shortlist (from
+  // calibration_editor_shortlists). Editor reasoning fields stay null at
+  // this stage — the editor UI fills them in via calibration-submit-decisions.
+  let calibrationDecisionsInserted = 0;
+  let calibrationSession: {
+    engine_version: string | null;
+    tier_config_versions: Record<string, number> | null;
+  } | null = null;
+  if (trigger === 'calibration' && calibrationSessionId) {
+    // Fetch session-level provenance once (engine_version + tier_config_versions).
+    const { data: sess } = await admin
+      .from('calibration_sessions')
+      .select('engine_version, tier_config_versions')
+      .eq('id', calibrationSessionId)
+      .maybeSingle();
+    calibrationSession = sess
+      ? {
+          engine_version: (sess.engine_version as string) ?? null,
+          tier_config_versions:
+            (sess.tier_config_versions as Record<string, number>) ?? null,
+        }
+      : { engine_version: null, tier_config_versions: null };
+
+    // Fetch the editor's shortlists for every project in this batch.
+    const projectIds = results
+      .map((r) => r.project_id)
+      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+    const { data: editorRows } = await admin
+      .from('calibration_editor_shortlists')
+      .select('project_id, editor_picked_stems')
+      .eq('calibration_session_id', calibrationSessionId)
+      .in('project_id', projectIds);
+    const editorPickedByProject = new Map<string, string[]>();
+    for (const er of editorRows ?? []) {
+      editorPickedByProject.set(
+        er.project_id as string,
+        Array.isArray(er.editor_picked_stems) ? (er.editor_picked_stems as string[]) : [],
+      );
+    }
+
+    // Per-round, build pairings + decision rows.
+    const allDecisionRows: CalibrationDecisionRow[] = [];
+    for (const r of results) {
+      if (!r.ai_slot_assignments || !r.project_id) continue; // failed round
+      const editorPicked = editorPickedByProject.get(r.project_id) ?? [];
+      const pairings = pairSlotsForDiff({
+        ai_slot_assignments: r.ai_slot_assignments,
+        ai_per_stem_context: r.ai_per_stem_context ?? {},
+        editor_picked_stems: editorPicked,
+      });
+      // Resolve per-tier config version from the session map (W8.4 provenance).
+      const tcVersions = calibrationSession?.tier_config_versions ?? {};
+      const tcVersion = tcVersions
+        ? Number(Object.values(tcVersions)[0] ?? 0) || null
+        : null;
+      const decisions = buildCalibrationDecisions({
+        calibration_session_id: calibrationSessionId,
+        project_id: r.project_id,
+        round_id: r.round_id,
+        engine_version: calibrationSession?.engine_version ?? ENGINE_VERSION,
+        tier_config_version: tcVersion,
+        slots: pairings,
+      });
+      allDecisionRows.push(...decisions);
+      // Stamp ai_run_completed_at on the editor shortlist row.
+      await admin
+        .from('calibration_editor_shortlists')
+        .update({ ai_run_completed_at: new Date().toISOString() })
+        .eq('calibration_session_id', calibrationSessionId)
+        .eq('project_id', r.project_id);
+    }
+    if (allDecisionRows.length > 0) {
+      const { error: decErr, count } = await admin
+        .from('calibration_decisions')
+        .insert(allDecisionRows, { count: 'exact' });
+      if (decErr) {
+        console.warn(
+          `[${GENERATOR}] calibration_decisions insert failed: ${decErr.message}`,
+        );
+      } else {
+        calibrationDecisionsInserted = count ?? allDecisionRows.length;
+      }
+    }
+  }
 
   // ── Compute per-slot / per-package match rates ─────────────────────────
   const perSlotMatchRates: Record<string, number> = {};
@@ -300,7 +477,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     per_package_match_rates: perPackageMatchRates,
     engine_version: ENGINE_VERSION,
     model_versions: { pass1: PASS1_MODEL, pass2: SONNET_MODEL },
-    notes: `cost_usd=${totalCostRounded.toFixed(4)} | failed=${results.filter((r) => r.warnings.length > 0).length}`,
+    notes:
+      trigger === 'calibration' && calibrationSessionId
+        ? `cost_usd=${totalCostRounded.toFixed(4)} | failed=${results.filter((r) => r.warnings.length > 0).length} | calibration_session_id=${calibrationSessionId} | calibration_decisions=${calibrationDecisionsInserted}`
+        : `cost_usd=${totalCostRounded.toFixed(4)} | failed=${results.filter((r) => r.warnings.length > 0).length}`,
   };
   const { data: inserted, error: insErr } = await admin
     .from('shortlisting_benchmark_results')
@@ -342,6 +522,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       per_package_match_rates: perPackageMatchRates,
       total_cost_usd: totalCostRounded,
       per_round: results,
+      // W14 (mig 407): only present when trigger='calibration'.
+      ...(trigger === 'calibration'
+        ? {
+            calibration_session_id: calibrationSessionId,
+            calibration_decisions_inserted: calibrationDecisionsInserted,
+          }
+        : {}),
     },
     200,
     req,
@@ -354,6 +541,8 @@ async function runBlindBenchmark(
   round: any,
   // deno-lint-ignore no-explicit-any
   anchors: any,
+  /** W14 (mig 407): when true, populate ai_slot_assignments + ai_per_stem_context for the calibration_decisions write step. */
+  wantsCalibrationData: boolean = false,
 ): Promise<RoundResult> {
   const admin = getAdminClient();
   const warnings: string[] = [];
@@ -503,8 +692,49 @@ async function runBlindBenchmark(
     perSlot[slotId] = slotMatched;
   }
 
+  // W14 (mig 407): build the AI-side surface for calibration_decisions when
+  // requested. Picks the FIRST stem per slot when slot_assignments returned a
+  // list (Pass 2 occasionally returns arrays for multi-pick slots; calibration
+  // diffs are per-slot so we anchor on the first / canonical pick).
+  let aiSlotAssignments: Record<string, string | null> | undefined;
+  let aiPerStemContext: NonNullable<RoundResult['ai_per_stem_context']> | undefined;
+  if (wantsCalibrationData) {
+    aiSlotAssignments = {};
+    aiPerStemContext = {};
+    for (const [slotId, stems] of Object.entries(output.slot_assignments)) {
+      const arr = Array.isArray(stems) ? stems : [stems as string];
+      const stem = arr[0] ?? null;
+      aiSlotAssignments[slotId] = stem;
+    }
+    // Per-stem context from the round's classifications.
+    const stemToClassification = new Map<string, Pass2ClassificationRow>();
+    for (const c of classifications) stemToClassification.set(c.stem, c);
+    for (const stem of Object.values(aiSlotAssignments)) {
+      if (!stem) continue;
+      const c = stemToClassification.get(stem);
+      if (!c) continue;
+      const analysisStr = typeof c.analysis === 'string' ? c.analysis : '';
+      aiPerStemContext[stem] = {
+        ai_score: typeof c.combined_score === 'number' ? c.combined_score : null,
+        ai_per_dim_scores:
+          typeof c.technical_score === 'number'
+            ? {
+                technical: c.technical_score,
+                lighting: typeof c.lighting_score === 'number' ? c.lighting_score : 0,
+                composition:
+                  typeof c.composition_score === 'number' ? c.composition_score : 0,
+                aesthetic:
+                  typeof c.aesthetic_score === 'number' ? c.aesthetic_score : 0,
+              }
+            : null,
+        ai_analysis_excerpt: analysisStr ? analysisStr.slice(0, 400) : null,
+      };
+    }
+  }
+
   return {
     round_id: round.id,
+    project_id: round.project_id,
     package_type: packageType,
     matched,
     total_confirmed: confirmedIds.length,
@@ -512,6 +742,8 @@ async function runBlindBenchmark(
     per_slot: perSlot,
     cost_usd: visionCostUsd,
     warnings,
+    ai_slot_assignments: aiSlotAssignments,
+    ai_per_stem_context: aiPerStemContext,
   };
 }
 
