@@ -111,6 +111,14 @@ function toTableName(entityName) {
     // (per migration 158 — one substrate row per missed-opportunity event).
     // Default pluraliser would yield 'pulse_listing_missed_opportunities'.
     'pulse_listing_missed_opportunities': 'pulse_listing_missed_opportunity',
+    // W12.B: object_registry is intentionally singular (one row per canonical
+    // entry). Default pluraliser yields 'object_registries' (y → ies). Without
+    // this override api.entities.ObjectRegistry would 404 like W15b.9 did.
+    'object_registries': 'object_registry',
+    // object_registry_candidates is plural-as-typed (ends in 'e' → +'s'). The
+    // default pluraliser produces the correct table name; we add the explicit
+    // identity entry so a smoke test can guard against silent drift.
+    'object_registry_candidates': 'object_registry_candidates',
   };
 
   snake = overrides[snake] || snake;

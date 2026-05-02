@@ -61,6 +61,10 @@ export const ROUTE_ACCESS = {
   FinalsQADashboard: OWNER_ONLY,
   // Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
   SettingsObjectRegistryDiscovery: OWNER_ONLY,
+  // Wave 12.B — full object registry curation: browse canonicals, review
+  // discovery queue, view normalisation stats. master_admin only because
+  // mutations rewrite the canonical taxonomy used by Stage 1 grounding.
+  SettingsObjectRegistry: OWNER_ONLY,
   // W11.6.10 — engine override patterns analytics dashboard.
   SettingsEngineOverridePatterns: ADMIN_AND_ABOVE,
 

@@ -143,6 +143,8 @@ const CalibrationDashboard = React.lazy(() => import('./pages/CalibrationDashboa
 const FinalsQADashboard = React.lazy(() => import('./pages/FinalsQADashboard'));
 // Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
 const SettingsObjectRegistryDiscovery = React.lazy(() => import('./pages/SettingsObjectRegistryDiscovery'));
+// Wave 12.B — full object registry admin: browse + queue + normalisation.
+const SettingsObjectRegistry = React.lazy(() => import('./pages/SettingsObjectRegistry'));
 // W11.6.10 — engine override patterns analytics dashboard.
 const SettingsEngineOverridePatterns = React.lazy(() => import('./pages/SettingsEngineOverridePatterns'));
 const SettingsPackageTierMapping = React.lazy(() => import('./pages/SettingsPackageTierMapping'));
@@ -233,6 +235,7 @@ export const PAGES = {
     "CalibrationDashboard": CalibrationDashboard,
     "FinalsQADashboard": FinalsQADashboard,
     "SettingsObjectRegistryDiscovery": SettingsObjectRegistryDiscovery,
+    "SettingsObjectRegistry": SettingsObjectRegistry,
     "SettingsEngineOverridePatterns": SettingsEngineOverridePatterns,
     "SettingsPackageTierMapping": SettingsPackageTierMapping,
     "SocialMedia": SocialMedia,

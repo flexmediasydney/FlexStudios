@@ -72,4 +72,21 @@ describe('entityNameToTable — pluraliser overrides', () => {
       'shortlisting_quarantine'
     );
   });
+
+  // ─── W12.B: Object Registry overrides — without these the admin page 404s ──
+  it('maps ObjectRegistry → object_registry (W12.B singular override)', () => {
+    expect(entityNameToTable('ObjectRegistry')).toBe('object_registry');
+  });
+
+  it('maps ObjectRegistryCandidate → object_registry_candidates (default plural is correct)', () => {
+    expect(entityNameToTable('ObjectRegistryCandidate')).toBe(
+      'object_registry_candidates'
+    );
+  });
+
+  it('maps RawAttributeObservation → raw_attribute_observations (default plural is correct)', () => {
+    expect(entityNameToTable('RawAttributeObservation')).toBe(
+      'raw_attribute_observations'
+    );
+  });
 });
