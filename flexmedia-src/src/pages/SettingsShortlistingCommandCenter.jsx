@@ -1,5 +1,5 @@
 /**
- * SettingsShortlistingCommandCenter — Wave 11.6.21 + W11.6.21b master_admin umbrella.
+ * SettingsShortlistingCommandCenter — W11.6.21 + W11.6.21b + W11.6.23 master_admin umbrella.
  *
  * Spec history:
  *   W11.6.21  — initial umbrella + 9 consolidated pages (Overview NEW, plus
@@ -9,11 +9,16 @@
  *               that were left standalone in the W11.6.21 sweep:
  *               room types, standards, signals, calibration-ops, training,
  *               overrides-admin, prompts, engine-settings, vendor.
+ *   W11.6.23  — 20th tab "Architecture" — read-only data-explorer view
+ *               surfacing layer counts, slot coverage matrix, and
+ *               heuristic slot-shape suggestions (split / deletion_candidate /
+ *               new_slot_needed). Powered by RPC
+ *               shortlisting_architecture_kpis (mig 421).
  *
  * URL:        /SettingsShortlistingCommandCenter[?tab=<key>]
  * Permission: master_admin only (gated via PermissionGuard + routeAccess).
  *
- * Tabs (19 total):
+ * Tabs (20 total):
  *   1.  overview        — engine-wide KPIs (W11.6.21).
  *   2.  tiers           — SettingsTierConfigs (W8).
  *   3.  mappings        — SettingsPackageTierMapping (W7.7).
@@ -33,6 +38,7 @@
  *  17.  prompts         — SettingsShortlistingPrompts (W6 P8).            [W11.6.21b]
  *  18.  engine-settings — SettingsEngineSettings (W7.7).                  [W11.6.21b]
  *  19.  vendor          — SettingsVendorComparison (W11.8).               [W11.6.21b]
+ *  20.  architecture    — ArchitectureTab (W11.6.23).                     [W11.6.23]
  *
  * Note on the two calibration tabs:
  *   `calibration` is the W14 50-project structured calibration session
@@ -86,6 +92,7 @@ import {
   Layers,
   ListChecks,
   Microscope,
+  Network,
   Ruler,
   ScanSearch,
   ShieldAlert,
@@ -117,6 +124,8 @@ import SettingsShortlistingOverrides from "@/pages/SettingsShortlistingOverrides
 import SettingsShortlistingPrompts from "@/pages/SettingsShortlistingPrompts";
 import SettingsEngineSettings from "@/pages/SettingsEngineSettings";
 import SettingsVendorComparison from "@/pages/SettingsVendorComparison";
+// W11.6.23 — Architecture & Data Explorer tab.
+import ArchitectureTab from "@/components/settings/architecture/ArchitectureTab";
 
 // Tab keys (URL query value `?tab=<key>`). Default = overview.
 export const VALID_TABS = [
@@ -141,6 +150,8 @@ export const VALID_TABS = [
   "prompts",
   "engine-settings",
   "vendor",
+  // — W11.6.23 (added 1) —————————————————————————————————————————————————
+  "architecture",
 ];
 
 const TAB_LABELS = {
@@ -165,6 +176,8 @@ const TAB_LABELS = {
   prompts: "Prompts",
   "engine-settings": "Engine Settings",
   vendor: "Vendor Comparison",
+  // W11.6.23
+  architecture: "Architecture",
 };
 
 const TAB_ICONS = {
@@ -187,6 +200,8 @@ const TAB_ICONS = {
   prompts: FileEdit,
   "engine-settings": Cog,
   vendor: Shuffle,
+  // W11.6.23
+  architecture: Network,
 };
 
 /**
@@ -229,12 +244,14 @@ export default function SettingsShortlistingCommandCenter() {
             Shortlisting Command Center
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            Wave 11.6.21 + W11.6.21b — single owner control surface for the
-            shortlisting engine. Engine KPIs, tier weights, package mappings,
-            slot taxonomy, room types, standards, signals, prompts, training,
-            calibration (sessions + ops), override patterns + analytics,
-            object registry, AI suggestions, rejection-reason analytics,
-            engine settings, and vendor A/B comparison all live here.
+            Wave 11.6.21 + W11.6.21b + W11.6.23 — single owner control
+            surface for the shortlisting engine. Engine KPIs, tier weights,
+            package mappings, slot taxonomy, room types, standards, signals,
+            prompts, training, calibration (sessions + ops), override
+            patterns + analytics, object registry, AI suggestions,
+            rejection-reason analytics, engine settings, vendor A/B
+            comparison, and the data-explorer architecture view all live
+            here.
           </p>
         </div>
 
@@ -377,6 +394,13 @@ export default function SettingsShortlistingCommandCenter() {
           <TabsContent value="vendor" className="mt-0">
             <Suspense fallback={<TabFallback />}>
               <SettingsVendorComparison />
+            </Suspense>
+          </TabsContent>
+
+          {/* — W11.6.23 — Architecture & Data Explorer ————————————————— */}
+          <TabsContent value="architecture" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <ArchitectureTab />
             </Suspense>
           </TabsContent>
         </Tabs>

@@ -190,7 +190,7 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     vi.clearAllMocks();
   });
 
-  it("renders all 19 tab triggers (W11.6.21 ten + W11.6.21b nine)", () => {
+  it("renders all 20 tab triggers (W11.6.21 ten + W11.6.21b nine + W11.6.23 one)", () => {
     renderPage();
     // W11.6.21
     expect(screen.getByTestId("tab-overview")).toBeTruthy();
@@ -213,6 +213,8 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     expect(screen.getByTestId("tab-prompts")).toBeTruthy();
     expect(screen.getByTestId("tab-engine-settings")).toBeTruthy();
     expect(screen.getByTestId("tab-vendor")).toBeTruthy();
+    // W11.6.23
+    expect(screen.getByTestId("tab-architecture")).toBeTruthy();
   });
 
   it("default tab is overview when no ?tab= query param", () => {
@@ -264,7 +266,7 @@ describe("resolveActiveTab", () => {
     expect(resolveActiveTab(42)).toBe("overview");
   });
 
-  it("VALID_TABS exports the expected 19-entry set (W11.6.21 + W11.6.21b)", () => {
+  it("VALID_TABS exports the expected 20-entry set (W11.6.21 + W11.6.21b + W11.6.23)", () => {
     expect(VALID_TABS).toEqual([
       // W11.6.21
       "overview",
@@ -287,6 +289,8 @@ describe("resolveActiveTab", () => {
       "prompts",
       "engine-settings",
       "vendor",
+      // W11.6.23
+      "architecture",
     ]);
   });
 
@@ -300,6 +304,10 @@ describe("resolveActiveTab", () => {
     expect(resolveActiveTab("prompts")).toBe("prompts");
     expect(resolveActiveTab("engine-settings")).toBe("engine-settings");
     expect(resolveActiveTab("vendor")).toBe("vendor");
+  });
+
+  it("W11.6.23 architecture tab resolves via resolveActiveTab", () => {
+    expect(resolveActiveTab("architecture")).toBe("architecture");
   });
 
   it("calibration vs calibration-ops are distinct (W11.6.21b disambiguation)", () => {
