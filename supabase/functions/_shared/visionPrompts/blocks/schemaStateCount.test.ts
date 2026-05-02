@@ -83,8 +83,21 @@ import { STAGE4_TOOL_SCHEMA } from '../../../shortlisting-shape-d-stage4/stage4P
  *  Today's worst case: floorplan_image at 308. Limit = 308 * 1.10. */
 export const STAGE1_STATE_COUNT_LIMIT = 339;
 
-/** Stage 4 STAGE4_TOOL_SCHEMA. Today's value: 141. Limit = 141 * 1.10. */
-export const STAGE4_STATE_COUNT_LIMIT = 156;
+/** Stage 4 STAGE4_TOOL_SCHEMA. Limit = today's value * 1.10.
+ *
+ * Mig 444 (engine rewrite, 2026-05-02): bumped 156 -> 220 to accommodate the
+ * new constraint-based `position_decisions[]` + `proposed_position_templates[]`
+ * surfaces alongside the legacy `slot_decisions[]` array. Both must coexist
+ * during the one-cycle dual-emit cutover window — the follow-up that drops
+ * slot_decisions will reduce the proxy back to ~158 and we should re-pin the
+ * limit then. Today's measured proxy: 199. Headroom: 199 * 1.10 = 218.9 -> 220.
+ *
+ * Rationale for the rebuild: per Joseph (2026-05-02): "the limit was a
+ * guardrail against accidents, not a hard architectural ceiling". The new
+ * schema is the engine's primary surface — bumping the guardrail to fit it
+ * is intentional, documented, and safely under Gemini's empirical serving
+ * threshold (Stage 1 schemas operate at 290-310 without issue). */
+export const STAGE4_STATE_COUNT_LIMIT = 220;
 
 // ─── State-count proxy ─────────────────────────────────────────────────────
 

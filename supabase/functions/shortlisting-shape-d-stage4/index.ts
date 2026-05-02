@@ -121,6 +121,11 @@ import {
 } from '../_shared/projectEngineRoles.ts';
 import type { ProductRow } from '../_shared/slotEligibility.ts';
 import type { Pass2SlotDefinition } from '../_shared/pass2Prompt.ts';
+import {
+  resolveGalleryPositions,
+  renderGalleryPositionsBlock,
+  type ResolvedGalleryPosition,
+} from '../_shared/resolveGalleryPositions.ts';
 
 const GENERATOR = 'shortlisting-shape-d-stage4';
 
@@ -640,6 +645,37 @@ async function runStage4Core(
       warnings.push(`slotEnumerationBlock load failed: ${msg}`);
     }
 
+    // Mig 444: resolve gallery_positions for the round. Tolerates R1's mig
+    // 443 not being applied yet — falls back to empty list with a warning so
+    // legacy slot resolution remains the primary path. When R1 lands and
+    // operators have authored positions, the rendered block is injected into
+    // the user prompt and Stage 4 emits position_decisions[] alongside
+    // legacy slot_decisions[].
+    //
+    // Scope ids are NULL for now — the Stage 4 round context doesn't yet
+    // carry project_type_id / package_id / product_id / price_tier_id /
+    // grade_id (engine grade per mig 443). A follow-up will hydrate those
+    // from shortlisting_rounds + projects, but the resolver is wired in now
+    // so the prompt + persistence paths are ready when the data is.
+    let galleryPositions: ResolvedGalleryPosition[] = [];
+    let galleryPositionsBlockText = '';
+    try {
+      const resolved = await resolveGalleryPositions({
+        admin,
+        project_type_id: null,
+        package_id: null,
+        product_id: null,
+        price_tier_id: null,
+        grade_id: null,
+      });
+      for (const w of resolved.warnings) warnings.push(`resolveGalleryPositions: ${w}`);
+      galleryPositions = resolved.positions;
+      galleryPositionsBlockText = renderGalleryPositionsBlock(resolved.positions);
+    } catch (posErr) {
+      const m = posErr instanceof Error ? posErr.message : String(posErr);
+      warnings.push(`resolveGalleryPositions failed: ${m}`);
+    }
+
     const systemText = [
       buildStage4SystemPrompt(),
       '',
@@ -656,6 +692,7 @@ async function runStage4Core(
       sourceContextBlockText: sourceContextBlock(sourceType),
       photographerTechniquesBlockText: photographerTechniquesBlock(),
       exifContextTableText,
+      galleryPositionsBlockText,
       voiceBlockText: voiceAnchorBlock(voice),
       selfCritiqueBlockText: SELF_CRITIQUE_BLOCK,
       propertyFacts: ctx.property_facts,
@@ -742,6 +779,12 @@ async function runStage4Core(
     // 'pass2_slot_suggestion' (legacy event-type name, kept for W12 discovery
     // queue compatibility). Empty/missing -> no-op. Spec: W11-7 §"proposed_slots".
     const proposedSlots = (output.proposed_slots as Array<Record<string, unknown>> | undefined) || [];
+    // Mig 444 — position_decisions[] (one entry per resolved gallery_position)
+    // + proposed_position_templates[] (recurring constraint patterns Stage 4
+    // wants to elevate to saved templates). Both are best-effort: the round
+    // can succeed without either when the resolver returned zero positions.
+    const positionDecisions = (output.position_decisions as Array<Record<string, unknown>> | undefined) || [];
+    const proposedPositionTemplates = (output.proposed_position_templates as Array<Record<string, unknown>> | undefined) || [];
     const gallerySeq = (output.gallery_sequence as string[] | undefined) || null;
     const dedupGroups = (output.dedup_groups as Array<Record<string, unknown>> | undefined) || null;
     const missingShots = (output.missing_shot_recommendations as string[] | undefined) || null;
@@ -832,6 +875,35 @@ async function runStage4Core(
       roundId,
       proposedSlots,
     });
+
+    // Mig 444 — persist position_decisions[] to shortlisting_position_decisions
+    // and proposed_position_templates[] to shortlisting_position_template_suggestions.
+    // Both are tolerant of mig 444 not being applied yet (the helpers warn
+    // and return early when their tables are missing).
+    try {
+      await persistPositionDecisions({
+        admin,
+        projectId: ctx.project_id,
+        roundId,
+        positionDecisions,
+        resolvedPositions: galleryPositions,
+        warnings,
+      });
+    } catch (perr) {
+      const m = perr instanceof Error ? perr.message : String(perr);
+      warnings.push(`persistPositionDecisions failed: ${m}`);
+    }
+    try {
+      await persistProposedPositionTemplates({
+        admin,
+        roundId,
+        proposedPositionTemplates,
+        warnings,
+      });
+    } catch (perr) {
+      const m = perr instanceof Error ? perr.message : String(perr);
+      warnings.push(`persistProposedPositionTemplates failed: ${m}`);
+    }
 
     // W11.6.22b — emit curated-position coverage gap events (required-but-
     // missing OR ai_backfill-filled). Joined position prefs are loaded once
@@ -2309,6 +2381,254 @@ export async function persistProposedSlots(args: PersistProposedSlotsArgs): Prom
     `[${GENERATOR}] persistProposedSlots round=${args.roundId} emitted=${rows.length}`,
   );
   return rows.length;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Mig 444 — position_decisions persistence
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface PersistPositionDecisionsArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  projectId: string;
+  roundId: string;
+  /** Raw position_decisions[] from Gemini (may be empty/missing). */
+  positionDecisions: Array<Record<string, unknown>>;
+  /**
+   * The resolver-output that fed Stage 4 — used to map (a) winner stem ->
+   * composition_groups.id and (b) sanity-check that emitted position_index
+   * values exist in the round's resolved set.
+   */
+  resolvedPositions: ResolvedGalleryPosition[];
+  warnings: string[];
+}
+
+/**
+ * Persist Stage 4's position_decisions[] to shortlisting_position_decisions.
+ *
+ * Idempotent (delete-then-insert by round_id) so a regenerate doesn't
+ * double-stack. Tolerant of mig 444 not being applied yet — surfaces a
+ * warning + returns 0.
+ *
+ * Maps winner.stem -> composition_groups.id by reading the round's groups
+ * table. When a stem doesn't resolve to a known group, we still persist the
+ * decision (winner_stem present, winner_group_id NULL) so an audit trail
+ * exists for the discrepancy.
+ */
+export async function persistPositionDecisions(
+  args: PersistPositionDecisionsArgs,
+): Promise<number> {
+  const decisions = Array.isArray(args.positionDecisions) ? args.positionDecisions : [];
+
+  // Idempotency: always delete prior rows for this round, even when the new
+  // run produced zero — clears stale decisions on regen.
+  const { error: delErr } = await args.admin
+    .from('shortlisting_position_decisions')
+    .delete()
+    .eq('round_id', args.roundId);
+  if (delErr) {
+    const msg = String(delErr.message ?? delErr);
+    if (msg.includes('does not exist') || msg.includes('PGRST205')) {
+      args.warnings.push(
+        'persistPositionDecisions: shortlisting_position_decisions table missing (mig 444 not applied yet) — skipping',
+      );
+      return 0;
+    }
+    console.warn(`[${GENERATOR}] persistPositionDecisions delete-prior failed: ${msg}`);
+  }
+
+  if (decisions.length === 0) {
+    console.log(
+      `[${GENERATOR}] persistPositionDecisions round=${args.roundId} emitted=0`,
+    );
+    return 0;
+  }
+
+  // Build a stem -> group_id map from composition_groups for FK resolution.
+  const stemToGroupId = new Map<string, string>();
+  try {
+    const { data: groupRows } = await args.admin
+      .from('composition_groups')
+      .select('id, key_image_path')
+      .eq('round_id', args.roundId);
+    for (const r of (groupRows || []) as Array<Record<string, unknown>>) {
+      const gid = String(r.id);
+      const path = typeof r.key_image_path === 'string' ? r.key_image_path : '';
+      if (!path) continue;
+      // Stems are usually the basename without extension.
+      const stem = path.split('/').pop()?.replace(/\.[^.]+$/, '') ?? '';
+      if (stem) stemToGroupId.set(stem, gid);
+    }
+  } catch (gerr) {
+    const m = gerr instanceof Error ? gerr.message : String(gerr);
+    args.warnings.push(`persistPositionDecisions: composition_groups lookup failed: ${m} (winner_group_id will be null)`);
+  }
+
+  // Build a position_index -> ResolvedGalleryPosition map for template_slot_id
+  // backfill. When Gemini emits a position_index that wasn't in the resolver
+  // output, we still persist it but flag a warning.
+  const byIndex = new Map<number, ResolvedGalleryPosition>();
+  for (const p of args.resolvedPositions) byIndex.set(p.position_index, p);
+
+  const ALLOWED_PHASES = new Set(['mandatory', 'conditional', 'optional']);
+  const nowIso = new Date().toISOString();
+  const rows: Array<Record<string, unknown>> = [];
+
+  for (const d of decisions) {
+    const positionIndex = Number(d.position_index ?? -1);
+    if (!Number.isFinite(positionIndex) || positionIndex < 0) {
+      args.warnings.push(
+        `persistPositionDecisions: skipped decision with invalid position_index=${d.position_index}`,
+      );
+      continue;
+    }
+    const phaseRaw = typeof d.phase === 'string' ? d.phase : '';
+    const phase = ALLOWED_PHASES.has(phaseRaw) ? phaseRaw : null;
+    if (!phase) {
+      args.warnings.push(
+        `persistPositionDecisions: skipped position_index=${positionIndex} with invalid phase='${phaseRaw}'`,
+      );
+      continue;
+    }
+    const winner = (d.winner ?? {}) as Record<string, unknown>;
+    const winnerStem = typeof winner.stem === 'string' ? winner.stem : null;
+    const winnerGroupId = winnerStem ? stemToGroupId.get(winnerStem) ?? null : null;
+    const resolvedPos = byIndex.get(positionIndex);
+    if (!resolvedPos) {
+      args.warnings.push(
+        `persistPositionDecisions: position_index=${positionIndex} not in round's resolved positions (model emitted unknown index) — persisting anyway`,
+      );
+    }
+    rows.push({
+      round_id: args.roundId,
+      project_id: args.projectId,
+      position_index: positionIndex,
+      phase,
+      position_constraints: (d.position_constraints ?? null) as Record<string, unknown> | null,
+      winner_group_id: winnerGroupId,
+      winner_stem: winnerStem,
+      winner_rationale: typeof winner.rationale === 'string' ? winner.rationale : null,
+      constraint_match_score: typeof winner.constraint_match_score === 'number'
+        ? winner.constraint_match_score
+        : null,
+      slot_fit_score: typeof winner.slot_fit_score === 'number' ? winner.slot_fit_score : null,
+      alternatives: Array.isArray(d.alternatives) ? d.alternatives : [],
+      rejected_near_duplicates: Array.isArray(d.rejected_near_duplicates)
+        ? d.rejected_near_duplicates
+        : [],
+      template_slot_id: resolvedPos?.template_slot_id ?? null,
+      created_at: nowIso,
+    });
+  }
+
+  if (rows.length === 0) {
+    console.log(
+      `[${GENERATOR}] persistPositionDecisions round=${args.roundId} emitted=0 (after validation)`,
+    );
+    return 0;
+  }
+
+  const { error: insErr } = await args.admin
+    .from('shortlisting_position_decisions')
+    .insert(rows);
+  if (insErr) {
+    const msg = String(insErr.message ?? insErr);
+    if (msg.includes('does not exist') || msg.includes('PGRST205')) {
+      args.warnings.push(
+        'persistPositionDecisions: shortlisting_position_decisions table missing on insert — skipping',
+      );
+      return 0;
+    }
+    console.warn(`[${GENERATOR}] persistPositionDecisions insert failed: ${msg}`);
+    args.warnings.push(`persistPositionDecisions insert failed: ${msg}`);
+    return 0;
+  }
+
+  console.log(
+    `[${GENERATOR}] persistPositionDecisions round=${args.roundId} emitted=${rows.length}`,
+  );
+  return rows.length;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Mig 444 — proposed_position_templates persistence (auto-promotion source)
+// ──────────────────────────────────────────────────────────────────────────
+
+export interface PersistProposedPositionTemplatesArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  roundId: string;
+  proposedPositionTemplates: Array<Record<string, unknown>>;
+  warnings: string[];
+}
+
+/**
+ * Persist Stage 4's proposed_position_templates[] into
+ * shortlisting_position_template_suggestions. The auto-promotion fn
+ * (shortlisting_promote_position_template_suggestions) reads this table
+ * weekly and promotes patterns with sufficient evidence into
+ * shortlisting_slot_definitions (initially is_active=false).
+ *
+ * Each template proposal is identified by a deterministic key derived from
+ * the constraint_pattern + label so repeated observation across rounds
+ * accumulates evidence on the SAME row (rather than fanning out into N
+ * near-identical rows). On conflict we coalesce: increment evidence counts,
+ * append round_id to sample_round_ids, refresh last_observed_at.
+ *
+ * Tolerant of mig 444 not being applied yet — surfaces a warning + returns 0.
+ */
+export async function persistProposedPositionTemplates(
+  args: PersistProposedPositionTemplatesArgs,
+): Promise<number> {
+  const templates = Array.isArray(args.proposedPositionTemplates)
+    ? args.proposedPositionTemplates
+    : [];
+  if (templates.length === 0) {
+    console.log(
+      `[${GENERATOR}] persistProposedPositionTemplates round=${args.roundId} emitted=0`,
+    );
+    return 0;
+  }
+
+  // We want one row per (label, constraint_pattern) signature ACROSS rounds.
+  // Use the upsert RPC (provided by mig 444) which locks the row and applies
+  // the coalesce arithmetic atomically. Falling back to a plain insert when
+  // the RPC is missing (mig 444 not applied yet) — that path warns and skips.
+  let inserted = 0;
+  for (const t of templates) {
+    const label = typeof t.proposed_template_label === 'string' ? t.proposed_template_label : null;
+    if (!label) {
+      args.warnings.push(
+        'persistProposedPositionTemplates: skipped entry with missing proposed_template_label',
+      );
+      continue;
+    }
+    const pattern = (t.constraint_pattern ?? null) as Record<string, unknown> | null;
+    const candidateStems = Array.isArray(t.candidate_stems) ? t.candidate_stems : [];
+    const reasoning = typeof t.reasoning === 'string' ? t.reasoning : null;
+
+    const { error } = await args.admin.rpc('shortlisting_record_position_template_suggestion', {
+      p_round_id: args.roundId,
+      p_label: label,
+      p_constraint_pattern: pattern,
+      p_candidate_stems: candidateStems,
+      p_reasoning: reasoning,
+    });
+    if (error) {
+      const msg = String(error.message ?? error);
+      if (msg.includes('does not exist') || msg.includes('function') && msg.includes('not exist')) {
+        args.warnings.push(
+          'persistProposedPositionTemplates: RPC missing (mig 444 not applied yet) — skipping remaining templates',
+        );
+        return inserted;
+      }
+      args.warnings.push(`persistProposedPositionTemplates rpc failed: ${msg}`);
+      continue;
+    }
+    inserted += 1;
+  }
+  console.log(
+    `[${GENERATOR}] persistProposedPositionTemplates round=${args.roundId} emitted=${inserted}`,
+  );
+  return inserted;
 }
 
 // ──────────────────────────────────────────────────────────────────────────

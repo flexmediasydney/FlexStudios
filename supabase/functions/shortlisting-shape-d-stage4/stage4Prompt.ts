@@ -26,7 +26,17 @@ import { CANONICAL_SLOT_IDS } from '../_shared/visionPrompts/blocks/slotEnumerat
 // position_index + position_filled_via fields so curated_positions slots can
 // fill one image per position with a curated_match / ai_backfill marker.
 // Legacy ai_decides slot_decisions stay unchanged (both fields null).
-export const STAGE4_PROMPT_VERSION = 'v1.2';
+//
+// Mig 444 (engine rewrite, 2026-05-02) — bumped to v1.3:
+//   - Added top-level `position_decisions[]` for the new constraint-based
+//     gallery_positions model (one row per resolved position, not per slot).
+//   - Added top-level `proposed_position_templates[]` so Gemini can suggest
+//     recurring constraint patterns that should become saved templates.
+//   - Legacy `slot_decisions[]` retained for ONE deploy cycle (dual emission
+//     window). Audit + swimlane queries continue to consume slot_decisions
+//     until R3 validation lands; the follow-up will drop slot_decisions and
+//     keep position_decisions only.
+export const STAGE4_PROMPT_VERSION = 'v1.3';
 export const STAGE4_TOOL_NAME = 'synthesise_round';
 
 /**
@@ -91,11 +101,188 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
       description: `Echo "${STAGE4_PROMPT_VERSION}".`,
     },
 
-    // ─── Slot decisions ──────────────────────────────────────────────────
+    // ─── Position decisions (mig 444 — constraint-based engine) ──────────
+    // Mig 444: the new primary output. Each entry corresponds to one resolved
+    // gallery_position (constraint tuple) injected into the user prompt. The
+    // model picks the strongest image whose Stage 1 attributes satisfy the
+    // position's constraints (NULL constraint axis = "any value acceptable")
+    // and emits a winner + alternatives + rationale tied to the constraint
+    // match.
+    //
+    // No closed enum on `phase` — state-count discipline (description-only).
+    // The persistence layer will reject any phase value not in
+    // {mandatory, conditional, optional} with a warning.
+    position_decisions: {
+      type: 'array',
+      description:
+        'One entry per resolved gallery_position. Fill in the order the ' +
+        'positions appear in the prompt. For each position: pick the image ' +
+        'that best satisfies the position\'s constraint tuple (NULL axes are ' +
+        'wildcards — any value matches). Phase semantics: mandatory MUST be ' +
+        'filled when at least one image satisfies the constraints; ' +
+        'conditional is filled only when an image clearly satisfies them; ' +
+        'optional is filled only when there is a strong, clear match. When ' +
+        'phase=mandatory and no image satisfies AND ai_backfill_on_gap=true, ' +
+        'pick the closest image and explain the gap in the rationale; when ' +
+        'ai_backfill_on_gap=false, OMIT the entry entirely so the operator ' +
+        'sees a coverage gap event instead of a forced backfill.',
+      items: {
+        type: 'object',
+        properties: {
+          position_index: {
+            type: 'integer',
+            description:
+              '0-based index from the gallery_positions list in the prompt. ' +
+              'MUST match exactly — the persistence layer keys decisions to ' +
+              'positions by this integer.',
+          },
+          phase: {
+            type: 'string',
+            description:
+              'Echo the position\'s phase: one of "mandatory", "conditional", "optional".',
+          },
+          position_constraints: {
+            type: 'object',
+            description:
+              'Echo the position\'s constraint tuple back so we can confirm ' +
+              'the model parsed the position correctly. Mirrors the prompt input.',
+            properties: {
+              room_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              space_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              zone_focus: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              shot_scale: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              perspective_compression: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              lens_class: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              image_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              composition_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+            },
+          },
+          winner: {
+            type: 'object',
+            properties: {
+              stem: { type: 'string' },
+              rationale: {
+                type: 'string',
+                description:
+                  '2-4 sentences citing (a) which constraint axes the winner ' +
+                  'satisfies vs leaves wildcard, AND (b) the visual evidence ' +
+                  'beating the alternatives. Refer to other stems by name.',
+              },
+              constraint_match_score: {
+                type: 'number',
+                description:
+                  '0-10 — how well the winner satisfies the position\'s ' +
+                  'constraint tuple. 10 = every non-null axis matches; 5 = ' +
+                  'about half of the non-null axes match; 0 = no axes match ' +
+                  '(only used in ai_backfill scenarios).',
+              },
+              slot_fit_score: {
+                type: 'number',
+                description:
+                  'W11.6.15 — 0-10 — how strongly this image fits the ' +
+                  'position\'s compositional intent independent of per-image ' +
+                  'quality. Preserved from the legacy slot model so dual-emit ' +
+                  'parity stays intact during the cutover window.',
+              },
+            },
+            required: ['stem', 'rationale', 'constraint_match_score', 'slot_fit_score'],
+          },
+          alternatives: {
+            type: 'array',
+            description: 'Up to 2 backup picks with constraint_match_score each.',
+            items: {
+              type: 'object',
+              properties: {
+                stem: { type: 'string' },
+                rationale: { type: 'string' },
+                constraint_match_score: { type: 'number' },
+              },
+              required: ['stem', 'rationale', 'constraint_match_score'],
+            },
+          },
+          rejected_near_duplicates: {
+            type: 'array',
+            description:
+              'Stems rejected as visually-near-identical to the winner. Each ' +
+              'entry includes which winning stem it duplicates.',
+            items: {
+              type: 'object',
+              properties: {
+                stem: { type: 'string' },
+                near_dup_of: { type: 'string' },
+              },
+              required: ['stem', 'near_dup_of'],
+            },
+          },
+        },
+        required: ['position_index', 'phase', 'winner'],
+      },
+    },
+
+    // ─── Proposed position templates (mig 444) ──────────────────────────
+    // Mig 444 replaces `proposed_slots[]` with a constraint-based equivalent.
+    // When Gemini sees a recurring composition pattern across rounds that
+    // isn't already a saved template, it surfaces it here. The W12-style
+    // promotion fn in mig 444 aggregates these across rounds and auto-promotes
+    // patterns with sufficient evidence into shortlisting_slot_definitions
+    // (initially is_active=false so an operator review still gates them).
+    proposed_position_templates: {
+      type: 'array',
+      description:
+        'Suggested NEW position templates when Stage 4 sees a recurring ' +
+        'composition pattern that no existing template covers. Empty array ' +
+        'when nothing warrants a new template — do NOT manufacture proposals. ' +
+        'Threshold for human review: an operator-readable label, the constraint ' +
+        'pattern that defines the template, and the candidate stems that would ' +
+        'fill it in this round.',
+      items: {
+        type: 'object',
+        properties: {
+          proposed_template_label: {
+            type: 'string',
+            description:
+              'Operator-readable label, e.g. "Kitchen — gulley with island foreground".',
+          },
+          constraint_pattern: {
+            type: 'object',
+            description:
+              'The constraint tuple that defines this template. NULL axes ' +
+              'are wildcards. Mirrors position_constraints shape.',
+            properties: {
+              room_type: { type: 'string', nullable: true },
+              space_type: { type: 'string', nullable: true },
+              zone_focus: { type: 'string', nullable: true },
+              shot_scale: { type: 'string', nullable: true },
+              perspective_compression: { type: 'string', nullable: true },
+              lens_class: { type: 'string', nullable: true },
+              image_type: { type: 'string', nullable: true },
+              composition_type: { type: 'string', nullable: true },
+            },
+          },
+          candidate_stems: {
+            type: 'array',
+            description: 'Stems from THIS round that would fill the template.',
+            items: { type: 'string' },
+          },
+          reasoning: {
+            type: 'string',
+            description: '1-3 sentences why this should be a saved template.',
+          },
+        },
+        required: ['proposed_template_label', 'candidate_stems', 'reasoning'],
+      },
+    },
+
+    // ─── Slot decisions (LEGACY — dual emission for one cycle) ───────────
     // QC-iter2-W3 F-D-006: previous examples (`master_bedroom`,
     // `alfresco/outdoor_hero`) were NOT in the canonical slot_id enum. The
     // model parroted these and then tripped Gemini's enum constraint or
     // collapsed onto bad aliases. Use canonical Phase-1 ids only.
+    //
+    // Mig 444: position_decisions[] is the new primary surface. slot_decisions
+    // is RETAINED for one deploy cycle so the swimlane + audit queries don't
+    // break during R3 validation. The follow-up will drop slot_decisions
+    // entirely once position_decisions has been verified end-to-end.
     slot_decisions: {
       type: 'array',
       minItems: 4,
@@ -532,6 +719,12 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
   },
   required: [
     'schema_version',
+    // Mig 444: position_decisions is the new primary surface but is required
+    // ONLY when the round resolved to non-zero gallery_positions. Keep it
+    // OPTIONAL at the schema level so legacy rounds + rounds with no resolved
+    // positions still pass. The persistence layer reads `position_decisions`
+    // when present and falls back to slot_decisions otherwise.
+    // 'position_decisions',  -- intentionally not required (see comment)
     'slot_decisions',
     'master_listing',
     'gallery_sequence',
@@ -559,17 +752,44 @@ export function buildStage4SystemPrompt(): string {
     'authoritative property facts from the CRM, plus a voice anchor rubric.',
     '',
     'Your job is to:',
-    '  1. Make slot decisions WITH visual cross-comparison (which image is the',
-    '     hero kitchen? which is the lead facade? which alfresco does the job?).',
-    "  2. Draft a complete publication-ready master listing in the property's",
+    '  1. Mig 444: Fill the round\'s GALLERY POSITIONS — each position is a',
+    '     constraint tuple (partial, NULL = wildcard). Match images to positions',
+    '     by satisfying as many constraint axes as possible. Phase governs how',
+    '     hard you try (mandatory/conditional/optional). Emit one entry per',
+    '     position into `position_decisions[]`.',
+    '  2. Also emit the legacy `slot_decisions[]` array for one deploy cycle —',
+    '     keep the slot_id-based output flowing while operators validate the',
+    '     position-based output (R3 validation window).',
+    "  3. Draft a complete publication-ready master listing in the property's",
     '     tier voice.',
-    '  3. Sequence the marketing gallery (ordered stems, narrative arc).',
-    '  4. Group near-duplicates so production knows where to cull.',
-    "  5. Call out missing shots the photographer didn't capture.",
-    '  6. Where your visual cross-comparison shows Stage 1 was wrong on any',
+    '  4. Sequence the marketing gallery (ordered stems, narrative arc).',
+    '  5. Group near-duplicates so production knows where to cull.',
+    "  6. Call out missing shots the photographer didn't capture.",
+    '  7. Where your visual cross-comparison shows Stage 1 was wrong on any',
     '     per-image field, emit a stage_4_overrides[] row rather than silently',
     '     changing the answer. The override entries are first-class training',
     '     data for the engine and operator review surface.',
+    '',
+    'POSITION-MATCHING DISCIPLINE (mig 444)',
+    '- A position with constraint X=null means "X is wildcard, any value is',
+    '  acceptable". Do not penalise images for the wildcard axis.',
+    '- A position with constraint X=value means "winner SHOULD have X=value".',
+    '  When no image satisfies, lower the constraint_match_score honestly —',
+    '  do NOT fabricate a match. The score tells the operator how loose the',
+    '  fill was.',
+    '- Phase = mandatory: fill if ANY image plausibly satisfies the tuple,',
+    '  even at constraint_match_score 4-5. The position is required for the',
+    '  package; only omit when the round genuinely has zero candidates AND',
+    '  ai_backfill_on_gap=false.',
+    '- Phase = conditional: fill ONLY when an image clearly satisfies the',
+    '  constraints (constraint_match_score >= 6). When no image does, OMIT',
+    '  the position decision.',
+    '- Phase = optional: fill ONLY when there is a strong, clear match',
+    '  (constraint_match_score >= 7). Otherwise omit.',
+    '- If you see a recurring composition pattern across the round that no',
+    '  existing template covers, propose a new template via',
+    '  `proposed_position_templates[]`. Empty array when nothing warrants a',
+    '  new template — don\'t manufacture proposals.',
     '',
     'DISCIPLINE',
     "- Never invent factual figures. If a number isn't in property_facts, omit",
@@ -579,10 +799,10 @@ export function buildStage4SystemPrompt(): string {
     '- Voice anchor rubric is law — if it says "no exclamation marks" or "no',
     '  stunning", do not slip those in.',
     '- Apply the Sydney typology primer when naming style_archetype + period.',
-    "- If you see a recurring composition pattern that doesn't fit any of the",
-    '  canonical slot_ids, surface it via `proposed_slots[]` rather than silently',
-    "  picking the closest fit. Empty array when nothing warrants a new slot —",
-    "  don't manufacture proposals.",
+    "- Legacy slot_decisions[]: also emit the existing slot-by-slot picks for",
+    "  the round's slot lattice, same as before mig 444. The persistence layer",
+    "  treats slot_decisions and position_decisions as parallel surfaces during",
+    "  the cutover window — both must be present.",
     '- W11.6.13: when emitting stage_4_overrides[] entries that correct',
     '  space_type or zone_focus, the rationale MUST address BOTH axes. Name',
     '  the architectural enclosure (space) AND the compositional subject (zone)',
@@ -613,6 +833,14 @@ export interface BuildStage4UserPromptOpts {
    * production paths always supply it.
    */
   exifContextTableText?: string;
+  /**
+   * Mig 444: pre-rendered gallery_positions block (output of
+   * renderGalleryPositionsBlock). Empty string when the round resolved to
+   * zero positions; in that case Stage 4 falls back to the legacy slot
+   * lattice and emits no position_decisions[]. Production callers always
+   * compute this even when empty so the prompt structure is consistent.
+   */
+  galleryPositionsBlockText?: string;
   voiceBlockText: string;
   selfCritiqueBlockText: string;
   propertyFacts: PropertyFacts;
@@ -677,6 +905,14 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     ? [opts.exifContextTableText, '']
     : [];
 
+  // Mig 444: gallery_positions block (constraint tuples). Sits BEFORE the
+  // legacy slotEnumerationBlock so the model reads positions as the primary
+  // task surface. When empty (round has zero resolved positions), the slot
+  // lattice + legacy slot_decisions[] is the only output path.
+  const positionsSection = opts.galleryPositionsBlockText && opts.galleryPositionsBlockText.length > 0
+    ? [opts.galleryPositionsBlockText, '']
+    : [];
+
   return [
     opts.sourceContextBlockText,
     '',
@@ -686,6 +922,7 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     '── PROPERTY FACTS (authoritative; do NOT invent) ──',
     factLines.join('\n'),
     '',
+    ...positionsSection,
     ...exifTableSection,
     `── STAGE 1 PER-IMAGE ENRICHMENT (${opts.stage1Merged.length} entries) ──`,
     'Use this as text context alongside the visual previews. Each entry is the',
@@ -706,5 +943,9 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     'Return one JSON object exactly matching the schema. All required fields',
     'must be present. Use empty array [] for collections with no entries (do',
     'not omit). Use empty string "" for closing_paragraph when not warranted.',
+    'Mig 444: emit BOTH `position_decisions[]` (one per resolved gallery_position',
+    'above; omitted only when the round resolved to zero positions) AND the',
+    'legacy `slot_decisions[]`. The dual emission is intentional — the engine',
+    'is in a one-cycle cutover window.',
   ].join('\n');
 }
