@@ -209,11 +209,192 @@ export const ENGINE_ROLES = [
 ];
 
 // ── Color helpers for matrix cells ───────────────────────────────────────
+//
+// Authored / Target dual-number logic (W11.6.28b — Joseph's brief):
+//   X = positionCount (authored)   — gallery_positions rows in the cell scope
+//   Y = expectedTarget             — the package's contractual deliverable
+//                                    count for this price tier (or sum of
+//                                    products[] if the tier jsonb's
+//                                    image_count is missing)
+//
+// Color rules:
+//   slate  — X = 0   (nothing authored yet, no warning)
+//   red    — Y = 0   (defensive — package has no count for this tier; the
+//                     cell shouldn't exist but render safely if it does)
+//   amber  — X > Y   (over-target — engine will drop lowest-priority
+//                     positions; surfaces a warning to the operator)
+//   green  — 0 < X ≤ Y (the recipe authors within the contractual budget)
+//
+// expectedTarget=null is treated as "no target known" → fall back to the
+// pre-target heuristic (any X > 0 reads as green; X = 0 reads as slate).
 export function cellHealthColor(positionCount, expectedTarget) {
-  if (positionCount === 0) return "red";
-  if (expectedTarget == null) return positionCount > 0 ? "green" : "amber";
-  if (positionCount >= expectedTarget) return "green";
-  return "amber";
+  const x = positionCount || 0;
+  const y = expectedTarget;
+  if (y === 0) return "red";
+  if (x === 0) return "slate";
+  if (y == null) return "green";
+  if (x > y) return "amber";
+  return "green";
+}
+
+// ── Per-package target derivation (W11.6.28b) ────────────────────────────
+//
+// The recipe matrix shows X authored / Y target per cell. Y is the package's
+// contractual image deliverable count for this price tier:
+//
+//   1. PRIMARY  → packages.standard_tier / .premium_tier jsonb's `image_count`
+//                 (authoritative when present; matches contract docs).
+//   2. FALLBACK → SUM(products[i].quantity) for products that can deliver
+//                 images in that tier. Quantity comes from the package's
+//                 own products[] jsonb array; the per-product image
+//                 contribution is taken from the product's tier jsonb when
+//                 present, otherwise from the per-product quantity field.
+//   3. HARD FALLBACK → packages.expected_count_target (legacy single-tier
+//                      target — the same number across both columns).
+//   4. UNKNOWN  → null (cell renders without a target gauge).
+//
+// The fallback breakdown is exposed to the UI as a tooltip explaining
+// "Target: 5 (Sales) + 3 (Drone) + 1 (Floor Plans) = 9".
+//
+// `productLookup` is optional (Map<id, product>) — passed in by the matrix
+// when rendering per-cell targets so we can read the product's own
+// .standard_tier / .premium_tier jsonb. When absent we still try to
+// resolve from the package's products[] entries themselves (each entry
+// already carries `quantity` from PackageFormDialog).
+export function deriveCellTarget(pkg, tierCode, productLookup = null) {
+  if (!pkg || !tierCode) return { value: null, source: "unknown", breakdown: [] };
+
+  const tierKey = tierCode === "premium" ? "premium_tier" : "standard_tier";
+  const tierJson = pkg[tierKey];
+
+  // ── Primary: tier jsonb image_count ────────────────────────────────────
+  if (tierJson && typeof tierJson === "object") {
+    const ic =
+      tierJson.image_count ?? tierJson.images ?? tierJson.deliverable_count;
+    if (Number.isFinite(Number(ic)) && Number(ic) > 0) {
+      return {
+        value: Number(ic),
+        source: "tier_image_count",
+        breakdown: [
+          {
+            label: `${pkg.name || "Package"} ${tierCode}`,
+            value: Number(ic),
+          },
+        ],
+      };
+    }
+  }
+
+  // ── Fallback: sum of products[] in this package ─────────────────────────
+  const items = Array.isArray(pkg.products) ? pkg.products : [];
+  if (items.length > 0) {
+    const breakdown = [];
+    let total = 0;
+    for (const item of items) {
+      // Prefer the product's tier-specific image_count if we have a lookup.
+      let qty = null;
+      const prod = productLookup?.get?.(item.product_id);
+      if (prod && prod[tierKey] && typeof prod[tierKey] === "object") {
+        const pIc =
+          prod[tierKey].image_count ??
+          prod[tierKey].images ??
+          prod[tierKey].deliverable_count;
+        if (Number.isFinite(Number(pIc)) && Number(pIc) > 0) qty = Number(pIc);
+      }
+      // Fallback to the line-item quantity already carried by the package.
+      if (qty == null && Number.isFinite(Number(item.quantity))) {
+        qty = Number(item.quantity);
+      }
+      // Filter out non-image deliverables when we know the product (drone,
+      // floor plans, video, etc still count as positions today — keep them
+      // in the sum so the total matches the engine's per-role budget).
+      if (qty == null || qty === 0) continue;
+      breakdown.push({
+        label: item.product_name || prod?.name || "Product",
+        value: qty,
+      });
+      total += qty;
+    }
+    if (total > 0) {
+      return {
+        value: total,
+        source: "sum_of_products",
+        breakdown,
+      };
+    }
+  }
+
+  // ── Hard fallback: legacy expected_count_target column ─────────────────
+  if (Number.isFinite(Number(pkg.expected_count_target))) {
+    const v = Number(pkg.expected_count_target);
+    if (v > 0) {
+      return {
+        value: v,
+        source: "expected_count_target",
+        breakdown: [
+          {
+            label: `${pkg.name || "Package"} legacy target`,
+            value: v,
+          },
+        ],
+      };
+    }
+  }
+
+  return { value: null, source: "unknown", breakdown: [] };
+}
+
+// Format a derived target's breakdown into the per-cell tooltip copy.
+export function describeTargetBreakdown(target) {
+  if (!target || target.value == null) {
+    return "No target — package missing image_count and products quantities.";
+  }
+  if (target.source === "tier_image_count") {
+    return `Target: ${target.value} images (from package tier image_count).`;
+  }
+  if (target.source === "expected_count_target") {
+    return `Target: ${target.value} images (legacy expected_count_target — tier jsonb has no image_count).`;
+  }
+  if (target.source === "sum_of_products") {
+    const parts = target.breakdown
+      .map((b) => `${b.value} (${b.label})`)
+      .join(" + ");
+    return `Target: ${target.value} images = ${parts}. (Sum-of-products fallback — tier jsonb has no image_count.)`;
+  }
+  return "";
+}
+
+// Whether a package OFFERS this price tier — used to disable cells that
+// don't make sense for a package that doesn't sell in this tier (e.g. an
+// AI package may only have a Standard tier). We treat the tier as "offered"
+// when EITHER the tier jsonb has any pricing/image data OR the legacy
+// expected_count_target is non-null (since the legacy column is per-package
+// not per-tier, we assume both tiers are offered).
+export function packageOffersTier(pkg, tierCode) {
+  if (!pkg) return false;
+  const tierKey = tierCode === "premium" ? "premium_tier" : "standard_tier";
+  const tierJson = pkg[tierKey];
+  if (tierJson && typeof tierJson === "object") {
+    const hasFields = Object.keys(tierJson).some((k) => {
+      const v = tierJson[k];
+      return v != null && v !== 0 && v !== "" && !Number.isNaN(v);
+    });
+    if (hasFields) return true;
+  }
+  // Legacy package with no per-tier jsonb but a global target → both tiers
+  // are considered offered.
+  if (
+    pkg.expected_count_target != null &&
+    Number.isFinite(Number(pkg.expected_count_target)) &&
+    Number(pkg.expected_count_target) > 0
+  ) {
+    return true;
+  }
+  // Last resort: a package with products[] is offering whichever tier the
+  // operator set up. Default to TRUE for both tiers so the matrix doesn't
+  // accidentally hide cells.
+  if (Array.isArray(pkg.products) && pkg.products.length > 0) return true;
+  return false;
 }
 
 // ── Shape of a constraint tuple (for snapshot equality + diffing) ────────

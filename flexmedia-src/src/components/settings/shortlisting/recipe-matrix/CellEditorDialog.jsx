@@ -1,21 +1,22 @@
 /**
  * CellEditorDialog — modal editor for one matrix cell (or "Tier defaults").
  *
+ * W11.6.28b: cell scope_type is now `package_x_price_tier` (was
+ * `package_grade`). The Tier defaults pseudo-row stays at scope_type
+ * `price_tier` with scope_ref_id = price_tier_id. See mig 443 + mig 446
+ * + mig 447.
+ *
  * Renders:
- *   1. Inheritance breadcrumb (top)
- *   2. Per-cell engine_mode_override + tolerance band controls
- *   3. Engine-role tab strip (Sales Images / Drone / Floor Plans / …)
- *   4. Position list for the active engine role with Add buttons
+ *   1. Engine-grade pill (top — explanatory only; grade is per-round)
+ *   2. Inheritance breadcrumb
+ *   3. Per-cell target banner — X authored / Y target, with over-target
+ *      warning when X > Y
+ *   4. Per-cell engine_mode_override + tolerance band controls
+ *   5. Engine-role tab strip with per-tab authored/target counts
+ *   6. Position list for the active engine role with Add buttons
  *
  * The position editor itself is a child component (PositionRow) that
  * expands inline when ▶ is clicked.
- *
- * Save flow:
- *   - Each PositionRow has its own Save button → calls back into this
- *     dialog's `onPositionSave`, which delegates to the upsert mutation.
- *   - Tolerance + engine_mode_override are saved on a debounce — we
- *     surface a small "Save tolerance" button to keep the contract
- *     explicit (no accidental writes).
  */
 import React, { useMemo, useState } from "react";
 import {
@@ -42,24 +43,30 @@ import {
   TabsTrigger,
   TabsContent,
 } from "@/components/ui/tabs";
-import { Plus, Layers, Save } from "lucide-react";
+import { Plus, Layers, Save, Info, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/api/supabaseClient";
 import { IconTip } from "./Tip";
 import PositionRow from "./PositionRow";
-import { ENGINE_MODES, ENGINE_ROLES } from "./constants";
+import {
+  ENGINE_MODES,
+  ENGINE_ROLES,
+  deriveCellTarget,
+  describeTargetBreakdown,
+} from "./constants";
 import { usePositionsForCell } from "./hooks";
 
 export default function CellEditorDialog({
   open,
   onOpenChange,
-  cell, // { kind: 'cell'|'defaults', packageId?, priceTierId, package?, tier }
-  // packages / tiers are reserved for the prev/next cell jumper that
-  // operators wanted in the brief — wired up underscore-prefixed for now.
+  cell, // { kind: 'cell'|'defaults', packageId?, priceTierId, package?, tier, target? }
+  // packages / tiers reserved for the prev/next jumper.
   packages: _packages,
+  priceTiers: _priceTiers,
   tiers: _tiers,
   templates,
+  productLookup,
   projectTypeId, // optional further-narrowing scope; null for now
   productId,
 }) {
@@ -96,12 +103,61 @@ export default function CellEditorDialog({
     return out;
   }, [positions]);
 
+  // ── Per-cell + per-engine-role target derivation ─────────────────────
+  //
+  // The cell-level target is the package's image_count for this tier, with
+  // the sum-of-products fallback. Per-tab targets break that total down by
+  // engine_role using the products' engine_role + the package's products[]
+  // line items. This lets us render "5 authored / 12 target" for the Sales
+  // Images tab specifically, instead of using the cell total everywhere.
+  const cellTarget = useMemo(() => {
+    if (!cell || isDefaults) return { value: null, source: "defaults", breakdown: [] };
+    if (cell.target?.value != null) return cell.target;
+    return deriveCellTarget(cell.package, cell.tier?.code, productLookup);
+  }, [cell, isDefaults, productLookup]);
+
+  const perRoleTargets = useMemo(() => {
+    const out = {};
+    for (const role of ENGINE_ROLES) out[role.key] = null;
+    if (isDefaults || !cell?.package) return out;
+
+    const tierCode = cell.tier?.code || "standard";
+    const items = Array.isArray(cell.package.products) ? cell.package.products : [];
+    for (const item of items) {
+      const prod = productLookup?.get?.(item.product_id);
+      const role = prod?.engine_role || "photo_day_shortlist";
+      // Per-product tier image_count if available.
+      const tierKey = tierCode === "premium" ? "premium_tier" : "standard_tier";
+      let qty = null;
+      if (prod && prod[tierKey] && typeof prod[tierKey] === "object") {
+        const ic =
+          prod[tierKey].image_count ??
+          prod[tierKey].images ??
+          prod[tierKey].deliverable_count;
+        if (Number.isFinite(Number(ic)) && Number(ic) > 0) qty = Number(ic);
+      }
+      if (qty == null && Number.isFinite(Number(item.quantity))) {
+        qty = Number(item.quantity);
+      }
+      if (qty == null || qty === 0) continue;
+      out[role] = (out[role] || 0) + qty;
+    }
+    return out;
+  }, [cell, isDefaults, productLookup]);
+
+  const cellAuthoredTotal = positions.length;
+  const cellOverTarget =
+    cellTarget?.value != null && cellAuthoredTotal > cellTarget.value;
+
   // ── Mutations ────────────────────────────────────────────────────
   //
-  // Both insert and update target gallery_positions in the mig 443
-  // (scope_type / scope_ref_id*) shape. Cell scope is `package_grade`
-  // (with ref_id=package_id, ref_id_2=grade_id); the tier-defaults
-  // pseudo-row uses `price_tier` (with ref_id=grade_id, ref_id_2=NULL).
+  // Cell scope (W11.6.28b):
+  //   - Tier defaults pseudo-row → scope_type = 'price_tier',
+  //                                scope_ref_id = price_tier_id,
+  //                                scope_ref_id_2 = NULL
+  //   - Package × price tier cell → scope_type = 'package_x_price_tier',
+  //                                 scope_ref_id = package_id,
+  //                                 scope_ref_id_2 = price_tier_id
   const upsertMutation = useMutation({
     mutationFn: async (row) => {
       const scopePayload = isDefaults
@@ -111,16 +167,12 @@ export default function CellEditorDialog({
             scope_ref_id_2: null,
           }
         : {
-            scope_type: "package_grade",
+            scope_type: "package_x_price_tier",
             scope_ref_id: cell.packageId,
             scope_ref_id_2: cell.priceTierId,
           };
 
       // Filter the row down to columns that actually exist on the table.
-      // Anything we add for UI-side bookkeeping (is_overridden_at_cell,
-      // inherited_from_scope) gets stripped. We also drop column names
-      // from the legacy package_id / price_tier_id shape if they leaked
-      // through.
       const transientKeys = [
         "is_overridden_at_cell",
         "inherited_from_scope",
@@ -239,6 +291,73 @@ export default function CellEditorDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* Engine grade explanatory pill — grade is NOT a matrix axis. */}
+        <div
+          className="flex items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] text-slate-700"
+          data-testid="engine-grade-pill"
+        >
+          <Info className="h-3.5 w-3.5 mt-0.5 text-slate-500 flex-shrink-0" />
+          <div className="leading-snug">
+            <strong>Engine grade</strong> (Volume / Refined / Editorial) is
+            derived per-round from the shoot quality and steers Stage 4
+            voice anchor. It does <em>not</em> affect slot allocation.
+            Recipes are scoped to <code>package × price tier</code> only.
+          </div>
+        </div>
+
+        {/* Cell-level authored/target banner with over-target warning. */}
+        {!isDefaults && (
+          <div
+            className={
+              "rounded-md border px-3 py-2 text-xs " +
+              (cellOverTarget
+                ? "border-amber-300 bg-amber-50 text-amber-900"
+                : "border-blue-200 bg-blue-50 text-blue-900")
+            }
+            data-testid="cell-target-banner"
+          >
+            {cellOverTarget ? (
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 text-amber-700 flex-shrink-0" />
+                <div className="space-y-0.5">
+                  <div className="font-semibold">
+                    Over target: {cellAuthoredTotal} authored /{" "}
+                    {cellTarget.value} target
+                  </div>
+                  <div>
+                    This recipe authors {cellAuthoredTotal} positions but
+                    the package target is {cellTarget.value}. The engine
+                    will drop the {cellAuthoredTotal - cellTarget.value}{" "}
+                    lowest-priority position
+                    {cellAuthoredTotal - cellTarget.value === 1 ? "" : "s"}{" "}
+                    (optional first, then conditional) to fit. To resolve:
+                    remove {cellAuthoredTotal - cellTarget.value} position
+                    {cellAuthoredTotal - cellTarget.value === 1 ? "" : "s"}{" "}
+                    OR bump the package target.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="font-semibold tabular-nums">
+                  {cellAuthoredTotal} authored / {cellTarget?.value ?? "—"} target
+                </span>
+                {cellTarget?.value != null && (
+                  <span className="opacity-80">
+                    — {describeTargetBreakdown(cellTarget)}
+                  </span>
+                )}
+                {cellTarget?.value == null && (
+                  <span className="opacity-80">
+                    — package has no image_count or products quantities for
+                    this tier; cell renders without a target gauge.
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Inheritance breadcrumb */}
         {scopeChain.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 text-[11px] mt-1" data-testid="scope-breadcrumb">
@@ -262,7 +381,7 @@ export default function CellEditorDialog({
               </React.Fragment>
             ))}
             <IconTip
-              text="Each step further narrows the scope. Overrides at this cell replace inherited rows by position_index. Click a higher scope to view (defaults editor in a separate cell)."
+              text="Each step further narrows the scope. Overrides at this cell replace inherited rows by position_index. Engine grade is NOT in this chain — it's per-round derived."
             />
           </div>
         )}
@@ -354,7 +473,9 @@ export default function CellEditorDialog({
         >
           <TabsList className="h-auto flex flex-wrap">
             {ENGINE_ROLES.map((role) => {
-              const count = positionsByRole[role.key]?.length || 0;
+              const authoredCount = positionsByRole[role.key]?.length || 0;
+              const tabTarget = perRoleTargets[role.key];
+              const tabOver = tabTarget != null && authoredCount > tabTarget;
               return (
                 <TabsTrigger
                   key={role.key}
@@ -363,8 +484,13 @@ export default function CellEditorDialog({
                   data-testid={`engine-role-tab-${role.key}`}
                 >
                   {role.label}
-                  <Badge variant="secondary" className="text-[10px]">
-                    {count}
+                  <Badge
+                    variant={tabOver ? "destructive" : "secondary"}
+                    className="text-[10px]"
+                    data-testid={`engine-role-tab-${role.key}-count`}
+                  >
+                    {authoredCount}
+                    {tabTarget != null ? `/${tabTarget}` : ""}
                   </Badge>
                 </TabsTrigger>
               );
@@ -373,12 +499,52 @@ export default function CellEditorDialog({
 
           {ENGINE_ROLES.map((role) => {
             const list = positionsByRole[role.key] || [];
+            const tabAuthored = list.length;
+            const tabTarget = perRoleTargets[role.key];
+            const tabOver = tabTarget != null && tabAuthored > tabTarget;
             return (
               <TabsContent
                 key={role.key}
                 value={role.key}
                 className="space-y-2 mt-3"
               >
+                {/* Per-tab authored/target banner */}
+                {!isDefaults && (
+                  <div
+                    className={
+                      "rounded-md border px-2.5 py-1.5 text-[11px] " +
+                      (tabOver
+                        ? "border-amber-300 bg-amber-50 text-amber-900"
+                        : "border-slate-200 bg-slate-50 text-slate-700")
+                    }
+                    data-testid={`engine-role-tab-banner-${role.key}`}
+                  >
+                    {tabOver ? (
+                      <div className="flex items-start gap-1.5">
+                        <AlertTriangle className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                        <span>
+                          <strong>{tabAuthored} authored / {tabTarget} target</strong>{" "}
+                          — this engine role is over budget. The engine will
+                          drop {tabAuthored - tabTarget} lowest-priority
+                          position{tabAuthored - tabTarget === 1 ? "" : "s"}{" "}
+                          (optional first, then conditional) to fit.
+                        </span>
+                      </div>
+                    ) : (
+                      <span>
+                        <strong className="tabular-nums">
+                          {tabAuthored} authored / {tabTarget != null ? tabTarget : "—"} target
+                        </strong>
+                        {tabTarget == null && (
+                          <span className="opacity-80 ml-1.5">
+                            — no per-role budget for this engine role.
+                          </span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {positionsQuery.isLoading && (
                   <div className="text-xs text-muted-foreground">
                     Loading positions…

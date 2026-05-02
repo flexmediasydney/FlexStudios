@@ -71,10 +71,9 @@ export default function HelpDrawer({ open, onOpenChange }) {
                 Positions inherit through a 4-step chain (broadest → narrowest):
               </p>
               <ol className="list-decimal pl-5 space-y-1 text-muted-foreground mt-2">
-                <li><strong>Tier defaults</strong> — applies to every package at this price tier</li>
-                <li><strong>Project-type overlay</strong> — narrows to one project type</li>
-                <li><strong>Package overlay</strong> — narrows to one package</li>
-                <li><strong>Cell</strong> — package × tier (× project type × product)</li>
+                <li><strong>Tier defaults</strong> — applies to every package at this price tier (<code>scope_type=price_tier</code>)</li>
+                <li><strong>Project-type overlay</strong> — narrows to one project type (<code>scope_type=project_type</code>)</li>
+                <li><strong>Cell</strong> — package × price tier (<code>scope_type=package_x_price_tier</code>)</li>
               </ol>
               <p className="text-muted-foreground mt-2">
                 A row override at a narrower scope <em>replaces</em> the
@@ -108,11 +107,56 @@ export default function HelpDrawer({ open, onOpenChange }) {
               <h3 className="font-semibold mb-1.5">Engine grade vs price tier</h3>
               <p className="text-muted-foreground">
                 <strong>Price tier</strong> (Standard / Premium) determines
-                what the recipe targets. <strong>Engine grade</strong>{" "}
-                (Volume / Refined / Editorial) is derived per-round from the
-                property's shoot quality and steers the Stage 4 voice
-                anchor — it does <em>not</em> affect slot allocation.
+                what the recipe targets and IS the matrix column axis.
+                Each (package × price tier) cell is its own recipe.
               </p>
+              <p className="text-muted-foreground mt-2">
+                <strong>Engine grade</strong> (Volume / Refined / Editorial)
+                is derived per-round from the property's shoot quality and
+                steers the Stage 4 voice anchor only — it does <em>not</em>{" "}
+                affect slot allocation. Recipes apply equally regardless of
+                grade. Grade does NOT appear in the matrix.
+              </p>
+            </section>
+
+            <section>
+              <h3 className="font-semibold mb-1.5">Authored / target dual-number</h3>
+              <p className="text-muted-foreground">
+                Each cell shows{" "}
+                <strong className="tabular-nums">X authored / Y target</strong>:
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-muted-foreground mt-2">
+                <li>
+                  <strong>X (authored)</strong> = positions you've
+                  explicitly defined in this cell's scope (rows in{" "}
+                  <code>gallery_positions</code>).
+                </li>
+                <li>
+                  <strong>Y (target)</strong> = images the package
+                  contractually delivers for this price tier. Read from
+                  <code> packages.standard_tier.image_count</code> /{" "}
+                  <code>premium_tier.image_count</code> when present.
+                </li>
+                <li>
+                  <strong>Sum-of-products fallback</strong>: if the tier
+                  jsonb doesn't carry an <code>image_count</code>, the UI
+                  sums the package's <code>products[].quantity</code>{" "}
+                  entries — using each product's tier-specific{" "}
+                  <code>image_count</code> when available. The cell tooltip
+                  shows the breakdown:{" "}
+                  <em>"Target: 5 (Sales) + 3 (Drone) + 1 (Floor Plans) = 9"</em>.
+                </li>
+                <li>
+                  Cell colour: <span className="text-emerald-700">green</span>{" "}
+                  when 0 &lt; X ≤ Y, <span className="text-amber-700">amber</span>{" "}
+                  when X &gt; Y (over-target warning), slate when X = 0.
+                </li>
+                <li>
+                  Over-target authoring drops lowest-priority positions
+                  (optional first, then conditional) to fit the package
+                  target.
+                </li>
+              </ul>
             </section>
 
             <section>

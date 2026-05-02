@@ -7,6 +7,10 @@
  * "10 positions for Silver Standard: 2 kitchens, 1 master bedroom, …"
  * rather than the old engine-internal slot taxonomy.
  *
+ * W11.6.28b correction: the matrix axes are package × PRICE TIER
+ * (Standard / Premium), NOT engine grade. Engine grade is per-round
+ * derived and only steers Stage 4 voice anchor.
+ *
  * Top-level layout:
  *   1. Help banner + slide-out drawer for deeper docs
  *   2. Auto-promotion review queue card (R2's mechanic; hidden when empty)
@@ -41,11 +45,11 @@ export default function RecipeMatrixTab() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [activeCell, setActiveCell] = useState(null);
 
-  // Cell-counts query: one bulk SELECT to populate every cell's badge in
-  // one round-trip. Reads scope_type / scope_ref_id / scope_ref_id_2
-  // (the mig 443 schema) and bucket-keys results by:
-  //   "{package_id}|{grade_id}"        for package_grade rows (cells)
-  //   "__defaults__|{grade_id}"        for price_tier rows (tier defaults)
+  // Cell-counts query: one bulk SELECT to populate every cell's authored
+  // count badge in one round-trip. Reads scope_type / scope_ref_id /
+  // scope_ref_id_2 (the mig 443 schema) and bucket-keys results by:
+  //   "{package_id}|{price_tier_id}"  for package_x_price_tier rows (cells)
+  //   "__defaults__|{price_tier_id}"  for price_tier rows (tier defaults)
   // Other scope_types are ignored at this surface — they show up only
   // inside the cell editor's inheritance breadcrumb.
   const cellCountsQuery = useQuery({
@@ -68,7 +72,7 @@ export default function RecipeMatrixTab() {
       const counts = {};
       for (const r of res.data || []) {
         let key = null;
-        if (r.scope_type === "package_grade") {
+        if (r.scope_type === "package_x_price_tier") {
           key = `${r.scope_ref_id}|${r.scope_ref_id_2}`;
         } else if (r.scope_type === "price_tier") {
           key = `__defaults__|${r.scope_ref_id}`;
@@ -82,17 +86,14 @@ export default function RecipeMatrixTab() {
 
   const refs = refsQuery.data;
 
-  // Per-tier expected target — used for cell health colouring. Today the
-  // engine treats `expected_count_target` as a per-package metric; the
-  // matrix surface uses the package's own target as the column-tier
-  // expected. (Tier-specific targets are a follow-up; surfacing the
-  // package number is the right interim default.)
-  const expectedTargets = useMemo(() => {
-    if (!refs) return {};
-    const out = {};
-    for (const t of refs.tiers || []) out[t.id] = null;
-    return out;
-  }, [refs]);
+  // Lookup map for products — used by the matrix to derive per-cell targets
+  // (sum of products[].quantity falling back to per-product tier
+  // image_count).
+  const productLookup = useMemo(() => {
+    const m = new Map();
+    for (const p of refs?.products || []) m.set(p.id, p);
+    return m;
+  }, [refs?.products]);
 
   if (refsQuery.isLoading) {
     return (
@@ -115,19 +116,37 @@ export default function RecipeMatrixTab() {
 
   return (
     <div className="space-y-3" data-testid="recipe-matrix-tab">
-      {/* Help banner */}
+      {/* Help banner — W11.6.28b copy (price tier axis + dual-number
+          authored/target explanation). */}
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900 flex items-start gap-2.5">
         <Sparkles className="h-4 w-4 mt-0.5 text-blue-600 flex-shrink-0" />
-        <div className="flex-1 leading-relaxed">
-          A <strong>recipe</strong> defines which gallery <strong>positions</strong>{" "}
-          the engine targets for a given (package × grade) cell. Click a cell to
-          edit. Each position has constraints (room, shot scale, compression,
-          etc.) — leave constraints blank to let the engine pick.
-          <div className="mt-1 text-blue-800/90">
-            <strong>Engine grade</strong> (Volume / Refined / Editorial) is the
-            quality bar the recipe targets and is derived per-round from the
-            property's shoot quality. The grade also steers the Stage 4 voice
-            anchor downstream.
+        <div className="flex-1 leading-relaxed space-y-1">
+          <div className="font-semibold">
+            Recipe Matrix — what each cell means
+          </div>
+          <div>
+            Each cell defines the gallery <strong>positions</strong> the
+            engine targets for one (package × price tier). Click a cell to
+            edit. The matrix axes are:
+            <ul className="list-disc pl-5 mt-1">
+              <li><strong>Rows</strong> = packages (Silver, Gold, AI, …)</li>
+              <li><strong>Columns</strong> = price tier (Standard / Premium)</li>
+            </ul>
+          </div>
+          <div>
+            Each cell shows <strong>AUTHORED / TARGET</strong>.{" "}
+            <strong>AUTHORED</strong> = positions you've explicitly defined
+            in this recipe. <strong>TARGET</strong> = images the package
+            contractually delivers. The gap is filled by AI when{" "}
+            <code>engine_mode = recipe_with_ai_backfill</code> (default).
+            Over-target authoring (X &gt; Y) drops lowest-priority
+            positions to fit.
+          </div>
+          <div className="text-blue-800/90 mt-1">
+            <strong>Engine grade</strong> (Volume / Refined / Editorial) is
+            derived per-round from the shoot quality and steers the Stage 4
+            voice anchor. It does <em>not</em> affect slot allocation —
+            recipes apply equally regardless of grade.
           </div>
         </div>
         <Button
@@ -148,9 +167,9 @@ export default function RecipeMatrixTab() {
       {/* Matrix */}
       <MatrixGrid
         packages={refs.packages}
-        tiers={refs.tiers}
+        priceTiers={refs.priceTiers || refs.tiers}
+        productLookup={productLookup}
         cellCounts={cellCountsQuery.data || {}}
-        expectedTargets={expectedTargets}
         loading={cellCountsQuery.isLoading}
         onCellClick={(cell) => setActiveCell(cell)}
       />
@@ -166,8 +185,9 @@ export default function RecipeMatrixTab() {
         }}
         cell={activeCell}
         packages={refs.packages}
-        tiers={refs.tiers}
+        priceTiers={refs.priceTiers || refs.tiers}
         templates={refs.slots}
+        productLookup={productLookup}
       />
 
       {/* Help drawer (deeper docs) */}

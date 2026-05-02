@@ -4,20 +4,28 @@
  * Each hook is a thin wrapper around the relevant Supabase query so the
  * UI components stay declarative.
  *
- *   useRecipeRefs()          — packages, tiers, project_types, products,
- *                              slot_definitions (templates).
- *   usePositionsForCell({pkg,tier,projectType}) — gallery_positions for
- *                              one matrix cell (with inheritance metadata
- *                              when the resolve_gallery_positions_for_cell
- *                              RPC is available; falls back to direct
- *                              SELECT otherwise so the UI works pre-RPC).
+ *   useRecipeRefs()          — packages (with full tier jsonb + products[]),
+ *                              priceTiers (Standard / Premium from
+ *                              package_price_tiers), project_types,
+ *                              products (with tier jsonb), slot_definitions.
+ *   usePositionsForCell({pkg,priceTier,projectType}) — gallery_positions
+ *                              for one matrix cell (with inheritance
+ *                              metadata when the
+ *                              resolve_gallery_positions_for_cell RPC is
+ *                              available; falls back to direct SELECT
+ *                              otherwise so the UI works pre-RPC).
  *   useAxisDistribution(axis) — dropdown values for a constraint axis.
  *   usePromotionSuggestions() — pending auto-promotion suggestions
  *                              (R2's mechanic; safe-empty when missing).
- *   useTierDefaultsCounts(refs) — per-tier expected_count_target so cells
- *                              can colour themselves green/amber.
  *
  * All queries use a 60 s stale time — config data is low-mutation.
+ *
+ * Matrix axes (W11.6.28b — Joseph's correction):
+ *   rows    = packages
+ *   columns = price tiers (Standard / Premium) — package_price_tiers table
+ *
+ * Engine grade is NOT a matrix axis. It's per-round derived and only
+ * steers Stage 4 voice anchor.
  */
 
 import { useQuery } from "@tanstack/react-query";
@@ -33,13 +41,16 @@ const STALE_MS = 60_000;
 
 /**
  * Reference data for the matrix:
- *   packages — rows with id, name, expected_count_target,
- *              expected_count_tolerance_below/_above, engine_mode_override
- *   tiers    — shortlisting_tiers (the post-rename table is
- *              `shortlisting_grades`; if R1's mig 443 has shipped we'll
- *              read that, otherwise fall back to `shortlisting_tiers`).
+ *   packages   — id, name, products[] jsonb, standard_tier/premium_tier
+ *                jsonb, expected_count_target, tolerance bands,
+ *                engine_mode_override.
+ *   priceTiers — package_price_tiers rows (Standard / Premium). NEW in
+ *                W11.6.28b — replaces engine grades on the column axis.
  *   project_types — id, name
- *   products — id, name
+ *   products   — id, name, standard_tier/premium_tier jsonb,
+ *                engine_role, min_quantity, max_quantity. The tier jsonb
+ *                lets us read per-product image_count for the sum-of-
+ *                products target fallback.
  *   slot_definitions — the 10 active templates that power "Insert from
  *                      template" + the Advanced expander.
  */
@@ -47,11 +58,11 @@ export function useRecipeRefs() {
   return useQuery({
     queryKey: ["recipe-matrix-refs"],
     queryFn: async () => {
-      // ── Packages ─────────────────────────────────────────────────
+      // ── Packages (full tier jsonb + products[] for target derivation) ──
       const packagesRes = await supabase
         .from("packages")
         .select(
-          "id, name, expected_count_target, expected_count_tolerance_below, expected_count_tolerance_above, engine_mode_override",
+          "id, name, products, standard_tier, premium_tier, expected_count_target, expected_count_tolerance_below, expected_count_tolerance_above, engine_mode_override",
         )
         .eq("is_active", true)
         .order("name");
@@ -62,7 +73,7 @@ export function useRecipeRefs() {
         const fallback = await supabase
           .from("packages")
           .select(
-            "id, name, expected_count_target, expected_count_tolerance_below, expected_count_tolerance_above",
+            "id, name, products, standard_tier, premium_tier, expected_count_target, expected_count_tolerance_below, expected_count_tolerance_above",
           )
           .eq("is_active", true)
           .order("name");
@@ -72,40 +83,48 @@ export function useRecipeRefs() {
         throw new Error(packagesRes.error.message);
       }
 
-      // ── Engine grades (column axis on the matrix) ───────────────
+      // ── Price tiers (column axis on the matrix) ─────────────────
       //
-      // Mig 443 renamed `shortlisting_tiers` → `shortlisting_grades` and
-      // renamed the operator-facing display_name set to Volume / Refined /
-      // Editorial. The `tier_code` column stayed (it's used for join
-      // keys); only the table name + display_name changed.
-      //
-      // Pre-mig 443 fallback: read shortlisting_tiers if the renamed
-      // table doesn't exist yet. We surface a normalised shape so the UI
-      // never has to care which name the DB has.
-      let tiers;
-      const gradesRes = await supabase
-        .from("shortlisting_grades")
-        .select("id, tier_code, display_name")
-        .eq("is_active", true)
+      // W11.6.28b: read from `package_price_tiers` (mig 446). This is the
+      // canonical source of price-tier UUIDs for the matrix.
+      // Pre-mig 446 fallback: synthesize the two known tiers with the
+      // hardcoded UUIDs so the UI keeps rendering even when the table is
+      // missing (this avoids a bricked Settings tab during a deploy gap).
+      const STABLE_PRICE_TIER_UUIDS = {
+        standard: "a0000000-0000-4000-a000-000000000001",
+        premium: "a0000000-0000-4000-a000-000000000002",
+      };
+      let priceTiers;
+      const ptRes = await supabase
+        .from("package_price_tiers")
+        .select("id, code, display_name, display_order")
         .order("display_order");
-      if (gradesRes.error) {
-        const tierRes = await supabase
-          .from("shortlisting_tiers")
-          .select("id, tier_code, display_name")
-          .eq("is_active", true)
-          .order("display_order");
-        if (tierRes.error) throw new Error(tierRes.error.message);
-        tiers = (tierRes.data || []).map((t) => ({
-          id: t.id,
-          code: t.tier_code,
-          display_name: t.display_name,
-        }));
+      if (ptRes.error) {
+        if (
+          /(does not exist|relation .* does not exist)/i.test(
+            ptRes.error.message || "",
+          )
+        ) {
+          // Pre-mig synthesis with stable UUIDs.
+          priceTiers = [
+            {
+              id: STABLE_PRICE_TIER_UUIDS.standard,
+              code: "standard",
+              display_name: "Standard",
+              display_order: 1,
+            },
+            {
+              id: STABLE_PRICE_TIER_UUIDS.premium,
+              code: "premium",
+              display_name: "Premium",
+              display_order: 2,
+            },
+          ];
+        } else {
+          throw new Error(ptRes.error.message);
+        }
       } else {
-        tiers = (gradesRes.data || []).map((t) => ({
-          id: t.id,
-          code: t.tier_code,
-          display_name: t.display_name,
-        }));
+        priceTiers = ptRes.data || [];
       }
 
       // ── Project types ───────────────────────────────────────────
@@ -115,10 +134,12 @@ export function useRecipeRefs() {
         .order("name");
       if (projectTypesRes.error) throw new Error(projectTypesRes.error.message);
 
-      // ── Products ────────────────────────────────────────────────
+      // ── Products (incl. tier jsonb for sum-of-products target fallback) ─
       const productsRes = await supabase
         .from("products")
-        .select("id, name")
+        .select(
+          "id, name, engine_role, standard_tier, premium_tier, min_quantity, max_quantity",
+        )
         .eq("is_active", true)
         .order("name")
         .limit(500);
@@ -146,7 +167,12 @@ export function useRecipeRefs() {
 
       return {
         packages: packages || [],
-        tiers: tiers || [],
+        // W11.6.28b: matrix columns are price tiers, not engine grades.
+        // `tiers` is kept for now as an alias of `priceTiers` so any
+        // straggling consumer keeps compiling — it's deprecated and
+        // should not be read in new code.
+        priceTiers: priceTiers || [],
+        tiers: priceTiers || [],
         projectTypes: projectTypesRes.data || [],
         products: productsRes.data || [],
         slots: Array.from(slotByLatest.values()),
@@ -164,9 +190,12 @@ export function useRecipeRefs() {
  * `gallery_positions` against the `scope_type`/`scope_ref_id` model
  * (per mig 443) if the RPC isn't deployed yet.
  *
- * Cell scope_type vocabulary used here (mirrors mig 443 doc):
- *   'package_grade'   → ref_id=package_id, ref_id_2=grade_id (cell)
- *   'price_tier'      → ref_id=grade_id           (tier defaults pseudo-row)
+ * Cell scope_type vocabulary used here (W11.6.28b — price-tier axis):
+ *   'package_x_price_tier' → ref_id=package_id, ref_id_2=price_tier_id
+ *                            (cell)
+ *   'price_tier'           → ref_id=price_tier_id  (tier defaults pseudo-row)
+ *
+ * `priceTierId` MUST be a UUID from package_price_tiers (mig 446).
  *
  * Returned shape:
  *   {
@@ -224,12 +253,12 @@ export function usePositionsForCell({
 
       // Fallback: direct SELECT against the scope_type / scope_ref_id model.
       // For the matrix cell (package × price_tier), scope_type is
-      // 'package_grade' with scope_ref_id = package_id and
-      // scope_ref_id_2 = grade_id. For the "Tier defaults" pseudo-row
+      // 'package_x_price_tier' with scope_ref_id = package_id and
+      // scope_ref_id_2 = price_tier_id. For the "Tier defaults" pseudo-row
       // (no package), scope_type = 'price_tier' with scope_ref_id =
-      // grade_id and scope_ref_id_2 = NULL.
+      // price_tier_id and scope_ref_id_2 = NULL.
       const isDefaults = !packageId;
-      const scopeType = isDefaults ? "price_tier" : "package_grade";
+      const scopeType = isDefaults ? "price_tier" : "package_x_price_tier";
       let q = supabase
         .from("gallery_positions")
         .select("*")
