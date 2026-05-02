@@ -748,9 +748,22 @@ export default function Stage4CorrectionsLane({ roundId }) {
             </div>
           )}
 
-        {/* Per-stem cards (W11.6.1-hotfix grouping) */}
+        {/* Per-stem cards (W11.6.1-hotfix grouping).
+            W11.6.20 density-grid: lay out the per-stem cards as a CSS
+            grid (auto-fill ~360px floor) so the lane fills horizontally
+            on wide viewports instead of a wasted vertical scroll of
+            single-card rows. Each card retains its internal flex layout
+            (thumbnail + body); we only re-arrange the OUTER stack. The
+            360px floor is intentionally larger than the swimlane MD
+            floor (240px) because each card embeds a thumbnail + diff
+            rows + 3 action buttons, so it needs more horizontal room
+            to render readably. */}
         {groupedByStem.length > 0 && (
-          <div className="space-y-2">
+          <div
+            data-testid="stage4-corrections-grid"
+            className="grid gap-2"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))" }}
+          >
             {groupedByStem.map(({ stem, rows: stemRows }) => (
               <GroupedCorrectionCard
                 key={stem}

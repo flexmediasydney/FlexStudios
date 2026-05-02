@@ -529,10 +529,19 @@ export default function ShortlistingCard({
       )}
     >
       {/* Thumbnail — W11.6.2: 3:2 (Canon R5 native is 6240x4160 = 1.5).
-          W11.6.1-hotfix-2 BUG #3: switch wrapper width on previewSize so
-          the toolbar's SM/MD/LG toggle visibly changes the thumbnail size.
-          aspect-[3/2] inside DroneThumbnail derives the height; we pin a
-          max-width on the wrapper so the parent column flexes around it.
+          W11.6.1-hotfix-2 BUG #3: previewSize used to clamp the wrapper
+          via max-w-[96px] / max-w-[256px] so the thumb visibly shrunk
+          when SM was selected — but the parent COLUMN was a vertical
+          stack (`space-y-2`), so SM cards left huge horizontal dead
+          space.
+
+          W11.6.20 density-grid: previewSize now drives DENSITY at the
+          bucket level — each bucket is a CSS grid whose minmax-floor
+          shrinks for SM and grows for LG. Cards fill their grid cell
+          width (no max-w here), and aspect-[3/2] inside DroneThumbnail
+          still derives the thumbnail height. The card body sits below
+          the thumbnail and naturally narrows with the cell, which is
+          exactly what we want — denser layout, narrower cards.
 
           W11.6.20 swimlane-lightbox: when onImageClick is provided, the
           thumbnail wrapper becomes a button that opens the lightbox. We
@@ -545,11 +554,7 @@ export default function ShortlistingCard({
           inspection (the image) is now click-to-lightbox; everything
           else still works normally. */}
       <div
-        className={cn(
-          "relative",
-          previewSize === "sm" && "max-w-[96px]",
-          previewSize === "lg" && "max-w-[256px]",
-        )}
+        className={cn("relative")}
         data-testid={`shortlisting-card-thumb-${previewSize}`}
         // Make the thumb itself the click target — semantic role=button
         // for AT users; cursor-pointer + hover ring for sighted users.

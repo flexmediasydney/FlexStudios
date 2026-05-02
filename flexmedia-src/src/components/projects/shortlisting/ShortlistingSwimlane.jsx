@@ -77,13 +77,37 @@ import SwimlaneToolbar, {
   SwimlaneSlotCounter,
   useSwimlaneElapsedTimer,
 } from "./SwimlaneToolbar";
-import { useSwimlaneSettings } from "@/hooks/useSwimlaneSettings";
+import { useSwimlaneSettings, PREVIEW_SIZES } from "@/hooks/useSwimlaneSettings";
 import {
   PHASE_OF_SLOT,
   SLOT_DISPLAY_NAMES,
   slotImportanceKey,
 } from "@/lib/swimlaneSlots";
 import { useAuth } from "@/lib/AuthContext";
+
+// W11.6.20 density-grid: helper to resolve the minmax(<px>) floor for the
+// CSS grid that lays out cards inside each bucket. The toolbar's SM/MD/LG
+// toggle now drives DENSITY (cards-per-row) — not just thumbnail size —
+// because the original behaviour left huge horizontal dead-space when SM
+// was selected. See PREVIEW_SIZES.gridMinPx for the per-size floors.
+//
+// Exported for unit tests so we can assert the px floor without mounting
+// the full swimlane (which has 10+ data dependencies).
+export function previewGridMinPx(previewSize) {
+  return PREVIEW_SIZES[previewSize]?.gridMinPx ?? PREVIEW_SIZES.md.gridMinPx;
+}
+
+export function previewGridStyle(previewSize) {
+  // `auto-fill` packs as many columns as fit the lane width; `minmax` lets
+  // each column flex to fill remaining space so a row of 3 cards in an MD
+  // lane spreads evenly instead of clumping at the left. The ~1fr cap is
+  // intentional: cards never grow indefinitely, but they DO fill the row
+  // when there are fewer than the lane can hold.
+  return {
+    display: "grid",
+    gridTemplateColumns: `repeat(auto-fill, minmax(${previewGridMinPx(previewSize)}px, 1fr))`,
+  };
+}
 
 // Column definitions
 const COLUMNS = [
@@ -1746,7 +1770,20 @@ function SwimlaneColumn({
             <span className="uppercase tracking-wide">{column.label}</span>
             <span className="tabular-nums">{items.length}</span>
           </div>
-          <div className="p-2 space-y-2 min-h-[200px] max-h-[70vh] overflow-y-auto">
+          {/* W11.6.20 density-grid: bucket body is now a CSS grid driven by
+              previewSize. SM packs ~5–6 cards/row, MD ~3–4, LG ~2–3 — the
+              `auto-fill` math collapses to 1 column on narrow viewports so
+              mobile layout is unchanged. The grouped-by-slot path falls
+              back to a vertical stack of sub-lanes (each sub-lane is its
+              OWN grid). DnD is unaffected: @hello-pangea/dnd treats the
+              grid container the same as a flex container — grid items
+              are draggable, grid cells are valid drop targets. */}
+          <div
+            className="p-2 min-h-[200px] max-h-[70vh] overflow-y-auto"
+            data-testid={`swimlane-bucket-${column.key}`}
+            data-preview-size={previewSize}
+            style={!grouped && items.length > 0 ? { ...previewGridStyle(previewSize), gap: "0.5rem" } : undefined}
+          >
             {items.length === 0 ? (
               <div className="text-center py-6 text-[11px] text-muted-foreground">
                 {snapshot.isDraggingOver
@@ -1866,7 +1903,17 @@ function SwimlaneGroupedList({
               </span>
             </button>
             {isOpen && (
-              <div className="p-1 space-y-1">
+              // W11.6.20 density-grid: each expanded sub-lane is its own
+              // grid so the sub-lane respects the same density semantics
+              // as a top-level bucket. The sub-lane is narrower (it's
+              // nested inside PROPOSED) so SM/MD/LG produce fewer
+              // cards-per-row than the top-level case — that's correct;
+              // auto-fill adapts to the available width.
+              <div
+                className="p-1"
+                data-preview-size={previewSize}
+                style={{ ...previewGridStyle(previewSize), gap: "0.25rem" }}
+              >
                 {subLane.items.map((item, i) => (
                   <SwimlaneCardRenderer
                     key={item.id}

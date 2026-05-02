@@ -37,10 +37,20 @@ export const SORT_OPTIONS = [
   { value: "group_index", label: "Group index" },
 ];
 
+// W11.6.20 density-grid: SM/MD/LG now drive a CSS grid auto-fill minmax in
+// each swimlane column (instead of just clamping the thumbnail width). The
+// `gridMinPx` value is the minimum card width for `repeat(auto-fill,
+// minmax(<gridMinPx>px, 1fr))` — smaller minmax → more columns per lane →
+// higher density. Targets at ~1200px-wide bucket area:
+//   - SM ≈ 5–6 cards/row (160px floor)
+//   - MD ≈ 3–4 cards/row (240px floor)
+//   - LG ≈ 2–3 cards/row (360px floor)
+// `px` is retained for the toolbar tooltip / aria-label so the legacy "96px"
+// copy still resolves to a reasonable thumbnail-side hint.
 export const PREVIEW_SIZES = {
-  sm: { px: 96, label: "Small" },
-  md: { px: 192, label: "Medium" },
-  lg: { px: 256, label: "Large" },
+  sm: { px: 96, gridMinPx: 160, label: "Small" },
+  md: { px: 192, gridMinPx: 240, label: "Medium" },
+  lg: { px: 256, gridMinPx: 360, label: "Large" },
 };
 
 const DEFAULT_SORT = "slot_importance";
