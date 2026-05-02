@@ -1,26 +1,25 @@
 /**
- * SettingsShortlistingPrompts — Wave 6 P8 follow-up
+ * SettingsShortlistingPrompts — master_admin-only editor for the engine's
+ * tunable prompt scaffolding.
  *
- * Master_admin-only editor for the engine's prompt scaffolding. Three pass
- * kinds are versioned in `shortlisting_prompt_versions` and read at runtime
- * by the corresponding edge function (with a hardcoded fallback in source).
+ * Currently exposes one pass kind, versioned in `shortlisting_prompt_versions`:
  *
  *   pass0_reject  — full Haiku user-message text for the hard-reject call.
  *                   Replaces HARD_REJECT_PROMPT verbatim when active.
- *   pass1_system  — Sonnet `system` message for Pass 1 classification. The
- *                   user_prefix (Stream B anchors, taxonomies, JSON schema)
- *                   continues to be auto-built by buildPass1Prompt() and is
- *                   NOT overridable here.
- *   pass2_system  — same shape as pass1_system but for Pass 2.
+ *
+ * Note: pass1_system + pass2_system used to live here too, but pass1/pass2
+ * were sunset in W11.7.10 (Shape D is the only engine now). The Stage 1 /
+ * Stage 4 prompts are now assembled in code from blocks under
+ * supabase/functions/_shared/visionPrompts/ and are not DB-tunable.
  *
  * Versioning: on save, INSERT new row at version+1 + is_active=true, then
  * UPDATE the prior active row to is_active=false. Roll back the insert if
- * deactivation fails. Mirror Phase 7 / Phase 1.5 contract.
+ * deactivation fails.
  *
- * Safety: if DB has no active row OR a query errors, runtime falls back to
+ * Safety: if DB has no active row OR the query errors, runtime falls back to
  * the hardcoded source. So a saved prompt that breaks the engine can be
- * reverted by toggling is_active off; the next pass call sees no DB row and
- * reverts to whatever's committed in code.
+ * reverted by toggling is_active off; the next call sees no DB row and uses
+ * whatever's committed in code.
  */
 
 import { useMemo, useState, useEffect } from "react";
@@ -64,24 +63,6 @@ const PASS_KINDS = [
       "Full Haiku user-message text used when scanning each composition for hard rejects (motion blur, lens cap, agent headshot, etc). The whole text below is sent verbatim alongside the image.",
     accent: "border-red-200 dark:border-red-900",
     iconTone: "text-red-600",
-  },
-  {
-    key: "pass1_system",
-    label: "Pass 1 — Classification system",
-    model: "claude-sonnet-4-6",
-    description:
-      "Sonnet system message that frames the reasoning-first classification call. The user_prefix (Stream B anchors, room/composition taxonomies, JSON schema) is still auto-built by the runtime — not editable here.",
-    accent: "border-blue-200 dark:border-blue-900",
-    iconTone: "text-blue-600",
-  },
-  {
-    key: "pass2_system",
-    label: "Pass 2 — Shortlisting system",
-    model: "claude-sonnet-4-6",
-    description:
-      "Sonnet system message for the single-call shortlisting pass with full universe context. The user_prefix (project/package context + every classification + slot definitions) is auto-built and not editable here.",
-    accent: "border-purple-200 dark:border-purple-900",
-    iconTone: "text-purple-600",
   },
 ];
 

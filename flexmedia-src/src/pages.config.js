@@ -155,9 +155,6 @@ const FinalsQADashboard = React.lazy(() => import('./pages/FinalsQADashboard'));
 // Folds 8+ scattered owner settings pages into one tabbed admin surface.
 const SettingsShortlistingCommandCenter = React.lazy(() => import('./pages/SettingsShortlistingCommandCenter'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
-const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
-const SettingsLegacyImport = React.lazy(() => import('./pages/SettingsLegacyImport'));
-const SettingsLegacyCrmReconciliation = React.lazy(() => import('./pages/SettingsLegacyCrmReconciliation'));
 const SettingsTonomoWebhooks = React.lazy(() => import('./pages/SettingsTonomoWebhooks'));
 const AIAuditLog = React.lazy(() => import('./pages/AIAuditLog'));
 const TeamDetails = React.lazy(() => import('./pages/TeamDetails'));
@@ -263,9 +260,6 @@ export const PAGES = {
     "Tasks": Tasks,
     "SettingsClients": SettingsClients,
     "SettingsDataConsistency": SettingsDataConsistency,
-    "SettingsLegacyPackageMapping": SettingsLegacyPackageMapping,
-    "SettingsLegacyImport": SettingsLegacyImport,
-    "SettingsLegacyCrmReconciliation": SettingsLegacyCrmReconciliation,
     "SettingsIntegrations": SettingsIntegrations,
     "SettingsNotifications": SettingsNotifications,
     "SettingsOrganisation": SettingsOrganisation,

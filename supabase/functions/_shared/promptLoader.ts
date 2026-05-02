@@ -13,9 +13,12 @@
  *     reverts to whatever was committed in code.
  *
  * Pass kinds:
- *   pass0_reject  — full Haiku user-message text for the hard-reject call
- *   pass1_system  — Sonnet `system` message for Pass 1 classification
- *   pass2_system  — Sonnet `system` message for Pass 2 shortlisting
+ *   pass0_reject  — full Haiku user-message text for the hard-reject call.
+ *
+ * Note: pass1_system + pass2_system existed pre-W11.7.10 but were sunset
+ * with the pass1/pass2 engine. Stage 1 / Stage 4 prompts are now assembled
+ * in code from supabase/functions/_shared/visionPrompts/ blocks and are
+ * not DB-tunable.
  *
  * Cost: a single SELECT per pass call. No caching today — Supabase RLS check
  * is fast enough at our volume. If we ever shortlist 1000+ rounds/hour we
@@ -24,7 +27,7 @@
 
 import { getAdminClient } from './supabase.ts';
 
-export type PassKind = 'pass0_reject' | 'pass1_system' | 'pass2_system';
+export type PassKind = 'pass0_reject';
 
 export interface ActivePrompt {
   text: string;
