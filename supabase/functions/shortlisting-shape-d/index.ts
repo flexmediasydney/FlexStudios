@@ -3,9 +3,11 @@
  * ────────────────────
  * Wave 11.7.1 — production Shape D shortlisting orchestrator.
  *
- * Replaces (Phase A coexistence) `shortlisting-pass1` + `shortlisting-pass2`
- * for rounds where `engine_settings.engine_mode = 'shape_d'` (or per-round
- * override `shortlisting_rounds.engine_mode = 'shape_d_*'`).
+ * Wave 11.7.10 sunset: this is now the ONLY shortlisting engine. The legacy
+ * `shortlisting-pass1` + `shortlisting-pass2` two-pass engine is retired —
+ * Shape D handles every round regardless of engine_settings/round
+ * engine_mode. A round persisted with engine_mode='two_pass' (legacy data)
+ * is treated as Shape D and stamped as 'shape_d_full' on completion.
  *
  * Spec: docs/design-specs/W11-7-unified-shortlisting-architecture.md
  *
@@ -38,8 +40,9 @@
  *
  * ─── RESPONSIBILITIES ─────────────────────────────────────────────────────────
  *
- *  1. Auth + RLS: master_admin/admin/manager + service-role (matches pass1).
- *  2. Engine-mode gate: 400 if engine_mode='two_pass' (caller must use pass1).
+ *  1. Auth + RLS: master_admin/admin/manager + service-role (former pass1
+ *     caller pattern).
+ *  2. (W11.7.10 sunset) Engine-mode gate removed — Shape D is the only engine.
  *  3. Round bootstrap: load shortlisting_rounds + projects + composition_groups.
  *  4. Property tier resolution: round.property_tier (default 'standard').
  *  5. Source type: defaults to 'internal_raw' for the production RAW workflow.
@@ -303,8 +306,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (cors) return cors;
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405, req);
 
-  // Auth: service-role bypass + master_admin/admin/manager allowed (matches
-  // pass1). The dispatcher passes a service-role JWT.
+  // Auth: service-role bypass + master_admin/admin/manager allowed (former
+  // pass1 caller pattern, retained as-is). The dispatcher passes a service-
+  // role JWT.
   const user = await getUserFromReq(req).catch(() => null);
   const isService = user?.id === '__service_role__';
   if (!isService) {
@@ -340,7 +344,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
   if (!roundId) return errorResponse('round_id (or job_id) required', 400, req);
 
-  // Project-access guard for non-service callers (matches pass1 audit defect #42).
+  // Project-access guard for non-service callers (former pass1 audit defect #42).
   if (!isService) {
     const adminLookup = getAdminClient();
     const { data: rowForAcl } = await adminLookup
@@ -586,15 +590,15 @@ async function preflightShapeDStage1(roundId: string): Promise<PreflightOk> {
     );
   }
 
-  // 3. Engine-mode gate
+  // 3. Engine-mode (W11.7.10 sunset): Shape D is the ONLY engine. Legacy
+  // rounds persisted with engine_mode='two_pass' fall through to shape_d_full
+  // here — we just log a warning and continue. The finalEngineMode below
+  // overwrites the row to 'shape_d_full' on completion.
   const roundEngineMode = await loadRoundEngineMode(admin, roundId);
-  const wantsShapeD = roundEngineMode?.startsWith('shape_d')
-    || (settings.engine_mode === 'shape_d' && (!roundEngineMode || roundEngineMode === 'two_pass'));
-  if (!wantsShapeD) {
-    throw new Error(
-      `round ${roundId} engine_mode is two_pass — use shortlisting-pass1. ` +
-      `Set engine_settings.engine_mode='shape_d' or shortlisting_rounds.engine_mode='shape_d_full' ` +
-      `to opt this round into Shape D.`,
+  if (roundEngineMode === 'two_pass') {
+    console.warn(
+      `[${GENERATOR}] round ${roundId} has legacy engine_mode='two_pass' — ` +
+      `treating as shape_d_full (W11.7.10 sunset)`,
     );
   }
 
@@ -858,8 +862,8 @@ async function runShapeDStage1Core(
   // W11.6.18 — resolve the active tier_config once per round so persist can
   // pick the W11 per-signal weighted rollup when signal_weights is configured.
   // Falls back to null (legacy hardcoded 4-axis blend) when engine_tier_id is
-  // missing or no active config exists. Mirrors the shortlisting-pass1 path
-  // and emits a shortlisting_events warning so admin notices.
+  // missing or no active config exists. Mirrors the former shortlisting-pass1
+  // path and emits a shortlisting_events warning so admin notices.
   const tierConfig: TierConfigRow | null = ctx.engine_tier_id
     ? await getActiveTierConfig(ctx.engine_tier_id)
     : null;
@@ -1102,10 +1106,15 @@ async function runShapeDStage1Core(
   // explicitly opted out of paying past the cap. The audit row still records
   // the partial successes (their cost is already spent and the
   // composition_classifications are landed).
+  // W11.7.10 sunset: never stamp 'two_pass' anymore — even on full failure
+  // we leave the round at shape_d_partial so a retry stays in Shape D land
+  // (the legacy two-pass engine is retired). Total-failure rounds will have
+  // zero successes recorded; the operator re-fires Stage 1 from the
+  // DispatcherPanel.
   const finalEngineMode = costCapExceeded
     ? 'shape_d_partial' /* recorded for audit, even though we'll throw below */
     : allFailed
-      ? 'two_pass' /* leave it for retry */
+      ? 'shape_d_partial' /* legacy 'two_pass' retry-leave value retired */
       : (partial ? 'shape_d_partial' : 'shape_d_full');
 
   // ── Cost cap exceeded (W6a F-E-001) — write audit then throw ─────────────
@@ -1178,7 +1187,7 @@ async function runShapeDStage1Core(
 
   // ── Stamp engine_mode + cost on shortlisting_rounds ──────────────────────
   {
-    // Accumulate cost across retries (matches pass1 audit defect #5 pattern).
+    // Accumulate cost across retries (former pass1 audit defect #5 pattern).
     const { data: priorRound } = await admin
       .from('shortlisting_rounds')
       .select('stage_1_total_cost_usd')

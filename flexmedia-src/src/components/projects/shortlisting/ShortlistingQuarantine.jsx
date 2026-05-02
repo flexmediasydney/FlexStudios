@@ -124,21 +124,26 @@ export default function ShortlistingQuarantine({ roundId }) {
       // return this group as eligible for re-classification (it filters
       // out groups with a quarantine row).
       await api.entities.ShortlistingQuarantine.delete(restoreDialog.id);
-      // Trigger pass1 for the round — it'll pick up just this group since
-      // already-classified compositions are excluded by the RPC.
-      // Burst 19 OO2: api.functions.invoke wraps params with { body: ... }
-      // internally; the previous { body: { round_id } } double-wrapped and
-      // Pass 1 saw req.json() = { body: { round_id: ... } } with no top-
-      // level round_id field. Restore-to-round was completely broken.
+      // W11.7.10 sunset: previously invoked `shortlisting-pass1` here. The
+      // legacy two-pass engine is retired — restore now re-classifies via
+      // the Shape D Stage 1 orchestrator. Shape D's idempotency loader
+      // skips already-classified groups, so it'll pick up just the restored
+      // composition. Direct invoke is best-effort; if it fails the operator
+      // can re-fire from the DispatcherPanel.
       try {
-        await api.functions.invoke("shortlisting-pass1", {
+        await api.functions.invoke("shortlisting-shape-d", {
           round_id: roundId,
         });
         toast.success("Restored and re-classification triggered.");
-      } catch (passErr) {
-        // The delete succeeded; pass1 invoke is best-effort. Surface but don't fail.
-        console.warn("[ShortlistingQuarantine] pass1 invoke failed:", passErr);
-        toast.success("Restored. Run Pass 1 manually to re-classify.");
+      } catch (shapeErr) {
+        // The delete succeeded; shape-d invoke is best-effort. Surface but don't fail.
+        console.warn(
+          "[ShortlistingQuarantine] shortlisting-shape-d invoke failed:",
+          shapeErr,
+        );
+        toast.success(
+          "Restored. Re-fire Stage 1 from the Dispatcher panel to re-classify.",
+        );
       }
       queryClient.invalidateQueries({
         queryKey: ["shortlisting_quarantine", roundId],
@@ -317,7 +322,7 @@ export default function ShortlistingQuarantine({ roundId }) {
               {restoreDialog?.file_stem || "—"} was flagged as{" "}
               <strong>{REASON_LABEL[restoreDialog?.reason] || restoreDialog?.reason}</strong>{" "}
               by Pass 0. Restoring will delete the quarantine flag and
-              re-trigger Pass 1 classification just for this composition.
+              re-trigger Shape D Stage 1 classification just for this composition.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

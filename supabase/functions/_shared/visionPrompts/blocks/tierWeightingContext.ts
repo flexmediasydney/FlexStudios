@@ -1,20 +1,22 @@
 /**
  * tierWeightingContext.ts — Wave 8 (W7.6 composable block).
  *
- * Spec: docs/design-specs/W8-tier-configs.md §4 (Pass 2: tier_config informs
- * the prompt) + R10 (opt-in via engine_settings.pass2_tier_weighting_context_enabled).
+ * Spec: docs/design-specs/W8-tier-configs.md §4 (former Pass 2: tier_config
+ * informs the prompt) + R10 (opt-in via the legacy
+ * engine_settings.pass2_tier_weighting_context_enabled flag).
  *
- * Renders an opt-in context block for the Pass 2 prompt that surfaces the
+ * Renders an opt-in context block for the slot-fill prompt that surfaces the
  * tier's dimension priorities. The model uses this to phrase acceptance/
  * rejection reasoning when scores are close to the Tier anchor — knowing
  * "this round weights aesthetic at 0.35 vs technical 0.20" helps the model
  * pick the right tie-breaker between two Tier-P-anchor compositions.
  *
  * IMPORTANT: this block is OPT-IN, gated by an engine_settings flag. The
- * caller (shortlisting-pass2) reads `engine_settings.pass2_tier_weighting_context_enabled`
- * (default TRUE) and decides whether to include this block in the prompt.
- * When disabled, the block is omitted entirely (not just empty) so the
- * blockVersions map for that round records the absence.
+ * (former pass2; now Shape D) caller reads
+ * `engine_settings.pass2_tier_weighting_context_enabled` (default TRUE) and
+ * decides whether to include this block in the prompt. When disabled, the
+ * block is omitted entirely (not just empty) so the blockVersions map for
+ * that round records the absence.
  *
  * Block-version provenance: BUMP this version constant when the text changes.
  * Bumping a tier_config weight value does NOT bump this block's version —

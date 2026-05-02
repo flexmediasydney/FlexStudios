@@ -1,16 +1,18 @@
 /**
- * slotAssignment.ts — pure helper for replaying Pass 2's slot-picking math.
+ * slotAssignment.ts — pure helper for replaying the slot-picking math
+ * (formerly Pass 2's job; W11.7.10 sunset folded into Shape D Stage 4).
  *
  * Spec: docs/design-specs/W8-tier-configs.md §5 (re-simulation safeguard).
  *
- * Pass 2 today calls Sonnet for the full universe + emits both winners and
- * a coverage_notes prose paragraph. The DECISION ITSELF (which composition
- * wins each slot) is structurally pure: for each slot, pick the highest-
- * scoring eligible composition. Pulling that math out of `shortlisting-pass2`
- * into this module lets `simulate-tier-config` replay the math under draft
- * tier_config weights without spending an LLM round-trip.
+ * The slot-fill caller (formerly shortlisting-pass2; now Shape D's
+ * synthesis stage) calls Sonnet for the full universe + emits both winners
+ * and a coverage_notes prose paragraph. The DECISION ITSELF (which
+ * composition wins each slot) is structurally pure: for each slot, pick the
+ * highest-scoring eligible composition. Pulling that math into this module
+ * lets `simulate-tier-config` replay the math under draft tier_config
+ * weights without spending an LLM round-trip.
  *
- * The decision narrative (Pass 2's coverage_notes + phase3 justifications)
+ * The decision narrative (coverage_notes + phase3 justifications)
  * is NOT replayed — re-simulation only computes the slot winners + alternatives,
  * not the prose. That's the right scope: re-simulation answers "would the
  * draft change which compositions get picked?" — the prose isn't part of the
@@ -28,9 +30,10 @@
  *   2. Hard rejects — when `hardRejectThresholds` is provided, any composition
  *      with `technical_score < threshold.technical OR lighting_score <
  *      threshold.lighting` is dropped from candidacy for every slot. This
- *      mirrors what the Pass 2 prompt asks the model to do (W7.7 spec §
- *      hard_reject_thresholds), but enforced numerically at re-simulation
- *      time so the simulator's math is reproducible without the LLM.
+ *      mirrors what the slot-fill prompt (formerly Pass 2; now Shape D
+ *      Stage 4) asks the model to do (W7.7 spec § hard_reject_thresholds),
+ *      but enforced numerically at re-simulation time so the simulator's
+ *      math is reproducible without the LLM.
  *   3. Top-3 — for each slot, return the winner + 2 alternatives (rank 2 + 3),
  *      sorted by combined_score DESC, breaking ties on `group_index` ASC for
  *      determinism (matches spec L13 "group_index ASC tie-breaker").

@@ -2,8 +2,9 @@
  * assemble.ts — Wave 7 P1-10 (W7.6): typed assembly API for vision prompts.
  *
  * Joins ordered lists of `BlockEntry` fragments (system + user) into the
- * `AssembledPrompt` shape consumed by `shortlisting-pass1` / `shortlisting-pass2`
- * (system message + userPrefix + provenance map of block versions).
+ * `AssembledPrompt` shape consumed by `shortlisting-shape-d` (formerly the
+ * sunset `shortlisting-pass1` / `shortlisting-pass2` pair) — system message
+ * + userPrefix + provenance map of block versions.
  *
  * The API is intentionally explicit:
  *   - Caller passes `BlockEntry[]` (name + version + rendered text).

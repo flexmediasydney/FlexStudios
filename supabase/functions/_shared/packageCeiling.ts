@@ -3,8 +3,9 @@
  *
  * Single source of truth for "what's the photo count target for this round".
  * The investigation pre-execution flagged that THREE separate edge functions
- * (shortlisting-ingest, shortlisting-pass2, shortlisting-benchmark-runner)
- * each maintained their own copy of:
+ * (shortlisting-ingest, the former shortlisting-pass2 — W11.7.10 sunset, now
+ * shortlisting-shape-d — and shortlisting-benchmark-runner) each maintained
+ * their own copy of:
  *
  *   const PACKAGE_CEILING_DEFAULTS = { gold: 24, 'day to dusk': 31, premium: 38 };
  *

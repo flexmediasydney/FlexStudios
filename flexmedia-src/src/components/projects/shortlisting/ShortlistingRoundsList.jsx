@@ -8,12 +8,12 @@
  *
  * Actions per row:
  *   - "View" → switch to Swimlane sub-tab with this round selected
- *   - "Re-run Pass 2" → calls shortlisting-pass2 directly with round_id
- *     (only for status='processing' or 'proposed')
+ *
+ * W11.7.10 sunset: the "Re-run Pass 2" button was removed when the legacy
+ * two-pass engine was retired. Operators now use Shape D's re-fire path
+ * (DispatcherPanel) to re-run a round through the unified Stage 1/Stage 4
+ * pipeline.
  */
-import { useState, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
 import {
   Table,
   TableBody,
@@ -24,9 +24,8 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, Eye, RefreshCw } from "lucide-react";
+import { Eye } from "lucide-react";
 import { format } from "date-fns";
-import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 const ROUND_STATUS_TONE = {
@@ -52,37 +51,8 @@ function formatDate(d) {
 
 export default function ShortlistingRoundsList({
   rounds,
-  projectId,
   onSelectRound,
 }) {
-  const queryClient = useQueryClient();
-  const [busyRoundId, setBusyRoundId] = useState(null);
-
-  const reRunPass2 = useCallback(
-    async (roundId) => {
-      setBusyRoundId(roundId);
-      try {
-        const resp = await api.functions.invoke("shortlisting-pass2", {
-          round_id: roundId,
-        });
-        const result = resp?.data ?? resp ?? {};
-        if (result?.ok === false || result?.success === false) {
-          throw new Error(result?.error || "Re-run failed");
-        }
-        toast.success("Pass 2 re-running…");
-        queryClient.invalidateQueries({
-          queryKey: ["shortlisting_rounds", projectId],
-        });
-      } catch (err) {
-        console.error("[ShortlistingRoundsList] reRunPass2 failed:", err);
-        toast.error(err?.message || "Re-run failed");
-      } finally {
-        setBusyRoundId(null);
-      }
-    },
-    [projectId, queryClient],
-  );
-
   if (!rounds || rounds.length === 0) {
     return (
       <div className="rounded-md border bg-card p-6 text-center text-sm text-muted-foreground">
@@ -109,14 +79,6 @@ export default function ShortlistingRoundsList({
         </TableHeader>
         <TableBody>
           {rounds.map((r) => {
-            // Burst 18 LL1: Pass 2 has a hard status guard that throws unless
-            // round.status='processing' (see shortlisting-pass2 line ~214).
-            // Previous UI also showed the button for 'proposed' rounds, but
-            // the click would just error with "Pass 2 requires status=
-            // 'processing'". A proper re-run from 'proposed' requires
-            // reverting status + clearing pass3 events, which the API
-            // doesn't expose yet — so we hide the button for now.
-            const canReRunPass2 = r.status === "processing";
             return (
               <TableRow key={r.id}>
                 <TableCell className="font-medium">{r.round_number}</TableCell>
@@ -159,22 +121,6 @@ export default function ShortlistingRoundsList({
                       <Eye className="h-3.5 w-3.5 mr-1" />
                       View
                     </Button>
-                    {canReRunPass2 && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => reRunPass2(r.id)}
-                        disabled={busyRoundId === r.id}
-                        title="Re-run Pass 2 only (cheaper than full re-run)"
-                      >
-                        {busyRoundId === r.id ? (
-                          <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-3.5 w-3.5 mr-1" />
-                        )}
-                        Re-run Pass 2
-                      </Button>
-                    )}
                   </div>
                 </TableCell>
               </TableRow>

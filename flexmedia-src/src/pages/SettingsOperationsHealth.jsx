@@ -8,7 +8,7 @@
  *
  * Round 2 (2026-04-26) cost ~15 minutes debugging a missing
  * SHORTLISTING_DISPATCHER_JWT secret. The dispatcher claimed jobs fine,
- * but every chain-call to extract/pass0/pass1/pass2/pass3 silently 401'd.
+ * but every chain-call to extract/pass0/shape-d/pass3 silently 401'd.
  * This page is the visual equivalent of "is the dispatcher healthy?".
  *
  * Pattern mirrors EdgeFunctionHealth.jsx (per-fn ping + auto-refresh +
@@ -58,10 +58,11 @@ const SHORTLISTING_FUNCTIONS = [
     description: "per-bracket EXIF/JPEG via Modal" },
   { name: "shortlisting-pass0", critical: false,
     description: "technical filter (sharpness/exposure)" },
-  { name: "shortlisting-pass1", critical: false,
-    description: "per-image room/composition classification" },
-  { name: "shortlisting-pass2", critical: false,
-    description: "slot-fill + alternates" },
+  // W11.7.10 sunset: shortlisting-pass1 + shortlisting-pass2 removed when the
+  // legacy two-pass engine was retired. Shape D Stage 1 + Stage 4 replace
+  // them. shortlisting-shape-d / shortlisting-shape-d-stage4 are not health-
+  // probed here yet — they expose `_health_check` but the next pass on this
+  // page will add them.
   { name: "shortlisting-pass3", critical: false,
     description: "coverage check + notification dispatch" },
   { name: "shortlist-lock", critical: false,

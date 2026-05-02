@@ -3,7 +3,8 @@
  * resolution.
  *
  * Replaces the hardcoded {Gold: 24, Day-to-Dusk: 31, Premium: 38} ceiling
- * tables that used to live in shortlisting-ingest, shortlisting-pass2,
+ * tables that used to live in shortlisting-ingest, the former
+ * shortlisting-pass2 (W11.7.10 sunset; now shortlisting-shape-d),
  * shortlisting-pass3, shortlisting-benchmark-runner, and pass2Prompt's
  * describeCeiling() — none of which can survive the new pricing matrix where
  * customers buy à la carte add-ons that genuinely change the deliverable
