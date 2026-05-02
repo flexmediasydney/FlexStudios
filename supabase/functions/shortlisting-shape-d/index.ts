@@ -786,7 +786,9 @@ async function runShapeDStage1Background(args: BackgroundArgs): Promise<void> {
   const { lockName, tickId } = preflight;
 
   try {
-    const result = await runShapeDStage1Core(roundId, preflight);
+    // Mig 437: thread jobId into the core so manual_chain_required events
+    // can reference the originating Stage 1 job row by id.
+    const result = await runShapeDStage1Core(roundId, preflight, jobId);
     // Self-update the dispatching job row. The dispatcher saw mode='background'
     // and skipped its auto-mark; we own the row state from here.
     if (jobId) {
@@ -836,6 +838,11 @@ async function runShapeDStage1Background(args: BackgroundArgs): Promise<void> {
 async function runShapeDStage1Core(
   roundId: string,
   preflight: PreflightOk,
+  // Mig 437: dispatching job_id (when invoked via shortlisting-job-dispatcher)
+  // surfaced into the manual_chain_required payload so the operator can
+  // backtrack from the alert to the originating Stage 1 job row.
+  // Optional + nullable — direct invocations (test harness, manual fire) pass null.
+  stage1JobId: string | null = null,
 ): Promise<RoundResult> {
   const admin = getAdminClient();
   const { ctx, settings, compositions, groupsToRun, primedGroupIds, voice, sourceType, startedAt } = preflight;
@@ -1056,6 +1063,11 @@ async function runShapeDStage1Core(
           const r = await runStage1PerImage({
             composition: c,
             ctx,
+            // Mig 437: thread roundId + admin so the runner emits
+            // `engine_vendor_failure` events on Gemini non-2xx responses.
+            roundId,
+            admin,
+            attemptIndex: 1,
             systemText,
             userTextPrefix,
             userTextSuffix,
@@ -1433,12 +1445,46 @@ async function runShapeDStage1Core(
   // 16k thinking) hit the edge-runtime wall budget. Insert a
   // `stage4_synthesis` job; the dispatcher (mig 377 extends the kind enum)
   // routes it to shortlisting-shape-d-stage4 next tick.
-  const stage4JobId = await dispatchStage4Job({
+  const stage4Dispatch = await dispatchStage4Job({
     admin,
     projectId: ctx.project_id,
     roundId,
     warnings,
   });
+  const stage4JobId = stage4Dispatch.jobId;
+
+  // ── Mig 437: manual_chain_required observability event ───────────────────
+  // When Stage 1 succeeded (we got past the allFailed throw above) but Stage
+  // 4 was NOT auto-dispatched, we want a notification immediately rather than
+  // waiting for the stranded-round auditor cron to flag it ~10min later. The
+  // skipReason captures the gating cause — most-common is a stale
+  // stage4_synthesis row from a prior run blocking the new insert (the
+  // Saladine 6c61ceb6 case on 2026-05-02).
+  if (stage4Dispatch.skipReason !== null) {
+    try {
+      await admin.from('shortlisting_events').insert({
+        project_id: ctx.project_id,
+        round_id: roundId,
+        event_type: 'manual_chain_required',
+        actor_type: 'system',
+        actor_id: null,
+        payload: {
+          stage1_job_id: stage1JobId,
+          reason: stage4Dispatch.skipReason,
+          reason_detail: stage4Dispatch.detail || null,
+          stage1_result_summary: {
+            engine_mode: finalEngineMode,
+            successes: allSuccesses.length,
+            failures: allFailures.length,
+            compositions_total: compositions.length,
+          },
+        },
+      });
+    } catch (evtErr) {
+      const m = evtErr instanceof Error ? evtErr.message : String(evtErr);
+      warnings.push(`manual_chain_required event insert failed: ${m}`);
+    }
+  }
 
   // ── Dispatch canonical-rollup as a separate edge job ─────────────────────
   // Wave 12 hygiene: Stage 1.5 normalisation runs as its own dispatcher-routed
@@ -1716,6 +1762,13 @@ function estimateStage1Cost(imageCount: number): number {
 interface RunStage1PerImageOpts {
   composition: CompositionRow;
   ctx: RoundContext;
+  // Mig 437: roundId + admin + attemptIndex threaded through so the runner
+  // can emit `engine_vendor_failure` shortlisting_events on any non-2xx
+  // response from Gemini. Observation only — no behavioural change to the
+  // call retry semantics or vendor selection (W11.8.1: no failover).
+  roundId: string;
+  admin: ReturnType<typeof getAdminClient>;
+  attemptIndex: number;
   systemText: string;
   // W11.6.14: per-image user_text composed in the runner. Prefix is the
   // shared user blocks (source/techniques/pass1/voice anchor); suffix is
@@ -1852,16 +1905,69 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
   // 12× cost spike on Anthropic Opus 4.7 (W15a smoke prior to hotfix-3/4).
   let resp: VisionResponse | null = null;
   let err: string | undefined;
+  // Mig 437: capture VendorCallError status + raw message for the
+  // engine_vendor_failure observability event below. Plain-string err loses
+  // the structured fields we want in the payload.
+  let vendorErrStatus: number | null = null;
+  let vendorErrMessage: string | null = null;
 
   try {
     resp = await callVisionAdapter(baseReq);
   } catch (e) {
-    if (e instanceof MissingVendorCredential) err = e.message;
-    else if (e instanceof VendorCallError) err = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
-    else err = e instanceof Error ? e.message : String(e);
+    if (e instanceof MissingVendorCredential) {
+      err = e.message;
+      vendorErrMessage = e.message;
+    } else if (e instanceof VendorCallError) {
+      err = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
+      vendorErrStatus = typeof e.status === 'number' ? e.status : null;
+      vendorErrMessage = e.message;
+    } else {
+      err = e instanceof Error ? e.message : String(e);
+      vendorErrMessage = err;
+    }
   }
 
   if (!resp) {
+    // ─── Mig 437: engine_vendor_failure observability event ───────────────
+    // Emit one row per non-2xx Gemini response (or any other vendor-call
+    // failure path that left resp=null). NO retry / failover side effect —
+    // pure observation. Wrapped in try/catch so the event-write path can
+    // never mask the original vendor failure on the upstream return.
+    try {
+      // Best-effort gemini_error_code parse from the message body. Adapter
+      // surfaces messages of the form "Gemini 400: { ... }" — we look for an
+      // outer top-level "code" field in the JSON tail (verbose patterns
+      // include code='INVALID_ARGUMENT').
+      const msg = vendorErrMessage || '';
+      const codeMatch = /"code"\s*:\s*"([A-Z_]+)"/.exec(msg)
+        || /"code"\s*:\s*(\d+)/.exec(msg);
+      const geminiErrorCode = codeMatch ? codeMatch[1] : null;
+      // Approximate request size bytes — total JSON serialised body.
+      const requestSizeBytesApprox = JSON.stringify(baseReq).length;
+      await opts.admin.from('shortlisting_events').insert({
+        project_id: opts.ctx.project_id,
+        round_id: opts.roundId,
+        group_id: composition.group_id,
+        event_type: 'engine_vendor_failure',
+        actor_type: 'engine',
+        actor_id: null,
+        payload: {
+          stage: 'stage1',
+          vendor: PRIMARY_VENDOR,
+          model: PRIMARY_MODEL,
+          status_code: vendorErrStatus,
+          gemini_error_code: geminiErrorCode,
+          gemini_error_message_excerpt: msg.slice(0, 600),
+          stem: composition.stem,
+          attempt_count: opts.attemptIndex,
+          request_size_bytes_approx: requestSizeBytesApprox,
+        },
+      });
+    } catch (evtErr) {
+      const m = evtErr instanceof Error ? evtErr.message : String(evtErr);
+      console.warn(`[${GENERATOR}] engine_vendor_failure event insert failed: ${m}`);
+    }
+
     return {
       group_id: composition.group_id,
       stem: composition.stem,
@@ -2670,7 +2776,27 @@ interface DispatchStage4JobArgs {
   warnings: string[];
 }
 
-async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<string | null> {
+/**
+ * Mig 437: structured result so the caller can emit a `manual_chain_required`
+ * shortlisting_events row capturing exactly WHY chain was skipped (instead of
+ * a binary stage4_dispatched=false signal that buried the cause in operator
+ * triage). skipReason='duplicate_active_job' is the most-common case and the
+ * one that hit Saladine on 2026-05-02 — a stale stage4_synthesis row blocked
+ * a clean Stage 1 from auto-chaining.
+ */
+type Stage4DispatchSkipReason =
+  | 'duplicate_active_job'  // an existing pending/running/succeeded stage4 row blocks insert
+  | 'db_insert_error'       // postgrest returned an error on the insert path
+  | 'unknown';              // null id with no error captured (defensive sentinel)
+
+interface Stage4DispatchResult {
+  jobId: string | null;
+  skipReason: Stage4DispatchSkipReason | null;
+  /** Lightweight summary for the manual_chain_required event payload. */
+  detail?: string;
+}
+
+async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<Stage4DispatchResult> {
   // Idempotency: skip if a non-terminal stage4_synthesis job already exists
   // for this round. The unique partial index (mig 377) also enforces this at
   // the DB layer; the explicit check just avoids the noisy unique-violation
@@ -2685,7 +2811,11 @@ async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<string | 
     console.log(
       `[${GENERATOR}] stage4_synthesis job already exists for round ${args.roundId} — skipping insert`,
     );
-    return null;
+    return {
+      jobId: null,
+      skipReason: 'duplicate_active_job',
+      detail: `${existing} active stage4_synthesis row(s) already exist for round`,
+    };
   }
 
   const { data, error } = await args.admin
@@ -2707,10 +2837,22 @@ async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<string | 
     .maybeSingle();
   if (error) {
     args.warnings.push(`stage4_synthesis dispatch failed: ${error.message}`);
-    return null;
+    return {
+      jobId: null,
+      skipReason: 'db_insert_error',
+      detail: error.message,
+    };
   }
   console.log(`[${GENERATOR}] dispatched stage4_synthesis job ${data?.id} for round ${args.roundId}`);
-  return (data?.id as string) || null;
+  const jobId = (data?.id as string) || null;
+  if (!jobId) {
+    return {
+      jobId: null,
+      skipReason: 'unknown',
+      detail: 'insert returned no row + no error',
+    };
+  }
+  return { jobId, skipReason: null };
 }
 
 // ─── canonical-rollup dispatch (Wave 12) ─────────────────────────────────────

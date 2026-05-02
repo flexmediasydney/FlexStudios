@@ -682,15 +682,47 @@ async function runStage4Core(
 
     // Call Gemini vision adapter with retries. W11.8.1: Anthropic failover
     // stripped — exhausted retries throw and the round flips to 'failed'.
-    const { resp, vendorUsed, modelUsed, costUsd, wallMs, inputTokens, outputTokens, thinkingTokens, failoverTriggered, failoverReason, error } =
-      await callStage4Gemini({
-        systemText,
-        userText,
-        previews,
-        settings,
-      });
+    const stage4Call = await callStage4Gemini({
+      systemText,
+      userText,
+      previews,
+      settings,
+    });
+    const { resp, vendorUsed, modelUsed, costUsd, wallMs, inputTokens, outputTokens, thinkingTokens, failoverTriggered, failoverReason, error } = stage4Call;
 
     if (!resp) {
+      // ─── Mig 437: engine_vendor_failure observability event ────────────
+      // Fire BEFORE the throw so even though the round flips to 'failed' we
+      // get the structured alert path firing the notification + email queue
+      // immediately. Wrapped in try/catch so an event-write failure can never
+      // mask the original vendor error in the log/throw chain.
+      try {
+        const msg = stage4Call.vendorErrorMessage || '';
+        const codeMatch = /"code"\s*:\s*"([A-Z_]+)"/.exec(msg)
+          || /"code"\s*:\s*(\d+)/.exec(msg);
+        const geminiErrorCode = codeMatch ? codeMatch[1] : null;
+        await admin.from('shortlisting_events').insert({
+          project_id: ctx.project_id,
+          round_id: roundId,
+          group_id: null,
+          event_type: 'engine_vendor_failure',
+          actor_type: 'engine',
+          actor_id: null,
+          payload: {
+            stage: 'stage4',
+            vendor: PRIMARY_VENDOR,
+            model: PRIMARY_MODEL,
+            status_code: stage4Call.vendorErrorStatus,
+            gemini_error_code: geminiErrorCode,
+            gemini_error_message_excerpt: msg.slice(0, 600),
+            attempt_count: stage4Call.attemptCount,
+            request_size_bytes_approx: stage4Call.requestSizeBytesApprox,
+          },
+        });
+      } catch (evtErr) {
+        const m = evtErr instanceof Error ? evtErr.message : String(evtErr);
+        console.warn(`[${GENERATOR}] engine_vendor_failure event insert failed: ${m}`);
+      }
       throw new Error(`Stage 4 vision call failed: ${error ?? 'unknown'}`);
     }
 
@@ -1469,6 +1501,16 @@ interface CallStage4Result {
   failoverTriggered: false;
   failoverReason: null;
   error: string | null;
+  /**
+   * Mig 437: structured vendor failure metadata for the engine_vendor_failure
+   * shortlisting_events emission. Populated when the call exhausted retries
+   * with a VendorCallError; null on success or on missing-credential bail-out
+   * (which has its own non-retry error path).
+   */
+  vendorErrorStatus: number | null;
+  vendorErrorMessage: string | null;
+  attemptCount: number;
+  requestSizeBytesApprox: number;
 }
 
 /**
@@ -1502,7 +1544,15 @@ async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result>
   };
 
   let lastErr: string | null = null;
+  // Mig 437: capture structured fields for the engine_vendor_failure
+  // observability event so the caller can emit a row pointing at the
+  // exact vendor failure mode (status code + message excerpt + attempt).
+  let lastVendorStatus: number | null = null;
+  let lastVendorMessage: string | null = null;
+  let attemptsRun = 0;
+  const requestSizeBytesApprox = JSON.stringify(baseReq).length;
   for (let attempt = 1; attempt <= STAGE4_RETRY_COUNT; attempt++) {
+    attemptsRun = attempt;
     try {
       const resp = await callVisionAdapter(baseReq);
       return {
@@ -1517,6 +1567,10 @@ async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result>
         failoverTriggered: false,
         failoverReason: null,
         error: null,
+        vendorErrorStatus: null,
+        vendorErrorMessage: null,
+        attemptCount: attempt,
+        requestSizeBytesApprox,
       };
     } catch (e) {
       if (e instanceof MissingVendorCredential) {
@@ -1527,12 +1581,19 @@ async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result>
           inputTokens: 0, outputTokens: 0, thinkingTokens: 0,
           failoverTriggered: false, failoverReason: null,
           error: e.message,
+          vendorErrorStatus: null,
+          vendorErrorMessage: e.message,
+          attemptCount: attempt,
+          requestSizeBytesApprox,
         };
       }
       if (e instanceof VendorCallError) {
         lastErr = `${e.vendor}/${e.model} ${e.status ?? ''}: ${e.message}`;
+        lastVendorStatus = typeof e.status === 'number' ? e.status : null;
+        lastVendorMessage = e.message;
       } else {
         lastErr = e instanceof Error ? e.message : String(e);
+        lastVendorMessage = lastErr;
       }
       console.warn(`[${GENERATOR}] Stage 4 attempt ${attempt}/${STAGE4_RETRY_COUNT} failed: ${lastErr}`);
       // Exponential back-off between retries (2s, 4s, 8s).
@@ -1555,6 +1616,10 @@ async function callStage4Gemini(args: CallStage4Args): Promise<CallStage4Result>
     failoverTriggered: false,
     failoverReason: null,
     error: lastErr,
+    vendorErrorStatus: lastVendorStatus,
+    vendorErrorMessage: lastVendorMessage,
+    attemptCount: attemptsRun,
+    requestSizeBytesApprox,
   };
 }
 
