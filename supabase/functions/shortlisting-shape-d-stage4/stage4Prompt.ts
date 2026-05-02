@@ -22,10 +22,11 @@
 
 import { CANONICAL_SLOT_IDS } from '../_shared/visionPrompts/blocks/slotEnumeration.ts';
 
-// Bumped to v1.1 — slot_id is now an enum-constrained string. The model can
-// no longer drift to free-form variants like `living_dining_hero` or
-// `exterior_rear_hero` (W11.7.1 swimlane-fragmentation fix).
-export const STAGE4_PROMPT_VERSION = 'v1.1';
+// W11.6.22 — bumped to v1.2: slot_decisions[] now accepts optional
+// position_index + position_filled_via fields so curated_positions slots can
+// fill one image per position with a curated_match / ai_backfill marker.
+// Legacy ai_decides slot_decisions stay unchanged (both fields null).
+export const STAGE4_PROMPT_VERSION = 'v1.2';
 export const STAGE4_TOOL_NAME = 'synthesise_round';
 
 /**
@@ -181,6 +182,28 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
               },
               required: ['stem', 'near_dup_of'],
             },
+          },
+          // W11.6.22 — curated_positions support. Both fields are OPTIONAL:
+          // legacy ai_decides slots leave them null. For curated slots, emit
+          // the 1-based position_index AND position_filled_via='curated_match'
+          // (matched position's criteria) or 'ai_backfill' (no match, fell
+          // back to AI choice when the position allowed it).
+          position_index: {
+            type: 'integer',
+            nullable: true,
+            description:
+              'W11.6.22 — for curated_positions slots, the 1-based position ' +
+              'this winner fills. NULL for ai_decides slots.',
+          },
+          position_filled_via: {
+            type: 'string',
+            nullable: true,
+            enum: ['curated_match', 'ai_backfill'],
+            description:
+              'W11.6.22 — curated_match: winner satisfies the position\'s ' +
+              'composition / zone / space / lighting / image_type criteria. ' +
+              'ai_backfill: no candidate matched and you filled the position ' +
+              'with your best AI alternative. NULL for ai_decides slots.',
           },
         },
         required: ['slot_id', 'phase', 'winner', 'alternatives'],

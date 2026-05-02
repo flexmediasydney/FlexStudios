@@ -1725,6 +1725,19 @@ export async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Prom
       ? rawSlotFit
       : null;
 
+    // W11.6.22 — curated_positions support. Both fields are OPTIONAL on the
+    // Stage 4 response: legacy ai_decides slot_decisions leave them null.
+    const rawPositionIndex = decision.position_index;
+    const positionIndex =
+      typeof rawPositionIndex === 'number' && Number.isFinite(rawPositionIndex) && rawPositionIndex >= 1
+        ? Math.floor(rawPositionIndex)
+        : null;
+    const rawFilledVia = decision.position_filled_via;
+    const positionFilledVia =
+      rawFilledVia === 'curated_match' || rawFilledVia === 'ai_backfill'
+        ? rawFilledVia
+        : null;
+
     rowsToInsert.push({
       project_id: args.projectId,
       round_id: args.roundId,
@@ -1734,6 +1747,10 @@ export async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Prom
       ai_proposed_analysis: rationale,
       // W11.6.15: separate dimension; null when Stage 4 didn't emit it.
       slot_fit_score: slotFitScore,
+      // W11.6.22 — curated position metadata. Null on legacy ai_decides
+      // slots so existing swimlane reads stay byte-stable.
+      position_index: positionIndex,
+      position_filled_via: positionFilledVia,
       // REGRESSION FIX 2026-05-01: was 'approved_as_proposed' which the
       // swimlane interprets as "human approved" and auto-moved cards to the
       // APPROVED column without operator interaction. 'ai_proposed' is the
