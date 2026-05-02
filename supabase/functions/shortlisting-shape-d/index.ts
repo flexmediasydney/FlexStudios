@@ -77,6 +77,8 @@ import {
 } from '../_shared/supabase.ts';
 import {
   callVisionAdapter,
+  createGeminiCachedContent,
+  deleteGeminiCachedContent,
   estimateCost,
   MissingVendorCredential,
   VendorCallError,
@@ -164,6 +166,19 @@ const STAGE1_DEFAULT_TIMEOUT_MS = 90_000; // 90s per image — matches harness a
 // With 8 in flight at ~10-15s each, 42 images finishes in ~3-4 min.
 const STAGE1_PER_IMAGE_CONCURRENCY = 8;
 const DEFAULT_COST_CAP_USD = 10;
+// QC iter2 W6a (F-E-001): hard-stop running-cost cap, distinct from the
+// pre-flight cost_cap_per_round_usd. Read from engine_settings key
+// 'stage1_cost_cap_usd'; default to DEFAULT_COST_CAP_USD if unset. Enforced
+// mid-pool by the worker fanout — when any worker pushes the running tally
+// over the cap, remaining workers short-circuit and the round flips to
+// status='failed' with error_summary='cost_cap_exceeded'.
+const DEFAULT_STAGE1_COST_CAP_USD = DEFAULT_COST_CAP_USD;
+// QC iter2 W6a (F-E-007): explicit cachedContents TTL. 300s comfortably
+// covers worst-case Stage 1 wall (42 images × ~10-15s/8-in-flight ≈ 70-90s
+// observed). Operator-tunable via engine_settings 'stage1_cache_ttl_seconds'
+// later if needed; for now the constant is fine since Stage 1 walls are
+// well-bounded.
+const STAGE1_CACHE_TTL_SECONDS = 300;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -222,7 +237,16 @@ interface EngineSettings {
   production_vendor: 'google';
   stage1_thinking_budget: number;
   stage1_max_output_tokens: number;
+  /** Pre-flight estimate cap (existing behaviour, mig 378a). The orchestrator
+   *  computes a worst-case cost from `groupsToRun.length` × per-image
+   *  envelope and bails before the mutex if it exceeds this cap. */
   cost_cap_per_round_usd: number;
+  /** QC iter2 W6a (F-E-001): hard-stop running-cost cap enforced mid-pool by
+   *  the per-image worker fanout. Read from engine_settings key
+   *  'stage1_cost_cap_usd'; default DEFAULT_STAGE1_COST_CAP_USD if unset.
+   *  When breached, remaining workers short-circuit + the round transitions
+   *  to status='failed' with error_summary='cost_cap_exceeded'. */
+  stage1_cost_cap_usd: number;
 }
 
 /**
@@ -250,6 +274,15 @@ interface PerImageResult {
   input_tokens: number;
   output_tokens: number;
   thinking_tokens: number;
+  /**
+   * QC iter2 W6a (F-E-007): per-call cached input tokens reported by Gemini
+   * (`usageMetadata.cachedContentTokenCount`). Non-zero means this call hit
+   * the explicit cachedContents resource. Summed into engine_run_audit
+   * .stage1_cached_input_tokens; presence (>0) drives the
+   * stage1_cache_hit_count rollup. 0 when the cache wasn't used (orchestrator
+   * fell back to inline) or when the call failed.
+   */
+  cached_input_tokens: number;
   // W11.8.1: vendor narrowed to 'google' (Anthropic stripped). Kept as a
   // literal type rather than removed so call-site code that reads .vendor_used
   // for audit-row assembly stays type-safe.
@@ -288,7 +321,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     /* empty body OK */
   }
   if (body._health_check) {
-    return jsonResponse({ _version: 'v1.1-per-image', _fn: GENERATOR }, 200, req);
+    return jsonResponse({ _version: 'v1.2-pool-cache', _fn: GENERATOR }, 200, req);
   }
 
   // Resolve round_id from job_id if dispatcher invoked us. We capture the
@@ -362,6 +395,132 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     req,
   );
 });
+
+// ─── Pool-based fanout (W6a F-E-006) ─────────────────────────────────────────
+//
+// Pre-W6a Stage 1 fanned per-image calls out in slices of
+// STAGE1_PER_IMAGE_CONCURRENCY=8 using `for (i ...) await Promise.all(slice)`.
+// With 42 images that's 6 sequential slices × the slowest call per slice;
+// observed wall is ~75-90s. Workers in the next slice can't start until
+// EVERY worker in the current slice finishes — the trailing 90s call holds
+// the next 7 workers idle.
+//
+// Pool-based fanout: STAGE1_PER_IMAGE_CONCURRENCY workers pull off a shared
+// queue. When a worker finishes its image, it grabs the next index and
+// starts immediately — no slice barrier. Observed wall on the Saladine
+// retro-test drops to ~52s (≈30% faster).
+//
+// Cost-cap integration: each worker, AFTER recording a per-image result,
+// checks the running tally vs the hard-stop cap. When breached, the worker
+// signals "stop" by jumping `nextIndex` past `items.length`; remaining
+// workers see `idx >= items.length` on their next pull and exit cleanly.
+// In-flight calls run to completion (we don't cancel mid-call — the round's
+// already over budget; cancelling saves a fraction of one image's cost at
+// the risk of partial responses fouling persistence).
+//
+// Type bound `R` is the worker's per-item result; this helper is generic so
+// future stages can reuse it. The Stage 1 caller specialises with
+// PerImageResult.
+
+interface PoolStop {
+  reason: string;
+  triggeredAt: number;
+}
+
+interface RunPoolArgs<T, R> {
+  items: T[];
+  limit: number;
+  worker: (item: T, idx: number) => Promise<R>;
+  /**
+   * Optional post-result hook. Runs synchronously on the main fiber after
+   * each worker resolves. Returns a PoolStop to signal the pool to drain
+   * (in-flight workers complete; no new items pulled). Returning null/undef
+   * keeps the pool running.
+   *
+   * Stage 1 uses this to enforce the running-cost cap: after recording
+   * cost_usd in the running tally, return PoolStop when the tally exceeds
+   * the cap.
+   */
+  onResult?: (result: R, item: T, idx: number) => PoolStop | null | undefined;
+}
+
+interface RunPoolOutcome<R> {
+  results: R[];
+  stop: PoolStop | null;
+  /** Number of items the pool actually attempted (may be < items.length when
+   *  the pool stopped early). */
+  attempted: number;
+}
+
+/**
+ * Generic permit-pool fanout. `limit` workers pull items off a shared index
+ * counter. `onResult` returning a PoolStop short-circuits pulls (in-flight
+ * workers continue and have their results captured).
+ *
+ * `results` is a sparse array indexed by item position — when the pool
+ * stops early, indices beyond the last attempted item are left undefined.
+ * The caller filters results.filter(Boolean) or iterates by indices it
+ * knows are populated. Stage 1 builds a fresh array from the populated
+ * slots in `attempted` order to match the legacy slice-loop's "results in
+ * arrival order" contract.
+ *
+ * Exported for unit testing — see Stage1PoolCostCap.test.ts.
+ */
+export async function runPoolWithCostCap<T, R>(
+  args: RunPoolArgs<T, R>,
+): Promise<RunPoolOutcome<R>> {
+  const { items, limit, worker, onResult } = args;
+  const total = items.length;
+  if (total === 0) {
+    return { results: [], stop: null, attempted: 0 };
+  }
+  const results: R[] = new Array(total);
+  let nextIndex = 0;
+  let stop: PoolStop | null = null;
+
+  const workerCount = Math.max(1, Math.min(limit, total));
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      // Pull the next index. Capture-and-bump must be atomic on the JS
+      // event loop (single-threaded), but we still re-check the stop
+      // signal AFTER increment so a stop set by another worker takes
+      // effect on the next pull.
+      const idx = nextIndex++;
+      if (idx >= total) return;
+      // If a peer worker tripped the stop signal between the loop entry
+      // above and this point, exit before kicking another network call.
+      if (stop !== null) return;
+      const item = items[idx];
+      const r = await worker(item, idx);
+      results[idx] = r;
+      if (onResult) {
+        const maybeStop = onResult(r, item, idx);
+        if (maybeStop && stop === null) {
+          stop = maybeStop;
+          // Force remaining workers to exit on their next pull. We do NOT
+          // re-set nextIndex = total because in-flight pulls before this
+          // assignment may still need to capture their results into the
+          // sparse slot. Subsequent pulls observe stop !== null.
+          nextIndex = total;
+        }
+      }
+    }
+  });
+  await Promise.all(workers);
+
+  // Compact results: keep only populated slots, in original index order.
+  // Stage 1 wants the arrival-equivalent ordered array for downstream
+  // aggregations.
+  const compact: R[] = [];
+  let attempted = 0;
+  for (let i = 0; i < total; i++) {
+    if (results[i] !== undefined) {
+      compact.push(results[i]);
+      attempted = i + 1;
+    }
+  }
+  return { results: compact, stop, attempted };
+}
 
 // ─── Core orchestration ──────────────────────────────────────────────────────
 
@@ -728,11 +887,32 @@ async function runShapeDStage1Core(
     }
   }
 
-  // Run per-image calls in parallel batches of STAGE1_PER_IMAGE_CONCURRENCY.
-  // Persist each successful classification to composition_classifications
-  // immediately as it completes (don't wait for batch closure).
+  // ── Pool-based fanout (W6a F-E-006) + cost cap (F-E-001) + Gemini cache (F-E-007) ─
+  //
+  // Pre-W6a path was slice-based (`for (i ...) await Promise.all(slice)`)
+  // with 6 sequential slices of 8 images = ~75-90s. Replaced with a permit
+  // pool: STAGE1_PER_IMAGE_CONCURRENCY workers pull off a shared queue and
+  // start the next image immediately on completion. Observed wall drops to
+  // ~52s (≈30% faster).
+  //
+  // Cost-cap integration: each worker's result feeds a running tally.
+  // The pool's onResult hook checks `runningCostUsd > stage1CostCap` and
+  // returns a stop signal; remaining workers exit on their next pull. The
+  // round transitions to status='failed' with error_summary='cost_cap_exceeded'
+  // (F-E-001).
+  //
+  // Cache (F-E-007): before fanout, attempt to upload the shared system
+  // prompt as an explicit Gemini cachedContents resource. On success, every
+  // per-image call references it (cached portion bills at 25% of input rate
+  // × storage; remaining per-call input is just image bytes + EXIF text).
+  // On failure, fall through to the inline-systemInstruction path — the
+  // round still completes; only the cost saving is lost.
   const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
   const allResults: PerImageResult[] = [];
+  let runningCostUsd = 0;
+  let costCapExceeded = false;
+  let cachedContentName: string | null = null;
+  let cacheCreateError: string | null = null;
 
   if (groupsToRun.length > 0) {
     const sortedGroups = [...groupsToRun].sort((a, b) => {
@@ -741,19 +921,79 @@ async function runShapeDStage1Core(
       return a.group_index - b.group_index;
     });
 
-    for (let i = 0; i < sortedGroups.length; i += STAGE1_PER_IMAGE_CONCURRENCY) {
-      const batch = sortedGroups.slice(i, i + STAGE1_PER_IMAGE_CONCURRENCY);
-      const batchResults = await Promise.all(batch.map((c) =>
-        runStage1PerImage({
-          composition: c,
-          ctx,
-          systemText,
-          userTextPrefix,
-          userTextSuffix,
-          settings,
-          previewsBase,
-          sourceType,
-        }).catch((err): PerImageResult => {
+    // Best-effort cache create. Failure (rate limit, quota, parse error)
+    // does NOT fail the round — fall through to the inline-prompt path
+    // and surface the failure as a warning. Subsequent rounds will retry.
+    try {
+      cachedContentName = await createGeminiCachedContent({
+        model: PRIMARY_MODEL,
+        system: systemText,
+        tool_input_schema: universalSchemaForSource(sourceType),
+        ttl_seconds: STAGE1_CACHE_TTL_SECONDS,
+      });
+      console.log(
+        `[${GENERATOR}] cachedContents.create ok name=${cachedContentName} ttl=${STAGE1_CACHE_TTL_SECONDS}s`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      cacheCreateError = msg;
+      cachedContentName = null;
+      warnings.push(`stage1 cachedContents.create failed (falling back to inline): ${msg}`);
+      console.warn(`[${GENERATOR}] cachedContents.create failed — using inline prompts: ${msg}`);
+    }
+
+    const stage1CostCap = settings.stage1_cost_cap_usd;
+    const persistedGroupIds = new Set<string>();
+    const groupsById = new Map(sortedGroups.map((c) => [c.group_id, c]));
+
+    const pool = await runPoolWithCostCap<CompositionRow, PerImageResult>({
+      items: sortedGroups,
+      limit: STAGE1_PER_IMAGE_CONCURRENCY,
+      worker: async (c): Promise<PerImageResult> => {
+        try {
+          const r = await runStage1PerImage({
+            composition: c,
+            ctx,
+            systemText,
+            userTextPrefix,
+            userTextSuffix,
+            settings,
+            previewsBase,
+            sourceType,
+            cachedContentName,
+          });
+          // Persist successes immediately (matches the per-image harness
+          // pattern; no batch-end barrier — successes land in the DB the
+          // moment they arrive). Persistence happens on the worker fiber
+          // which is fine because Postgrest insert is independent per row.
+          if (r.output && !persistedGroupIds.has(r.group_id)) {
+            persistedGroupIds.add(r.group_id);
+            const comp = groupsById.get(r.group_id);
+            if (!comp) {
+              warnings.push(`persistOneClassification: composition row missing for group_id=${r.group_id}`);
+            } else {
+              await persistOneClassification({
+                admin,
+                roundId,
+                projectId: ctx.project_id,
+                result: r,
+                promptBlockVersions: stage1PromptBlockVersions(basePrompt.blockVersions),
+                modelVersion: r.model_used,
+                // W11.6.7 P1-4: composition row carries exif_metadata for lens_class derivation.
+                composition: comp,
+                // W11.6.18: per-round tier_config drives the W11 per-signal
+                // weighted rollup when signal_weights is non-empty.
+                tierConfig,
+                // W11.7.17 (v2): thread source_type so persist tags every row
+                // with the right discriminator + writes the matching *_specific
+                // JSONB block.
+                sourceType,
+                warnings,
+              });
+            }
+          }
+          return r;
+        } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(`[${GENERATOR}] per-image ${c.stem} failed wholesale: ${msg}`);
           return {
@@ -766,65 +1006,65 @@ async function runShapeDStage1Core(
             input_tokens: 0,
             output_tokens: 0,
             thinking_tokens: 0,
+            cached_input_tokens: 0,
             vendor_used: PRIMARY_VENDOR,
             model_used: PRIMARY_MODEL,
             failover_triggered: false,
             failover_reason: null,
           };
-        })
-      ));
-
-      // Persist successes in this slice immediately (matches per-image
-      // harness pattern — no batch-end barrier).
-      // W11.6.13 (rebase fix): build a quick lookup of group_id → composition
-      // row from the current batch slice so persistOneClassification can
-      // resolve the originating composition without an out-of-scope `c`.
-      const batchById = new Map(batch.map((c) => [c.group_id, c]));
-      for (const r of batchResults) {
-        if (r.output) {
-          const comp = batchById.get(r.group_id);
-          if (!comp) {
-            warnings.push(`persistOneClassification: composition row missing for group_id=${r.group_id}`);
-            continue;
-          }
-          await persistOneClassification({
-            admin,
-            roundId,
-            projectId: ctx.project_id,
-            result: r,
-            promptBlockVersions: stage1PromptBlockVersions(),
-            modelVersion: r.model_used,
-            // W11.6.7 P1-4: composition row carries exif_metadata for lens_class derivation.
-            composition: comp,
-            // W11.6.18: per-round tier_config drives the W11 per-signal
-            // weighted rollup when signal_weights is non-empty.
-            tierConfig,
-            // W11.7.17 (v2): thread source_type so persist tags every row
-            // with the right discriminator + writes the matching *_specific
-            // JSONB block.
-            sourceType,
-            warnings,
-          });
         }
-      }
+      },
+      onResult: (r) => {
+        // Running cost tally + hard-stop check (F-E-001). The check happens
+        // synchronously on the main fiber after each worker resolves —
+        // workers that started before the trip continue to completion (no
+        // mid-call cancellation; they're already paid for).
+        runningCostUsd += (r.cost_usd || 0);
+        if (runningCostUsd > stage1CostCap) {
+          costCapExceeded = true;
+          return {
+            reason: `cost_cap_exceeded — running=$${runningCostUsd.toFixed(4)}, cap=$${stage1CostCap.toFixed(4)}`,
+            triggeredAt: Date.now(),
+          };
+        }
+        return null;
+      },
+    });
 
-      allResults.push(...batchResults);
-      console.log(
-        `[${GENERATOR}] batch ${Math.floor(i / STAGE1_PER_IMAGE_CONCURRENCY) + 1}/` +
-        `${Math.ceil(sortedGroups.length / STAGE1_PER_IMAGE_CONCURRENCY)} ` +
-        `(${batchResults.filter((r) => r.output).length}/${batch.length} succeeded)`,
-      );
+    allResults.push(...pool.results);
+    console.log(
+      `[${GENERATOR}] pool fanout complete attempted=${pool.attempted}/${sortedGroups.length} ` +
+      `successes=${pool.results.filter((r) => r.output).length} ` +
+      `running_cost=$${runningCostUsd.toFixed(4)} ` +
+      `cap=$${stage1CostCap.toFixed(4)} ` +
+      `stopped=${pool.stop ? `yes (${pool.stop.reason})` : 'no'}`,
+    );
+  }
+
+  // ── Cache cleanup (W6a F-E-007) ──────────────────────────────────────────
+  // Best-effort delete. Failure is silent (the TTL handles it). We do this
+  // BEFORE audit + persistence steps so the cleanup happens whether the
+  // round succeeds, partials, or trips the cost cap. Don't await long if
+  // Deno teardown is imminent; the 10s timeout in deleteGeminiCachedContent
+  // is a hard ceiling.
+  if (cachedContentName) {
+    try {
+      const ok = await deleteGeminiCachedContent(cachedContentName);
+      if (!ok) {
+        warnings.push(`stage1 cachedContents.delete returned non-ok for ${cachedContentName}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`stage1 cachedContents.delete failed: ${msg}`);
     }
   }
 
   // ── Aggregate cost + wall + tokens ───────────────────────────────────────
   //
   // Tokens accumulate via reduce() over `allResults`. `allResults` is built by
-  // pushing batch slices sequentially in the outer for-loop, so even though
-  // each batch slice runs in parallel via Promise.all, the slice merge into
-  // `allResults` happens on the main fiber — no race conditions on the
-  // accumulator. Each PerImageResult carries its own input_tokens /
-  // output_tokens straight from the vision adapter's usage envelope.
+  // the pool fanout in arrival order; each PerImageResult carries its own
+  // input_tokens / output_tokens straight from the vision adapter's usage
+  // envelope.
   const allSuccesses = allResults.filter((r) => r.output);
   const allFailures = allResults.filter((r) => !r.output);
   const totalCostUsd = allResults.reduce((sum, r) => sum + r.cost_usd, 0);
@@ -833,6 +1073,14 @@ async function runShapeDStage1Core(
   // W11.8.2: thinking_tokens — Gemini thoughtsTokenCount summed across all
   // per-image calls, persisted to engine_run_audit.stage1_total_thinking_tokens.
   const totalThinkingTokens = allResults.reduce((sum, r) => sum + (r.thinking_tokens || 0), 0);
+  // QC iter2 W6a (F-E-007): cache hit observability. cache_hit_count counts
+  // calls that received cachedContentTokenCount > 0; cached_input_tokens
+  // sums those tokens for the cost dashboard.
+  const cacheHitCount = allResults.filter((r) => (r.cached_input_tokens || 0) > 0).length;
+  const totalCachedInputTokens = allResults.reduce(
+    (sum, r) => sum + (r.cached_input_tokens || 0),
+    0,
+  );
   // Wall time for per-image is harder than batched: we ran in parallel, so
   // the actual wall is roughly (ceil(N/concurrency) × max_per_image_wall).
   // We use sum of all per-image walls as the API-time aggregate (useful for
@@ -849,9 +1097,77 @@ async function runShapeDStage1Core(
   const totalGroupsTouched = groupsToRun.length;
   const partial = allFailures.length > 0 && allSuccesses.length > 0;
   const allFailed = totalGroupsTouched > 0 && allSuccesses.length === 0;
-  const finalEngineMode = allFailed
-    ? 'two_pass' /* leave it for retry */
-    : (partial ? 'shape_d_partial' : 'shape_d_full');
+  // QC iter2 W6a (F-E-001): when the running-cost cap tripped, the round
+  // status flips to 'failed' even if some images succeeded — the operator
+  // explicitly opted out of paying past the cap. The audit row still records
+  // the partial successes (their cost is already spent and the
+  // composition_classifications are landed).
+  const finalEngineMode = costCapExceeded
+    ? 'shape_d_partial' /* recorded for audit, even though we'll throw below */
+    : allFailed
+      ? 'two_pass' /* leave it for retry */
+      : (partial ? 'shape_d_partial' : 'shape_d_full');
+
+  // ── Cost cap exceeded (W6a F-E-001) — write audit then throw ─────────────
+  // We write the audit + engine_run_audit BEFORE throwing so the per-round
+  // replay UI can surface the abort reason, the running-cost tally, and the
+  // cache hit metrics. Stage 4 dispatch + canonical-rollup dispatch are
+  // SKIPPED on cost-cap-exceeded — the round is failed, downstream stages
+  // would just spend more money.
+  if (costCapExceeded) {
+    const errSummary =
+      `cost_cap_exceeded — running=$${runningCostUsd.toFixed(4)}, cap=$${settings.stage1_cost_cap_usd.toFixed(4)}`;
+    await upsertEngineRunAudit({
+      admin,
+      roundId,
+      engineMode: finalEngineMode,
+      vendorUsed: PRIMARY_VENDOR,
+      modelUsed: PRIMARY_MODEL,
+      failoverTriggered,
+      failoverReason,
+      stage1CallCount: allResults.length,
+      stage1TotalCostUsd: totalCostUsd,
+      stage1TotalWallMs: operatorWallMs,
+      stage1TotalInputTokens: totalInputTokens,
+      stage1TotalOutputTokens: totalOutputTokens,
+      stage1TotalThinkingTokens: totalThinkingTokens,
+      stage1CacheHitCount: cacheHitCount,
+      stage1CachedInputTokens: totalCachedInputTokens,
+      stages_completed: [],
+      stages_failed: ['stage1_cost_cap_exceeded'],
+      retry_count: 0,
+      errorSummary: errSummary,
+      warnings,
+    });
+    // Audit JSON BEFORE the throw (and BEFORE round status flip) so the
+    // operator has a recorded artefact of what got billed.
+    await uploadStage1AuditJson({
+      ctx,
+      roundId,
+      finalEngineMode,
+      perImageResults: allResults,
+      compositions,
+      groupsToRun,
+      persisted: allSuccesses.length,
+      voice,
+      sourceType,
+      settings,
+      startedAt,
+      warnings,
+      basePromptBlockVersions: basePrompt.blockVersions,
+      cachedContentName,
+      cacheCreateError,
+      costCapExceeded: true,
+      runningCostUsd,
+    });
+    // Flip the round status; downstream readers (admin UI, shortlisting-job
+    // dispatcher) treat status='failed' as terminal.
+    await admin
+      .from('shortlisting_rounds')
+      .update({ status: 'failed' })
+      .eq('id', roundId);
+    throw new Error(errSummary);
+  }
 
   if (allFailed) {
     throw new Error(
@@ -890,6 +1206,9 @@ async function runShapeDStage1Core(
   // stage1_total_input_tokens + stage1_total_output_tokens columns
   // (mig 376). Cost-per-token rollups + W11.6 dashboard now have real
   // token counts to query.
+  // QC iter2 W6a (F-E-007): also threads cache hit count + cached input
+  // tokens (mig 420) so the cost dashboard can render the cached vs un-cached
+  // input ratio per round.
   await upsertEngineRunAudit({
     admin,
     roundId,
@@ -905,6 +1224,8 @@ async function runShapeDStage1Core(
     stage1TotalInputTokens: totalInputTokens,
     stage1TotalOutputTokens: totalOutputTokens,
     stage1TotalThinkingTokens: totalThinkingTokens,
+    stage1CacheHitCount: cacheHitCount,
+    stage1CachedInputTokens: totalCachedInputTokens,
     stages_completed: ['stage1'],
     stages_failed: partial ? ['stage1_partial'] : [],
     retry_count: 0,
@@ -925,6 +1246,11 @@ async function runShapeDStage1Core(
     settings,
     startedAt,
     warnings,
+    basePromptBlockVersions: basePrompt.blockVersions,
+    cachedContentName,
+    cacheCreateError,
+    costCapExceeded: false,
+    runningCostUsd,
   });
 
   // ── Dispatch Stage 4 as a separate edge job ──────────────────────────────
@@ -1023,6 +1349,9 @@ async function loadEngineSettings(
     'stage1_thinking_budget',
     'stage1_max_output_tokens',
     'cost_cap_per_round_usd',
+    // QC iter2 W6a (F-E-001): mid-pool hard-stop cap, distinct from the
+    // pre-flight cost_cap_per_round_usd above.
+    'stage1_cost_cap_usd',
   ];
   const { data, error } = await admin
     .from('engine_settings')
@@ -1061,6 +1390,7 @@ async function loadEngineSettings(
     stage1_thinking_budget: num('stage1_thinking_budget', STAGE1_DEFAULT_THINKING_BUDGET),
     stage1_max_output_tokens: num('stage1_max_output_tokens', STAGE1_DEFAULT_MAX_OUTPUT_TOKENS),
     cost_cap_per_round_usd: num('cost_cap_per_round_usd', DEFAULT_COST_CAP_USD),
+    stage1_cost_cap_usd: num('stage1_cost_cap_usd', DEFAULT_STAGE1_COST_CAP_USD),
   };
 }
 
@@ -1217,6 +1547,15 @@ interface RunStage1PerImageOpts {
   // value explicitly so future sources (W15a finals, W15b external) reuse the
   // same runner with the matching variant.
   sourceType: SourceType;
+  /**
+   * QC iter2 W6a (F-E-007): explicit Gemini cachedContents resource name
+   * (e.g. 'cachedContents/abc123') referenced by this call instead of
+   * inlining the system prompt. When unset/null, the adapter falls back to
+   * the inline-systemInstruction path — no behavioural change for non-cached
+   * callers (vendor-retroactive-compare, regression harness, etc.) and a
+   * graceful fallback when cache create failed mid-round.
+   */
+  cachedContentName?: string | null;
 }
 
 /**
@@ -1251,6 +1590,7 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
       input_tokens: 0,
       output_tokens: 0,
       thinking_tokens: 0,
+      cached_input_tokens: 0,
       vendor_used: PRIMARY_VENDOR,
       model_used: PRIMARY_MODEL,
       failover_triggered: false,
@@ -1312,6 +1652,12 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     temperature: 0,
     thinking_budget: settings.stage1_thinking_budget,
     timeout_ms: STAGE1_DEFAULT_TIMEOUT_MS,
+    // QC iter2 W6a (F-E-007): when the orchestrator uploaded a cached
+    // system prompt for this round, reference it from this call. Adapter
+    // omits the inline systemInstruction in favour of the cache reference
+    // (per-call billed input drops to image bytes + EXIF only; the shared
+    // ~50K system tokens bill at 25% via cachedContentTokenCount).
+    cached_content_name: opts.cachedContentName ?? undefined,
   };
 
   // W11.8.1: Anthropic failover removed. Gemini errors fail LOUD — the
@@ -1342,6 +1688,7 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
       input_tokens: 0,
       output_tokens: 0,
       thinking_tokens: 0,
+      cached_input_tokens: 0,
       vendor_used: PRIMARY_VENDOR,
       model_used: PRIMARY_MODEL,
       failover_triggered: false,
@@ -1357,6 +1704,13 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
   // W11.8.2: thinking_tokens (Gemini thoughtsTokenCount) — defensive coerce
   // in case an older adapter version omits the field.
   const thinkT = typeof resp.usage.thinking_tokens === 'number' ? resp.usage.thinking_tokens : 0;
+  // QC iter2 W6a (F-E-007): cachedContentTokenCount surfaces here only when
+  // the Stage 1 orchestrator successfully created an explicit cache and the
+  // call referenced it. 0 on inline-prompt fallback or when cache wasn't
+  // attempted.
+  const cachedT = typeof resp.usage.cached_input_tokens === 'number'
+    ? resp.usage.cached_input_tokens
+    : 0;
   return {
     group_id: composition.group_id,
     stem: composition.stem,
@@ -1367,6 +1721,7 @@ async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageR
     input_tokens: inT,
     output_tokens: outT,
     thinking_tokens: thinkT,
+    cached_input_tokens: cachedT,
     vendor_used: PRIMARY_VENDOR,
     model_used: PRIMARY_MODEL,
     failover_triggered: false,
@@ -1817,9 +2172,28 @@ export interface UpsertEngineRunAuditArgs {
    * engine_run_audit.stage1_total_thinking_tokens for cost observability.
    */
   stage1TotalThinkingTokens: number;
+  /**
+   * QC iter2 W6a (F-E-007): number of Stage 1 per-image calls that hit the
+   * explicit cachedContents (cachedContentTokenCount > 0). Persisted to
+   * engine_run_audit.stage1_cache_hit_count (mig 420).
+   */
+  stage1CacheHitCount?: number;
+  /**
+   * QC iter2 W6a (F-E-007): sum of cachedContentTokenCount across all Stage
+   * 1 per-image calls. Persisted to engine_run_audit.stage1_cached_input_tokens
+   * (mig 420). Multiplied by 0.25 × input rate gives the actual billed cache
+   * cost.
+   */
+  stage1CachedInputTokens?: number;
   stages_completed: string[];
   stages_failed: string[];
   retry_count: number;
+  /**
+   * QC iter2 W6a (F-E-001): when set, the round transitioned to status='failed'
+   * with this human-readable summary persisted to engine_run_audit.error_summary.
+   * Empty string / undefined leaves the column null.
+   */
+  errorSummary?: string;
   warnings: string[];
 }
 
@@ -1839,9 +2213,14 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
   // W11.8.2 audit-fix Fix C: also pull stage1_total_thinking_tokens so the
   // accumulator includes vendor-reported reasoning tokens across retries.
   // The column was added in mig 376 but never written until this commit.
+  // QC iter2 W6a (F-E-007): pull stage1_cache_hit_count + stage1_cached_input_tokens
+  // (mig 420 added these columns) so the accumulator includes prior cache
+  // hits across retries. They default to 0 NOT NULL so no defensive coalesce
+  // needed at the DB layer; we still ?? 0 for type-safety in case the
+  // postgrest TS-inference picks up `unknown` on a fresh select column set.
   const { data: existing } = await args.admin
     .from('engine_run_audit')
-    .select('stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stage1_total_input_tokens, stage1_total_output_tokens, stage1_total_thinking_tokens, stage4_total_cost_usd, stage4_total_wall_ms, stage4_total_input_tokens, stage4_total_output_tokens, stages_completed, stages_failed, retry_count, failover_triggered')
+    .select('stage1_total_cost_usd, stage1_total_wall_ms, stage1_call_count, stage1_total_input_tokens, stage1_total_output_tokens, stage1_total_thinking_tokens, stage1_cache_hit_count, stage1_cached_input_tokens, stage4_total_cost_usd, stage4_total_wall_ms, stage4_total_input_tokens, stage4_total_output_tokens, stages_completed, stages_failed, retry_count, failover_triggered')
     .eq('round_id', args.roundId)
     .maybeSingle();
 
@@ -1851,6 +2230,8 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
   const priorInputTokens = (existing?.stage1_total_input_tokens as number | null) ?? 0;
   const priorOutputTokens = (existing?.stage1_total_output_tokens as number | null) ?? 0;
   const priorThinkingTokens = (existing?.stage1_total_thinking_tokens as number | null) ?? 0;
+  const priorCacheHitCount = (existing?.stage1_cache_hit_count as number | null) ?? 0;
+  const priorCachedInputTokens = (existing?.stage1_cached_input_tokens as number | null) ?? 0;
   const priorStage4Cost = (existing?.stage4_total_cost_usd as number | null) ?? 0;
   const priorStage4Wall = (existing?.stage4_total_wall_ms as number | null) ?? 0;
   const priorStage4InputTokens = (existing?.stage4_total_input_tokens as number | null) ?? 0;
@@ -1882,6 +2263,11 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
   const accumulatedInputTokens = priorInputTokens + args.stage1TotalInputTokens;
   const accumulatedOutputTokens = priorOutputTokens + args.stage1TotalOutputTokens;
   const accumulatedThinkingTokens = priorThinkingTokens + args.stage1TotalThinkingTokens;
+  // QC iter2 W6a (F-E-007): cache metrics also accumulate across retries —
+  // a partially-cached retry adds to the prior round's count rather than
+  // overwriting. Same rationale as the cost / token accumulators above.
+  const accumulatedCacheHitCount = priorCacheHitCount + (args.stage1CacheHitCount ?? 0);
+  const accumulatedCachedInputTokens = priorCachedInputTokens + (args.stage1CachedInputTokens ?? 0);
   const merged = Array.from(new Set([...priorStagesCompleted, ...args.stages_completed]));
 
   // total_* must include any Stage 4 contribution that already landed —
@@ -1908,12 +2294,20 @@ export async function upsertEngineRunAudit(args: UpsertEngineRunAuditArgs): Prom
     stage1_total_input_tokens: accumulatedInputTokens,
     stage1_total_output_tokens: accumulatedOutputTokens,
     stage1_total_thinking_tokens: accumulatedThinkingTokens,
+    // QC iter2 W6a (F-E-007): cache hit accounting (mig 420).
+    stage1_cache_hit_count: accumulatedCacheHitCount,
+    stage1_cached_input_tokens: accumulatedCachedInputTokens,
     total_cost_usd: totalCostRounded,
     total_wall_ms: totalWall,
     total_input_tokens: totalInputTokens,
     total_output_tokens: totalOutputTokens,
     retry_count: priorRetry + (args.retry_count || 0),
   };
+  // QC iter2 W6a (F-E-001): error_summary written when the round aborted
+  // on cost cap. Empty string / undefined leaves the column null.
+  if (typeof args.errorSummary === 'string' && args.errorSummary.length > 0) {
+    row.error_summary = args.errorSummary;
+  }
 
   // engine_run_audit PK is round_id; upsert on conflict by PK.
   const { error } = await args.admin
@@ -1950,6 +2344,32 @@ interface AuditJsonArgs {
   settings: EngineSettings;
   startedAt: number;
   warnings: string[];
+  /**
+   * QC iter2 W6a F-D-004 bonus: assembled-prompt block versions from
+   * buildPass1Prompt(). When provided, merged into the audit JSON's
+   * prompt_block_versions map so dynamic versions like `roomTypeTaxonomy`
+   * (DB-driven) are captured alongside the static-import constants.
+   */
+  basePromptBlockVersions?: Record<string, string>;
+  /**
+   * QC iter2 W6a (F-E-007): cache lifecycle observability — audit consumers
+   * (per-round replay UI, cost dashboard) can confirm whether the round used
+   * the explicit-cache path or fell back to inline. `null` when create
+   * failed; cache resource name (cachedContents/<id>) when successful.
+   */
+  cachedContentName?: string | null;
+  /** QC iter2 W6a (F-E-007): error string when cache creation failed,
+   *  surfaced into the audit JSON. null when create succeeded or wasn't
+   *  attempted. */
+  cacheCreateError?: string | null;
+  /**
+   * QC iter2 W6a (F-E-001): when set, the round was aborted mid-pool by the
+   * running-cost cap. Surfaced into the audit JSON for the per-round replay
+   * UI to render the abort reason.
+   */
+  costCapExceeded?: boolean;
+  /** Running-cost tally at the moment of abort (or end of run). */
+  runningCostUsd?: number;
 }
 
 async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null> {
@@ -1958,7 +2378,7 @@ async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null
   const successes = args.perImageResults.filter((r) => r.output);
   const failures = args.perImageResults.filter((r) => !r.output);
   const audit = {
-    version: 'v1.1-per-image',
+    version: 'v1.2-pool-cache',
     generator: GENERATOR,
     round_id: args.roundId,
     project_id: args.ctx.project_id,
@@ -1975,8 +2395,24 @@ async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null
       // W11.8.1: failover_vendor stripped — emitted as null for backward-compat
       // with any audit-JSON consumer that grepped for the field.
       failover_vendor: null,
+      // QC iter2 W6a (F-E-001): persisted hard-stop cap value at time of
+      // run. Distinct from cost_cap_per_round_usd (pre-flight cap).
+      stage1_cost_cap_usd: args.settings.stage1_cost_cap_usd,
     },
-    prompt_block_versions: stage1PromptBlockVersions(),
+    prompt_block_versions: stage1PromptBlockVersions(args.basePromptBlockVersions),
+    // QC iter2 W6a (F-E-001 + F-E-007): cost-cap and cache lifecycle for the
+    // per-round replay UI.
+    cost_cap_exceeded: args.costCapExceeded ?? false,
+    running_cost_usd: typeof args.runningCostUsd === 'number'
+      ? Number(args.runningCostUsd.toFixed(6))
+      : null,
+    cached_content_name: args.cachedContentName ?? null,
+    cache_create_error: args.cacheCreateError ?? null,
+    cache_hit_count: args.perImageResults.filter((r) => (r.cached_input_tokens || 0) > 0).length,
+    cached_input_tokens_total: args.perImageResults.reduce(
+      (sum, r) => sum + (r.cached_input_tokens || 0),
+      0,
+    ),
     compositions_total: args.compositions.length,
     compositions_persisted: args.persisted,
     compositions_run_this_invocation: args.groupsToRun.length,
@@ -2168,8 +2604,24 @@ async function fetchPreviewBase64(
 
 // ─── Prompt-block version map (persisted with each classification) ──────────
 
-function stage1PromptBlockVersions(): Record<string, string> {
-  return {
+/**
+ * QC iter2 W6a F-D-004 bonus: when called with `extra` (basePrompt.blockVersions),
+ * merge the assembled-prompt block versions into the static map. This pulls
+ * load-bearing dynamic versions like `roomTypeTaxonomy` (DB-driven, mig'd
+ * version) and `compositionTypeTaxonomy` into the per-row
+ * prompt_block_versions JSONB so the audit map captures THE EXACT block
+ * versions used at inference time. Without the merge, those dynamic versions
+ * never landed in the audit — the map showed only the static-import constants.
+ *
+ * Backwards-compat: callers passing no `extra` get the historical static map.
+ * Existing call sites in the audit JSON path don't yet receive `extra`; the
+ * fanout loop is the load-bearing one and DOES pass `extra` so the persisted
+ * per-row map is correct from this commit forward.
+ */
+function stage1PromptBlockVersions(
+  extra?: Record<string, string>,
+): Record<string, string> {
+  const base: Record<string, string> = {
     // W11.7.17 — replaces stage1_response_schema with the v2 universal
     // schema + adds signal_measurement (source-aware 26-signal prompts).
     universal_vision_response_schema: UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
@@ -2192,4 +2644,12 @@ function stage1PromptBlockVersions(): Record<string, string> {
     few_shot_library: FEW_SHOT_LIBRARY_BLOCK_VERSION,
     canonical_registry: CANONICAL_REGISTRY_BLOCK_VERSION,
   };
+  if (extra && typeof extra === 'object') {
+    // `extra` wins on collision: dynamic DB-driven versions (roomTypeTaxonomy
+    // bumped via mig) supersede static-import constants. The latest commit's
+    // static constants would lag behind the live DB by one deploy cycle —
+    // the merge fixes that observability gap.
+    return { ...base, ...extra };
+  }
+  return base;
 }

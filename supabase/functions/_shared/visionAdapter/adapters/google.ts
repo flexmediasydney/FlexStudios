@@ -39,6 +39,7 @@ import {
 import { estimateCost } from '../pricing.ts';
 
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_CACHED_CONTENTS_BASE = 'https://generativelanguage.googleapis.com/v1beta/cachedContents';
 const MAX_ATTEMPTS = 3;
 const DEFAULT_TIMEOUT_MS = 90 * 1000;
 const BACKOFF_MS = [1000, 2000, 4000];
@@ -153,7 +154,6 @@ export function buildGeminiBody(req: VisionRequest): Record<string, unknown> {
     ? req.thinking_budget
     : (isProModel ? 2048 : 0);
   const body: Record<string, unknown> = {
-    systemInstruction: { parts: [{ text: req.system }] },
     contents,
     generationConfig: {
       responseMimeType: 'application/json',
@@ -163,6 +163,21 @@ export function buildGeminiBody(req: VisionRequest): Record<string, unknown> {
       thinkingConfig: { thinkingBudget, includeThoughts: false },
     },
   };
+
+  // QC iter2 W6a (F-E-007): when the caller has uploaded the system prompt
+  // as an explicit cachedContents resource, reference it from this call
+  // instead of inlining the systemInstruction. The cached content carries
+  // the system prompt + responseSchema (caller put both in there at create
+  // time); we still need responseSchema in generationConfig because Gemini
+  // doesn't carry it through cachedContents in all model versions.
+  // Empty/missing `cached_content_name` falls through to the inline path —
+  // safe for callers that don't use caching (vendor-retroactive-compare
+  // single-shot calls, regression harness, etc).
+  if (typeof req.cached_content_name === 'string' && req.cached_content_name.length > 0) {
+    body.cachedContent = req.cached_content_name;
+  } else {
+    body.systemInstruction = { parts: [{ text: req.system }] };
+  }
   return body;
 }
 
@@ -376,4 +391,142 @@ export async function callGoogleVision(req: VisionRequest): Promise<VisionRespon
     `Gemini API exhausted ${MAX_ATTEMPTS} attempts: ${lastErr || 'unknown error'}`,
     lastStatus,
   );
+}
+
+// ─── Explicit cachedContents API (W6a F-E-007) ───────────────────────────────
+//
+// Gemini's explicit-cache feature: upload the shared portion of the prompt
+// once, then per-call reference it via `cachedContent: <name>`. Cached
+// portion bills at 25% of standard input rate, plus a flat storage fee for
+// the TTL window. Endpoint:
+//   POST   https://generativelanguage.googleapis.com/v1beta/cachedContents
+//   DELETE https://generativelanguage.googleapis.com/v1beta/cachedContents/<id>
+//
+// We expose two helpers used by the Stage 1 orchestrator:
+//   createGeminiCachedContent — uploads system prompt + tool schema, returns
+//     the `name` (cachedContents/<id>) on success.
+//   deleteGeminiCachedContent — best-effort cleanup; safe to call after the
+//     round completes or aborts. Failure is swallowed (TTL handles it).
+//
+// Both fail soft: throw VendorCallError on hard failure but the orchestrator
+// catches and falls back to inline prompts. Don't fail the round on cache
+// mishaps.
+
+interface CreateCachedContentArgs {
+  /** Gemini model id, e.g. 'gemini-2.5-pro'. Cache binds to a specific
+   *  model version — re-creating per round is cheap; sharing across rounds
+   *  with different models is unsafe. */
+  model: string;
+  /** Shared system prompt text. */
+  system: string;
+  /** Response schema bound at create time so it's part of the cached
+   *  config. (Gemini also accepts it on the per-call generationConfig; we
+   *  pass it both places for safety.) */
+  tool_input_schema: Record<string, unknown>;
+  /** Cache TTL — '300s' covers worst-case Stage 1 wall (42 images at 8 in
+   *  flight, ~10-15s each, ~70-90s observed). Default 300s if unset. */
+  ttl_seconds?: number;
+  /** Hard timeout in ms for the create call. Default 30s. */
+  timeout_ms?: number;
+}
+
+/**
+ * Upload a Gemini cachedContents resource carrying the shared system prompt.
+ * Returns the resource name (e.g. 'cachedContents/abc123') on success.
+ *
+ * Throws VendorCallError on HTTP failure (orchestrator should catch and fall
+ * back to inline-prompt path; don't fail the round).
+ *
+ * IMPORTANT: cachedContents requires the model name in the body; the model
+ * binding is permanent for the lifetime of the cache. The Stage 1
+ * orchestrator should create + use + delete one cache per round so the
+ * model selection stays in lockstep.
+ */
+export async function createGeminiCachedContent(
+  args: CreateCachedContentArgs,
+): Promise<string> {
+  const apiKey = getApiKey();
+  const ttlSeconds = typeof args.ttl_seconds === 'number' && args.ttl_seconds > 0
+    ? args.ttl_seconds
+    : 300;
+  const timeoutMs = args.timeout_ms ?? 30_000;
+
+  // Cached content body shape per Gemini docs:
+  //   { model: 'models/<id>', systemInstruction: { parts: [{text}] },
+  //     ttl: '300s' }
+  // The `model` field MUST be prefixed with `models/`. The systemInstruction
+  // shape mirrors the per-call shape exactly.
+  const body = {
+    model: `models/${args.model}`,
+    systemInstruction: { parts: [{ text: args.system }] },
+    ttl: `${ttlSeconds}s`,
+  };
+
+  const url = `${GEMINI_CACHED_CONTENTS_BASE}?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const rawText = await res.text();
+  if (!res.ok) {
+    throw new VendorCallError(
+      'google',
+      args.model,
+      `cachedContents.create ${res.status}: ${rawText.slice(0, 400)}`,
+      res.status,
+    );
+  }
+  let parsed: { name?: string };
+  try {
+    parsed = JSON.parse(rawText) as { name?: string };
+  } catch {
+    throw new VendorCallError(
+      'google',
+      args.model,
+      `cachedContents.create non-JSON response: ${rawText.slice(0, 400)}`,
+      res.status,
+    );
+  }
+  if (typeof parsed.name !== 'string' || parsed.name.length === 0) {
+    throw new VendorCallError(
+      'google',
+      args.model,
+      `cachedContents.create response missing 'name' field: ${rawText.slice(0, 400)}`,
+      res.status,
+    );
+  }
+  return parsed.name;
+}
+
+/**
+ * Delete a Gemini cachedContents resource. Best-effort — failure is swallowed
+ * via the orchestrator's catch wrapper because the cache will TTL-expire on
+ * its own (default 300s in createGeminiCachedContent). Returns true on success.
+ *
+ * The `name` argument should be the full resource name as returned by
+ * createGeminiCachedContent (e.g. 'cachedContents/abc123').
+ */
+export async function deleteGeminiCachedContent(
+  name: string,
+  timeoutMs = 10_000,
+): Promise<boolean> {
+  const apiKey = getApiKey();
+  // Strip any leading slash. The name format is `cachedContents/<id>`; the
+  // base URL already contains `cachedContents`, so concat the id portion.
+  const id = name.replace(/^\/?cachedContents\//, '');
+  const url = `${GEMINI_CACHED_CONTENTS_BASE}/${encodeURIComponent(id)}?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, {
+    method: 'DELETE',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    console.warn(
+      `[visionAdapter/google] cachedContents.delete ${res.status} for ${name}: ${txt.slice(0, 200)}`,
+    );
+    return false;
+  }
+  return true;
 }

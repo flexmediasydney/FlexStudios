@@ -27,7 +27,11 @@ import {
   type VisionVendor,
   VendorCallError,
 } from './types.ts';
-import { callGoogleVision } from './adapters/google.ts';
+import {
+  callGoogleVision,
+  createGeminiCachedContent,
+  deleteGeminiCachedContent,
+} from './adapters/google.ts';
 
 export type {
   VisionImage,
@@ -41,6 +45,15 @@ export type {
 export { MissingVendorCredential, VendorCallError } from './types.ts';
 export { estimateCost, resolveRates, VENDOR_PRICING } from './pricing.ts';
 export type { ModelRates } from './pricing.ts';
+// QC iter2 W6a (F-E-007): Gemini explicit cachedContents lifecycle.
+// Re-exported through the adapter index so callers don't have to know which
+// vendor adapter implements caching. Currently google-only; Anthropic's
+// prompt-cache shape is different and would land as separate exports if
+// reintroduced.
+export {
+  createGeminiCachedContent,
+  deleteGeminiCachedContent,
+} from './adapters/google.ts';
 
 // ─── Router ──────────────────────────────────────────────────────────────────
 

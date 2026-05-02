@@ -123,6 +123,37 @@ Deno.test('buildGeminiBody — user_text appended after image parts', () => {
   assertEquals(parts[parts.length - 1].text, 'Classify this.');
 });
 
+// QC iter2 W6a (F-E-007) — cached_content_name plumbing into Gemini body
+Deno.test(
+  'buildGeminiBody — cached_content_name swaps systemInstruction for cachedContent reference',
+  () => {
+    const body = buildGeminiBody(
+      baseReq({ cached_content_name: 'cachedContents/abc-xyz' }),
+    ) as Record<string, unknown>;
+    // systemInstruction MUST be omitted — Gemini rejects requests carrying
+    // both inline systemInstruction and a cachedContent reference.
+    assertEquals(body.systemInstruction, undefined);
+    assertEquals(body.cachedContent, 'cachedContents/abc-xyz');
+    // generationConfig (responseSchema, etc.) still travels per-call.
+    assert(typeof body.generationConfig === 'object');
+  },
+);
+
+Deno.test(
+  'buildGeminiBody — empty/missing cached_content_name keeps systemInstruction inline (no regression)',
+  () => {
+    // Empty string and undefined both fall through to inline path.
+    const empty = buildGeminiBody(baseReq({ cached_content_name: '' })) as Record<string, unknown>;
+    const missing = buildGeminiBody(baseReq()) as Record<string, unknown>;
+    for (const body of [empty, missing]) {
+      assertEquals(body.cachedContent, undefined);
+      const sys = body.systemInstruction as { parts: Array<{ text: string }> };
+      assert(sys);
+      assertEquals(sys.parts[0].text, 'You classify real-estate images.');
+    }
+  },
+);
+
 Deno.test('buildGeminiBody — multi-image batch packs all into one user turn', () => {
   const req = baseReq({
     images: [

@@ -86,6 +86,23 @@ export interface VisionRequest {
   /** Whether to enable prompt caching (Gemini implicit). Retained for future
    *  vendor support; no-op on the Google adapter. */
   enable_prompt_cache?: boolean;
+  /**
+   * QC iter2 W6a (F-E-007): explicit Gemini cachedContents reference.
+   * When set, the Google adapter omits `systemInstruction` from the
+   * generateContent body (the cache already carries it) and adds
+   * `cachedContent: <name>` at the top level. Per-call billed input
+   * tokens drop to just the per-image content (image bytes + EXIF block);
+   * the shared system tokens are billed at 25% via cachedContentTokenCount.
+   *
+   * Format: 'cachedContents/<id>' as returned by the cachedContents.create
+   * API. The orchestrator owns lifecycle: create before fanout, delete (or
+   * let TTL expire) after.
+   *
+   * If creation fails (rate limit, quota), the orchestrator falls back to
+   * the per-call inline path (this field unset) — a no-op in the adapter,
+   * which simply emits the systemInstruction inline as before.
+   */
+  cached_content_name?: string;
   /** Hard timeout in ms. Defaults to 90s in adapters when omitted. */
   timeout_ms?: number;
   /**
