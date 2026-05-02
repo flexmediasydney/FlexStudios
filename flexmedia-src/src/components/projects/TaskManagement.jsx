@@ -22,114 +22,12 @@ import { createNotification, writeFeedEvent } from "@/components/notifications/c
 import { useTaskTakeover } from "./hooks/useTaskTakeover";
 import TaskTakeoverDialog from "./TaskTakeoverDialog";
 
-export function getCountdownState({ dueDate, thresholds }) {
-  if (!dueDate) return "normal";
-  
-  const defaults = { yellow_start: 12, yellow_end: 6, red_threshold: 6 };
-  const t = thresholds || defaults;
-
-  let due;
-  try {
-    due = new Date(dueDate);
-    if (isNaN(due.getTime())) return "normal";
-  } catch {
-    return "normal";
-  }
-
-  const secondsLeft = differenceInSeconds(due, new Date());
-  const isPast = secondsLeft < 0;
-  const absSeconds = Math.abs(secondsLeft);
-  const totalHours = absSeconds / 3600;
-
-  if (isPast) {
-    return "overdue"; // red
-  } else if (totalHours < t.red_threshold) {
-    return "critical"; // red
-  } else if (totalHours < t.yellow_end) {
-    return "warning"; // orange
-  } else if (totalHours < t.yellow_start) {
-    return "caution"; // amber
-  }
-  return "normal"; // neutral
-}
-
-export function CountdownTimer({ dueDate, compact = false, thresholds }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    let mounted = true;
-    const id = setInterval(() => {
-      if (mounted) setNow(Date.now());
-    }, 1000);
-    return () => {
-      mounted = false;
-      clearInterval(id);
-    };
-  }, []);
-
-  if (!dueDate) return <span className="text-xs text-muted-foreground">No deadline</span>;
-
-  const defaults = { yellow_start: 12, yellow_end: 6, red_threshold: 6 };
-  const t = thresholds || defaults;
-
-  let due;
-  try {
-    due = new Date(dueDate);
-    if (isNaN(due.getTime())) throw new Error('Invalid date');
-  } catch {
-    return <span className="text-xs text-destructive">Invalid date</span>;
-  }
-
-  const secondsLeft = differenceInSeconds(due, new Date(now));
-  const isPast = secondsLeft < 0;
-  const absSeconds = Math.abs(secondsLeft);
-  const days = Math.floor(absSeconds / 86400);
-  const hours = Math.floor((absSeconds % 86400) / 3600);
-  const minutes = Math.floor((absSeconds % 3600) / 60);
-
-  // Always show all components: xD XXh XXm
-  const totalHours = absSeconds / 3600;
-
-  let text, color;
-  if (isPast) {
-    text = `${days}d ${hours}h ${minutes}m overdue`;
-    color = "text-red-600 dark:text-red-400";
-  } else if (totalHours < t.red_threshold) {
-    text = `${days}d ${hours}h ${minutes}m`;
-    color = "text-red-500 dark:text-red-400";
-  } else if (totalHours < t.yellow_end) {
-    text = `${days}d ${hours}h ${minutes}m`;
-    color = "text-orange-500 dark:text-orange-400";
-  } else if (totalHours < t.yellow_start) {
-    text = `${days}d ${hours}h ${minutes}m`;
-    color = "text-amber-500 dark:text-amber-400";
-  } else {
-    text = `${days}d ${hours}h ${minutes}m`;
-    color = "text-muted-foreground";
-  }
-
-  return <span className={`text-xs font-mono flex-shrink-0 ${color}`}>{text}</span>;
-}
-
-export function CompletionTimer({ dueDate, completedDate }) {
-  if (!dueDate || !completedDate) return null;
-  let due, completed;
-  try {
-    due = new Date(dueDate);
-    completed = new Date(completedDate);
-    if (isNaN(due.getTime()) || isNaN(completed.getTime())) return null;
-  } catch {
-    return null;
-  }
-  const absSeconds = Math.abs(differenceInSeconds(completed, due));
-  const days = Math.floor(absSeconds / 86400);
-  const hours = Math.floor((absSeconds % 86400) / 3600);
-  const minutes = Math.floor((absSeconds % 3600) / 60);
-
-  const text = `completed in ${days}d ${hours}h ${minutes}m`;
-  const color = differenceInSeconds(completed, due) <= 0 ? "text-green-600 dark:text-green-400" : "text-orange-500 dark:text-orange-400";
-
-  return <span className={`text-xs font-mono flex-shrink-0 ${color}`}>{text}</span>;
-}
+// Timer presentational helpers live in ./taskTimers so that TaskListView and
+// TaskDetailPanel can import them without forming a circular dep on this
+// module (which would TDZ in production: "Cannot access 'te' before
+// initialization"). Re-exported here for back-compat with non-cyclic
+// consumers (ProjectCardFields, ProjectRevisionsTab, pages/Tasks).
+export { getCountdownState, CountdownTimer, CompletionTimer } from "./taskTimers";
 
 export const ROLE_LABELS = {
   none: "No auto-assign",

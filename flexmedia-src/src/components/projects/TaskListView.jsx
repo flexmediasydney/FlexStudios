@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Circle, Lock, CalendarIcon, Trash2, AlertTriangle, ClockIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CountdownTimer, CompletionTimer, getCountdownState } from "./TaskManagement";
+import { CountdownTimer, CompletionTimer, getCountdownState } from "./taskTimers";
 import TaskDetailPanel from "./TaskDetailPanel";
 import ProductBrandingSummary from "./ProductBrandingSummary";
 import TaskEffortBadge from "./TaskEffortBadge";

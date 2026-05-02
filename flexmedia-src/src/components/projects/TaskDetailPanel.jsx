@@ -9,7 +9,7 @@ import { api } from "@/api/supabaseClient";
 import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { format } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
-import { CountdownTimer, CompletionTimer } from "./TaskManagement";
+import { CountdownTimer, CompletionTimer } from "./taskTimers";
 import TaskTimeLoggerRobust from "@/components/utilization/TaskTimeLoggerRobust";
 import TaskEffortSectionVirtualized from "./TaskEffortSectionVirtualized";
 import TaskEffortBadge from "./TaskEffortBadge";
