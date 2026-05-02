@@ -979,10 +979,8 @@ export default function ProjectDetails() {
       <div className="p-4 lg:p-8 space-y-4">
         <Skeleton className="h-8 w-48 animate-pulse" />
         <Skeleton className="h-12 w-full animate-pulse" />
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2">
-            <Skeleton className="h-48 w-full animate-pulse" />
-          </div>
+        <div className="grid grid-cols-1 lg:grid-cols-[10fr_3fr] gap-4">
+          <Skeleton className="h-48 w-full animate-pulse" />
           <Skeleton className="h-48 w-full animate-pulse" />
         </div>
       </div>
@@ -1479,9 +1477,9 @@ export default function ProjectDetails() {
         return null;
       })()}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
+      <div data-testid="project-detail-grid" className="grid grid-cols-1 lg:grid-cols-[10fr_3fr] gap-4 lg:gap-6">
         {/* Main Content */}
-        <div className="lg:col-span-2 space-y-4 lg:space-y-6">
+        <div className="space-y-4 lg:space-y-6">
           {/* Project Progress Bar */}
           <ErrorBoundary><ProjectProgressBar tasks={projectTasks} /></ErrorBoundary>
 
@@ -1529,58 +1527,7 @@ export default function ProjectDetails() {
             </AlertDialogContent>
           </AlertDialog>
 
-          {/* Weather + Project Details + Staff moved to right sidebar */}
-
-          {/* Project Details + Pricing — kept in main content for width */}
-          <Card>
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm">Pricing & Deliverables</CardTitle>
-                {project.source === 'tonomo' && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-violet-100 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700">⚡ Tonomo</span>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-2 pt-0">
-              {project.delivery_link?.trim() && (
-                <div>
-                  <a href={project.delivery_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-primary hover:underline text-sm">
-                    <ExternalLink className="h-4 w-4" /> View Deliverables
-                  </a>
-                </div>
-              )}
-              {canSeePricing && project?.tonomo_pending_delta && (
-                <TonomoPendingDeltaBanner
-                  project={project}
-                  canEdit={memoizedCanEdit}
-                  onResolved={() => refetchEntityList("Project")}
-                />
-              )}
-              {canSeePricing && (
-                <ErrorBoundary>
-                  <ProjectPricingTable project={project} pricingTier={project.pricing_tier || "standard"} canSeePricing={canSeePricing} canEdit={memoizedCanEdit} />
-                </ErrorBoundary>
-              )}
-              {canSeePricing && project?.has_pricing_mismatch && (
-                <div className="flex items-center gap-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs">
-                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                  <div>
-                    <p className="font-medium text-amber-800 dark:text-amber-300">Price Mismatch</p>
-                    <p className="text-amber-600 dark:text-amber-400">{project.pricing_mismatch_details}</p>
-                  </div>
-                </div>
-              )}
-              {project.notes?.trim() && (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Notes</p>
-                    <p className="text-sm whitespace-pre-wrap">{project.notes}</p>
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
+          {/* Weather + Project Details + Staff + Pricing & Deliverables moved to right sidebar */}
 
           <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <div className="overflow-x-auto border-b bg-muted/30">
@@ -1717,10 +1664,63 @@ export default function ProjectDetails() {
         </div>
 
         {/* Sidebar */}
-        <div className="space-y-3">
+        <div data-testid="project-detail-sidebar" className="space-y-3">
+          {/* Pricing & Deliverables — relocated from main column, sits above weather card */}
+          <Card data-testid="sidebar-pricing-card">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm">Pricing & Deliverables</CardTitle>
+                {project.source === 'tonomo' && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-violet-100 text-violet-700 border border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-700">⚡ Tonomo</span>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2 pt-0">
+              {project.delivery_link?.trim() && (
+                <div>
+                  <a href={project.delivery_link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 text-primary hover:underline text-sm">
+                    <ExternalLink className="h-4 w-4" /> View Deliverables
+                  </a>
+                </div>
+              )}
+              {canSeePricing && project?.tonomo_pending_delta && (
+                <TonomoPendingDeltaBanner
+                  project={project}
+                  canEdit={memoizedCanEdit}
+                  onResolved={() => refetchEntityList("Project")}
+                />
+              )}
+              {canSeePricing && (
+                <ErrorBoundary>
+                  <ProjectPricingTable project={project} pricingTier={project.pricing_tier || "standard"} canSeePricing={canSeePricing} canEdit={memoizedCanEdit} />
+                </ErrorBoundary>
+              )}
+              {canSeePricing && project?.has_pricing_mismatch && (
+                <div className="flex items-center gap-2 p-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs">
+                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
+                  <div>
+                    <p className="font-medium text-amber-800 dark:text-amber-300">Price Mismatch</p>
+                    <p className="text-amber-600 dark:text-amber-400">{project.pricing_mismatch_details}</p>
+                  </div>
+                </div>
+              )}
+              {project.notes?.trim() && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Notes</p>
+                    <p className="text-sm whitespace-pre-wrap">{project.notes}</p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Weather — compact */}
           {project?.property_address && (
-            <ErrorBoundary><ProjectWeatherCard project={project} products={enrichedWeatherProducts} /></ErrorBoundary>
+            <div data-testid="sidebar-weather-wrapper">
+              <ErrorBoundary><ProjectWeatherCard project={project} products={enrichedWeatherProducts} /></ErrorBoundary>
+            </div>
           )}
 
           {/* Project Info — compact */}
