@@ -109,6 +109,28 @@ export interface Pass2SlotDefinition {
   max_images: number;
   min_images: number;
   notes: string | null;
+  // W11.6.22 — selection_mode: 'ai_decides' (legacy default) | 'curated_positions'.
+  // When 'curated_positions', `curated_positions` array is populated and Stage 4
+  // is told to fill one image per position (vs one image per slot).
+  selection_mode?: 'ai_decides' | 'curated_positions';
+  curated_positions?: Pass2SlotPositionPreference[];
+}
+
+/**
+ * W11.6.22 — one curated position within a curated_positions slot. Mirrors
+ * the shortlisting_slot_position_preferences row shape (subset).
+ */
+export interface Pass2SlotPositionPreference {
+  position_index: number;
+  display_label: string;
+  preferred_composition_type: string | null;
+  preferred_zone_focus: string | null;
+  preferred_space_type: string | null;
+  preferred_lighting_state: string | null;
+  preferred_image_type: string | null;
+  preferred_signal_emphasis: string[];
+  is_required: boolean;
+  ai_backfill_on_gap: boolean;
 }
 
 /**

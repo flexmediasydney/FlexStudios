@@ -13,10 +13,28 @@ export interface CompositionTypeTaxonomyBlockOpts {
   // empty — taxonomy block has no inputs today
 }
 
-const COMPOSITION_TYPE_TAXONOMY =
-  `hero_wide | corner_two_point | detail_closeup | corridor_leading | ` +
-  `straight_on | overhead | upward_void | threshold_transition | ` +
-  `drone_nadir | drone_oblique_contextual | architectural_abstract`;
+/**
+ * W11.6.22 — exported canonical 11-value list. The W11.6.22 curated-position
+ * editor in SettingsShortlistingSlots imports COMPOSITION_TYPE_OPTIONS to
+ * populate the per-position composition_type dropdown without re-declaring
+ * the vocabulary on the frontend.
+ */
+export const COMPOSITION_TYPE_OPTIONS = [
+  'hero_wide',
+  'corner_two_point',
+  'detail_closeup',
+  'corridor_leading',
+  'straight_on',
+  'overhead',
+  'upward_void',
+  'threshold_transition',
+  'drone_nadir',
+  'drone_oblique_contextual',
+  'architectural_abstract',
+] as const;
+export type CompositionTypeOption = typeof COMPOSITION_TYPE_OPTIONS[number];
+
+const COMPOSITION_TYPE_TAXONOMY = COMPOSITION_TYPE_OPTIONS.join(' | ');
 
 export function compositionTypeTaxonomyBlock(
   _opts?: CompositionTypeTaxonomyBlockOpts,

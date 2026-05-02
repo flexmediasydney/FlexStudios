@@ -29,7 +29,13 @@
 
 import type { Pass2SlotDefinition } from '../../pass2Prompt.ts';
 
-export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.2';
+// v1.3 (W11.6.22): per-slot selection_mode rendering. ai_decides slots emit
+// the legacy "exactly N image(s)" line; curated_positions slots enumerate one
+// row per position with composition / zone / space / lighting / image-type /
+// signal-emphasis hints + is_required + ai_backfill_on_gap flags. Stage 4 is
+// instructed to emit `position_index` per slot_decision and to use
+// `position_filled_via='ai_backfill'` when curation cannot be matched.
+export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.3';
 
 // ─── Canonical slot vocabulary (W11.7.1 hygiene) ────────────────────────────
 //
@@ -245,7 +251,26 @@ export function slotEnumerationBlock(opts: SlotEnumerationBlockOpts): string {
     ? engineRoles.join(', ')
     : '(none — slot list will be limited to phase 3)';
 
-  return [
+  // W11.6.22 — when ANY slot is curated_positions, append the per-position
+  // emission contract so the model knows to set position_index and
+  // position_filled_via on slot_decisions[].
+  const hasCurated = slotDefinitions.some(
+    (s) => s.selection_mode === 'curated_positions',
+  );
+  const curatedFooter = hasCurated
+    ? [
+        '',
+        'CURATED POSITION CONTRACT (W11.6.22):',
+        'For slots marked CURATED above, emit ONE slot_decisions[] entry per position:',
+        '  - Set `position_index` to the position number (1-based, matches the row).',
+        '  - Set `position_filled_via` to "curated_match" when the winner satisfies the position\'s composition / zone / space / lighting / image_type criteria.',
+        '  - Set `position_filled_via` to "ai_backfill" when no candidate matches AND the position allows backfill — pick your best AI-decided alternative for that role.',
+        '  - When a position is REQUIRED and no candidate matches AND backfill is disabled, omit that position from slot_decisions[] (the engine will emit a coverage_gap_required_position event for the swimlane to surface).',
+        'For ai_decides slots, leave position_index and position_filled_via UNSET (they default to null).',
+      ].join('\n')
+    : '';
+
+  const lines = [
     'SHORTLISTING CONTEXT:',
     `Property: ${propertyAddress || 'Unknown property'}`,
     `Package: ${packageType}`,
@@ -256,7 +281,9 @@ export function slotEnumerationBlock(opts: SlotEnumerationBlockOpts): string {
     '',
     'SLOT REQUIREMENTS:',
     slotRequirements,
-  ].join('\n');
+  ];
+  if (curatedFooter) lines.push(curatedFooter);
+  return lines.join('\n');
 }
 
 // ─── Internal helpers (private to this block) ────────────────────────────────
