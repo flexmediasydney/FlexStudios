@@ -3,11 +3,12 @@
  * ────────────────────
  * Wave 11.7.1 — production Shape D shortlisting orchestrator.
  *
- * Wave 11.7.10 sunset: this is now the ONLY shortlisting engine. The legacy
- * `shortlisting-pass1` + `shortlisting-pass2` two-pass engine is retired —
- * Shape D handles every round regardless of engine_settings/round
- * engine_mode. A round persisted with engine_mode='two_pass' (legacy data)
- * is treated as Shape D and stamped as 'shape_d_full' on completion.
+ * Mig 439 (legacy cleanup wave): Shape D is the only shortlisting engine.
+ * Rounds persisted with engine_mode='two_pass' are now rejected with a 400
+ * error — the operator must reset such rounds to engine_mode='shape_d_full'
+ * via the DispatcherPanel before re-firing. (Wave 11.7.10 retired the
+ * shortlisting-pass1/pass2 edge fns; today's cleanup removes the
+ * warn-and-continue accommodation that lingered after that retirement.)
  *
  * Spec: docs/design-specs/W11-7-unified-shortlisting-architecture.md
  *
@@ -40,9 +41,9 @@
  *
  * ─── RESPONSIBILITIES ─────────────────────────────────────────────────────────
  *
- *  1. Auth + RLS: master_admin/admin/manager + service-role (former pass1
- *     caller pattern).
- *  2. (W11.7.10 sunset) Engine-mode gate removed — Shape D is the only engine.
+ *  1. Auth + RLS: master_admin/admin/manager + service-role.
+ *  2. Engine-mode gate (mig 439): rounds with engine_mode='two_pass' are
+ *     rejected with a 400; Shape D is the only engine.
  *  3. Round bootstrap: load shortlisting_rounds + projects + composition_groups.
  *  4. Property tier resolution: round.property_tier (default 'standard').
  *  5. Source type: defaults to 'internal_raw' for the production RAW workflow.
@@ -248,7 +249,8 @@ interface RoundContext {
 }
 
 interface EngineSettings {
-  engine_mode: 'two_pass' | 'shape_d';
+  // mig 439: 'two_pass' enum value retired. Only 'shape_d' is accepted.
+  engine_mode: 'shape_d';
   // W11.8.1: production_vendor is hardcoded to 'google'. Anthropic failover
   // stripped — failover_vendor field removed from this interface entirely.
   // Future Gemini regressions fail LOUD via VendorCallError instead of
@@ -352,9 +354,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (cors) return cors;
   if (req.method !== 'POST') return errorResponse('Method not allowed', 405, req);
 
-  // Auth: service-role bypass + master_admin/admin/manager allowed (former
-  // pass1 caller pattern, retained as-is). The dispatcher passes a service-
-  // role JWT.
+  // Auth: service-role bypass + master_admin/admin/manager allowed. The
+  // dispatcher passes a service-role JWT.
   const user = await getUserFromReq(req).catch(() => null);
   const isService = user?.id === '__service_role__';
   if (!isService) {
@@ -411,7 +412,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // tightened NULL-critical-fields predicate.
   const force = body.force === true;
 
-  // Project-access guard for non-service callers (former pass1 audit defect #42).
+  // Project-access guard for non-service callers.
   if (!isService) {
     const adminLookup = getAdminClient();
     const { data: rowForAcl } = await adminLookup
@@ -668,15 +669,16 @@ async function preflightShapeDStage1(
     );
   }
 
-  // 3. Engine-mode (W11.7.10 sunset): Shape D is the ONLY engine. Legacy
-  // rounds persisted with engine_mode='two_pass' fall through to shape_d_full
-  // here — we just log a warning and continue. The finalEngineMode below
-  // overwrites the row to 'shape_d_full' on completion.
+  // 3. Engine-mode gate (mig 439 legacy cleanup): Shape D is the ONLY engine.
+  // Rounds with engine_mode='two_pass' are rejected — the legacy two-pass
+  // engine is retired and we no longer accommodate replays of those rounds.
+  // The operator must reset the round to 'shape_d_full' (or NULL — the
+  // orchestrator stamps 'shape_d_full' on success) before re-firing.
   const roundEngineMode = await loadRoundEngineMode(admin, roundId);
   if (roundEngineMode === 'two_pass') {
-    console.warn(
-      `[${GENERATOR}] round ${roundId} has legacy engine_mode='two_pass' — ` +
-      `treating as shape_d_full (W11.7.10 sunset)`,
+    throw new Error(
+      `two_pass engine retired in W11.7.10; round must be reset to shape_d_full ` +
+      `(round ${roundId} engine_mode='two_pass')`,
     );
   }
 
@@ -910,7 +912,7 @@ async function runShapeDStage1Core(
     canonicalRegistryBlock(),
   ]);
 
-  // System prompt: pass1 system blocks (header + stepOrdering) + W11.7.17
+  // System prompt: Stage 1 system blocks (header + stepOrdering) + W11.7.17
   // signalMeasurementBlock (source-aware 26-signal measurement prompts;
   // injected right after `header` per W11.7.17 spec §11) + Sydney primer
   // (anchor style_archetype + era_hint to Sydney typology) + project_memory
@@ -935,7 +937,7 @@ async function runShapeDStage1Core(
 
   // User prompt: source-context preamble TOP, then photographer-techniques
   // preamble (recognise deliberate craft moves like fingers-over-sun so we
-  // don't penalise them), then pass1 user blocks (room taxonomy, scoring
+  // don't penalise them), then Stage 1 user blocks (room taxonomy, scoring
   // anchors, vantage, clutter), then voice anchor rubric, then self-critique,
   // then few_shot library at the END. The model sees ONE image — no stem
   // matching needed.
@@ -967,8 +969,8 @@ async function runShapeDStage1Core(
   // W11.6.18 — resolve the active tier_config once per round so persist can
   // pick the W11 per-signal weighted rollup when signal_weights is configured.
   // Falls back to null (legacy hardcoded 4-axis blend) when engine_tier_id is
-  // missing or no active config exists. Mirrors the former shortlisting-pass1
-  // path and emits a shortlisting_events warning so admin notices.
+  // missing or no active config exists; emits a shortlisting_events warning
+  // so admin notices.
   const tierConfig: TierConfigRow | null = ctx.engine_tier_id
     ? await getActiveTierConfig(ctx.engine_tier_id)
     : null;
@@ -1283,15 +1285,14 @@ async function runShapeDStage1Core(
   // explicitly opted out of paying past the cap. The audit row still records
   // the partial successes (their cost is already spent and the
   // composition_classifications are landed).
-  // W11.7.10 sunset: never stamp 'two_pass' anymore — even on full failure
-  // we leave the round at shape_d_partial so a retry stays in Shape D land
-  // (the legacy two-pass engine is retired). Total-failure rounds will have
-  // zero successes recorded; the operator re-fires Stage 1 from the
-  // DispatcherPanel.
+  //
+  // mig 439: total-failure rounds stamp shape_d_partial (zero successes
+  // recorded; operator re-fires Stage 1 from the DispatcherPanel). The
+  // 'two_pass' retry-leave value is retired entirely.
   const finalEngineMode = costCapExceeded
     ? 'shape_d_partial' /* recorded for audit, even though we'll throw below */
     : allFailed
-      ? 'shape_d_partial' /* legacy 'two_pass' retry-leave value retired */
+      ? 'shape_d_partial'
       : (partial ? 'shape_d_partial' : 'shape_d_full');
 
   // ── Cost cap exceeded (W6a F-E-001) — write audit then throw ─────────────
@@ -1364,7 +1365,7 @@ async function runShapeDStage1Core(
 
   // ── Stamp engine_mode + cost on shortlisting_rounds ──────────────────────
   {
-    // Accumulate cost across retries (former pass1 audit defect #5 pattern).
+    // Accumulate cost across retries.
     const { data: priorRound } = await admin
       .from('shortlisting_rounds')
       .select('stage_1_total_cost_usd')
@@ -1564,8 +1565,10 @@ async function loadEngineSettings(
   // W11.8.1: production_vendor + failover_vendor stripped from required keys.
   // production_vendor is hardcoded to 'google' since Anthropic vision is gone.
   // The DB rows for those keys may still exist — they're harmless and ignored.
+  // mig 439: 'engine_mode' key removed — Shape D is the only engine and the
+  // value is hardcoded below. Existing engine_settings.engine_mode rows are
+  // ignored (left in place for any external readers; harmless).
   const keys = [
-    'engine_mode',
     'stage1_thinking_budget',
     'stage1_max_output_tokens',
     'cost_cap_per_round_usd',
@@ -1602,7 +1605,10 @@ async function loadEngineSettings(
     return def;
   };
 
-  const engine_mode = (str('engine_mode', 'two_pass') as 'two_pass' | 'shape_d');
+  // mig 439: default to 'shape_d'. The legacy 'two_pass' default tracked the
+  // pre-sunset world where engine_mode could route to the retired pass1/pass2
+  // chain; with Shape D as the only engine, the default is the only value.
+  const engine_mode = 'shape_d' as const;
 
   return {
     engine_mode,
@@ -1771,10 +1777,10 @@ interface RunStage1PerImageOpts {
   attemptIndex: number;
   systemText: string;
   // W11.6.14: per-image user_text composed in the runner. Prefix is the
-  // shared user blocks (source/techniques/pass1/voice anchor); suffix is
-  // SELF_CRITIQUE + few_shot library. Per-image exifContextBlock is spliced
-  // between them so the model reads fresh metadata just before the scoring
-  // discipline reminder.
+  // shared user blocks (source/techniques/Stage 1 taxonomy/voice anchor);
+  // suffix is SELF_CRITIQUE + few_shot library. Per-image exifContextBlock is
+  // spliced between them so the model reads fresh metadata just before the
+  // scoring discipline reminder.
   userTextPrefix: string;
   userTextSuffix: string;
   settings: EngineSettings;
