@@ -161,6 +161,8 @@ const TalentPulse = React.lazy(() => import('./pages/TalentPulse'));
 const Users = React.lazy(() => import('./pages/Users'));
 // Wave 15b.9 — Pulse Missed-Opportunity Command Center (master_admin only).
 const PulseMissedOpportunityCommandCenter = React.lazy(() => import('./pages/PulseMissedOpportunityCommandCenter'));
+// Wave 11.6 — Rejection Reasons Dashboard (master_admin only).
+const SettingsRejectionReasonsDashboard = React.lazy(() => import('./pages/SettingsRejectionReasonsDashboard'));
 
 
 export const PAGES = {
@@ -265,6 +267,7 @@ export const PAGES = {
     "UserSettings": UserSettings,
     "Users": Users,
     "PulseMissedOpportunityCommandCenter": PulseMissedOpportunityCommandCenter,
+    "SettingsRejectionReasonsDashboard": SettingsRejectionReasonsDashboard,
 }
 
 export const pagesConfig = {

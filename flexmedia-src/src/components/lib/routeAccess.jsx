@@ -65,6 +65,10 @@ export const ROUTE_ACCESS = {
   // discovery queue, view normalisation stats. master_admin only because
   // mutations rewrite the canonical taxonomy used by Stage 1 grounding.
   SettingsObjectRegistry: OWNER_ONLY,
+  // Wave 12.7-12.8 — AI suggestion engine review surface (slot + room-type
+  // proposals). master_admin only because approve/merge mutations extend
+  // the canonical slot/room-type taxonomies.
+  SettingsAISuggestions: OWNER_ONLY,
   // W11.6.10 — engine override patterns analytics dashboard.
   SettingsEngineOverridePatterns: ADMIN_AND_ABOVE,
 
@@ -158,6 +162,10 @@ export const ROUTE_ACCESS = {
   // master_admin only because it exposes manual override of customer-facing
   // quotes + a queue-pause control that affects production cost.
   PulseMissedOpportunityCommandCenter: OWNER_ONLY,
+  // Wave 11.6 — rejection reasons dashboard. master_admin only because it
+  // surfaces raw human override observations (W11.5 capture) + Gemini cost
+  // attribution + canonical registry coverage.
+  SettingsRejectionReasonsDashboard: OWNER_ONLY,
 };
 
 /**
