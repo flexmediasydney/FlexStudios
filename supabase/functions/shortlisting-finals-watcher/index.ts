@@ -40,6 +40,7 @@ import {
   getUserFromReq,
   serveWithAudit,
   getAdminClient,
+  callerHasProjectAccess,
 } from '../_shared/supabase.ts';
 
 const GENERATOR = 'shortlisting-finals-watcher';
@@ -48,6 +49,29 @@ interface RequestBody {
   project_id?: string;
   file_paths?: string[];
   _health_check?: boolean;
+}
+
+// F-B-006 (QC-iter2-W4 P1): role-gate decision exposed as a pure function
+// for unit testing. Mirrors the inline check in serveWithAudit.
+// Returns the (status, reason) tuple — { allow: true } means allow.
+export type RoleGateOutcome =
+  | { allow: true }
+  | { allow: false; status: 401 | 403; reason: string };
+
+export function evaluateFinalsWatcherRoleGate(
+  isService: boolean,
+  user: { role?: string | null } | null,
+): RoleGateOutcome {
+  if (isService) return { allow: true };
+  if (!user) return { allow: false, status: 401, reason: 'Authentication required' };
+  if (!['master_admin', 'admin', 'manager'].includes(user.role || '')) {
+    return {
+      allow: false,
+      status: 403,
+      reason: 'Forbidden — only master_admin/admin/manager can update training weights',
+    };
+  }
+  return { allow: true };
 }
 
 // Audit defect #21: editor variant suffixes are richer than just `-\d+`.
@@ -114,6 +138,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const projectId = body.project_id?.trim();
   const filePaths = Array.isArray(body.file_paths) ? body.file_paths : [];
   if (!projectId) return errorResponse('project_id required', 400, req);
+
+  // F-B-006 (QC-iter2-W4 P1): cross-project privilege escalation guard.
+  // Role-gating above is necessary but not sufficient — a manager assigned to
+  // project A could otherwise submit { project_id: <project-B-id>, ... } and
+  // mutate training weights on project B's stems. Match the pattern used in
+  // pass0/pass3/shape-d/overrides: after role-gate, verify project membership.
+  if (!isService && user && !(await callerHasProjectAccess(user, projectId))) {
+    return errorResponse('Forbidden — no access to project', 403, req);
+  }
 
   const admin = getAdminClient();
 

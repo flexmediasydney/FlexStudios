@@ -269,18 +269,60 @@ async function handleApprove(
   const canonicalId = body.canonical_id?.trim() || candidate.proposed_canonical_label;
   const displayName = body.display_name?.trim() || candidate.proposed_display_name || canonicalId;
 
+  // F-B-013 (QC-iter2-W4 P1): re-embed from CURATED text, not the candidate's
+  // raw observed-label embedding. The candidate's embedding was computed from
+  // the raw label only; the canonical row needs to embed the curated
+  // display_name + description + level concat + aliases via composeEmbedText
+  // so semantic search by curated phrasing matches immediately (without a
+  // manual `backfill_embeddings` rerun). Inline embed is cleanest reuse:
+  // one row, one Gemini call. Falls back to the candidate embedding (with a
+  // warning) only if Gemini errors — the row's still queryable that way and
+  // backfill_embeddings can recompute later.
+  const description = body.description ?? candidate.proposed_description ?? null;
+  const level0 = body.level_0_class ?? candidate.proposed_level_0_class ?? null;
+  const level1 = body.level_1_functional ?? candidate.proposed_level_1_functional ?? null;
+  const level2 = body.level_2_material ?? candidate.proposed_level_2_material ?? null;
+  const level3 = body.level_3_specific ?? candidate.proposed_level_3_specific ?? null;
+  const level4 = body.level_4_detail ?? candidate.proposed_level_4_detail ?? null;
+  const aliases = body.aliases ?? [];
+
+  let embeddingLiteral: string | null = null;
+  let reembedSource: 'curated' | 'candidate_fallback' = 'curated';
+  try {
+    const embedTextStr = composeEmbedText({
+      display_name: displayName,
+      description,
+      level_0_class: level0,
+      level_1_functional: level1,
+      level_2_material: level2,
+      level_3_specific: level3,
+      level_4_detail: level4,
+      aliases,
+    });
+    const vec = await embedText(embedTextStr);
+    embeddingLiteral = formatVectorLiteral(vec);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[${FN_NAME}] approve_candidate: re-embed failed for '${canonicalId}', ` +
+      `falling back to candidate embedding (run backfill_embeddings to recompute): ${msg}`,
+    );
+    embeddingLiteral = (candidate.candidate_embedding as string | null) || null;
+    reembedSource = 'candidate_fallback';
+  }
+
   const insertPayload: Record<string, unknown> = {
     canonical_id: canonicalId,
     display_name: displayName,
-    description: body.description ?? candidate.proposed_description,
-    level_0_class: body.level_0_class ?? candidate.proposed_level_0_class,
-    level_1_functional: body.level_1_functional ?? candidate.proposed_level_1_functional,
-    level_2_material: body.level_2_material ?? candidate.proposed_level_2_material,
-    level_3_specific: body.level_3_specific ?? candidate.proposed_level_3_specific,
-    level_4_detail: body.level_4_detail ?? candidate.proposed_level_4_detail,
+    description,
+    level_0_class: level0,
+    level_1_functional: level1,
+    level_2_material: level2,
+    level_3_specific: level3,
+    level_4_detail: level4,
     parent_canonical_id: body.parent_canonical_id ?? null,
-    aliases: body.aliases ?? [],
-    embedding_vector: candidate.candidate_embedding,    // re-use the embedding from the candidate
+    aliases,
+    embedding_vector: embeddingLiteral,
     market_frequency: candidate.observed_count || 1,
     signal_room_type: body.signal_room_type ?? null,
     signal_confidence: body.signal_confidence ?? null,
@@ -318,6 +360,7 @@ async function handleApprove(
     candidate_id: body.candidate_id,
     approved_object_id: newRow.id,
     canonical_id: newRow.canonical_id,
+    reembed_source: reembedSource,
     message: `Candidate approved as canonical ${newRow.canonical_id}`,
   }, 200, req);
 }
@@ -539,7 +582,12 @@ async function handleBackfillEmbeddings(
   }, 200, req);
 }
 
-function composeEmbedText(row: { display_name: string; description: string | null; level_0_class: string | null; level_1_functional: string | null; level_2_material: string | null; level_3_specific: string | null; level_4_detail: string | null; aliases: string[] | null }): string {
+// F-B-013 (QC-iter2-W4 P1): exported so unit tests can verify approve_candidate
+// composes embed text from CURATED display_name + description + level concat +
+// aliases (not the candidate's raw observed-label embedding). This is the same
+// helper used by `backfill_embeddings`, ensuring the two re-embed paths are
+// byte-identical.
+export function composeEmbedText(row: { display_name: string; description: string | null; level_0_class: string | null; level_1_functional: string | null; level_2_material: string | null; level_3_specific: string | null; level_4_detail: string | null; aliases: string[] | null }): string {
   const parts: string[] = [row.display_name];
   if (row.description) parts.push(row.description);
   const levels = [row.level_0_class, row.level_1_functional, row.level_2_material, row.level_3_specific, row.level_4_detail].filter(Boolean);

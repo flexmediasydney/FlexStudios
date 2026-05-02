@@ -44,6 +44,25 @@ interface RequestBody {
   _health_check?: boolean;
 }
 
+// F-B-007 (QC-iter2-W4 P1): role-gate decision exposed as a pure function
+// for unit testing. Mirrors the inline check in serveWithAudit. Manager is
+// permitted (matches pass0/pass3/shape-d/shape-d-stage4).
+export type ExtractRoleGateOutcome =
+  | { allow: true }
+  | { allow: false; status: 401 | 403; reason: string };
+
+export function evaluateExtractRoleGate(
+  isService: boolean,
+  user: { role?: string | null } | null,
+): ExtractRoleGateOutcome {
+  if (isService) return { allow: true };
+  if (!user) return { allow: false, status: 401, reason: 'Authentication required' };
+  if (!['master_admin', 'admin', 'manager'].includes(user.role || '')) {
+    return { allow: false, status: 403, reason: 'Forbidden' };
+  }
+  return { allow: true };
+}
+
 interface ExtractInput {
   jobId: string | null;
   projectId: string;
@@ -60,7 +79,12 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const isService = user?.id === '__service_role__';
   if (!isService) {
     if (!user) return errorResponse('Authentication required', 401, req);
-    if (!['master_admin', 'admin'].includes(user.role || '')) {
+    // F-B-007 (QC-iter2-W4 P1): role gate consistency. pass0/pass3/shape-d/
+    // shape-d-stage4 all permit manager. The fn-level comment (line 22)
+    // already documents "manual rerun via UI / curl" implying manager was
+    // intended. Project-level access is enforced inside extract() via the
+    // project lookup + dropbox_root_path check.
+    if (!['master_admin', 'admin', 'manager'].includes(user.role || '')) {
       return errorResponse('Forbidden', 403, req);
     }
   }
