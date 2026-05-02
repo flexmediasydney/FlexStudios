@@ -41,40 +41,38 @@ export default defineConfig({
     cssCodeSplit: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
-          'vendor-supabase': ['@supabase/supabase-js'],
-          'vendor-query': ['@tanstack/react-query'],
-          'vendor-date': ['date-fns'],
-          'vendor-recharts': ['recharts'],
-          'vendor-icons': ['lucide-react'],
-          // Isolate leaflet + react-leaflet into a dedicated chunk so Rollup
-          // does not auto-split react-leaflet's forwardRef-based components
-          // (Pane/Polygon/Polyline/etc.) into anonymous chunks that can race
-          // with vendor-icons during top-level evaluation. Without this
-          // grouping, Rollup produced a chunk containing
-          // `const te = s.forwardRef(J)` at module scope, where `s` (react)
-          // and `S` (react-dom) were imported from vendor-icons. A circular
-          // import via the auto-split sibling chunks (Marker/Popup/TileLayer/
-          // ZoomControl/Rectangle/Tooltip/grid-layer/hooks/media-overlay)
-          // could trigger TDZ — "Cannot access 'te' before initialization" —
-          // synchronously on load. Forcing the entire react-leaflet surface
-          // into a single chunk removes the auto-split graph and the cycle.
-          'vendor-leaflet': [
-            'react-leaflet',
-            'leaflet',
-            'react-leaflet-cluster',
-            'leaflet.markercluster',
-          ],
-          'vendor-radix': [
-            '@radix-ui/react-dialog',
-            '@radix-ui/react-dropdown-menu',
-            '@radix-ui/react-popover',
-            '@radix-ui/react-select',
-            '@radix-ui/react-tabs',
-            '@radix-ui/react-tooltip',
-            '@radix-ui/react-toast',
-          ],
+        // Function form (instead of static `{name: [packages]}`) so a chunk
+        // captures EVERY sub-package of an ecosystem — not just the ones we
+        // explicitly listed. Without this, Rollup auto-splits internal deps
+        // (e.g. @radix-ui/react-context, @radix-ui/react-primitive, react-
+        // leaflet's hooks/media-overlay/grid-layer) into anonymous chunks
+        // that import from the manualChunk and re-import back, producing a
+        // circular import via the chunk boundary. Under minification one of
+        // those re-exports becomes a const named `te` that's read before
+        // its initializer ran — TDZ — surfacing as
+        // "Cannot access 'te' before initialization" on first render.
+        // The previous array form caught react-leaflet itself but missed
+        // its internal helpers; same shape was hitting @radix-ui's full
+        // dep graph and breaking the swimlane on Project Details whenever
+        // a Radix-driven component rendered.
+        manualChunks(id) {
+          if (id.includes('node_modules/')) {
+            if (id.includes('node_modules/@radix-ui/'))            return 'vendor-radix';
+            if (id.includes('node_modules/lucide-react/'))         return 'vendor-icons';
+            if (id.includes('node_modules/recharts/') ||
+                id.includes('node_modules/d3-'))                   return 'vendor-recharts';
+            if (id.includes('node_modules/date-fns/'))             return 'vendor-date';
+            if (id.includes('node_modules/@tanstack/react-query')) return 'vendor-query';
+            if (id.includes('node_modules/@supabase/'))            return 'vendor-supabase';
+            if (id.includes('node_modules/react-leaflet') ||
+                id.includes('node_modules/leaflet') ||
+                id.includes('node_modules/leaflet.markercluster')) return 'vendor-leaflet';
+            if (id.includes('node_modules/react-router') ||
+                id.includes('node_modules/react-dom') ||
+                id.includes('node_modules/react/') ||
+                id.includes('node_modules/scheduler/'))            return 'vendor-react';
+          }
+          // Everything else: let Rollup decide (default per-route splits).
         },
       },
     },
