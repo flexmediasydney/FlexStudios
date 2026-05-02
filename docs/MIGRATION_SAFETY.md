@@ -13,11 +13,32 @@ migration's leading comment.
 
 - Migrations live in `supabase/migrations/` named `NNN_description.sql`
 - `NNN` is a 3-digit zero-padded sequence number, monotonically increasing
-- Before authoring, run `ls supabase/migrations/ | sort -n | tail -5` to find
-  the next number
+- Before authoring, run `git fetch origin main && ls supabase/migrations/ |
+  sort -V | tail -5` to find the next number — and when working in a
+  multi-agent dispatch, **also check `supabase_migrations.schema_migrations`
+  on the live DB** since another agent may have applied a number that
+  hasn't merged to main yet
 - Drone, shortlisting, pulse, and other modules **share** the same numbering
   space — there is no per-module sequence
 - Never re-use a number; if a migration is reverted in code, increment past it
+
+### Filename collisions in multi-agent dispatch
+
+When multiple agents are dispatched in parallel, they each pick "the next
+free number" independently and can land on the same `NNN` prefix. Both
+migrations apply cleanly to prod (timestamp-based `version` column in
+`supabase_migrations.schema_migrations` is distinct), so the DB state is
+unaffected — but disk filenames collide.
+
+Observed collisions to date: `113_*` (2 files), `396_*` (2 files), `413_*`
+(2 files), `421_*` (2 files). Each was resolved by renaming the
+later-landing migration to `(N+1)_description.sql` after the fact via a
+`git mv` chore commit.
+
+**Going forward**: master orchestrator should pre-allocate migration numbers
+when dispatching multiple SQL-touching agents in parallel. Inline brief:
+"Use migration number XXX. Do not pick 'next free' yourself — already
+allocated by orchestrator."
 
 ## The "additive then subtractive" rule
 

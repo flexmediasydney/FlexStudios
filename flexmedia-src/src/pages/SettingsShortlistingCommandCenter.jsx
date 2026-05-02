@@ -244,14 +244,12 @@ export default function SettingsShortlistingCommandCenter() {
             Shortlisting Command Center
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            Wave 11.6.21 + W11.6.21b + W11.6.23 — single owner control
-            surface for the shortlisting engine. Engine KPIs, tier weights,
+            All shortlisting-engine controls — engine KPIs, tier weights,
             package mappings, slot taxonomy, room types, standards, signals,
-            prompts, training, calibration (sessions + ops), override
-            patterns + analytics, object registry, AI suggestions,
-            rejection-reason analytics, engine settings, vendor A/B
-            comparison, and the data-explorer architecture view all live
-            here.
+            prompts, training, calibration, override patterns, object
+            registry, AI suggestions, rejection-reason analytics, engine
+            settings, vendor A/B comparison, and the data-explorer
+            architecture view.
           </p>
         </div>
 
