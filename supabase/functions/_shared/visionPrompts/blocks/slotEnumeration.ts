@@ -29,13 +29,21 @@
 
 import type { Pass2SlotDefinition } from '../../pass2Prompt.ts';
 
+// v1.4 (QC iter 3 P0 F-3C-003): extended CANONICAL_SLOT_IDS with the 32+
+// W11.6.24 (mig 422) slot_definitions inserts so the Stage 4 tool schema
+// enum and persist-time normaliseSlotId() accept the live DB vocabulary.
+// Pre-fix Stage 4 would refuse to emit any of the new slots (schema
+// validation failure) and persist would drop the row. Aliases that
+// collided with DB-active slot_ids (`exterior_front_hero`, `open_plan_hero`,
+// `garden_hero`) were promoted to canonical entries.
+//
 // v1.3 (W11.6.22): per-slot selection_mode rendering. ai_decides slots emit
 // the legacy "exactly N image(s)" line; curated_positions slots enumerate one
 // row per position with composition / zone / space / lighting / image-type /
 // signal-emphasis hints + is_required + ai_backfill_on_gap flags. Stage 4 is
 // instructed to emit `position_index` per slot_decision and to use
 // `position_filled_via='ai_backfill'` when curation cannot be matched.
-export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.3';
+export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.4';
 
 // ─── Canonical slot vocabulary (W11.7.1 hygiene) ────────────────────────────
 //
@@ -49,8 +57,10 @@ export const SLOT_ENUMERATION_BLOCK_VERSION = 'v1.3';
 export const CANONICAL_SLOT_IDS = [
   // Phase 1 — lead heroes (always filled when eligible)
   'exterior_facade_hero',
+  'exterior_front_hero', // QC3 F-3C-003: live in DB (mig 422)
   'kitchen_hero',
   'living_hero',
+  'open_plan_hero', // QC3 F-3C-003: live in DB (mig 422)
   'master_bedroom_hero',
   'alfresco_hero',
 
@@ -59,24 +69,62 @@ export const CANONICAL_SLOT_IDS = [
   'kitchen_secondary',
   'dining_hero',
   'bedroom_secondary',
+  'secondary_bedroom_hero', // QC3 F-3C-003: live in DB (mig 422)
   'bathroom_main',
   'ensuite_hero',
+  'secondary_ensuite_hero', // QC3 F-3C-003 (mig 422)
   'entry_hero',
   'study_hero',
   'powder_room',
   'laundry_hero',
   'garage_hero',
   'pool_hero',
+  'pool_day_hero', // QC3 F-3C-003 (mig 422)
+  'pool_dusk_hero', // QC3 F-3C-003 (mig 422)
   'view_hero',
 
-  // Phase 3 — detail / archive / specials
+  // Phase 2 — supporting (W11.6.24 / mig 422 additions)
+  'home_office_hero',
+  'kids_bedroom_hero',
+  'walk_in_robe_hero',
+  'wine_cellar_hero',
+  'gym_hero',
+  'mudroom_hero',
+  'theatre_hero',
+  'study_laundry_powder',
+
+  // Phase 3 — detail / archive / specials (legacy)
   'kitchen_detail',
   'bathroom_detail',
   'material_detail',
   'garden_detail',
+  'garden_hero', // QC3 F-3C-003: live in DB (mig 422)
   'balcony_terrace',
   'games_room',
   'media_room',
+
+  // Phase 3 — detail / outlook / overhead / cluster (W11.6.24 / mig 422 additions)
+  'kitchen_appliance_cluster',
+  'kitchen_island',
+  'kitchen_gulley',
+  'kitchen_pendant_detail',
+  'bathroom_tile_detail',
+  'period_feature_detail',
+  'joinery_detail',
+  'master_bed_window_outlook',
+  'master_ensuite_freestanding_bath',
+  'master_walk_in_robe_detail',
+  'lounge_fireplace',
+  'lounge_upstairs',
+  'lounge_window',
+  'dining_outlook',
+  'dining_overhead',
+  'garden_path',
+  'view_from_balcony',
+
+  // Drone (W11.6.24 / mig 422)
+  'drone_aerial_nadir',
+  'drone_aerial_oblique',
 
   // Phase 3 sentinel — Stage 4 free recommendations not tied to a specific slot.
   'ai_recommended',
@@ -117,17 +165,19 @@ export const SLOT_ID_ALIASES: Readonly<Record<string, CanonicalSlotId>> = {
   garage: 'garage_hero',
   bathroom: 'bathroom_main',
 
-  // Compound-room collapse
+  // Compound-room collapse. NOTE: `open_plan_hero` is itself canonical
+  // post-mig 422 (lives in DB), so it is no longer aliased to `living_hero`.
   living_dining_hero: 'living_hero',
   living_dining: 'living_hero',
-  open_plan_hero: 'living_hero',
-  open_plan: 'living_hero',
+  open_plan: 'open_plan_hero',
   kitchen_living_hero: 'kitchen_hero',
   kitchen_dining_hero: 'kitchen_hero',
 
-  // Synonyms — exterior
-  exterior_front_hero: 'exterior_facade_hero',
-  exterior_front: 'exterior_facade_hero',
+  // Synonyms — exterior. NOTE: `exterior_front_hero` is itself canonical
+  // post-mig 422 (lives in DB), so it is no longer aliased — see
+  // CANONICAL_SLOT_IDS. The alias map preserves any aliases that resolve TO
+  // `exterior_facade_hero` for replay parity with pre-W11.6.24 traffic.
+  exterior_front: 'exterior_front_hero',
   facade_hero: 'exterior_facade_hero',
   facade: 'exterior_facade_hero',
   street_view_hero: 'exterior_facade_hero',
@@ -162,10 +212,10 @@ export const SLOT_ID_ALIASES: Readonly<Record<string, CanonicalSlotId>> = {
   main_bathroom_hero: 'bathroom_main',
   ensuite_main: 'ensuite_hero',
 
-  // Synonyms — Phase 3
+  // Synonyms — Phase 3. NOTE: `garden_hero` is itself canonical post-mig 422
+  // (lives in DB), so it is no longer aliased to `garden_detail`.
   detail_hero: 'material_detail',
   material_hero: 'material_detail',
-  garden_hero: 'garden_detail',
   landscape_detail: 'garden_detail',
   kitchen_detail_hero: 'kitchen_detail',
   bathroom_detail_hero: 'bathroom_detail',

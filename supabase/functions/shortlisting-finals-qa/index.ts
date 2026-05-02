@@ -433,6 +433,10 @@ async function runFinalsQaBackground(args: BackgroundArgs): Promise<void> {
             projectId: ctx.project_id,
             result: r,
             warnings,
+            // QC iter 3 P0 F-3C-002: pass the assembled prompt's blockVersions
+            // through so the persisted prompt_block_versions JSONB carries
+            // every block actually loaded (not just the 3 hardcoded v2 keys).
+            promptBlockVersions: basePrompt.blockVersions,
           });
         } else if (r.error) {
           // Surface per-image failure messages into warnings so the operator
@@ -603,6 +607,16 @@ interface PersistArgs {
   projectId: string;
   result: FinalsResult;
   warnings: string[];
+  /**
+   * QC iter 3 P0 F-3C-002 (2026-05-02): full prompt-block version map from
+   * the assembled basePrompt — merged into the row's prompt_block_versions
+   * JSONB so audit/replay captures every block actually loaded for the
+   * inference call. Pre-fix the row stamped only 3 keys
+   * (universal_vision_response_schema + signal_measurement + source_context),
+   * dropping ~10 dynamically-versioned blocks (header, stepOrdering,
+   * roomTypeTaxonomy, etc.).
+   */
+  promptBlockVersions?: Record<string, string>;
 }
 
 /**
@@ -697,6 +711,47 @@ export async function persistFinalsClassification(args: PersistArgs): Promise<vo
     ? vantage
     : null;
 
+  // ─── QC iter 3 P0 F-3C-001 (2026-05-02): image_classification v2-nested read ──
+  // Mirrors the shape-d F-D-002 fix (W2 mig 418, hotfix-5) which never landed
+  // here. v2 universal schema places `time_of_day_*`, exterior/detail subject
+  // and is_drone under `out.image_classification.{is_dusk, is_day,
+  // is_golden_hour, is_night, subject, is_drone}`. Pre-fix the finals-qa
+  // persist read top-level v1 keys (`out.time_of_day`, `out.is_exterior`,
+  // `out.is_detail_shot`, `out.is_drone`) which v2 NEVER emits — so 5 prod
+  // v2 finals rows landed NULL on these columns.
+  //
+  // Now: derive `time_of_day` enum from the 4 nested booleans (priority:
+  // night > dusk > golden_hour > day, mirroring the visual progression).
+  // Derive `is_exterior` from `image_classification.subject === 'exterior'`,
+  // `is_detail_shot` from `subject === 'detail'` OR `image_type === 'is_detail_shot'`
+  // (the 11-option enum that flags detail shots even when subject is
+  // technically interior/exterior). Derive `is_drone` from
+  // `image_classification.is_drone` OR `image_type === 'is_drone'`.
+  // Backwards-compat fallback: when `image_classification` is null/undefined
+  // (defensive — shouldn't happen post-cutover), fall through to legacy
+  // top-level reads so any straggling v1.x traffic still lands cleanly.
+  const imgClass = (out.image_classification && typeof out.image_classification === 'object')
+    ? out.image_classification as Record<string, unknown>
+    : null;
+  const imageTypeRaw = str(out.image_type);
+  const timeOfDay: string | null = imgClass
+    ? (bool(imgClass.is_night) ? 'night'
+      : bool(imgClass.is_dusk) ? 'dusk_twilight'
+      : bool(imgClass.is_golden_hour) ? 'golden_hour'
+      : bool(imgClass.is_day) ? 'day'
+      : null)
+    : str(out.time_of_day);
+  const subjectRaw = imgClass ? str(imgClass.subject) : null;
+  const isExterior = imgClass
+    ? (subjectRaw === 'exterior')
+    : bool(out.is_exterior);
+  const isDetailShot = imgClass
+    ? (subjectRaw === 'detail' || imageTypeRaw === 'is_detail_shot')
+    : bool(out.is_detail_shot);
+  const isDrone = imgClass
+    ? (bool(imgClass.is_drone) || imageTypeRaw === 'is_drone')
+    : bool(out.is_drone);
+
   // signal_scores normalisation
   const sigNormResult = normaliseSignalScores(out.signal_scores, {
     groupId: args.result.group_id,
@@ -732,10 +787,10 @@ export async function persistFinalsClassification(args: PersistArgs): Promise<vo
       : null,
     composition_type: str(roomClassRaw?.composition_type ?? out.composition_type),
     vantage_point: vantageColumn,
-    time_of_day: str(out.time_of_day),
-    is_drone: bool(out.is_drone),
-    is_exterior: bool(out.is_exterior),
-    is_detail_shot: bool(out.is_detail_shot),
+    time_of_day: timeOfDay,
+    is_drone: isDrone,
+    is_exterior: isExterior,
+    is_detail_shot: isDetailShot,
     zones_visible: arr(out.zones_visible),
     key_elements: arr(out.key_elements),
     is_styled: bool(roomClassRaw?.is_styled ?? out.is_styled),
@@ -753,6 +808,11 @@ export async function persistFinalsClassification(args: PersistArgs): Promise<vo
     is_near_duplicate_candidate: false,
     model_version: args.result.model_used,
     prompt_block_versions: {
+      // QC iter 3 P0 F-3C-002: merge the full block-version map from the
+      // assembled basePrompt FIRST, then layer the v2 schema/signal/source
+      // versions on top so the v2 keys win on collision. Pre-fix only 3 keys
+      // landed — now ~13 keys land per row, mirroring shape-d's coverage.
+      ...(args.promptBlockVersions ?? {}),
       universal_vision_response_schema: UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
       signal_measurement: SIGNAL_MEASUREMENT_BLOCK_VERSION,
       source_context: SOURCE_CONTEXT_BLOCK_VERSION,

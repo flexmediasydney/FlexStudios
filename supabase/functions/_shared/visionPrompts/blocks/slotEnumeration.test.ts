@@ -105,8 +105,8 @@ Deno.test('slotEnumerationBlock: uses caller-supplied packageDisplayName for cei
   assertStringIncludes(txt, 'Package ceiling: 17 images (Custom à la carte maximum)');
 });
 
-Deno.test('slotEnumerationBlock: version bumped to v1.3 (W11.6.22 curated positions)', () => {
-  assertEquals(SLOT_ENUMERATION_BLOCK_VERSION, 'v1.3');
+Deno.test('slotEnumerationBlock: version bumped to v1.4 (QC iter 3 P0 F-3C-003 — mig 422 slot extension)', () => {
+  assertEquals(SLOT_ENUMERATION_BLOCK_VERSION, 'v1.4');
 });
 
 Deno.test('slotEnumerationBlock W11.6.22: curated footer appears when any slot uses curated_positions', () => {
@@ -296,12 +296,12 @@ Deno.test('slotEnumerationBlock W11.6.22b: curated_positions mode with empty arr
 
 // ─── W11.7.1 hygiene: canonical slot vocabulary tests ───────────────────────
 
-Deno.test('CANONICAL_SLOT_IDS: closed list, no duplicates, ~25 entries', () => {
+Deno.test('CANONICAL_SLOT_IDS: closed list, no duplicates, ~60 entries (post-mig 422)', () => {
   // Sanity: list isn't empty and has stayed within an order-of-magnitude of
-  // the ~25-slot lattice we agreed on. If we exceed 35 the lattice is
-  // fragmenting again.
-  assert(CANONICAL_SLOT_IDS.length >= 20, `expected >= 20 canonical slots, got ${CANONICAL_SLOT_IDS.length}`);
-  assert(CANONICAL_SLOT_IDS.length <= 35, `expected <= 35 canonical slots, got ${CANONICAL_SLOT_IDS.length}`);
+  // the ~60-slot lattice we agreed on after W11.6.24 (mig 422) added 31 new
+  // slot_definitions rows. If we exceed 100 the lattice is fragmenting again.
+  assert(CANONICAL_SLOT_IDS.length >= 40, `expected >= 40 canonical slots, got ${CANONICAL_SLOT_IDS.length}`);
+  assert(CANONICAL_SLOT_IDS.length <= 100, `expected <= 100 canonical slots, got ${CANONICAL_SLOT_IDS.length}`);
   assertEquals(
     new Set(CANONICAL_SLOT_IDS).size,
     CANONICAL_SLOT_IDS.length,
@@ -355,8 +355,12 @@ Deno.test('normaliseSlotId: drift patterns observed in prod resolve via alias ma
   assertEquals(normaliseSlotId('exterior_rear_hero'), 'exterior_rear');
   assertEquals(normaliseSlotId('living_dining_hero'), 'living_hero');
   assertEquals(normaliseSlotId('alfresco_outdoor_hero'), 'alfresco_hero');
-  assertEquals(normaliseSlotId('exterior_front_hero'), 'exterior_facade_hero');
-  assertEquals(normaliseSlotId('open_plan_hero'), 'living_hero');
+  // QC iter 3 P0 F-3C-003: `exterior_front_hero` and `open_plan_hero` are
+  // now CANONICAL (live in DB post-mig 422); they pass through unchanged.
+  assertEquals(normaliseSlotId('exterior_front_hero'), 'exterior_front_hero');
+  assertEquals(normaliseSlotId('open_plan_hero'), 'open_plan_hero');
+  // `garden_hero` was an alias to `garden_detail`; now canonical.
+  assertEquals(normaliseSlotId('garden_hero'), 'garden_hero');
   assertEquals(normaliseSlotId('balcony_terrace_hero'), 'balcony_terrace');
   assertEquals(normaliseSlotId('study_office'), 'study_hero');
 });
@@ -377,6 +381,58 @@ Deno.test('normaliseSlotId: unknown slot_ids return null (caller drops the row)'
   assertEquals(normaliseSlotId(undefined), null);
   assertEquals(normaliseSlotId(42), null);
   assertEquals(normaliseSlotId({}), null);
+});
+
+// ─── QC iter 3 P0 F-3C-003: W11.6.24 (mig 422) slot extension ───────────────
+
+Deno.test('CANONICAL_SLOT_IDS: includes the W11.6.24 mig 422 additions (F-3C-003)', () => {
+  // The 32 new slot_ids from `shortlisting_slot_definitions` post-mig 422
+  // that the active engine emits. Every one MUST be canonical so Stage 4's
+  // `[...CANONICAL_SLOT_IDS]` schema enum accepts them and persistSlotDecisions
+  // keeps the row instead of dropping it for "unknown slot_id".
+  const W11_6_24_NEW_CANONICALS = [
+    'home_office_hero',
+    'pool_day_hero',
+    'pool_dusk_hero',
+    'secondary_ensuite_hero',
+    'secondary_bedroom_hero',
+    'kitchen_appliance_cluster',
+    'kitchen_island',
+    'kitchen_gulley',
+    'kitchen_pendant_detail',
+    'wine_cellar_hero',
+    'walk_in_robe_hero',
+    'kids_bedroom_hero',
+    'bathroom_tile_detail',
+    'period_feature_detail',
+    'master_bed_window_outlook',
+    'master_ensuite_freestanding_bath',
+    'master_walk_in_robe_detail',
+    'joinery_detail',
+    'dining_overhead',
+    'dining_outlook',
+    'lounge_fireplace',
+    'lounge_upstairs',
+    'lounge_window',
+    'gym_hero',
+    'mudroom_hero',
+    'theatre_hero',
+    'study_laundry_powder',
+    'garden_hero',
+    'garden_path',
+    'view_from_balcony',
+    'drone_aerial_nadir',
+    'drone_aerial_oblique',
+    // Promoted from alias to canonical (DB now uses these directly):
+    'exterior_front_hero',
+    'open_plan_hero',
+  ];
+  for (const slotId of W11_6_24_NEW_CANONICALS) {
+    assert(
+      isCanonicalSlotId(slotId),
+      `W11.6.24 slot "${slotId}" must be in CANONICAL_SLOT_IDS post-mig 422`,
+    );
+  }
 });
 
 Deno.test('normaliseSlotId: persist-time normalisation matches Stage 4 schema enum', () => {
