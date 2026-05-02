@@ -315,6 +315,36 @@ interface PerImageResult {
   failover_reason: null;
 }
 
+// ─── Per-image error classification (W15c) ──────────────────────────────────
+//
+// Maps a raw PerImageResult.error string into a stable bucket consumed by
+// shortlisting_events.payload.error_class + the per-round
+// stage1_per_image_summary.failure_classes histogram. Buckets reflect the
+// known throw sites in runStage1PerImage + the pool worker's wholesale-catch:
+//
+//   - preview_fetch:     storage/Dropbox-side preview download failure
+//                        (`preview_fetch_failed:` prefix from runStage1PerImage)
+//   - vendor_call:       Gemini returned a non-2xx; VendorCallError formatted
+//                        as `google/<model> <status>: <message>`
+//   - missing_credential: GEMINI_API_KEY unset (MissingVendorCredential.message
+//                         is `<env_var> credential missing for <vendor>`)
+//   - wholesale:         pool worker caught an exception around the whole call
+//                        (`wholesale_failed:` prefix from index.ts:1075)
+//   - no_response:       adapter returned nothing without throwing
+//   - unknown:           anything else (raw vendor 5xx with no JSON body, etc.)
+//
+// Pure function — no DB / I/O. Exported for unit tests.
+export function classifyStage1PerImageError(errStr: string): string {
+  if (!errStr) return 'unknown';
+  if (errStr.startsWith('preview_fetch_failed:')) return 'preview_fetch';
+  if (errStr.startsWith('wholesale_failed:')) return 'wholesale';
+  if (errStr === 'no_response') return 'no_response';
+  if (/credential\s+missing/i.test(errStr)) return 'missing_credential';
+  if (/^google\/[\w.\-]+\s+\d*\s*:/i.test(errStr)) return 'vendor_call';
+  if (errStr.startsWith('google/')) return 'vendor_call';
+  return 'unknown';
+}
+
 // ─── Handler ────────────────────────────────────────────────────────────────
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -1164,6 +1194,73 @@ async function runShapeDStage1Core(
   // signatures, and so the engine_run_audit columns continue to be written.
   const failoverTriggered = false;
   const failoverReason: string | null = null;
+
+  // ── Per-image observability events (W15c) ────────────────────────────────
+  // Emit one shortlisting_events row per failing per-image call + a single
+  // round-level summary row, BEFORE any cost-cap / allFailed throw branches
+  // and BEFORE the success-path event. This guarantees the rows land on
+  // EVERY codepath (success, partial, total-fail, cost-cap), not just the
+  // happy path. The pre-W15c behaviour silently dropped per-image errors on
+  // ok-path rounds — operators had no way to see which 2 of 42 stems failed
+  // or why. Forward-only: we don't backfill historical rounds.
+  //
+  // Best-effort: if the events insert itself fails (rare; would imply the
+  // DB is sick), we log a warning and continue. Stage 1 result shape stays
+  // identical to pre-W15c.
+  const failureClassesAgg: Record<string, number> = {};
+  if (allFailures.length > 0) {
+    const failureRows = allFailures.map((f) => {
+      const errStr = f.error || 'no_response';
+      const errorClass = classifyStage1PerImageError(errStr);
+      failureClassesAgg[errorClass] = (failureClassesAgg[errorClass] ?? 0) + 1;
+      return {
+        project_id: ctx.project_id,
+        round_id: roundId,
+        group_id: f.group_id,
+        event_type: 'stage1_per_image_failure',
+        actor_type: 'system' as const,
+        payload: {
+          stem: f.stem,
+          error_class: errorClass,
+          vendor: f.vendor_used,
+          model: f.model_used,
+          // Trim raw error to keep payload bounded; full text already lives
+          // in the audit JSON via uploadStage1AuditJson.
+          raw_error_excerpt: errStr.slice(0, 800),
+          wall_ms: f.wall_ms,
+          // attempt_count is always 1 from this layer's perspective — the
+          // vendor adapter does internal HTTP retries, but the per-image
+          // worker only sees the final result. If a future change adds
+          // worker-level retries, increment this counter at that site.
+          attempt_count: 1,
+        },
+      };
+    });
+    const { error: failEvtErr } = await admin.from('shortlisting_events').insert(failureRows);
+    if (failEvtErr) {
+      warnings.push(`stage1_per_image_failure events insert failed: ${failEvtErr.message}`);
+    }
+  }
+  // Summary fires every run (failures=0 included) so dashboards have a
+  // continuous heartbeat keyed off (round_id, event_type='stage1_per_image_summary').
+  {
+    const { error: sumEvtErr } = await admin.from('shortlisting_events').insert({
+      project_id: ctx.project_id,
+      round_id: roundId,
+      event_type: 'stage1_per_image_summary',
+      actor_type: 'system' as const,
+      payload: {
+        failures: allFailures.length,
+        successes: allSuccesses.length,
+        per_image_calls_run: allResults.length,
+        failed_stems: allFailures.map((f) => f.stem),
+        failure_classes: failureClassesAgg,
+      },
+    });
+    if (sumEvtErr) {
+      warnings.push(`stage1_per_image_summary event insert failed: ${sumEvtErr.message}`);
+    }
+  }
 
   // ── Determine round engine_mode result ───────────────────────────────────
   const totalGroupsTouched = groupsToRun.length;
