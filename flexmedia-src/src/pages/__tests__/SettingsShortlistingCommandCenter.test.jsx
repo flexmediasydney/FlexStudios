@@ -184,28 +184,26 @@ describe("W11.6.21 hard-cut — old standalone routes removed", () => {
   });
 });
 
-// ── 3. Page render — 19 tabs ───────────────────────────────────────────────
+// ── 3. Page render — 20 tabs (post W11.6.28 Recipes consolidation) ────────
 describe("SettingsShortlistingCommandCenter — render", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders all 22 tab triggers (W11.6.21 ten + W11.6.21b nine + W11.6.23 + W11.6.25 + W11.6.27)", () => {
+  it("renders all 20 tab triggers (W11.6.28: slots + standards consolidated into recipes)", () => {
     renderPage();
-    // W11.6.21
+    // W11.6.21 (slots removed in W11.6.28)
     expect(screen.getByTestId("tab-overview")).toBeTruthy();
     expect(screen.getByTestId("tab-tiers")).toBeTruthy();
     expect(screen.getByTestId("tab-mappings")).toBeTruthy();
-    expect(screen.getByTestId("tab-slots")).toBeTruthy();
     expect(screen.getByTestId("tab-registry")).toBeTruthy();
     expect(screen.getByTestId("tab-suggestions")).toBeTruthy();
     expect(screen.getByTestId("tab-rejection")).toBeTruthy();
     expect(screen.getByTestId("tab-calibration")).toBeTruthy();
     expect(screen.getByTestId("tab-overrides")).toBeTruthy();
     expect(screen.getByTestId("tab-discovery")).toBeTruthy();
-    // W11.6.21b
+    // W11.6.21b (standards removed in W11.6.28)
     expect(screen.getByTestId("tab-roomtypes")).toBeTruthy();
-    expect(screen.getByTestId("tab-standards")).toBeTruthy();
     expect(screen.getByTestId("tab-signals")).toBeTruthy();
     expect(screen.getByTestId("tab-calibration-ops")).toBeTruthy();
     expect(screen.getByTestId("tab-training")).toBeTruthy();
@@ -215,10 +213,16 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     expect(screen.getByTestId("tab-vendor")).toBeTruthy();
     // W11.6.23
     expect(screen.getByTestId("tab-architecture")).toBeTruthy();
-    // W11.6.25
+    // W11.6.25 / W11.6.28 (single Recipes tab)
     expect(screen.getByTestId("tab-recipes")).toBeTruthy();
     // W11.6.27
     expect(screen.getByTestId("tab-taxonomy_explorer")).toBeTruthy();
+  });
+
+  it("W11.6.28: removed tabs no longer have triggers (slots + standards)", () => {
+    renderPage();
+    expect(screen.queryByTestId("tab-slots")).toBeNull();
+    expect(screen.queryByTestId("tab-standards")).toBeNull();
   });
 
   it("default tab is overview when no ?tab= query param", () => {
@@ -236,7 +240,6 @@ describe("SettingsShortlistingCommandCenter — render", () => {
   // to verify the tab routes don't throw at import or render time.
   it.each([
     ["roomtypes"],
-    ["standards"],
     ["signals"],
     ["calibration-ops"],
     ["training"],
@@ -253,6 +256,19 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     ).toBeTruthy();
     // The trigger for the requested tab is present (active state).
     expect(screen.getByTestId(`tab-${key}`)).toBeTruthy();
+  });
+
+  // ── W11.6.28: legacy slots / standards deep-links redirect to recipes ──
+  it.each([
+    ["slots"],
+    ["standards"],
+  ])("?tab=%s redirects to ?tab=recipes (W11.6.28)", (key) => {
+    renderPage(`/SettingsShortlistingCommandCenter?tab=${key}`);
+    expect(
+      screen.getByTestId("settings-shortlisting-command-center"),
+    ).toBeTruthy();
+    // The recipes trigger is the active one after redirect.
+    expect(screen.getByTestId("tab-recipes")).toBeTruthy();
   });
 });
 
@@ -334,22 +350,20 @@ describe("resolveActiveTab", () => {
     expect(resolveActiveTab(42)).toBe("overview");
   });
 
-  it("VALID_TABS exports the expected 22-entry set (W11.6.21 + W11.6.21b + W11.6.23 + W11.6.25 + W11.6.27)", () => {
+  it("VALID_TABS exports the expected 20-entry set (W11.6.28: slots + standards dropped)", () => {
     expect(VALID_TABS).toEqual([
-      // W11.6.21
+      // W11.6.21 (slots dropped in W11.6.28)
       "overview",
       "tiers",
       "mappings",
-      "slots",
       "registry",
       "suggestions",
       "rejection",
       "calibration",
       "overrides",
       "discovery",
-      // W11.6.21b
+      // W11.6.21b (standards dropped in W11.6.28)
       "roomtypes",
-      "standards",
       "signals",
       "calibration-ops",
       "training",
@@ -359,16 +373,17 @@ describe("resolveActiveTab", () => {
       "vendor",
       // W11.6.23
       "architecture",
-      // W11.6.25
+      // W11.6.25 / W11.6.28 — single Recipes tab
       "recipes",
       // W11.6.27 — Taxonomy Explorer (Vocabulary group).
       "taxonomy_explorer",
     ]);
   });
 
-  it("W11.6.21b new tabs resolve via resolveActiveTab", () => {
+  it("W11.6.21b new tabs resolve via resolveActiveTab (standards redirected in W11.6.28)", () => {
     expect(resolveActiveTab("roomtypes")).toBe("roomtypes");
-    expect(resolveActiveTab("standards")).toBe("standards");
+    // W11.6.28: 'standards' is now redirected to 'recipes'.
+    expect(resolveActiveTab("standards")).toBe("recipes");
     expect(resolveActiveTab("signals")).toBe("signals");
     expect(resolveActiveTab("calibration-ops")).toBe("calibration-ops");
     expect(resolveActiveTab("training")).toBe("training");
@@ -376,6 +391,11 @@ describe("resolveActiveTab", () => {
     expect(resolveActiveTab("prompts")).toBe("prompts");
     expect(resolveActiveTab("engine-settings")).toBe("engine-settings");
     expect(resolveActiveTab("vendor")).toBe("vendor");
+  });
+
+  it("W11.6.28 legacy tab keys redirect to recipes via resolveActiveTab", () => {
+    expect(resolveActiveTab("slots")).toBe("recipes");
+    expect(resolveActiveTab("standards")).toBe("recipes");
   });
 
   it("W11.6.23 architecture tab resolves via resolveActiveTab", () => {

@@ -1,6 +1,6 @@
 /**
  * SettingsShortlistingCommandCenter — W11.6.21 + W11.6.21b + W11.6.23 +
- * W11.6.25 + W11.6.27 (IA regroup) master_admin umbrella.
+ * W11.6.25 + W11.6.27 + W11.6.28 (Recipes consolidation) master_admin umbrella.
  *
  * Spec history:
  *   W11.6.21  — initial umbrella + 9 consolidated pages.
@@ -14,31 +14,42 @@
  *               links / data-testids remain unchanged. A new placeholder
  *               `taxonomy_explorer` tab is registered under Vocabulary; the
  *               T1 agent owns the component implementation.
+ *   W11.6.28  — Recipes Matrix consolidation. Joseph flagged the Slots /
+ *               Slot Recipes / Standards triplet as confusing — operators
+ *               had to think at engine-internal slot taxonomy level.
+ *               Replaced with one tab ("recipes") backed by RecipeMatrixTab,
+ *               a constraint-based gallery_positions matrix authoring UI.
+ *               The legacy `slots` and `standards` tab keys are dropped
+ *               from the IA but the underlying components stay in the
+ *               codebase (in case of revert) and the slots editor is
+ *               accessible via the Advanced expander inside the new tab.
  *
- * URL contract (unchanged):
+ * URL contract:
  *   /SettingsShortlistingCommandCenter[?tab=<key>]
  *   - Bare URL → Overview (Engine group active).
  *   - ?tab=<key> deep-links to that tab; the parent group is derived.
- *   - All previously-shipped tab keys are preserved verbatim.
+ *   - W11.6.28: ?tab=slots and ?tab=standards now redirect to ?tab=recipes
+ *     (those keys are no longer in VALID_TABS).
  *
  * Permission: master_admin only (gated via PermissionGuard + routeAccess).
  *
- * Groups (5 total, 22 tabs):
- *   1.  Engine            — overview, engine-settings, tiers, mappings, prompts
- *   2.  Slots & Recipes   — slots, recipes, standards
- *   3.  Vocabulary        — taxonomy_explorer (NEW), registry, discovery,
- *                           roomtypes, signals
- *   4.  Operations        — architecture, suggestions, overrides, overrides-admin,
- *                           rejection, vendor
- *   5.  Calibration       — calibration, calibration-ops, training
+ * Groups (5 total, 20 tabs after W11.6.28):
+ *   1.  Engine       — overview, engine-settings, tiers, mappings, prompts
+ *   2.  Recipes      — recipes (new RecipeMatrixTab; absorbs slots+standards)
+ *   3.  Vocabulary   — taxonomy_explorer, registry, discovery, roomtypes, signals
+ *   4.  Operations   — architecture, suggestions, overrides, overrides-admin,
+ *                      rejection, vendor
+ *   5.  Calibration  — calibration, calibration-ops, training
  *
  * Note on backward-compat & tests:
- *   The 57-spec vitest suite asserts that all 21 tab triggers (`data-testid=
- *   tab-<key>`) are present in the DOM at render time, regardless of which
+ *   The vitest suite asserts every active tab trigger (`data-testid=
+ *   tab-<key>`) is present in the DOM at render time, regardless of which
  *   tab is active. Implementation: every tab trigger is rendered on every
  *   mount, but the secondary strip for inactive groups is visually hidden
  *   via `hidden` (display: none). This keeps the test contract intact and
  *   avoids any tab-key churn while delivering the cleaner IA.
+ *   W11.6.28 dropped two trigger keys (`tab-slots`, `tab-standards`); the
+ *   test contract was updated to match.
  *
  * Note on the two calibration tabs:
  *   `calibration` is the W14 50-project structured calibration session
@@ -77,7 +88,6 @@ import {
   ListChecks,
   Microscope,
   Network,
-  Ruler,
   ScanSearch,
   ShieldAlert,
   Shuffle,
@@ -99,7 +109,11 @@ const SettingsTierConfigs = lazy(() => import("@/pages/SettingsTierConfigs"));
 const SettingsPackageTierMapping = lazy(() =>
   import("@/pages/SettingsPackageTierMapping"),
 );
-const SettingsShortlistingSlots = lazy(() =>
+// W11.6.28: kept for revert under an underscore-prefixed alias so the
+// linter accepts the parked lazy import. The legacy slots editor is
+// still mounted by the Advanced expander inside RecipeMatrixTab via its
+// own lazy import.
+const _SettingsShortlistingSlots_parked = lazy(() =>
   import("@/pages/SettingsShortlistingSlots"),
 );
 const SettingsObjectRegistry = lazy(() =>
@@ -123,7 +137,8 @@ const SettingsObjectRegistryDiscovery = lazy(() =>
 const SettingsShortlistingRoomTypes = lazy(() =>
   import("@/pages/SettingsShortlistingRoomTypes"),
 );
-const SettingsShortlistingStandards = lazy(() =>
+// W11.6.28: kept for revert under an underscore-prefixed alias.
+const _SettingsShortlistingStandards_parked = lazy(() =>
   import("@/pages/SettingsShortlistingStandards"),
 );
 const SettingsShortlistingSignals = lazy(() =>
@@ -150,8 +165,10 @@ const SettingsVendorComparison = lazy(() =>
 const ArchitectureTab = lazy(() =>
   import("@/components/settings/architecture/ArchitectureTab"),
 );
-const SlotRecipesTab = lazy(() =>
-  import("@/components/settings/shortlisting/SlotRecipesTab"),
+// W11.6.28: SlotRecipesTab is superseded by RecipeMatrixTab. The old
+// component stays in the codebase (no longer imported here) for revert.
+const RecipeMatrixTab = lazy(() =>
+  import("@/components/settings/shortlisting/RecipeMatrixTab"),
 );
 // W11.6.27 — Taxonomy Explorer (T1 agent ships the real component;
 // a placeholder lives at the same path so this lazy import never breaks
@@ -175,7 +192,8 @@ export const VALID_TABS = [
   "overview",
   "tiers",
   "mappings",
-  "slots",
+  // W11.6.28: 'slots' removed (folded into the recipes matrix; legacy
+  // editor reachable from the Advanced expander inside the new tab).
   "registry",
   "suggestions",
   "rejection",
@@ -184,7 +202,8 @@ export const VALID_TABS = [
   "discovery",
   // — W11.6.21b (added 9) ————————————————————————————————————————————————
   "roomtypes",
-  "standards",
+  // W11.6.28: 'standards' removed (per-tier targets now live as the
+  // 'Tier defaults' row of the Recipes matrix).
   "signals",
   "calibration-ops",
   "training",
@@ -194,17 +213,23 @@ export const VALID_TABS = [
   "vendor",
   // — W11.6.23 (added 1) —————————————————————————————————————————————————
   "architecture",
-  // — W11.6.25 (added 1) —————————————————————————————————————————————————
+  // — W11.6.25 / W11.6.28 — single Recipes tab —————————————————————————
   "recipes",
   // — W11.6.27 (added 1) —————————————————————————————————————————————————
   "taxonomy_explorer",
 ];
 
+// W11.6.28: tab keys that the URL still accepts but redirect to a
+// canonical replacement. Lets old deep-links keep working.
+const TAB_REDIRECTS = {
+  slots: "recipes",
+  standards: "recipes",
+};
+
 const TAB_LABELS = {
   overview: "Overview",
   tiers: "Tiers",
   mappings: "Packages",
-  slots: "Slots",
   registry: "Object Registry",
   suggestions: "AI Suggestions",
   rejection: "Rejection",
@@ -212,7 +237,6 @@ const TAB_LABELS = {
   overrides: "Override Patterns",
   discovery: "Object Discovery",
   roomtypes: "Room Types",
-  standards: "Standards",
   signals: "Signals",
   "calibration-ops": "Calibration Ops",
   training: "Training",
@@ -221,7 +245,7 @@ const TAB_LABELS = {
   "engine-settings": "Engine Settings",
   vendor: "Vendor Comparison",
   architecture: "Architecture",
-  recipes: "Slot Recipes",
+  recipes: "Recipes",
   taxonomy_explorer: "Taxonomy Explorer",
 };
 
@@ -229,7 +253,6 @@ const TAB_ICONS = {
   overview: Activity,
   tiers: Sliders,
   mappings: Layers,
-  slots: ListChecks,
   registry: Database,
   suggestions: Sparkles,
   rejection: TrendingDown,
@@ -237,7 +260,6 @@ const TAB_ICONS = {
   overrides: ShieldAlert,
   discovery: ScanSearch,
   roomtypes: Home,
-  standards: Ruler,
   signals: SignalIcon,
   "calibration-ops": Microscope,
   training: GraduationCap,
@@ -246,7 +268,7 @@ const TAB_ICONS = {
   "engine-settings": Cog,
   vendor: Shuffle,
   architecture: Network,
-  recipes: Layers,
+  recipes: ListChecks,
   taxonomy_explorer: Compass,
 };
 
@@ -264,10 +286,11 @@ export const GROUPS = [
   },
   {
     key: "slots",
-    label: "Slots & Recipes",
+    label: "Recipes",
     icon: ListChecks,
-    blurb: "Slot allocation, recipes, and per-tier standards.",
-    tabs: ["slots", "recipes", "standards"],
+    blurb:
+      "Constraint-based gallery_positions matrix. Author per-package × tier recipes; legacy slot templates live under the Advanced expander.",
+    tabs: ["recipes"],
   },
   {
     key: "vocabulary",
@@ -319,9 +342,13 @@ const TAB_TO_GROUP = (() => {
  * Pure helper: pick the active tab from a URL query value.
  * Exported for tests — accepts unknown user input and returns a guaranteed
  * valid key from VALID_TABS, defaulting to 'overview'.
+ *
+ * W11.6.28: legacy `slots` and `standards` deep-links redirect to the
+ * consolidated `recipes` tab.
  */
 export function resolveActiveTab(rawTab) {
   if (typeof rawTab !== "string") return "overview";
+  if (TAB_REDIRECTS[rawTab]) return TAB_REDIRECTS[rawTab];
   return VALID_TABS.includes(rawTab) ? rawTab : "overview";
 }
 
@@ -376,8 +403,8 @@ export default function SettingsShortlistingCommandCenter() {
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
             All shortlisting-engine controls, organised into five functional
-            groups: Engine, Slots & Recipes, Vocabulary, Operations, and
-            Calibration. Pick a group above, then drill into the tab you need.
+            groups: Engine, Recipes, Vocabulary, Operations, and Calibration.
+            Pick a group above, then drill into the tab you need.
           </p>
         </div>
 
@@ -491,11 +518,12 @@ export default function SettingsShortlistingCommandCenter() {
             </Suspense>
           </TabsContent>
 
-          <TabsContent value="slots" className="mt-0">
-            <Suspense fallback={<TabFallback />}>
-              <SettingsShortlistingSlots />
-            </Suspense>
-          </TabsContent>
+          {/* W11.6.28: 'slots' is no longer wired to a tab content panel.
+              Old deep-links (?tab=slots) redirect to ?tab=recipes via
+              resolveActiveTab → TAB_REDIRECTS. The legacy
+              SettingsShortlistingSlots component stays available via the
+              Advanced expander inside RecipeMatrixTab for the rare
+              template-authoring use case. */}
 
           <TabsContent value="registry" className="mt-0">
             <Suspense fallback={<TabFallback />}>
@@ -539,11 +567,11 @@ export default function SettingsShortlistingCommandCenter() {
             </Suspense>
           </TabsContent>
 
-          <TabsContent value="standards" className="mt-0">
-            <Suspense fallback={<TabFallback />}>
-              <SettingsShortlistingStandards />
-            </Suspense>
-          </TabsContent>
+          {/* W11.6.28: 'standards' (per-tier targets) is folded into the
+              RecipeMatrixTab as the 'Tier defaults' row. The legacy
+              SettingsShortlistingStandards component stays in the
+              codebase but is not wired into the IA. Old deep-links
+              redirect via TAB_REDIRECTS. */}
 
           <TabsContent value="signals" className="mt-0">
             <Suspense fallback={<TabFallback />}>
@@ -595,7 +623,7 @@ export default function SettingsShortlistingCommandCenter() {
 
           <TabsContent value="recipes" className="mt-0">
             <Suspense fallback={<TabFallback />}>
-              <SlotRecipesTab />
+              <RecipeMatrixTab />
             </Suspense>
           </TabsContent>
 
