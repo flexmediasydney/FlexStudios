@@ -580,9 +580,13 @@ export default function PulseMissedOpportunityCommandCenter() {
   };
 
   // ── KPI query ─────────────────────────────────────────────────────────────
+  // QC-iter2 W6b (F-E-008): use the cached RPC backed by a 5-min refresh
+  // materialised view (mig 424). Cuts per-call cost from ~111ms to ~1-5ms;
+  // 30s polling × ~24h dashboard sessions used to translate to ~320 sec/day
+  // of Postgres CPU per dashboard — now ~14 sec/day.
   const kpisQuery = useQuery({
-    queryKey: ["pulse-cc-kpis"],
-    queryFn: () => api.rpc("pulse_command_center_kpis", { p_days: 7 }),
+    queryKey: ["pulse-cc-kpis", "cached"],
+    queryFn: () => api.rpc("pulse_command_center_kpis_cached"),
     refetchInterval: POLL_INTERVAL_MS,
     staleTime: 15_000,
   });

@@ -49,6 +49,7 @@ import {
   type VisionRequest,
   type VisionResponse,
 } from '../_shared/visionAdapter/index.ts';
+import { estimateCost } from '../_shared/visionAdapter/pricing.ts';
 import { tryAcquireMutex, releaseMutex } from '../_shared/dispatcherMutex.ts';
 
 const GENERATOR = 'pulse-description-extractor';
@@ -361,19 +362,23 @@ export function normaliseExtractedPayload(raw: unknown): ExtractedPayload {
 }
 
 /**
- * Estimate per-row cost from token usage when the visionAdapter's pricing
- * table doesn't know the model. The adapter falls back to Sonnet rates
- * ($3/$15 per 1M) for unknown models, which over-counts Gemini 2.5 Pro
- * substantially. We re-derive the cost here so the cost gate + audit numbers
- * reflect actual Gemini 2.5 Pro pricing ($1.25/$10 per 1M for ≤200K input).
+ * Estimate per-row cost from token usage at Gemini 2.5 Pro rates.
+ *
+ * QC-iter2 W6b (F-E-002): Originally a duplicate inline override because
+ * pricing.ts didn't list 2.5 rates. Since W11.8.2 added explicit 2.5 Pro/Flash
+ * rows to `_shared/visionAdapter/pricing.ts`, the override is redundant. This
+ * helper now thinly wraps `estimateCost('google', 'gemini-2.5-pro', ...)` so
+ * the canonical pricing table is the single source of truth. Kept exported for
+ * test compatibility.
  *
  * Pure function, exported for tests.
  */
 export function estimateGemini25ProCost(input_tokens: number, output_tokens: number): number {
-  const inputUsd = (input_tokens / 1_000_000) * 1.25;
-  const outputUsd = (output_tokens / 1_000_000) * 10.0;
-  const cost = inputUsd + outputUsd;
-  return Math.round(cost * 1_000_000) / 1_000_000;
+  return estimateCost('google', 'gemini-2.5-pro', {
+    input_tokens,
+    output_tokens,
+    cached_input_tokens: 0,
+  });
 }
 
 // ─── Handler ─────────────────────────────────────────────────────────────────

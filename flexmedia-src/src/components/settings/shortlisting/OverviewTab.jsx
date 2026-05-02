@@ -22,9 +22,14 @@ export default function OverviewTab() {
   const qc = useQueryClient();
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ["shortlisting-command-center-kpis", 7],
+    queryKey: ["shortlisting-command-center-kpis", "cached"],
     queryFn: async () => {
-      const result = await api.rpc("shortlisting_command_center_kpis", { p_days: 7 });
+      // QC-iter2 W6b (F-E-008): use the cached RPC backed by a 5-min
+      // refresh materialised view (mig 424). The full p_days=7 aggregate
+      // (~111ms / 8265 buffer hits) used to run on every poll; the cached
+      // read is ~1-5ms. The MV is refreshed via pg_cron — data freshness
+      // is bounded at 5 min, well under the OverviewTab's 60s poll cadence.
+      const result = await api.rpc("shortlisting_command_center_kpis_cached");
       // api.rpc returns the raw value (single-row JSONB → object directly)
       return result?.data ?? result ?? {};
     },
