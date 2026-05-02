@@ -40,6 +40,40 @@ when dispatching multiple SQL-touching agents in parallel. Inline brief:
 "Use migration number XXX. Do not pick 'next free' yourself — already
 allocated by orchestrator."
 
+### Ephemeral-worktree freshness
+
+Every code-touching agent runs in an isolated worktree branched from
+`origin/main` at dispatch time. If the agent fetches once at start and
+then runs for 30+ minutes, it is reading a snapshot of `main` from
+half-an-hour ago. Two failure modes:
+
+1. **Stale-mainfile false positives during QC**: a QC agent inspects
+   `vite.config.js` (or some other recently-touched file) at minute 5,
+   sees the *old* version, and reports "X did not ship." Meanwhile X has
+   been merged into `origin/main` for 20 minutes. The agent's worktree
+   simply never refetched.
+2. **Migration filename collisions on push**: agent A and agent B both
+   pick `NNN_*.sql` because both were branched off the same SHA before
+   either landed.
+
+**Discipline** (encoded into the agent brief, not optional):
+
+- Immediately before reading any source file the agent intends to reason
+  about: `git fetch origin main && git rebase origin/main` from the
+  worktree. If rebase produces conflicts the agent must surface them, not
+  silently proceed.
+- Immediately before pushing: same fetch + rebase. If a file the agent
+  modified moved on `main`, the agent re-applies the change against the
+  new shape rather than force-pushing the stale version.
+- For migrations specifically, also re-check `ls supabase/migrations/ |
+  sort -V | tail -5` AND `select max(version) from
+  supabase_migrations.schema_migrations` after the rebase; another agent
+  may have applied a migration to prod that hasn't appeared in `main` yet.
+
+The cost of a `git fetch` is a second. The cost of a stale-worktree false
+positive is a re-dispatch loop, sometimes with the user already burned
+once on a "no it really did ship" cycle.
+
 ## The "additive then subtractive" rule
 
 **Every breaking schema change ships in two migrations across two deploys**:
@@ -240,6 +274,173 @@ After applying to prod:
   `uniq_shortlisting_jobs_pending_ingest_per_project`)
 - Constraints: `<table>_<purpose>_chk` for check; `<table>_<columns>_uniq` for
   unique
+
+## PostgREST relationship inference
+
+PostgREST builds an in-memory schema cache at startup (and on `NOTIFY pgrst,
+'reload schema'`) that includes every FK constraint visible in the
+`information_schema`. Embedded selects of the form
+
+```
+GET /rest/v1/composition_classifications?select=*,composition_groups(*)
+```
+
+are resolved against that cache. If the FK is **missing**, PostgREST
+returns the canonical 400:
+
+```
+Could not find a relationship between 'composition_classifications' and
+'composition_groups' in the schema cache
+```
+
+regardless of whether the column referencing the parent exists, is
+populated correctly, or even has the right type. The cache only sees
+declared relationships.
+
+### Symptom
+
+- Edge function calls `.from('composition_classifications').select('*,
+  composition_groups(*)')` and dies 1-3s after pickup with the message
+  above
+- Querying both tables independently works fine
+- The FK column is present, NOT NULL, and populated with valid parent ids
+
+### Detection
+
+```sql
+-- list FK constraints on the child
+SELECT conname, conrelid::regclass, confrelid::regclass, convalidated
+  FROM pg_constraint
+ WHERE conrelid = 'composition_classifications'::regclass
+   AND contype  = 'f';
+```
+
+If the parent reference column has no matching row in `pg_constraint`,
+PostgREST cannot infer the embed.
+
+### Fix
+
+Add the FK as `NOT VALID`. PostgREST sees the relationship metadata
+regardless of validation state, so the embed unblocks immediately
+without forcing a backfill of any orphans:
+
+```sql
+-- migration: 430_composition_classifications_fk_to_groups_not_valid.sql
+
+-- Forward
+ALTER TABLE composition_classifications
+  ADD CONSTRAINT composition_classifications_group_id_fkey
+  FOREIGN KEY (group_id)
+  REFERENCES composition_groups (id)
+  ON DELETE RESTRICT
+  NOT VALID;
+
+-- Tell PostgREST to refresh its schema cache so the next request picks up
+-- the new relationship without waiting for the next pgrst restart.
+NOTIFY pgrst, 'reload schema';
+
+-- Rollback (manual):
+--   ALTER TABLE composition_classifications
+--     DROP CONSTRAINT composition_classifications_group_id_fkey;
+--   NOTIFY pgrst, 'reload schema';
+```
+
+`NOT VALID` skips the existing-row check at constraint-creation time but
+**still validates new INSERTs and UPDATEs**. Any orphan rows that exist
+today survive untouched; cleanup + `VALIDATE CONSTRAINT` is a follow-up
+migration. See migration 430 for the canonical form (committed in
+`28c3145` on the same day Stage 4 broke).
+
+### Why this happens to us
+
+Edge functions written before PostgREST embeds were on the menu sometimes
+modelled relationships in application code (separate `.from()` calls
+joined client-side). When a later edge function adopts the embed shape,
+the FK that "obviously should exist" was never declared. Add it as
+`NOT VALID` the moment you discover the gap; do not block the unblock on
+orphan cleanup.
+
+## Gemini response-schema state-count limit
+
+Gemini's structured-output runtime compiles the `responseSchema` into a
+constraint automaton at request time. If the automaton's state count
+crosses an internal threshold (Google has not published the exact number;
+empirically ~hundreds of states once enums multiply with nested object
+shapes), Gemini returns:
+
+```
+The specified schema produces a constraint that has too many states for
+serving. Typical causes: long property/enum names, long array length
+limits, complex value matchers.
+```
+
+The threshold is per-schema, not per-call, so the same schema fails
+deterministically once the request hits it.
+
+### Symptom
+
+- A new Stage / pass / call adds either an extra closed enum, a
+  deeply-nested object shape, or an additional string field with a long
+  description, and the call 400s on every retry with the message above
+- The same enum was fine on a *smaller* schema (e.g. Stage 1 today still
+  serves the 60-entry `slot_id` enum because Stage 1's overall schema is
+  light enough)
+
+### Detection
+
+- Watch the edge function logs for the literal `too many states for
+  serving` substring
+- Note which schema fields you most-recently added; the regression is
+  almost always cumulative
+
+### Fix
+
+Drop the closed enum and teach the canonical list via `description`
+instead. Persist-time normalisation already collapses drift / aliases on
+our side, so the structural guarantee survives the schema-time loosening:
+
+```ts
+// before — closed enum, joins the state machine
+slot_id: {
+  type: SchemaType.STRING,
+  enum: [...CANONICAL_SLOT_IDS],   // 60 entries
+  description: 'Canonical slot id'
+}
+
+// after — open string, canonical list lives in the description so the
+// model still sees it; normaliseSlotId() at persist time collapses
+// drift, drops unrecognised values with a warning
+slot_id: {
+  type: SchemaType.STRING,
+  description:
+    'Canonical slot id. MUST be one of: ' +
+    CANONICAL_SLOT_IDS.join(', ') +
+    '. Drift / unrecognised ids are dropped at persist time.'
+}
+```
+
+See commit `bbb4337` (Stage 4 slot_id enum drop) and the parallel
+`photographer_techniques` enum drop earlier in the same day for two
+canonical examples.
+
+### When to drop a closed enum
+
+Heuristics, in order of weight:
+
+1. **Stage already fails with `too many states`**: drop now, no further
+   discussion.
+2. **Schema has 10+ string fields with long descriptions** AND adds a
+   60+-entry enum: pre-emptively use the description form, even if the
+   first call works — the next field added will tip you over.
+3. **Schema has nested object arrays** with their own enums: keep at
+   most one closed enum; convert the rest to description-only.
+4. **Schema is small (Stage 1, single-purpose call)**: closed enums are
+   fine. The state-count budget is not the constraint.
+
+If you drop a closed enum, the persistence layer **must** have a
+normaliser that maps drift back to the canonical set (or drops the value
+with a warning). See `slotEnumeration.ts::normaliseSlotId()` for the
+pattern: collapse aliases, log unrecognised, never crash.
 
 ## When in doubt
 
