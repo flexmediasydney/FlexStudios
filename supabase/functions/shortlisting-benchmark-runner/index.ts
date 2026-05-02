@@ -825,7 +825,10 @@ async function fetchSlotDefinitions(
   const { data, error } = await admin
     .from('shortlisting_slot_definitions')
     .select(
-      'slot_id, display_name, phase, eligible_when_engine_roles, eligible_room_types, max_images, min_images, notes, version, is_active',
+      // W11.6.22b — pull selection_mode so the prompt builder can branch
+      // between ai_decides (legacy) and curated_positions (per-position
+      // emission contract via slotEnumeration v1.3).
+      'slot_id, display_name, phase, eligible_when_engine_roles, eligible_room_types, max_images, min_images, notes, version, is_active, selection_mode',
     )
     .eq('is_active', true);
   if (error) throw new Error(`fetchSlotDefinitions failed: ${error.message}`);
@@ -851,9 +854,56 @@ async function fetchSlotDefinitions(
       min_images: row.min_images,
       notes: row.notes,
       version: row.version || 1,
+      selection_mode: row.selection_mode === 'curated_positions'
+        ? 'curated_positions' as const
+        : 'ai_decides' as const,
     } as Pass2SlotDefinition & { version: number };
     const existing = byId.get(cand.slot_id);
     if (!existing || cand.version > existing.version) byId.set(cand.slot_id, cand);
+  }
+
+  // W11.6.22b — join curated_positions for slots in curated_positions mode.
+  // We hit the position prefs table once per slot using IN() so the cost is
+  // O(1) DB roundtrip regardless of slot count.
+  const curatedSlotIds = Array.from(byId.values())
+    .filter((s) => s.selection_mode === 'curated_positions')
+    .map((s) => s.slot_id);
+  if (curatedSlotIds.length > 0) {
+    const { data: prefRows, error: prefErr } = await admin
+      .from('shortlisting_slot_position_preferences')
+      .select(
+        'slot_id, position_index, display_label, preferred_composition_type, preferred_zone_focus, preferred_space_type, preferred_lighting_state, preferred_image_type, preferred_signal_emphasis, is_required, ai_backfill_on_gap',
+      )
+      .in('slot_id', curatedSlotIds);
+    if (prefErr) {
+      console.warn(`fetchSlotDefinitions: position prefs load failed: ${prefErr.message}`);
+    } else if (Array.isArray(prefRows)) {
+      const bySlot = new Map<string, Array<Record<string, unknown>>>();
+      for (const r of prefRows as Array<Record<string, unknown>>) {
+        const sid = String(r.slot_id);
+        if (!bySlot.has(sid)) bySlot.set(sid, []);
+        bySlot.get(sid)!.push(r);
+      }
+      for (const slot of byId.values()) {
+        if (slot.selection_mode !== 'curated_positions') continue;
+        const rows = (bySlot.get(slot.slot_id) ?? []).slice();
+        rows.sort((a, b) => Number(a.position_index ?? 0) - Number(b.position_index ?? 0));
+        slot.curated_positions = rows.map((r) => ({
+          position_index: Number(r.position_index ?? 0),
+          display_label: typeof r.display_label === 'string' ? r.display_label : '',
+          preferred_composition_type: (r.preferred_composition_type as string | null) ?? null,
+          preferred_zone_focus: (r.preferred_zone_focus as string | null) ?? null,
+          preferred_space_type: (r.preferred_space_type as string | null) ?? null,
+          preferred_lighting_state: (r.preferred_lighting_state as string | null) ?? null,
+          preferred_image_type: (r.preferred_image_type as string | null) ?? null,
+          preferred_signal_emphasis: Array.isArray(r.preferred_signal_emphasis)
+            ? r.preferred_signal_emphasis as string[]
+            : [],
+          is_required: r.is_required === true,
+          ai_backfill_on_gap: r.ai_backfill_on_gap !== false,
+        }));
+      }
+    }
   }
 
   const slots = Array.from(byId.values())

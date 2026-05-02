@@ -625,6 +625,62 @@ export default function ShortlistingLightbox({
             </div>
           )}
 
+          {/* W11.6.22b — Position panel: only renders when the slot_decision
+              has a position_index (curated_positions slot). Cards from
+              ai_decides slots have position_index=null so this section is
+              hidden entirely (backward compat). */}
+          {slot?.position_index != null && (
+            <div
+              data-testid="position-panel"
+              data-position-index={slot.position_index}
+              data-position-filled-via={slot.position_filled_via || "unknown"}
+              className="mb-3 border-t border-white/10 pt-2"
+            >
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-[10px] uppercase tracking-wide text-white/60">
+                  Position
+                </div>
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
+                    slot.position_filled_via === "ai_backfill"
+                      ? "bg-amber-500/20 text-amber-200 ring-1 ring-amber-400/30"
+                      : "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/30",
+                  )}
+                  data-testid="position-badge"
+                >
+                  {slot.position_filled_via === "ai_backfill"
+                    ? "AI backfill"
+                    : "Curated match"}
+                </span>
+              </div>
+              <div className="text-white/85 font-medium">
+                Position {slot.position_index}
+                {slot.position_label ? ` — ${slot.position_label}` : ""}
+              </div>
+              {slot.position_criteria && typeof slot.position_criteria === "object" && (
+                <ul className="mt-1.5 space-y-0.5">
+                  {Object.entries(slot.position_criteria)
+                    .filter(([, v]) => v !== null && v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0))
+                    .map(([k, v]) => (
+                      <li
+                        key={k}
+                        className="flex items-center justify-between gap-2 text-[10px]"
+                        data-testid={`position-criterion-${k}`}
+                      >
+                        <span className="text-white/60 capitalize">
+                          {k.replace(/_/g, " ")}
+                        </span>
+                        <span className="font-mono text-white/85 truncate max-w-[200px]" title={Array.isArray(v) ? v.join(", ") : String(v)}>
+                          {Array.isArray(v) ? v.join(", ") : String(v)}
+                        </span>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          )}
+
           {/* 26-signal scores — top 8 */}
           <div className="mb-3">
             <div className="text-[10px] uppercase tracking-wide text-white/60 mb-1">

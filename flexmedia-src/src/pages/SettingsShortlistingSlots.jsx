@@ -29,8 +29,18 @@
 
 import { useMemo, useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api } from "@/api/supabaseClient";
 import { PermissionGuard } from "@/components/auth/PermissionGuard";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  COMPOSITION_TYPE_OPTIONS,
+  IMAGE_TYPE_OPTIONS,
+  LIGHTING_STATE_OPTIONS,
+  SPACE_TYPE_OPTIONS,
+  UNIVERSAL_SIGNAL_KEYS,
+  ZONE_FOCUS_OPTIONS,
+} from "@/lib/shortlistingEnums";
 import {
   Card,
   CardContent,
@@ -61,11 +71,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  GripVertical,
   Layers,
   Loader2,
   Pencil,
   Plus,
   Save,
+  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -237,6 +249,8 @@ function emptyForm() {
     eligible_composition_types: [],
     // W11.6.7 P1-5: optional same-room linkage to another slot's id (UUID).
     same_room_as_slot: null,
+    // W11.6.22: ai_decides (legacy default) | curated_positions.
+    selection_mode: "ai_decides",
     notes: "",
   };
 }
@@ -408,6 +422,433 @@ function EngineRoleMultiselect({ value, onChange }) {
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ── W11.6.22b: Curated positions editor ─────────────────────────────────────
+// One row per position. Drag-reorderable via @hello-pangea/dnd; the
+// position_index is auto-managed from the array order at save time. Save
+// flushes a transaction-style sequence: delete-removed → upsert-each.
+
+function emptyPosition(nextIndex) {
+  return {
+    id: null,
+    position_index: nextIndex,
+    display_label: "",
+    preferred_composition_type: null,
+    preferred_zone_focus: null,
+    preferred_space_type: null,
+    preferred_lighting_state: null,
+    preferred_image_type: null,
+    preferred_signal_emphasis: [],
+    is_required: false,
+    // Default TRUE per Joseph's W11.6.22 default.
+    ai_backfill_on_gap: true,
+  };
+}
+
+function ChipSignalMultiselect({ value, onChange }) {
+  const arr = Array.isArray(value) ? value : [];
+  const toggle = (k) => {
+    if (arr.includes(k)) onChange(arr.filter((x) => x !== k));
+    else onChange([...arr, k]);
+  };
+  return (
+    <div className="flex flex-wrap gap-1">
+      {UNIVERSAL_SIGNAL_KEYS.map((k) => {
+        const on = arr.includes(k);
+        return (
+          <button
+            key={k}
+            type="button"
+            onClick={() => toggle(k)}
+            className={cn(
+              "text-[10px] rounded border px-1.5 py-0.5 font-mono transition-colors",
+              on
+                ? "bg-primary/90 text-primary-foreground border-primary"
+                : "bg-background hover:bg-muted/40 border-border text-muted-foreground",
+            )}
+            data-testid={`signal-chip-${k}`}
+            aria-pressed={on}
+          >
+            {k}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function NullableSelect({ value, onChange, options, placeholder, testId }) {
+  return (
+    <Select
+      value={value || "__none__"}
+      onValueChange={(v) => onChange(v === "__none__" ? null : v)}
+    >
+      <SelectTrigger className="h-8 text-xs" data-testid={testId}>
+        <SelectValue placeholder={placeholder} />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="__none__">— any —</SelectItem>
+        {options.map((o) => (
+          <SelectItem key={o} value={o} className="font-mono text-xs">
+            {o}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function PositionsEditor({ slotId }) {
+  const queryClient = useQueryClient();
+  const positionsQuery = useQuery({
+    queryKey: ["slot_position_prefs", slotId],
+    queryFn: async () => {
+      const rows = await api.entities.ShortlistingSlotPositionPreference.filter(
+        { slot_id: slotId },
+        "position_index",
+        100,
+      );
+      return Array.isArray(rows) ? rows : [];
+    },
+    enabled: Boolean(slotId),
+  });
+
+  const [draftPositions, setDraftPositions] = useState(null);
+  const fetched = positionsQuery.data;
+  // Seed draftPositions on first fetch.
+  if (draftPositions === null && Array.isArray(fetched)) {
+    const sorted = [...fetched].sort(
+      (a, b) => (a.position_index ?? 0) - (b.position_index ?? 0),
+    );
+    setTimeout(() => setDraftPositions(sorted.map((r) => ({ ...r }))), 0);
+  }
+
+  const positions = Array.isArray(draftPositions) ? draftPositions : (fetched || []);
+
+  const updatePos = (index, patch) => {
+    setDraftPositions((prev) => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      if (!arr[index]) return arr;
+      arr[index] = { ...arr[index], ...patch };
+      return arr;
+    });
+  };
+
+  const addPosition = () => {
+    setDraftPositions((prev) => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      arr.push(emptyPosition(arr.length + 1));
+      return arr;
+    });
+  };
+
+  const removePosition = (index) => {
+    setDraftPositions((prev) => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      const next = arr.filter((_, i) => i !== index);
+      return next.map((p, i) => ({ ...p, position_index: i + 1 }));
+    });
+  };
+
+  const onDragEnd = (result) => {
+    if (!result.destination) return;
+    setDraftPositions((prev) => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      const [moved] = arr.splice(result.source.index, 1);
+      arr.splice(result.destination.index, 0, moved);
+      return arr.map((p, i) => ({ ...p, position_index: i + 1 }));
+    });
+  };
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const arr = Array.isArray(draftPositions) ? draftPositions : [];
+      const persisted = await api.entities.ShortlistingSlotPositionPreference.filter(
+        { slot_id: slotId },
+        "position_index",
+        100,
+      );
+      const draftIds = new Set(arr.map((r) => r.id).filter(Boolean));
+      const toDelete = (Array.isArray(persisted) ? persisted : []).filter(
+        (r) => r.id && !draftIds.has(r.id),
+      );
+      for (const r of toDelete) {
+        await api.entities.ShortlistingSlotPositionPreference.delete(r.id);
+      }
+      const results = [];
+      for (let i = 0; i < arr.length; i++) {
+        const p = arr[i];
+        const payload = {
+          slot_id: slotId,
+          position_index: i + 1,
+          display_label: (p.display_label || "").trim() || `Position ${i + 1}`,
+          preferred_composition_type: p.preferred_composition_type || null,
+          preferred_zone_focus: p.preferred_zone_focus || null,
+          preferred_space_type: p.preferred_space_type || null,
+          preferred_lighting_state: p.preferred_lighting_state || null,
+          preferred_image_type: p.preferred_image_type || null,
+          preferred_signal_emphasis: Array.isArray(p.preferred_signal_emphasis)
+            ? p.preferred_signal_emphasis
+            : [],
+          is_required: Boolean(p.is_required),
+          ai_backfill_on_gap: p.ai_backfill_on_gap !== false,
+        };
+        if (p.id) {
+          results.push(
+            await api.entities.ShortlistingSlotPositionPreference.update(
+              p.id,
+              payload,
+            ),
+          );
+        } else {
+          results.push(
+            await api.entities.ShortlistingSlotPositionPreference.create(
+              payload,
+            ),
+          );
+        }
+      }
+      return results;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["slot_position_prefs", slotId],
+      });
+      toast.success("Positions saved.");
+      setDraftPositions(null);
+    },
+    onError: (err) =>
+      toast.error(`Save positions failed: ${err.message}`),
+  });
+
+  if (positionsQuery.isLoading) {
+    return (
+      <div className="p-3 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 mr-1 inline animate-spin" />
+        Loading positions…
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="space-y-2"
+      data-testid={`positions-editor-${slotId}`}
+      data-positions-count={positions.length}
+    >
+      <DragDropContext onDragEnd={onDragEnd}>
+        <Droppable droppableId={`positions-${slotId}`}>
+          {(provided) => (
+            <div
+              {...provided.droppableProps}
+              ref={provided.innerRef}
+              className="space-y-2"
+            >
+              {positions.length === 0 && (
+                <div className="text-[11px] italic text-muted-foreground py-2">
+                  No positions yet. Click &ldquo;+ Add position&rdquo; below to start.
+                </div>
+              )}
+              {positions.map((pos, index) => (
+                <Draggable
+                  key={pos.id || `_new_${index}`}
+                  draggableId={`pos-${slotId}-${pos.id || `_new_${index}`}`}
+                  index={index}
+                >
+                  {(provided, snapshot) => (
+                    <div
+                      ref={provided.innerRef}
+                      {...provided.draggableProps}
+                      data-testid={`position-row-${index + 1}`}
+                      data-position-index={index + 1}
+                      className={cn(
+                        "border rounded-md p-2 bg-card space-y-2 text-xs",
+                        snapshot.isDragging && "shadow-lg opacity-80",
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div
+                          {...provided.dragHandleProps}
+                          className="cursor-grab active:cursor-grabbing text-muted-foreground"
+                          aria-label={`Drag to reorder position ${index + 1}`}
+                        >
+                          <GripVertical className="h-4 w-4" />
+                        </div>
+                        <Badge variant="outline" className="text-[10px] tabular-nums">
+                          Position {index + 1}
+                        </Badge>
+                        <Input
+                          value={pos.display_label || ""}
+                          onChange={(e) =>
+                            updatePos(index, { display_label: e.target.value })
+                          }
+                          placeholder="Display label (e.g. Primary Hero)"
+                          className="h-7 text-xs flex-1"
+                          data-testid={`position-label-${index + 1}`}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+                          onClick={() => removePosition(index)}
+                          aria-label={`Remove position ${index + 1}`}
+                          data-testid={`position-remove-${index + 1}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">
+                            Composition type
+                          </Label>
+                          <NullableSelect
+                            value={pos.preferred_composition_type}
+                            onChange={(v) =>
+                              updatePos(index, { preferred_composition_type: v })
+                            }
+                            options={COMPOSITION_TYPE_OPTIONS}
+                            placeholder="any composition"
+                            testId={`position-composition-${index + 1}`}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">
+                            Zone focus
+                          </Label>
+                          <NullableSelect
+                            value={pos.preferred_zone_focus}
+                            onChange={(v) =>
+                              updatePos(index, { preferred_zone_focus: v })
+                            }
+                            options={ZONE_FOCUS_OPTIONS}
+                            placeholder="any zone"
+                            testId={`position-zone-${index + 1}`}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">
+                            Space type
+                          </Label>
+                          <NullableSelect
+                            value={pos.preferred_space_type}
+                            onChange={(v) =>
+                              updatePos(index, { preferred_space_type: v })
+                            }
+                            options={SPACE_TYPE_OPTIONS}
+                            placeholder="any space"
+                            testId={`position-space-${index + 1}`}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-muted-foreground">
+                            Lighting state
+                          </Label>
+                          <NullableSelect
+                            value={pos.preferred_lighting_state}
+                            onChange={(v) =>
+                              updatePos(index, { preferred_lighting_state: v })
+                            }
+                            options={LIGHTING_STATE_OPTIONS}
+                            placeholder="any lighting"
+                            testId={`position-lighting-${index + 1}`}
+                          />
+                        </div>
+                        <div className="col-span-2">
+                          <Label className="text-[10px] text-muted-foreground">
+                            Image type
+                          </Label>
+                          <NullableSelect
+                            value={pos.preferred_image_type}
+                            onChange={(v) =>
+                              updatePos(index, { preferred_image_type: v })
+                            }
+                            options={IMAGE_TYPE_OPTIONS}
+                            placeholder="any image type"
+                            testId={`position-image-type-${index + 1}`}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <Label className="text-[10px] text-muted-foreground mb-1 block">
+                          Preferred signal emphasis ({(pos.preferred_signal_emphasis || []).length}/{UNIVERSAL_SIGNAL_KEYS.length})
+                        </Label>
+                        <ChipSignalMultiselect
+                          value={pos.preferred_signal_emphasis}
+                          onChange={(v) =>
+                            updatePos(index, { preferred_signal_emphasis: v })
+                          }
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-4 pt-1">
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <Checkbox
+                            checked={Boolean(pos.is_required)}
+                            onCheckedChange={(v) =>
+                              updatePos(index, { is_required: v === true })
+                            }
+                            data-testid={`position-required-${index + 1}`}
+                          />
+                          <span className="text-[11px]">Required</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <Checkbox
+                            checked={pos.ai_backfill_on_gap !== false}
+                            onCheckedChange={(v) =>
+                              updatePos(index, { ai_backfill_on_gap: v === true })
+                            }
+                            data-testid={`position-backfill-${index + 1}`}
+                          />
+                          <span className="text-[11px]">AI backfill on gap</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </Draggable>
+              ))}
+              {provided.placeholder}
+            </div>
+          )}
+        </Droppable>
+      </DragDropContext>
+
+      <div className="flex items-center justify-between pt-1">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={addPosition}
+          data-testid={`position-add-${slotId}`}
+        >
+          <Plus className="h-3 w-3 mr-1" /> Add position
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={() => saveMutation.mutate()}
+          disabled={saveMutation.isPending}
+          data-testid={`positions-save-${slotId}`}
+        >
+          {saveMutation.isPending ? (
+            <>
+              <Loader2 className="h-3 w-3 mr-1 animate-spin" /> Saving…
+            </>
+          ) : (
+            <>
+              <Save className="h-3 w-3 mr-1" /> Save positions
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -677,6 +1118,71 @@ function EditSlotDialog({
             </p>
           </div>
 
+          {/* W11.6.22 — Selection mode toggle + curated positions editor. */}
+          <div className="space-y-1.5 border-t pt-3">
+            <Label className="text-xs font-medium">Selection mode (W11.6.22)</Label>
+            <div
+              role="radiogroup"
+              aria-label="Selection mode"
+              className="flex flex-col gap-2"
+              data-testid="selection-mode-radio"
+            >
+              <label className="flex items-start gap-2 cursor-pointer text-xs">
+                <input
+                  type="radio"
+                  name="selection_mode"
+                  value="ai_decides"
+                  checked={form.selection_mode !== "curated_positions"}
+                  onChange={() => update("selection_mode", "ai_decides")}
+                  data-testid="mode-ai-decides"
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-medium">AI decides</span>
+                  <span className="block text-muted-foreground text-[11px]">
+                    AI picks N images subject to existing eligibility (legacy default).
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 cursor-pointer text-xs">
+                <input
+                  type="radio"
+                  name="selection_mode"
+                  value="curated_positions"
+                  checked={form.selection_mode === "curated_positions"}
+                  onChange={() => update("selection_mode", "curated_positions")}
+                  data-testid="mode-curated"
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="font-medium">Curated positions</span>
+                  <span className="block text-muted-foreground text-[11px]">
+                    Spec each position (composition / zone / space / lighting / image type / signal emphasis). AI picks one image per position; falls back per ai_backfill_on_gap.
+                  </span>
+                </span>
+              </label>
+            </div>
+            {!isNew && form.selection_mode === "curated_positions" && (
+              <div
+                className="mt-3 border rounded-md p-3 bg-muted/30"
+                data-testid="curated-positions-section"
+              >
+                <div className="flex items-baseline justify-between mb-2">
+                  <p className="text-[11px] font-medium">Curated positions</p>
+                  <p className="text-[10px] text-muted-foreground">
+                    Position changes save independently of the slot version.
+                  </p>
+                </div>
+                <PositionsEditor slotId={form.slot_id} />
+              </div>
+            )}
+            {isNew && form.selection_mode === "curated_positions" && (
+              <p className="text-[11px] italic text-muted-foreground">
+                Save the slot first, then re-open the editor to add positions.
+              </p>
+            )}
+          </div>
+
           <div className="space-y-1.5">
             <Label className="text-xs">Notes (optional)</Label>
             <Textarea
@@ -800,6 +1306,10 @@ export default function SettingsShortlistingSlots() {
             ? form.eligible_composition_types
             : null,
           same_room_as_slot: form.same_room_as_slot || null,
+          // W11.6.22b: persist selection_mode (defaults to ai_decides).
+          selection_mode: form.selection_mode === "curated_positions"
+            ? "curated_positions"
+            : "ai_decides",
           notes: form.notes?.trim() || null,
           version: 1,
           is_active: true,
@@ -829,6 +1339,10 @@ export default function SettingsShortlistingSlots() {
           ? form.eligible_composition_types
           : null,
         same_room_as_slot: form.same_room_as_slot || null,
+        // W11.6.22b: preserve admin's mode choice across versions.
+        selection_mode: form.selection_mode === "curated_positions"
+          ? "curated_positions"
+          : "ai_decides",
         notes: form.notes?.trim() || null,
         version: nextVersion,
         is_active: true,
@@ -928,6 +1442,11 @@ export default function SettingsShortlistingSlots() {
             ? [...row.eligible_composition_types]
             : [],
           same_room_as_slot: row.same_room_as_slot ?? null,
+          // W11.6.22b: seed mode from the row, fall back to ai_decides for any
+          // legacy cached rows pre-dating mig 417.
+          selection_mode: row.selection_mode === "curated_positions"
+            ? "curated_positions"
+            : "ai_decides",
           notes: row.notes || "",
         },
         currentVersion: row.version || 1,
@@ -1038,6 +1557,7 @@ export default function SettingsShortlistingSlots() {
                       <th className="px-3 py-2 font-medium">Slot ID</th>
                       <th className="px-3 py-2 font-medium">Name</th>
                       <th className="px-3 py-2 font-medium">Phase</th>
+                      <th className="px-3 py-2 font-medium">Mode</th>
                       <th className="px-3 py-2 font-medium">Engine roles</th>
                       <th className="px-3 py-2 font-medium">Room types</th>
                       <th className="px-3 py-2 font-medium tabular-nums">Min/Max</th>
@@ -1074,6 +1594,23 @@ export default function SettingsShortlistingSlots() {
                               className={cn("text-[10px]", phaseInfo.tone)}
                             >
                               {phaseInfo.label}
+                            </Badge>
+                          </td>
+                          <td className="px-3 py-2">
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "text-[10px]",
+                                row.selection_mode === "curated_positions"
+                                  ? "border-amber-300 text-amber-700 dark:text-amber-300"
+                                  : "border-border text-muted-foreground",
+                              )}
+                              data-testid={`mode-badge-${row.slot_id}`}
+                              data-selection-mode={row.selection_mode || "ai_decides"}
+                            >
+                              {row.selection_mode === "curated_positions"
+                                ? "Curated"
+                                : "AI decides"}
                             </Badge>
                           </td>
                           <td className="px-3 py-2 max-w-[220px]">

@@ -724,6 +724,32 @@ async function runStage4Core(
       proposedSlots,
     });
 
+    // W11.6.22b — emit curated-position coverage gap events (required-but-
+    // missing OR ai_backfill-filled). Joined position prefs are loaded once
+    // per round so the helper is a pure transform over slot_decisions[]. We
+    // skip entirely when no slot is in curated_positions mode for this round
+    // — the IN() query short-circuits to no rows so the cost stays zero.
+    try {
+      const curatedPrefsBySlot = await loadCuratedPositionPrefsBySlot(
+        admin,
+        roundId,
+      );
+      if (curatedPrefsBySlot.size > 0) {
+        await emitCuratedCoverageEvents({
+          admin,
+          projectId: ctx.project_id,
+          roundId,
+          slotDecisions,
+          curatedPrefsBySlot,
+        });
+      }
+    } catch (err) {
+      // Advisory analytics — never block Stage 4 completion on a bad load.
+      warnings.push(
+        `emitCuratedCoverageEvents skipped: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // Update engine_run_audit (incl. token attribution + prompt block versions)
     await updateEngineRunAudit({
       admin,
@@ -1883,6 +1909,239 @@ export async function persistProposedSlots(args: PersistProposedSlotsArgs): Prom
 
   console.log(
     `[${GENERATOR}] persistProposedSlots round=${args.roundId} emitted=${rows.length}`,
+  );
+  return rows.length;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// W11.6.22b — curated-position prefs loader (used by coverage event emitter)
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * Loads curated position prefs grouped by slot_id for any active slots in
+ * curated_positions mode. Joins shortlisting_slot_definitions →
+ * shortlisting_slot_position_preferences. Returns an empty map when no slot
+ * is curated (the common path) — caller short-circuits in that case.
+ *
+ * NOTE: this helper does NOT scope by round_id because curated prefs are
+ * global per slot_id (not per-round). Round eligibility is enforced upstream
+ * by the slot resolver / engine roles; we simply enumerate the rows the
+ * round's persisted slot_decisions[] could have filled.
+ */
+export async function loadCuratedPositionPrefsBySlot(
+  admin: ReturnType<typeof getAdminClient>,
+  _roundId: string,
+): Promise<Map<string, Array<{
+  position_index: number;
+  display_label: string;
+  is_required: boolean;
+  ai_backfill_on_gap: boolean;
+}>>> {
+  const map = new Map<string, Array<{
+    position_index: number;
+    display_label: string;
+    is_required: boolean;
+    ai_backfill_on_gap: boolean;
+  }>>();
+
+  // First, find slot_ids that are active AND in curated_positions mode.
+  const { data: slotRows, error: slotErr } = await admin
+    .from('shortlisting_slot_definitions')
+    .select('slot_id, selection_mode, is_active')
+    .eq('is_active', true)
+    .eq('selection_mode', 'curated_positions');
+  if (slotErr) {
+    throw new Error(
+      `loadCuratedPositionPrefsBySlot: slot lookup failed: ${slotErr.message}`,
+    );
+  }
+  const curatedSlotIds = Array.from(
+    new Set((slotRows || []).map((r) => String((r as Record<string, unknown>).slot_id))),
+  ).filter(Boolean);
+  if (curatedSlotIds.length === 0) return map;
+
+  const { data: prefRows, error: prefErr } = await admin
+    .from('shortlisting_slot_position_preferences')
+    .select('slot_id, position_index, display_label, is_required, ai_backfill_on_gap')
+    .in('slot_id', curatedSlotIds);
+  if (prefErr) {
+    throw new Error(
+      `loadCuratedPositionPrefsBySlot: prefs lookup failed: ${prefErr.message}`,
+    );
+  }
+  for (const r of (prefRows || []) as Array<Record<string, unknown>>) {
+    const slotId = String(r.slot_id);
+    const arr = map.get(slotId) ?? [];
+    arr.push({
+      position_index: Number(r.position_index ?? 0),
+      display_label: typeof r.display_label === 'string' ? r.display_label : '',
+      is_required: r.is_required === true,
+      ai_backfill_on_gap: r.ai_backfill_on_gap !== false,
+    });
+    map.set(slotId, arr);
+  }
+  // Sort by position_index for deterministic event order.
+  for (const arr of map.values()) {
+    arr.sort((a, b) => a.position_index - b.position_index);
+  }
+  return map;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// W11.6.22b — curated-position coverage gap events
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * W11.6.22b — surface curated-position coverage outcomes as
+ * shortlisting_events rows so the W11.6 RejectionReasonsDashboard's Stage 4
+ * self-correction panel + admin filters can reason about them.
+ *
+ * Two event types emitted:
+ *   - coverage_gap_required_position — a curated position with is_required=TRUE
+ *     has no matching slot_decisions[] entry (winner missing). Loud signal:
+ *     either the prompt failed to honour the contract OR the candidate set
+ *     genuinely had no match AND ai_backfill_on_gap was disabled.
+ *   - coverage_gap_ai_backfilled — a curated position was filled via
+ *     position_filled_via='ai_backfill' (Stage 4 fell back to its best AI pick
+ *     when no candidate matched the curated criteria). Soft signal: useful for
+ *     the admin to spot positions where curation isn't being respected.
+ *
+ * Idempotency mirrors persistProposedSlots: delete prior rows for the round +
+ * these two event_types before inserting, so a regenerate doesn't double-stack.
+ *
+ * Returns total events emitted. Failure paths warn + return early — these are
+ * advisory analytics, not critical-path persistence.
+ */
+export interface CuratedCoverageEventArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  projectId: string;
+  roundId: string;
+  /**
+   * Stage 4's emitted slot_decisions[] (raw model output before persistence).
+   * We re-derive position coverage from these rather than re-querying
+   * shortlisting_overrides so the events accurately reflect the model's
+   * intended emission, even if persistSlotDecisions later drops some rows
+   * for unrelated reasons (slot-constraint validator, unrecognised slot_id).
+   */
+  slotDecisions: Array<Record<string, unknown>>;
+  /**
+   * Curated position prefs joined for slots in this round, keyed by slot_id.
+   * One slot may have N positions. Caller supplies — keeps this helper a pure
+   * I/O shim with no DB lookups beyond the events insert.
+   */
+  curatedPrefsBySlot: Map<string, Array<{
+    position_index: number;
+    display_label: string;
+    is_required: boolean;
+    ai_backfill_on_gap: boolean;
+  }>>;
+}
+
+export async function emitCuratedCoverageEvents(
+  args: CuratedCoverageEventArgs,
+): Promise<number> {
+  const { admin, projectId, roundId, slotDecisions, curatedPrefsBySlot } = args;
+  if (curatedPrefsBySlot.size === 0) return 0;
+
+  // Index slot_decisions by (slot_id, position_index) so we can ask "did this
+  // curated position get filled?".
+  const filledByKey = new Map<string, { stem: string | null; via: string | null }>();
+  for (const d of slotDecisions) {
+    const slotId = typeof d.slot_id === 'string' ? d.slot_id : null;
+    if (!slotId) continue;
+    const idx = d.position_index;
+    if (typeof idx !== 'number' || !Number.isFinite(idx)) continue;
+    const winner = d.winner as Record<string, unknown> | undefined;
+    const stem = winner && typeof winner.stem === 'string' ? winner.stem : null;
+    const via = typeof d.position_filled_via === 'string' ? d.position_filled_via : null;
+    filledByKey.set(`${slotId}::${idx}`, { stem, via });
+  }
+
+  type EventRow = {
+    project_id: string;
+    round_id: string;
+    event_type: string;
+    actor_type: string;
+    payload: Record<string, unknown>;
+    created_at: string;
+  };
+  const nowIso = new Date().toISOString();
+  const rows: EventRow[] = [];
+
+  for (const [slotId, prefs] of curatedPrefsBySlot.entries()) {
+    for (const pref of prefs) {
+      const key = `${slotId}::${pref.position_index}`;
+      const filled = filledByKey.get(key);
+      if (pref.is_required && !filled) {
+        rows.push({
+          project_id: projectId,
+          round_id: roundId,
+          event_type: 'coverage_gap_required_position',
+          actor_type: 'system',
+          payload: {
+            slot_id: slotId,
+            position_index: pref.position_index,
+            display_label: pref.display_label,
+            ai_backfill_on_gap: pref.ai_backfill_on_gap,
+            emitted_by: 'shape_d_stage4',
+          },
+          created_at: nowIso,
+        });
+      }
+      if (filled && filled.via === 'ai_backfill') {
+        rows.push({
+          project_id: projectId,
+          round_id: roundId,
+          event_type: 'coverage_gap_ai_backfilled',
+          actor_type: 'system',
+          payload: {
+            slot_id: slotId,
+            position_index: pref.position_index,
+            display_label: pref.display_label,
+            winner_stem: filled.stem,
+            is_required: pref.is_required,
+            emitted_by: 'shape_d_stage4',
+          },
+          created_at: nowIso,
+        });
+      }
+    }
+  }
+
+  // Idempotent delete-prior of these two event types for this round.
+  const { error: delErr } = await admin
+    .from('shortlisting_events')
+    .delete()
+    .eq('round_id', roundId)
+    .in('event_type', [
+      'coverage_gap_required_position',
+      'coverage_gap_ai_backfilled',
+    ]);
+  if (delErr) {
+    console.warn(
+      `[${GENERATOR}] emitCuratedCoverageEvents delete-prior failed: ${delErr.message}`,
+    );
+  }
+
+  if (rows.length === 0) {
+    console.log(
+      `[${GENERATOR}] emitCuratedCoverageEvents round=${roundId} emitted=0 (all curated positions covered)`,
+    );
+    return 0;
+  }
+
+  const { error: insErr } = await admin
+    .from('shortlisting_events')
+    .insert(rows);
+  if (insErr) {
+    console.warn(
+      `[${GENERATOR}] emitCuratedCoverageEvents insert failed: ${insErr.message}`,
+    );
+    return 0;
+  }
+
+  console.log(
+    `[${GENERATOR}] emitCuratedCoverageEvents round=${roundId} emitted=${rows.length}`,
   );
   return rows.length;
 }

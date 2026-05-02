@@ -297,6 +297,41 @@ function renderSlotRequirements(
   const phase2 = slotDefs.filter((s) => s.phase === 2);
 
   const renderSlot = (s: Pass2SlotDefinition): string => {
+    // W11.6.22b — when selection_mode='curated_positions' and curated_positions
+    // is populated, emit one row per position with the curated criteria. The
+    // model now KNOWS each position's expected composition / zone / space /
+    // lighting / image_type / signal emphasis + is_required + ai_backfill flag.
+    if (
+      s.selection_mode === 'curated_positions' &&
+      Array.isArray(s.curated_positions) &&
+      s.curated_positions.length > 0
+    ) {
+      const positions = [...s.curated_positions].sort(
+        (a, b) => (a.position_index ?? 0) - (b.position_index ?? 0),
+      );
+      const header = `  - ${s.slot_id} (${s.display_name}) — CURATED, ${positions.length} position${positions.length === 1 ? '' : 's'} to fill:`;
+      const lines = positions.map((p) => {
+        const parts: string[] = [];
+        if (p.preferred_composition_type) parts.push(`composition: ${p.preferred_composition_type}`);
+        if (p.preferred_zone_focus) parts.push(`zone: ${p.preferred_zone_focus}`);
+        if (p.preferred_space_type) parts.push(`space: ${p.preferred_space_type}`);
+        if (p.preferred_lighting_state) parts.push(`lighting: ${p.preferred_lighting_state}`);
+        if (p.preferred_image_type) parts.push(`image_type: ${p.preferred_image_type}`);
+        if (Array.isArray(p.preferred_signal_emphasis) && p.preferred_signal_emphasis.length > 0) {
+          parts.push(`emphasise: ${p.preferred_signal_emphasis.join(', ')}`);
+        }
+        const flags: string[] = [];
+        if (p.is_required) flags.push('REQUIRED');
+        if (p.ai_backfill_on_gap === false) flags.push('no_ai_backfill');
+        const flagSuffix = flags.length > 0 ? ` [${flags.join(' · ')}]` : '';
+        const detailSuffix = parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
+        const label = p.display_label || `Position ${p.position_index}`;
+        return `      - Position ${p.position_index} — ${label}${detailSuffix}${flagSuffix}`;
+      });
+      const notesLine = s.notes ? `\n      (${s.notes})` : '';
+      return [header, ...lines].join('\n') + notesLine;
+    }
+
     const minMax =
       s.min_images === s.max_images
         ? `exactly ${s.max_images}`

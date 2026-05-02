@@ -263,6 +263,66 @@ describe("ShortlistingLightbox — side panel content", () => {
   });
 });
 
+describe("ShortlistingLightbox — W11.6.22b position panel", () => {
+  it("renders the Position panel when slot_decision has position_index", () => {
+    renderLightbox({
+      items: [
+        makeItem({
+          slot_decision: {
+            slot_id: "kitchen_hero",
+            phase: 1,
+            rank: 1,
+            position_index: 1,
+            position_label: "Primary Hero",
+            position_filled_via: "curated_match",
+            position_criteria: {
+              composition_type: "hero_wide",
+              zone_focus: "kitchen_island",
+            },
+          },
+        }),
+      ],
+    });
+    const panel = screen.getByTestId("position-panel");
+    expect(panel).toBeInTheDocument();
+    expect(panel).toHaveAttribute("data-position-index", "1");
+    expect(panel).toHaveAttribute("data-position-filled-via", "curated_match");
+    expect(panel.textContent).toMatch(/Position 1/);
+    expect(panel.textContent).toMatch(/Primary Hero/);
+    expect(screen.getByTestId("position-badge").textContent).toMatch(/Curated match/);
+    expect(screen.getByTestId("position-criterion-composition_type")).toBeInTheDocument();
+    expect(screen.getByTestId("position-criterion-zone_focus")).toBeInTheDocument();
+  });
+
+  it("renders amber 'AI backfill' badge when position_filled_via=ai_backfill", () => {
+    renderLightbox({
+      items: [
+        makeItem({
+          slot_decision: {
+            slot_id: "living_hero",
+            phase: 1,
+            position_index: 2,
+            position_filled_via: "ai_backfill",
+          },
+        }),
+      ],
+    });
+    expect(screen.getByTestId("position-badge").textContent).toMatch(/AI backfill/);
+  });
+
+  it("hides the Position panel when position_index is null (legacy ai_decides — backward compat)", () => {
+    renderLightbox();
+    expect(screen.queryByTestId("position-panel")).toBeNull();
+  });
+
+  it("hides the Position panel entirely when slot_decision is null", () => {
+    renderLightbox({
+      items: [makeItem({ slot_decision: null })],
+    });
+    expect(screen.queryByTestId("position-panel")).toBeNull();
+  });
+});
+
 describe("ShortlistingLightbox — accessibility", () => {
   it("close button has an accessible label", () => {
     renderLightbox();

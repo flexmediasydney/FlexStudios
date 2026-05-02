@@ -161,6 +161,139 @@ Deno.test('slotEnumerationBlock W11.6.22: footer absent when all slots are ai_de
   assert(!txt.includes('CURATED POSITION CONTRACT'));
 });
 
+// ─── W11.6.22b: per-slot per-position rendering ────────────────────────────
+
+Deno.test('slotEnumerationBlock W11.6.22b: curated_positions slot emits per-position lines', () => {
+  const slot: Pass2SlotDefinition = {
+    slot_id: 'kitchen_hero',
+    display_name: 'Kitchen',
+    phase: 1,
+    eligible_room_types: ['kitchen_main'],
+    max_images: 3,
+    min_images: 3,
+    notes: null,
+    selection_mode: 'curated_positions',
+    curated_positions: [
+      {
+        position_index: 1,
+        display_label: 'Primary Hero',
+        preferred_composition_type: 'hero_wide',
+        preferred_zone_focus: 'kitchen_island',
+        preferred_space_type: 'kitchen_dedicated',
+        preferred_lighting_state: 'day',
+        preferred_image_type: null,
+        preferred_signal_emphasis: ['composition_geometry', 'depth_layering'],
+        is_required: true,
+        ai_backfill_on_gap: false,
+      },
+      {
+        position_index: 2,
+        display_label: 'Angled alt',
+        preferred_composition_type: 'corner_two_point',
+        preferred_zone_focus: 'kitchen_island',
+        preferred_space_type: null,
+        preferred_lighting_state: null,
+        preferred_image_type: null,
+        preferred_signal_emphasis: [],
+        is_required: false,
+        ai_backfill_on_gap: true,
+      },
+      {
+        position_index: 3,
+        display_label: 'Mid-detail',
+        preferred_composition_type: 'detail_closeup',
+        preferred_zone_focus: 'kitchen_appliance_wall',
+        preferred_space_type: null,
+        preferred_lighting_state: null,
+        preferred_image_type: null,
+        preferred_signal_emphasis: [],
+        is_required: false,
+        ai_backfill_on_gap: true,
+      },
+    ],
+  };
+  const txt = slotEnumerationBlock({
+    propertyAddress: '1 Test Lane',
+    packageType: 'Premium',
+    packageDisplayName: 'Premium',
+    packageCeiling: 38,
+    pricingTier: 'premium',
+    engineRoles: ['photo_day_shortlist'],
+    totalCompositions: 50,
+    slotDefinitions: [slot],
+  });
+  // Per-position contract — header line surfaces the position count.
+  assertStringIncludes(txt, 'kitchen_hero (Kitchen) — CURATED, 3 positions to fill:');
+  assertStringIncludes(txt, 'Position 1 — Primary Hero');
+  assertStringIncludes(txt, 'composition: hero_wide');
+  assertStringIncludes(txt, 'zone: kitchen_island');
+  assertStringIncludes(txt, 'space: kitchen_dedicated');
+  assertStringIncludes(txt, 'lighting: day');
+  assertStringIncludes(txt, 'emphasise: composition_geometry, depth_layering');
+  // Required + no_ai_backfill flags surface.
+  assertStringIncludes(txt, '[REQUIRED · no_ai_backfill]');
+  assertStringIncludes(txt, 'Position 2 — Angled alt');
+  assertStringIncludes(txt, 'Position 3 — Mid-detail');
+  // Footer still appears (curated mode in play).
+  assertStringIncludes(txt, 'CURATED POSITION CONTRACT (W11.6.22)');
+});
+
+Deno.test('slotEnumerationBlock W11.6.22b: ai_decides slot keeps legacy single-line rendering (backward compat)', () => {
+  const slot: Pass2SlotDefinition = {
+    slot_id: 'living_hero',
+    display_name: 'Living',
+    phase: 1,
+    eligible_room_types: ['living', 'open_plan'],
+    max_images: 1,
+    min_images: 1,
+    notes: null,
+    selection_mode: 'ai_decides',
+  };
+  const txt = slotEnumerationBlock({
+    propertyAddress: 'X',
+    packageType: 'Standard',
+    packageDisplayName: 'Standard',
+    packageCeiling: 24,
+    pricingTier: 'standard',
+    engineRoles: ['photo_day_shortlist'],
+    totalCompositions: 30,
+    slotDefinitions: [slot],
+  });
+  assertStringIncludes(txt, '- living_hero (Living): exactly 1 image(s)');
+  assert(!txt.includes('— CURATED'));
+  assert(!txt.includes('CURATED POSITION CONTRACT'));
+});
+
+Deno.test('slotEnumerationBlock W11.6.22b: curated_positions mode with empty array falls back to legacy line', () => {
+  // Defensive — if a slot is flagged curated but no prefs are joined, we
+  // shouldn't emit an empty "CURATED, 0 positions" header. Fall back to the
+  // legacy line so the prompt remains coherent + the model has a usable
+  // signal even during partial migration.
+  const slot: Pass2SlotDefinition = {
+    slot_id: 'bedroom_secondary',
+    display_name: 'Bedroom 2',
+    phase: 2,
+    eligible_room_types: ['bedroom_secondary'],
+    max_images: 2,
+    min_images: 1,
+    notes: null,
+    selection_mode: 'curated_positions',
+    curated_positions: [],
+  };
+  const txt = slotEnumerationBlock({
+    propertyAddress: 'X',
+    packageType: 'Standard',
+    packageDisplayName: 'Standard',
+    packageCeiling: 24,
+    pricingTier: 'standard',
+    engineRoles: ['photo_day_shortlist'],
+    totalCompositions: 30,
+    slotDefinitions: [slot],
+  });
+  assertStringIncludes(txt, '- bedroom_secondary (Bedroom 2): 1-2 image(s)');
+  assert(!txt.includes('CURATED, 0 positions'));
+});
+
 // ─── W11.7.1 hygiene: canonical slot vocabulary tests ───────────────────────
 
 Deno.test('CANONICAL_SLOT_IDS: closed list, no duplicates, ~25 entries', () => {
