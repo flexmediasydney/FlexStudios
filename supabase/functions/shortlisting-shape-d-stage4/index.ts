@@ -189,6 +189,25 @@ interface RoundContext {
   package_type: string;
   package_ceiling: number;
   property_address: string | null;
+  // W11.6.25 — frozen slot recipe snapshot from ingest. NULL for legacy
+  // rounds; Stage 4 falls back to live slot definitions in that case.
+  resolved_slot_recipe: {
+    entries: Array<{
+      slot_id: string;
+      classification: 'mandatory' | 'conditional' | 'free_recommendation';
+      allocated_count: number;
+      max_count: number;
+      priority_rank: number;
+      notes: string | null;
+    }>;
+    totals?: {
+      mandatory: number;
+      conditional: number;
+      free_recommendation: number;
+      total_min: number;
+      total_max: number;
+    };
+  } | null;
 }
 
 interface EngineSettings {
@@ -597,6 +616,13 @@ async function runStage4Core(
         admin,
         ctx.project_id,
       );
+      // W11.6.25 — apply the frozen recipe (if present) onto the live slot
+      // list. The recipe sets per-slot allocated_count + max_count which
+      // override slot.min_images / slot.max_images for THIS round only;
+      // mid-round edits to allocations don't change in-flight rounds. When
+      // the recipe is NULL (legacy rounds), the live slot definitions are
+      // used as-is.
+      const slotsForPrompt = applyRecipeToSlots(slots, ctx.resolved_slot_recipe);
       slotEnumerationText = slotEnumerationBlock({
         propertyAddress: ctx.property_address,
         packageType: ctx.package_type,
@@ -605,7 +631,7 @@ async function runStage4Core(
         pricingTier: ctx.property_tier,
         engineRoles,
         totalCompositions: stage1Merged.length,
-        slotDefinitions: slots,
+        slotDefinitions: slotsForPrompt,
       });
     } catch (slotErr) {
       const msg = slotErr instanceof Error ? slotErr.message : String(slotErr);
@@ -801,6 +827,52 @@ async function runStage4Core(
       );
     }
 
+    // W11.6.25 — emit coverage_gap_mandatory_recipe when a recipe-mandatory
+    // slot received fewer winners than allocated_count. Advisory only — the
+    // round still moves toward 'proposed'; this lets the swimlane surface
+    // "Joseph's recipe demanded 2 kitchen heroes but Stage 4 only proposed 1"
+    // as a hard signal to ops.
+    if (ctx.resolved_slot_recipe && Array.isArray(ctx.resolved_slot_recipe.entries)) {
+      try {
+        const decisionsBySlot = new Map<string, number>();
+        for (const d of slotDecisions) {
+          const sid = typeof d.slot_id === 'string' ? d.slot_id : null;
+          if (!sid) continue;
+          decisionsBySlot.set(sid, (decisionsBySlot.get(sid) ?? 0) + 1);
+        }
+        const gaps: Array<{ slot_id: string; allocated: number; actual: number }> = [];
+        for (const e of ctx.resolved_slot_recipe.entries) {
+          if (e.classification !== 'mandatory') continue;
+          const actual = decisionsBySlot.get(e.slot_id) ?? 0;
+          if (actual < e.allocated_count) {
+            gaps.push({ slot_id: e.slot_id, allocated: e.allocated_count, actual });
+          }
+        }
+        if (gaps.length > 0) {
+          await admin.from('shortlisting_events').insert(
+            gaps.map((g) => ({
+              project_id: ctx.project_id,
+              round_id: roundId,
+              event_type: 'coverage_gap_mandatory_recipe',
+              actor_type: 'system',
+              actor_id: null,
+              payload: {
+                slot_id: g.slot_id,
+                allocated_count: g.allocated,
+                actual_count: g.actual,
+                shortfall: g.allocated - g.actual,
+                source: 'W11.6.25_slot_recipes',
+              },
+            })),
+          );
+        }
+      } catch (err) {
+        warnings.push(
+          `coverage_gap_mandatory_recipe emit skipped: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     // Update engine_run_audit (incl. token attribution + prompt block versions)
     await updateEngineRunAudit({
       admin,
@@ -951,7 +1023,9 @@ async function loadRoundContext(
       // QC-iter2-W3 F-D-007: pull package_type / package_ceiling /
       // expected_count_target so the Stage 4 prompt can render the
       // slotEnumerationBlock preamble (PHASE 1/2/3 + ceiling).
-      'id, project_id, status, property_tier, property_voice_anchor_override, package_type, package_ceiling, expected_count_target',
+      // W11.6.25: also pull resolved_slot_recipe (NULL for legacy rounds —
+      // Stage 4 falls back to live slot definitions when missing).
+      'id, project_id, status, property_tier, property_voice_anchor_override, package_type, package_ceiling, expected_count_target, resolved_slot_recipe',
     )
     .eq('id', roundId)
     .maybeSingle();
@@ -1006,6 +1080,17 @@ async function loadRoundContext(
     ? round.package_type
     : 'unspecified';
 
+  // W11.6.25 — surface the frozen recipe snapshot. Type-narrow defensively
+  // since it's a JSONB column and Postgres returns it as `unknown`.
+  let resolvedRecipe: RoundContext['resolved_slot_recipe'] = null;
+  const rawRecipe = (round as { resolved_slot_recipe?: unknown }).resolved_slot_recipe;
+  if (rawRecipe && typeof rawRecipe === 'object') {
+    const obj = rawRecipe as { entries?: unknown };
+    if (Array.isArray(obj.entries)) {
+      resolvedRecipe = rawRecipe as RoundContext['resolved_slot_recipe'];
+    }
+  }
+
   return {
     round_id: roundId,
     project_id: round.project_id as string,
@@ -1017,6 +1102,7 @@ async function loadRoundContext(
     package_type: packageType,
     package_ceiling: packageCeiling,
     property_address: propertyAddress,
+    resolved_slot_recipe: resolvedRecipe,
   };
 }
 
@@ -1148,6 +1234,45 @@ export async function loadSlotDefinitionsForRound(
     .map(({ version: _v, ...rest }) => rest)
     .sort((a, b) => (a.phase - b.phase) || a.slot_id.localeCompare(b.slot_id));
   return { slots, engineRoles };
+}
+
+// ─── W11.6.25 — apply resolved recipe to slot definitions ────────────────────
+
+/**
+ * Override per-slot min_images / max_images on the live slot definitions
+ * with the values from the round's frozen recipe snapshot.
+ *
+ * The slot lattice (room_type / engine_role gates, curated positions, etc.)
+ * comes from the live shortlisting_slot_definitions table — only the COUNT
+ * targets are recipe-driven. Slots not present in the recipe are left
+ * unchanged (legacy phase-3 free-recommendation behaviour). When the recipe
+ * is NULL, the input slots are returned untouched.
+ *
+ * Exported for unit testing.
+ */
+export function applyRecipeToSlots(
+  slots: Pass2SlotDefinition[],
+  recipe: RoundContext['resolved_slot_recipe'],
+): Pass2SlotDefinition[] {
+  if (!recipe || !Array.isArray(recipe.entries) || recipe.entries.length === 0) {
+    return slots;
+  }
+  const byId = new Map<string, { allocated_count: number; max_count: number }>();
+  for (const e of recipe.entries) {
+    byId.set(e.slot_id, {
+      allocated_count: e.allocated_count,
+      max_count: e.max_count,
+    });
+  }
+  return slots.map((s) => {
+    const r = byId.get(s.slot_id);
+    if (!r) return s;
+    return {
+      ...s,
+      min_images: r.allocated_count,
+      max_images: r.max_count,
+    };
+  });
 }
 
 // ─── Stage 1 merged JSON loader ──────────────────────────────────────────────

@@ -63,6 +63,15 @@ import {
 import { resolveManualModeReason } from '../_shared/manualModeResolver.ts';
 import { ENGINE_VERSION } from '../_shared/engineVersion.ts';
 import { getActiveTierConfig } from '../_shared/tierConfig.ts';
+import {
+  filterAllocationsByScope,
+  resolveSlotRecipe,
+  resolveTolerance,
+  type RecipeResolveContext,
+  type ResolvedSlotRecipe,
+  type SlotAllocationRow,
+  type SlotDefinitionLite,
+} from '../_shared/slotRecipeResolver.ts';
 
 const GENERATOR = 'shortlisting-ingest';
 const CHUNK_SIZE = 50;
@@ -318,6 +327,19 @@ async function ingest(
     }
   }
 
+  // 10c. W11.6.25 — resolve slot recipe + tolerance and pin onto the round.
+  // Replay-safe: Stage 4 reads the snapshot, NOT live tables, so mid-round
+  // edits to allocations don't change in-flight rounds. Failure to resolve
+  // is non-fatal — the round still runs with NULL recipe (Stage 4 falls back
+  // to live shortlisting_slot_definitions, legacy behaviour).
+  const recipeOutcome = await resolveRecipeForRound({
+    admin,
+    project,
+    engineTierId,
+    packageId: extractPrimaryPackageId(project),
+    warnings,
+  });
+
   // 11. Insert the round.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
@@ -339,6 +361,10 @@ async function ingest(
       // Wave 8 (W8.4): provenance pins for reproducible replay.
       engine_version: ENGINE_VERSION,
       tier_config_version: tierConfigVersion,
+      // W11.6.25 — slot recipe snapshot + tolerance pins.
+      resolved_slot_recipe: recipeOutcome.recipe,
+      resolved_tolerance_below: recipeOutcome.tolerance.tolerance_below,
+      resolved_tolerance_above: recipeOutcome.tolerance.tolerance_above,
     })
     .select('id, round_number')
     .single();
@@ -598,4 +624,210 @@ async function loadShortlistingTiers(
     .eq('is_active', true);
   if (error) throw new Error(`shortlisting_tiers fetch failed: ${error.message}`);
   return Array.isArray(data) ? (data as ShortlistingTierRow[]) : [];
+}
+
+// ─── W11.6.25 — slot recipe resolution at ingest ─────────────────────────────
+
+/**
+ * Pull the project's primary packages[?].package_id (first entry with a
+ * non-empty package_id). À-la-carte projects have no package — returns null.
+ */
+function extractPrimaryPackageId(
+  project: { packages?: Array<{ package_id?: string | null }> | null } | null,
+): string | null {
+  if (!project || !Array.isArray(project.packages)) return null;
+  for (const p of project.packages) {
+    if (p && typeof p.package_id === 'string' && p.package_id.length > 0) {
+      return p.package_id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Flatten products[] entries from the project into a list of product UUIDs
+ * for the individual_product scope. Walks both top-level products[] and
+ * packages[].products[] entries.
+ */
+function extractIndividualProductIds(
+  project: {
+    products?: Array<{ id?: string | null; product_id?: string | null }> | null;
+    packages?: Array<{ products?: Array<{ id?: string | null; product_id?: string | null }> | null }> | null;
+  } | null,
+): string[] {
+  const ids = new Set<string>();
+  const visit = (arr: Array<{ id?: string | null; product_id?: string | null }> | null | undefined) => {
+    if (!Array.isArray(arr)) return;
+    for (const p of arr) {
+      const id = p?.product_id ?? p?.id;
+      if (typeof id === 'string' && id.length > 0) ids.add(id);
+    }
+  };
+  visit(project?.products);
+  if (project?.packages && Array.isArray(project.packages)) {
+    for (const pkg of project.packages) visit(pkg?.products);
+  }
+  return Array.from(ids);
+}
+
+interface ResolveRecipeOpts {
+  admin: ReturnType<typeof getAdminClient>;
+  // deno-lint-ignore no-explicit-any
+  project: any;
+  engineTierId: string | null;
+  packageId: string | null;
+  warnings: string[];
+}
+
+interface RecipeOutcome {
+  recipe: ResolvedSlotRecipe | null;
+  tolerance: { tolerance_below: number; tolerance_above: number };
+}
+
+/**
+ * Resolve the round's slot recipe + tolerance by walking the four scopes,
+ * fetching matching allocation rows, and folding via slotRecipeResolver.
+ *
+ * Non-fatal: any DB error returns NULL recipe (Stage 4 falls back to live
+ * tables) plus a warning. Tolerance always returns at least the hard default.
+ */
+async function resolveRecipeForRound(opts: ResolveRecipeOpts): Promise<RecipeOutcome> {
+  const { admin, project, engineTierId, packageId, warnings } = opts;
+  const HARD_DEFAULT_TOL = { tolerance_below: 3, tolerance_above: 3 };
+
+  const ctx: RecipeResolveContext = {
+    projectTypeId: typeof project?.project_type_id === 'string' ? project.project_type_id : null,
+    packageTierId: engineTierId,
+    packageId,
+    individualProductIds: extractIndividualProductIds(project),
+  };
+
+  const scopeRefIds: string[] = [];
+  if (ctx.projectTypeId) scopeRefIds.push(ctx.projectTypeId);
+  if (ctx.packageTierId) scopeRefIds.push(ctx.packageTierId);
+  if (ctx.packageId) scopeRefIds.push(ctx.packageId);
+  for (const id of ctx.individualProductIds) scopeRefIds.push(id);
+
+  if (scopeRefIds.length === 0) {
+    return { recipe: null, tolerance: HARD_DEFAULT_TOL };
+  }
+
+  let allocRows: SlotAllocationRow[] = [];
+  try {
+    const { data, error } = await admin
+      .from('shortlisting_slot_allocations')
+      .select(
+        'scope_type, scope_ref_id, slot_id, classification, allocated_count, max_count, priority_rank, notes',
+      )
+      .eq('is_active', true)
+      .in('scope_ref_id', scopeRefIds);
+    if (error) {
+      warnings.push(`shortlisting_slot_allocations fetch failed: ${error.message} — Stage 4 will fall back to live slot definitions`);
+    } else if (Array.isArray(data)) {
+      // deno-lint-ignore no-explicit-any
+      allocRows = (data as any[]).map((r) => ({
+        scope_type: r.scope_type,
+        scope_ref_id: r.scope_ref_id,
+        slot_id: r.slot_id,
+        classification: r.classification,
+        allocated_count: Number(r.allocated_count) || 0,
+        max_count: r.max_count === null ? null : Number(r.max_count),
+        priority_rank: Number(r.priority_rank) || 100,
+        notes: r.notes ?? null,
+      }));
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    warnings.push(`shortlisting_slot_allocations fetch threw: ${msg}`);
+  }
+
+  let slotDefs: SlotDefinitionLite[] = [];
+  try {
+    const { data, error } = await admin
+      .from('shortlisting_slot_definitions')
+      .select('slot_id, phase, min_images, max_images, version')
+      .eq('is_active', true);
+    if (error) {
+      warnings.push(`shortlisting_slot_definitions fetch failed: ${error.message}`);
+    } else if (Array.isArray(data)) {
+      const byId = new Map<string, SlotDefinitionLite & { version: number }>();
+      // deno-lint-ignore no-explicit-any
+      for (const row of data as any[]) {
+        const cand = {
+          slot_id: row.slot_id,
+          phase: Number(row.phase) || 0,
+          min_images: row.min_images === null ? null : Number(row.min_images),
+          max_images: row.max_images === null ? null : Number(row.max_images),
+          version: Number(row.version) || 1,
+        };
+        const existing = byId.get(cand.slot_id);
+        if (!existing || cand.version > existing.version) byId.set(cand.slot_id, cand);
+      }
+      slotDefs = Array.from(byId.values()).map(({ version: _v, ...rest }) => rest);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    warnings.push(`shortlisting_slot_definitions fetch threw: ${msg}`);
+  }
+
+  const scopedRows = filterAllocationsByScope(allocRows, ctx);
+  const recipe = scopedRows.length > 0 ? resolveSlotRecipe(scopedRows, slotDefs, ctx) : null;
+
+  // Tolerance: package row → engine_settings → 3.
+  let packageTolBelow: number | null = null;
+  let packageTolAbove: number | null = null;
+  if (packageId) {
+    try {
+      const { data, error } = await admin
+        .from('packages')
+        .select('expected_count_tolerance_below, expected_count_tolerance_above')
+        .eq('id', packageId)
+        .maybeSingle();
+      if (error) {
+        warnings.push(`packages tolerance fetch failed: ${error.message}`);
+      } else if (data) {
+        packageTolBelow = data.expected_count_tolerance_below === null
+          ? null
+          : Number(data.expected_count_tolerance_below);
+        packageTolAbove = data.expected_count_tolerance_above === null
+          ? null
+          : Number(data.expected_count_tolerance_above);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      warnings.push(`packages tolerance fetch threw: ${msg}`);
+    }
+  }
+
+  let globalTolBelow: number | null = null;
+  let globalTolAbove: number | null = null;
+  try {
+    const { data, error } = await admin
+      .from('engine_settings')
+      .select('key, value')
+      .in('key', ['expected_count_tolerance_below', 'expected_count_tolerance_above']);
+    if (error) {
+      warnings.push(`engine_settings tolerance fetch failed: ${error.message}`);
+    } else if (Array.isArray(data)) {
+      for (const row of data) {
+        const v = typeof row.value === 'number'
+          ? row.value
+          : (typeof row.value === 'string' ? Number(row.value) : null);
+        if (row.key === 'expected_count_tolerance_below') globalTolBelow = v;
+        if (row.key === 'expected_count_tolerance_above') globalTolAbove = v;
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    warnings.push(`engine_settings tolerance fetch threw: ${msg}`);
+  }
+
+  const tolerance = resolveTolerance({
+    packageTolBelow,
+    packageTolAbove,
+    globalTolBelow,
+    globalTolAbove,
+  });
+
+  return { recipe, tolerance };
 }
