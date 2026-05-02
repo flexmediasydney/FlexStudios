@@ -89,16 +89,15 @@ const SOURCE_ID = 'rea_detail_enrich';
 // Apify wait / batch knobs
 // memo23 runs ~5s per URL against REA through its residential proxy. We want
 // every batch to complete within the waitForFinish window (no polling), so
-// BATCH_SIZE × 5s < APIFY_WAIT_SECS. 12 URLs × 5s = 60s << 85s window.
+// BATCH_SIZE × 5s < APIFY_WAIT_SECS. 6 URLs × 5s = 30s << 85s window.
 // Edge function wall-clock cap is 150s; we can fit 1 batch comfortably.
 // Cron calls this repeatedly for larger backfills.
 // B35: Dropped BATCH_SIZE from 15 → 12 to buy ~15s of wall-clock margin.
-// With 140s WALL_BUDGET_MS, Apify wait ≤85s, and ~20s of DB work (candidate
-// select, per-listing updates, timeline/history inserts), 12 URLs leaves
-// comfortable headroom. For throughput the cron fires every 15 min, so
-// 24 listings/hour = 576/day stays well within budget.
+// QC-iter2 W6b (F-E-009): Halved BATCH_SIZE from 12 → 6. Max 194s nearly
+// hit the 150s wall-clock cap. Throughput halves but master_admin manual
+// invocations cover any backfill spikes.
 const APIFY_WAIT_SECS = 85;
-const BATCH_SIZE = 12;
+const BATCH_SIZE = 6;
 const MAX_BATCHES_PER_INVOCATION = 1;
 
 // Confidence source labels (must match pulse_source_confidence() in 104)

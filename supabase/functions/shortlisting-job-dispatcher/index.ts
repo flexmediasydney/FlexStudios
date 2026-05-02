@@ -549,6 +549,41 @@ async function dispatchOne(job: ShortlistingJob): Promise<DispatchResult> {
 // Chain logic — enqueue the next kind for the same round on success
 // ──────────────────────────────────────────────────────────────────────────
 
+/**
+ * Pure decision helper for "given a job kind, what should the dispatcher do
+ * after the job succeeds?". Exported for tests so we don't need to mock the
+ * full chainNextKind() flow (which makes DB queries for sibling counting +
+ * idempotency).
+ *
+ * QC-iter2 W6b (F-B-012): the legacy two_pass kinds (pass1, pass2) and any
+ * future kind not yet wired to the dispatcher both fall through to 'unknown'
+ * — the caller logs a warn so ops can see stuck rounds rather than having
+ * the dispatcher silently swallow them.
+ */
+export type ChainDecision =
+  | { action: 'terminal' }
+  | { action: 'extract_chain' }
+  | { action: 'chain'; next: string }
+  | { action: 'unknown' };
+
+const TERMINAL_KINDS = new Set([
+  'ingest', // shortlisting-ingest enqueues its own extract chunks
+  'pass3', // pass3 fires the round-complete notification
+  'shape_d_stage1', // shape-d itself enqueues stage4_synthesis
+  'stage4_synthesis', // Stage 4 persistence transitions round.status to proposed
+  'canonical_rollup', // Stage 1.5 normalisation; standalone sidecar
+  'pulse_description_extract', // batch text extractor; standalone
+  'floorplan_extract', // floorplan vision extractor; standalone
+]);
+
+export function decideChain(kind: string): ChainDecision {
+  if (TERMINAL_KINDS.has(kind)) return { action: 'terminal' };
+  if (kind === 'extract') return { action: 'extract_chain' };
+  if (kind === 'pass0') return { action: 'chain', next: 'shape_d_stage1' };
+  // Legacy pass1/pass2 + any unmapped kind. F-B-012: caller must warn loudly.
+  return { action: 'unknown' };
+}
+
 async function chainNextKind(
   admin: ReturnType<typeof getAdminClient>,
   job: ShortlistingJob,
@@ -690,7 +725,15 @@ async function chainNextKind(
       // will be flagged as unknown kinds at dispatch and skipped.
     };
     const mapped = nextMap[job.kind];
-    if (!mapped) return;
+    if (!mapped) {
+      // QC-iter2 W6b (F-B-012): warn loudly so ops can spot stuck rounds.
+      console.warn(
+        `[${GENERATOR}] ${job.kind} ${job.id} succeeded but no chain target ` +
+          `defined — round ${roundId} will not advance. ` +
+          `Either add the kind to the terminal early-returns or to nextMap.`,
+      );
+      return;
+    }
     nextKind = mapped;
   }
 

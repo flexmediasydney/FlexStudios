@@ -109,6 +109,22 @@ const VALID_TIERS = new Set(['standard', 'premium']);
 // Spec §14 + mig 285: review_duration_seconds <= 30 → flagged as unverified.
 const CONFIRMED_REVIEW_THRESHOLD_SECONDS = 30;
 
+/**
+ * QC-iter2 W6b (F-B-011): coerce raw client_sequence input to a non-negative
+ * integer for persistence. Pure function, exported for tests.
+ *
+ * - Returns 0 (NOT null) for client_sequence === 0 — the FIRST event in a
+ *   session has a zero-based counter, and the prior `>0` predicate dropped
+ *   that legitimate value, mis-ordering the swimlane-lock event stream.
+ * - Returns null for negative, NaN, Infinity, non-finite, non-numeric, or
+ *   missing values.
+ * - Truncates fractional values via Math.floor.
+ */
+export function coerceClientSequence(raw: unknown): number | null {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return null;
+  return Math.floor(raw);
+}
+
 interface OverrideEventInput {
   project_id?: string;
   round_id?: string;
@@ -558,13 +574,11 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     // order by it, but THIS endpoint silently dropped the value because the
     // input interface didn't include it. Result: every new override row had
     // client_sequence=NULL and the lock-fn ordering fix never kicked in.
-    // Coerce defensively — the swimlane emits a positive integer, but legacy
-    // or unexpected clients might send strings/floats/negatives.
-    const clientSeqRaw = e.client_sequence;
-    const clientSequence =
-      typeof clientSeqRaw === 'number' && Number.isFinite(clientSeqRaw) && clientSeqRaw > 0
-        ? Math.floor(clientSeqRaw)
-        : null;
+    //
+    // QC-iter2 W6b (F-B-011): coerceClientSequence allows 0 (the first event
+    // of a session). Prior `>0` predicate sent 0 to NULL and shortlist-lock's
+    // ORDER BY client_sequence NULLS LAST sorted the first event last.
+    const clientSequence = coerceClientSequence(e.client_sequence);
 
     rows.push({
       project_id: e.project_id,

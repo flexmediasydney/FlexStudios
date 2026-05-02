@@ -57,6 +57,7 @@ import {
   type VisionRequest,
   type VisionResponse,
 } from '../_shared/visionAdapter/index.ts';
+import { estimateCost } from '../_shared/visionAdapter/pricing.ts';
 import {
   pulseExternalListingSchema,
   PULSE_EXTERNAL_LISTING_SCHEMA_VERSION,
@@ -327,10 +328,14 @@ export function toVisionResponseV2(
 
 /**
  * Re-cost a Flash response inline using Gemini 2.5 Flash rates ($0.30 input
- * / $2.50 output per 1M tokens). The visionAdapter's pricing table currently
- * lists 2.0-flash but not 2.5-flash, so unknown-model fallback to Sonnet rates
- * over-counts substantially. We re-derive cost here so the daily cap + audit
- * numbers reflect actual 2.5-flash pricing.
+ * / $2.50 output per 1M tokens).
+ *
+ * QC-iter2 W6b (F-E-002): Originally a duplicate inline override because
+ * pricing.ts didn't list 2.5 rates. Since W11.8.2 added explicit 2.5 Pro/Flash
+ * rows to `_shared/visionAdapter/pricing.ts`, the override is redundant. This
+ * helper now thinly wraps `estimateCost('google', 'gemini-2.5-flash', ...)` so
+ * the canonical pricing table is the single source of truth. Kept exported for
+ * test compatibility.
  *
  * Pure function, exported for tests.
  */
@@ -338,10 +343,11 @@ export function estimateGemini25FlashCost(
   input_tokens: number,
   output_tokens: number,
 ): number {
-  const inputUsd = (input_tokens / 1_000_000) * 0.30;
-  const outputUsd = (output_tokens / 1_000_000) * 2.50;
-  const cost = inputUsd + outputUsd;
-  return Math.round(cost * 1_000_000) / 1_000_000;
+  return estimateCost('google', 'gemini-2.5-flash', {
+    input_tokens,
+    output_tokens,
+    cached_input_tokens: 0,
+  });
 }
 
 // ─── Per-image extraction ────────────────────────────────────────────────────

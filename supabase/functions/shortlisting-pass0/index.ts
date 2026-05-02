@@ -812,15 +812,55 @@ async function classifyAllGroups(
 // Cached resolution: load DB override once per Pass 0 run, reuse across all
 // concurrent classifyOne calls. promptText falls back to HARD_REJECT_PROMPT
 // when DB returns null.
-let _cachedRejectPrompt: { text: string; version: number } | null = null;
-async function getRejectPromptText(): Promise<string> {
-  if (_cachedRejectPrompt) return _cachedRejectPrompt.text;
-  const dbPrompt = await getActivePrompt('pass0_reject');
+//
+// QC-iter2 W6b (F-B-010): module-level cache with no expiry meant warm
+// isolates kept the stale text indefinitely after an admin edited the prompt
+// in SettingsShortlistingPrompts. Edge isolates can survive >10min between
+// invocations on a busy host. Mirrors the `roomTypesFromDb` 60s TTL pattern.
+export const REJECT_PROMPT_CACHE_TTL_MS = 60_000;
+let _cachedRejectPrompt: { text: string; version: number; expiresAt: number } | null = null;
+
+export function _resetPass0RejectPromptCache(): void {
+  _cachedRejectPrompt = null;
+}
+
+/**
+ * Pure-ish helper exported for tests: takes an explicit loader (so tests can
+ * inject a mock) + a clock + an optional ttl override. Production calls below
+ * use the default `getActivePrompt + Date.now()` wiring.
+ */
+export async function resolveRejectPromptText(
+  loader: () => Promise<{ text: string; version: number } | null> = () =>
+    getActivePrompt('pass0_reject'),
+  now: () => number = () => Date.now(),
+  ttlMs: number = REJECT_PROMPT_CACHE_TTL_MS,
+): Promise<string> {
+  const t = now();
+  if (_cachedRejectPrompt && _cachedRejectPrompt.expiresAt > t) {
+    return _cachedRejectPrompt.text;
+  }
+  const dbPrompt = await loader();
   if (dbPrompt) {
-    _cachedRejectPrompt = dbPrompt;
+    _cachedRejectPrompt = {
+      text: dbPrompt.text,
+      version: dbPrompt.version,
+      expiresAt: t + ttlMs,
+    };
     return dbPrompt.text;
   }
+  // On miss, also cache the fallback so we don't hammer the DB on every
+  // classifyOne call when the table is empty / errored. Same TTL — the next
+  // refresh window picks up a freshly-published prompt within 60s.
+  _cachedRejectPrompt = {
+    text: HARD_REJECT_PROMPT,
+    version: 0,
+    expiresAt: t + ttlMs,
+  };
   return HARD_REJECT_PROMPT;
+}
+
+async function getRejectPromptText(): Promise<string> {
+  return resolveRejectPromptText();
 }
 
 async function classifyOne(row: InsertedGroupRow): Promise<ClassificationResult> {
