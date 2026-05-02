@@ -521,6 +521,36 @@ export default function ShortlistingSwimlane({
     setLightboxState({ bucket, index });
   }, []);
 
+  // QC-iter2-W7 F-C-011: hoist the lightboxItems mapping into a memo keyed
+  // on the active bucket. Previously the mapping ran inside an IIFE on every
+  // swimlane render even when the lightbox was closed (the IIFE was guarded
+  // but its captured closure re-allocated `bucketItems.map(...)` on each
+  // re-render once open). Memo eliminates the re-allocation churn so toggling
+  // overlay/Why? inside the lightbox doesn't rebuild the parent's items[].
+  const lightboxItemsMemo = useMemo(() => {
+    const bucket = lightboxState.bucket;
+    if (!bucket) return null;
+    const bucketItems = columnItems[bucket] || [];
+    if (bucketItems.length === 0) return null;
+    return bucketItems.map((it) => ({
+      id: it.id,
+      dropbox_path: it.dropbox_preview_path,
+      filename:
+        it.delivery_reference_stem ||
+        it.best_bracket_stem ||
+        it.rep_filename ||
+        it.id,
+      observed_objects: Array.isArray(it.classification?.observed_objects)
+        ? it.classification.observed_objects
+        : [],
+      signal_scores: it.classification?.signal_scores || null,
+      slot_decision: it.slot || null,
+      voice_tier: it.classification?.voice_tier || null,
+      master_listing: it.classification?.master_listing || null,
+      classification: it.classification || null,
+    }));
+  }, [lightboxState.bucket, columnItems]);
+
   const closeSignalModal = useCallback(() => {
     setSignalModalState((prev) => ({ ...prev, open: false }));
   }, []);
@@ -890,7 +920,15 @@ export default function ShortlistingSwimlane({
 
   // Apply overrides on top of initial assignment, in chronological order.
   // Local override state (for pending optimistic moves before server acks).
+  // QC-iter2-W7 F-C-019: cap pending optimistic overrides. Each in-flight
+  // override is held here until the server-side row lands and the refetch
+  // replaces it. If the network is slow or the operator is unusually fast
+  // (or stuck in a retry loop), the array can grow unbounded and slow the
+  // computedColumns memo. Capping at 20 lets the optimistic UI keep up with
+  // typical reviewer pace (one drag every few seconds) but prevents runaway.
+  const PENDING_OVERRIDE_CAP = 20;
   const [pendingOverrides, setPendingOverrides] = useState([]);
+  const pendingCatchingUp = pendingOverrides.length >= PENDING_OVERRIDE_CAP;
 
   const computedColumns = useMemo(() => {
     const proposed = new Set(initialColumns.proposed);
@@ -1265,18 +1303,26 @@ export default function ShortlistingSwimlane({
       // Optimistic update — append to pendingOverrides immediately. Use a
       // unique pendingId so concurrent drags don't step on each other when
       // we drop the pending entry on success/failure.
+      // F-C-019: drop the OLDEST entry once we hit the cap so the array is
+      // bounded; the dropped entry's server row will still apply when the
+      // refetch lands (it just stops contributing optimistic visuals).
       const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setPendingOverrides((prev) => [
-        ...prev,
-        {
-          ai_proposed_group_id: event.ai_proposed_group_id,
-          human_selected_group_id: event.human_selected_group_id,
-          human_action: event.human_action,
-          created_at: new Date().toISOString(),
-          _pending: true,
-          _pendingId: pendingId,
-        },
-      ]);
+      setPendingOverrides((prev) => {
+        const next = [
+          ...prev,
+          {
+            ai_proposed_group_id: event.ai_proposed_group_id,
+            human_selected_group_id: event.human_selected_group_id,
+            human_action: event.human_action,
+            created_at: new Date().toISOString(),
+            _pending: true,
+            _pendingId: pendingId,
+          },
+        ];
+        return next.length > PENDING_OVERRIDE_CAP
+          ? next.slice(next.length - PENDING_OVERRIDE_CAP)
+          : next;
+      });
 
       const sendResult = await sendOverride(event);
       // Drop only this pending entry — leave any other in-flight pendings alone.
@@ -1351,17 +1397,22 @@ export default function ShortlistingSwimlane({
       };
 
       const pendingId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      setPendingOverrides((prev) => [
-        ...prev,
-        {
-          ai_proposed_group_id: winnerGroupId,
-          human_selected_group_id: altGroupId,
-          human_action: "swapped",
-          created_at: new Date().toISOString(),
-          _pending: true,
-          _pendingId: pendingId,
-        },
-      ]);
+      setPendingOverrides((prev) => {
+        const next = [
+          ...prev,
+          {
+            ai_proposed_group_id: winnerGroupId,
+            human_selected_group_id: altGroupId,
+            human_action: "swapped",
+            created_at: new Date().toISOString(),
+            _pending: true,
+            _pendingId: pendingId,
+          },
+        ];
+        return next.length > PENDING_OVERRIDE_CAP
+          ? next.slice(next.length - PENDING_OVERRIDE_CAP)
+          : next;
+      });
 
       const sendResult = await sendOverride(event);
       setPendingOverrides((prev) =>
@@ -1699,9 +1750,30 @@ export default function ShortlistingSwimlane({
         </div>
       )}
 
-      {/* 3-column swimlane */}
+      {/* QC-iter2-W7 F-C-019: surface when optimistic overrides are running
+          past the cap. Operator-visible explanation that older drag actions
+          are still queued server-side; the optimistic visuals just stop
+          stacking so the column compute stays snappy. */}
+      {pendingCatchingUp && (
+        <div
+          className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 flex items-center gap-2"
+          data-testid="swimlane-pending-catching-up"
+        >
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <span>
+            Catching up… {pendingOverrides.length} edits queued for the server.
+            Slowing or hiding optimistic moves until the queue drains.
+          </span>
+        </div>
+      )}
+
+      {/* 3-column swimlane.
+          QC-iter2-W7 F-C-007: md breakpoint splits into 2 columns (proposed
+          spans full row, rejected/approved share row 2) so tablet-portrait
+          and small-laptop windows aren't stuck on the mobile single-column
+          stack. lg+ keeps the canonical 1fr_2fr_1fr layout. */}
       <DragDropContext onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_2fr_1fr] gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_2fr_1fr] gap-3">
           {COLUMNS.map((col) => {
             const items = columnItems[col.key] || [];
             // W11.6.1 — group-by-slot only applies to AI PROPOSED. The other
@@ -1804,35 +1876,16 @@ export default function ShortlistingSwimlane({
           + slot_decision + classification). The lightbox handles its own
           ←/→ keyboard nav, prev/next buttons, swipe — no plumbing needed
           from here. */}
-      {lightboxState.bucket && (() => {
-        const bucket = lightboxState.bucket;
-        const bucketItems = columnItems[bucket] || [];
-        if (bucketItems.length === 0) return null;
+      {lightboxState.bucket && lightboxItemsMemo && (() => {
         const COLUMN_LABEL = {
           rejected: "REJECTED",
           proposed: "AI PROPOSED",
           approved: "HUMAN APPROVED",
         };
-        const lightboxItems = bucketItems.map((it) => ({
-          id: it.id,
-          dropbox_path: it.dropbox_preview_path,
-          filename:
-            it.delivery_reference_stem ||
-            it.best_bracket_stem ||
-            it.rep_filename ||
-            it.id,
-          observed_objects: Array.isArray(it.classification?.observed_objects)
-            ? it.classification.observed_objects
-            : [],
-          signal_scores: it.classification?.signal_scores || null,
-          slot_decision: it.slot || null,
-          voice_tier: it.classification?.voice_tier || null,
-          master_listing: it.classification?.master_listing || null,
-          classification: it.classification || null,
-        }));
+        const bucket = lightboxState.bucket;
         return (
           <ShortlistingLightbox
-            items={lightboxItems}
+            items={lightboxItemsMemo}
             initialIndex={lightboxState.index}
             bucketLabel={COLUMN_LABEL[bucket] || bucket}
             allClassificationsInRound={classifications}

@@ -54,6 +54,21 @@ export interface BreakerStatus {
   state?: string;
 }
 
+/**
+ * Shape of a `pulse_source_circuit_breakers` row, partial because the helpers
+ * below select only the columns they need. QC-iter2-W7 F-F-008 typed the seven
+ * `as any` casts that previously masked the row shape from the type-checker.
+ */
+export interface CircuitBreakerState {
+  state?: 'open' | 'closed' | string | null;
+  reopen_at?: string | null;
+  opened_at?: string | null;
+  consecutive_failures?: number | null;
+  failure_threshold?: number | null;
+  cooldown_minutes?: number | null;
+  total_opens?: number | null;
+}
+
 // ── Run lifecycle ─────────────────────────────────────────────────────────
 
 /**
@@ -266,9 +281,10 @@ export async function breakerCheckOpen(
     .eq('source_id', sourceId)
     .maybeSingle();
 
-  const state = (data as any)?.state || 'closed';
-  const reopenAtIso = (data as any)?.reopen_at || null;
-  const consecutiveFailures = (data as any)?.consecutive_failures || 0;
+  const row = (data ?? null) as CircuitBreakerState | null;
+  const state = row?.state || 'closed';
+  const reopenAtIso = row?.reopen_at ?? null;
+  const consecutiveFailures = row?.consecutive_failures ?? 0;
 
   if (state !== 'open') {
     return { open: false, reopenAt: reopenAtIso, consecutiveFailures, state };
@@ -312,9 +328,10 @@ export async function breakerRecordFailure(
     .eq('source_id', sourceId)
     .maybeSingle();
 
-  const fails = ((cur as any)?.consecutive_failures || 0) + 1;
-  const threshold = (cur as any)?.failure_threshold || 3;
-  const cooldownMins = (cur as any)?.cooldown_minutes || 30;
+  const row = (cur ?? null) as CircuitBreakerState | null;
+  const fails = (row?.consecutive_failures ?? 0) + 1;
+  const threshold = row?.failure_threshold ?? 3;
+  const cooldownMins = row?.cooldown_minutes ?? 30;
   const shouldOpen = fails >= threshold;
   const now = new Date();
   const reopenAt = shouldOpen ? new Date(now.getTime() + cooldownMins * 60 * 1000) : null;
@@ -326,7 +343,7 @@ export async function breakerRecordFailure(
     ...(shouldOpen ? {
       opened_at: now.toISOString(),
       reopen_at: reopenAt!.toISOString(),
-      total_opens: ((cur as any)?.total_opens || 0) + 1,
+      total_opens: (row?.total_opens ?? 0) + 1,
     } : {}),
     updated_at: now.toISOString(),
   }, { onConflict: 'source_id' });

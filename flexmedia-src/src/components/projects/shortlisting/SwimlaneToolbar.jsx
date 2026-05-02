@@ -376,7 +376,7 @@ export default function SwimlaneToolbar({
             the link reproduces the exact view. */}
         {onSearchQueryChange ? (
           <div className="flex items-center gap-1">
-            <Search className="h-3.5 w-3.5 text-muted-foreground" />
+            <Search className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
             <Input
               type="search"
               value={searchQuery}
@@ -384,6 +384,7 @@ export default function SwimlaneToolbar({
               placeholder="Search keywords or anchor text"
               className="h-8 text-xs w-[220px]"
               data-testid="swimlane-search-input"
+              aria-label="Search shortlist by keywords or anchor text"
             />
             {searchQuery && (
               <button
@@ -393,7 +394,7 @@ export default function SwimlaneToolbar({
                 aria-label="Clear search"
                 data-testid="swimlane-search-clear"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
             )}
           </div>
@@ -729,11 +730,39 @@ export function useSwimlaneElapsedTimer({ roundId, isActive }) {
   });
 
   // Local 1Hz tick so the seconds counter advances smoothly between fetches.
+  // QC-iter2-W7 F-C-021: pause the tick when the tab is hidden. The user
+  // doesn't see the seconds advance (and the document.hidden timer
+  // throttling kicks in anyway), but skipping the setState saves a render
+  // per second per swimlane mount in the background tab. We also flip the
+  // tick back on once the tab regains focus so the elapsed display catches
+  // up immediately.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!isActive) return undefined;
-    const id = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(id);
+    if (typeof document === "undefined") return undefined;
+    let id = null;
+    const startTick = () => {
+      if (id != null) return;
+      id = setInterval(() => setNow(Date.now()), 1_000);
+    };
+    const stopTick = () => {
+      if (id == null) return;
+      clearInterval(id);
+      id = null;
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") stopTick();
+      else {
+        setNow(Date.now()); // catch-up render the moment the tab refocuses
+        startTick();
+      }
+    };
+    if (document.visibilityState !== "hidden") startTick();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      stopTick();
+    };
   }, [isActive]);
 
   if (!isActive) return null;

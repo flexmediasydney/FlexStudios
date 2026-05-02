@@ -127,6 +127,20 @@ export function parseDjiFilename(filename: string): DjiFilenameInfo | null {
 // ─── EXIF extraction ─────────────────────────────────────────────────────────
 
 /**
+ * QC-iter2-W7 F-F-011: ExifReader's tag shape — narrow union covers the
+ * common cases (string description, scalar value, rational tuple, GPS DMS
+ * triple). Replaces five `: any` annotations on the EXIF helper functions.
+ */
+type ExifRational = [number, number];
+type ExifTagValue = number | string | ExifRational | Array<number | string | ExifRational>;
+interface ExifTag {
+  value?: ExifTagValue;
+  description?: string;
+  id?: number;
+}
+type ExifRef = ExifTag | string | null | undefined;
+
+/**
  * Convert ExifReader's GPS coordinate format to a signed decimal.
  *
  * ExifReader (with expanded=true) returns GPSLatitude.description as a decimal
@@ -134,11 +148,15 @@ export function parseDjiFilename(filename: string): DjiFilenameInfo | null {
  * tuple. Reference code is the .description string when present; tuple
  * fallback otherwise.
  */
-function readGpsCoordinate(tag: any, ref: any): number | null {
+function readGpsCoordinate(tag: ExifTag | null | undefined, ref: ExifRef): number | null {
   if (!tag) return null;
   const refValue: string =
-    (typeof ref === 'object' && ref?.value) ||
-    (typeof ref === 'object' && ref?.description) ||
+    (typeof ref === 'object' && ref && typeof (ref as ExifTag).value === 'string'
+      ? ((ref as ExifTag).value as string)
+      : '') ||
+    (typeof ref === 'object' && ref && typeof (ref as ExifTag).description === 'string'
+      ? ((ref as ExifTag).description as string)
+      : '') ||
     (typeof ref === 'string' ? ref : '') ||
     '';
   let dec: number | null = null;
@@ -150,9 +168,9 @@ function readGpsCoordinate(tag: any, ref: any): number | null {
 
   if (dec === null && Array.isArray(tag.value) && tag.value.length === 3) {
     // Each entry is either a [num, den] pair or already a number.
-    const toNum = (v: any) =>
+    const toNum = (v: number | string | ExifRational): number =>
       Array.isArray(v) && v.length === 2 ? v[0] / v[1] : Number(v);
-    const [d, m, s] = tag.value.map(toNum);
+    const [d, m, s] = (tag.value as Array<number | string | ExifRational>).map(toNum);
     dec = d + m / 60 + s / 3600;
   }
 
@@ -163,7 +181,7 @@ function readGpsCoordinate(tag: any, ref: any): number | null {
   return negRef ? -Math.abs(dec) : Math.abs(dec);
 }
 
-function readNumericTag(tag: any): number | null {
+function readNumericTag(tag: ExifTag | null | undefined): number | null {
   if (!tag) return null;
   if (typeof tag.value === 'number') return tag.value;
   if (Array.isArray(tag.value) && tag.value.length === 2) {
@@ -183,11 +201,11 @@ function readNumericTag(tag: any): number | null {
   return null;
 }
 
-function readStringTag(tag: any): string | null {
+function readStringTag(tag: ExifTag | null | undefined): string | null {
   if (!tag) return null;
   if (typeof tag.description === 'string' && tag.description.length > 0) return tag.description;
   if (typeof tag.value === 'string') return tag.value;
-  if (Array.isArray(tag.value)) return tag.value.join('').trim() || null;
+  if (Array.isArray(tag.value)) return (tag.value as Array<number | string>).join('').trim() || null;
   return null;
 }
 

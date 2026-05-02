@@ -226,10 +226,10 @@ serveWithAudit(FN_NAME, async (req: Request): Promise<Response> => {
     let skipped = 0;
     const errors: string[] = [];
 
-    // Count how many were skipped by the pending filter above
-    skipped = totalUnits - pending.length - Math.max(0, totalUnits - existingKey.size - pending.length);
-    // simpler: skipped = the existing-key matches we filtered out above
-    skipped = 0;
+    // QC-iter2-W7 F-B-003: skipped counts dedup-key matches filtered out
+    // before the pending push. The previous arithmetic line was overwritten
+    // immediately by the simpler loop below; deleted to remove the dead
+    // expression and clarify intent.
     for (const unit of units) {
       const dedupKey = `${unit.group_id || ''}|${unit.raw_label}`;
       if (existingKey.has(dedupKey)) skipped++;

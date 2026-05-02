@@ -413,6 +413,11 @@ export default function ShortlistingLightbox({
           ? `Lightbox — ${item.filename}`
           : "Shortlisting media lightbox"
       }
+      // QC-iter2-W7 F-C-012: surface the bucket counter to screen readers via
+      // aria-describedby so AT users hear "3 of 12 — HUMAN APPROVED" when the
+      // dialog opens (and after each prev/next nav). Without this, the
+      // counter is visually present but invisible to non-sighted users.
+      aria-describedby="shortlisting-lightbox-counter"
       tabIndex={-1}
       data-testid="shortlisting-lightbox"
       className="fixed inset-0 z-50 flex flex-col bg-black/95 select-none"
@@ -422,7 +427,11 @@ export default function ShortlistingLightbox({
     >
       {/* Top bar — counter + annotations toggle + close */}
       <div className="absolute top-0 left-0 right-0 flex items-center justify-between px-4 py-3 z-10 gap-3">
-        <div className="text-white/80 text-xs sm:text-sm tabular-nums whitespace-nowrap">
+        <div
+          id="shortlisting-lightbox-counter"
+          className="text-white/80 text-xs sm:text-sm tabular-nums whitespace-nowrap"
+          aria-live="polite"
+        >
           {counter}
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -760,22 +769,136 @@ export default function ShortlistingLightbox({
             </div>
           )}
 
-          {/* EXIF — pulled from classification when present */}
+          {/* EXIF — pulled from classification when present.
+              QC-iter2-W7 F-C-018: render the highest-signal subset as a
+              compact key/value list instead of a full JSON.stringify dump.
+              Drone EXIF blobs can run 80+ tags (XMP camera-state spam); the
+              dump stretched the side panel and obscured the operator's
+              actual mental model (when, what camera/lens, how exposed). The
+              curated list keeps the panel scannable; the full blob remains
+              available via a "Show all" toggle when needed for debugging. */}
           {item?.classification?.exif && (
-            <div className="mt-3 border-t border-white/10 pt-2">
-              <div className="text-[10px] uppercase tracking-wide text-white/60 mb-1">
-                EXIF
-              </div>
-              <pre className="text-[10px] text-white/70 whitespace-pre-wrap break-all">
-                {typeof item.classification.exif === "string"
-                  ? item.classification.exif
-                  : JSON.stringify(item.classification.exif, null, 2)}
-              </pre>
-            </div>
+            <ExifPanel exif={item.classification.exif} />
           )}
         </aside>
       </div>
     </div>,
     document.body,
+  );
+}
+
+// QC-iter2-W7 F-C-018: compact EXIF panel. Renders the most operator-relevant
+// fields as a scannable key/value list, with a collapsible "Show all" escape
+// hatch for debugging. Accepts the same shapes the previous dump did
+// (string blob, object map, or stringified JSON nested inside).
+const EXIF_TOP_FIELDS = [
+  ["DateTimeOriginal", "Captured"],
+  ["Make", "Make"],
+  ["Model", "Model"],
+  ["LensModel", "Lens"],
+  ["FocalLength", "Focal length"],
+  ["FNumber", "Aperture"],
+  ["ExposureTime", "Shutter"],
+  ["ISOSpeedRatings", "ISO"],
+  ["WhiteBalance", "WB"],
+  ["GPSLatitude", "GPS lat"],
+  ["GPSLongitude", "GPS lon"],
+  ["Orientation", "Orientation"],
+];
+
+function ExifPanel({ exif }) {
+  const [showAll, setShowAll] = useState(false);
+  const exifObj = useMemo(() => {
+    if (!exif) return null;
+    if (typeof exif === "object") return exif;
+    if (typeof exif === "string") {
+      try {
+        return JSON.parse(exif);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }, [exif]);
+
+  // EXIF tag values come in many shapes (raw value, {value, description},
+  // arrays for rationals). Surface the most-readable string form.
+  const readField = useCallback((key) => {
+    if (!exifObj) return null;
+    const tag = exifObj[key];
+    if (tag == null) return null;
+    if (typeof tag === "string" || typeof tag === "number") return String(tag);
+    if (typeof tag === "object") {
+      if (typeof tag.description === "string" && tag.description.length > 0) {
+        return tag.description;
+      }
+      if (typeof tag.value === "number" || typeof tag.value === "string") {
+        return String(tag.value);
+      }
+      if (Array.isArray(tag.value)) return tag.value.join(", ");
+    }
+    return null;
+  }, [exifObj]);
+
+  if (!exifObj) {
+    // Couldn't parse — render the raw blob so debug paths still work.
+    return (
+      <div className="mt-3 border-t border-white/10 pt-2">
+        <div className="text-[10px] uppercase tracking-wide text-white/60 mb-1">
+          EXIF
+        </div>
+        <pre className="text-[10px] text-white/70 whitespace-pre-wrap break-all">
+          {typeof exif === "string" ? exif : JSON.stringify(exif, null, 2)}
+        </pre>
+      </div>
+    );
+  }
+
+  const rows = EXIF_TOP_FIELDS
+    .map(([key, label]) => [label, readField(key)])
+    .filter(([, val]) => val != null && val !== "");
+
+  return (
+    <div className="mt-3 border-t border-white/10 pt-2" data-testid="lightbox-exif-panel">
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[10px] uppercase tracking-wide text-white/60">
+          EXIF
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className="text-[10px] text-blue-300 hover:underline"
+          data-testid="lightbox-exif-show-all"
+        >
+          {showAll ? "Show key fields" : "Show all"}
+        </button>
+      </div>
+      {showAll ? (
+        <pre className="text-[10px] text-white/70 whitespace-pre-wrap break-all">
+          {JSON.stringify(exifObj, null, 2)}
+        </pre>
+      ) : rows.length === 0 ? (
+        <div className="text-[10px] text-white/40 italic">
+          No recognised EXIF fields. Use Show all to inspect raw blob.
+        </div>
+      ) : (
+        <ul className="space-y-0.5">
+          {rows.map(([label, val]) => (
+            <li
+              key={label}
+              className="flex items-center justify-between gap-2 text-[10px]"
+            >
+              <span className="text-white/60">{label}</span>
+              <span
+                className="font-mono text-white/85 truncate max-w-[200px]"
+                title={String(val)}
+              >
+                {String(val)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

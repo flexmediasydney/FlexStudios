@@ -662,6 +662,27 @@ async function runBackgroundChain(opts: BackgroundOpts): Promise<void> {
       failureReason = `engine_failed: one or more jobs reached dead_letter`;
       break;
     }
+
+    // QC-iter2-W7 F-B-014: engine_run_audit.completed_at is the canonical
+    // success signal but the rollup occasionally lags the round-status flip
+    // by 30-90s. Fall back to shortlisting_rounds.status so we don't burn
+    // the full 30-minute wall_timeout when the round has actually finished.
+    if (!audit?.completed_at) {
+      const { data: round } = await admin
+        .from('shortlisting_rounds')
+        .select('status')
+        .eq('id', roundId)
+        .maybeSingle();
+      const status = (round as { status?: string } | null)?.status;
+      if (status === 'proposed' || status === 'locked') {
+        succeeded = true;
+        break;
+      }
+      if (status === 'failed') {
+        failureReason = `engine_failed: round status='failed' (engine_run_audit rollup lag)`;
+        break;
+      }
+    }
   }
 
   if (!succeeded && !failureReason) {
