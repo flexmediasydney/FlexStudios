@@ -97,17 +97,17 @@ function renderPage(initialPath = "/SettingsObjectRegistry") {
   );
 }
 
-// ── 1. Route access ────────────────────────────────────────────────────────
-describe("SettingsObjectRegistry — route access", () => {
-  it("is registered in ROUTE_ACCESS", () => {
-    expect(ROUTE_ACCESS).toHaveProperty("SettingsObjectRegistry");
+// ── 1. Route access — W11.6.21 hard-cut ────────────────────────────────────
+// Page is no longer a standalone route; it's now a tab on the umbrella
+// SettingsShortlistingCommandCenter. Verify the standalone route entry was
+// removed AND the unlisted route still defaults to master_admin only.
+describe("SettingsObjectRegistry — route access (post W11.6.21 hard-cut)", () => {
+  it("is NO LONGER registered in ROUTE_ACCESS (consolidated into umbrella)", () => {
+    expect(ROUTE_ACCESS).not.toHaveProperty("SettingsObjectRegistry");
   });
 
-  it("master_admin can access", () => {
+  it("unlisted route still defaults to master_admin only", () => {
     expect(canAccessRoute("SettingsObjectRegistry", "master_admin")).toBe(true);
-  });
-
-  it("admin / manager / employee / contractor cannot access", () => {
     for (const role of ["admin", "manager", "employee", "contractor"]) {
       expect(canAccessRoute("SettingsObjectRegistry", role)).toBe(false);
     }

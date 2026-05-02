@@ -14,20 +14,14 @@ import { canAccessRoute, ROUTE_ACCESS } from '@/components/lib/routeAccess';
 
 // ─── 1. Permission gate ────────────────────────────────────────────────────
 
-describe('SettingsObjectRegistryDiscovery — route access', () => {
-  it('is registered in ROUTE_ACCESS', () => {
-    expect(ROUTE_ACCESS).toHaveProperty('SettingsObjectRegistryDiscovery');
+describe('SettingsObjectRegistryDiscovery — route access (post W11.6.21 hard-cut)', () => {
+  it('is NO LONGER registered in ROUTE_ACCESS (consolidated into umbrella)', () => {
+    expect(ROUTE_ACCESS).not.toHaveProperty('SettingsObjectRegistryDiscovery');
   });
 
-  it('master_admin can access', () => {
+  it('unlisted route still defaults to master_admin only', () => {
     expect(canAccessRoute('SettingsObjectRegistryDiscovery', 'master_admin')).toBe(true);
-  });
-
-  it('admin CANNOT access (this surface is owner-only)', () => {
     expect(canAccessRoute('SettingsObjectRegistryDiscovery', 'admin')).toBe(false);
-  });
-
-  it('manager / employee / contractor cannot access', () => {
     expect(canAccessRoute('SettingsObjectRegistryDiscovery', 'manager')).toBe(false);
     expect(canAccessRoute('SettingsObjectRegistryDiscovery', 'employee')).toBe(false);
     expect(canAccessRoute('SettingsObjectRegistryDiscovery', 'contractor')).toBe(false);

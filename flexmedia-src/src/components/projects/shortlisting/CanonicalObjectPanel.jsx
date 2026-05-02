@@ -230,12 +230,13 @@ export default function CanonicalObjectPanel({
             )}
           </div>
 
-          {/* Open in W12 registry */}
+          {/* Open in W12 registry — W11.6.21 link target is now the */}
+          {/* Shortlisting Command Center umbrella ?tab=discovery panel. */}
           {object.proposed_canonical_id && (
             <div className="pt-1">
               <a
                 href={createPageUrl(
-                  `SettingsObjectRegistryDiscovery?canonical=${encodeURIComponent(object.proposed_canonical_id)}`,
+                  `SettingsShortlistingCommandCenter?tab=discovery&canonical=${encodeURIComponent(object.proposed_canonical_id)}`,
                 )}
                 target="_blank"
                 rel="noreferrer"

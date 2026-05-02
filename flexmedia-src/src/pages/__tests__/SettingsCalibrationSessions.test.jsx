@@ -95,19 +95,16 @@ function renderPage(initialPath = "/SettingsCalibrationSessions") {
   );
 }
 
-// ── 1. Route gate ──────────────────────────────────────────────────────────
-describe("SettingsCalibrationSessions — route access", () => {
-  it("is registered in ROUTE_ACCESS", () => {
-    expect(ROUTE_ACCESS).toHaveProperty("SettingsCalibrationSessions");
+// ── 1. Route gate — W11.6.21 hard-cut ─────────────────────────────────────
+describe("SettingsCalibrationSessions — route access (post W11.6.21)", () => {
+  it("is NO LONGER registered in ROUTE_ACCESS (consolidated into umbrella)", () => {
+    expect(ROUTE_ACCESS).not.toHaveProperty("SettingsCalibrationSessions");
   });
 
-  it("master_admin can access all 3 tabs (route gate allows)", () => {
+  it("unlisted route still defaults to master_admin only", () => {
     expect(
       canAccessRoute("SettingsCalibrationSessions", "master_admin"),
     ).toBe(true);
-  });
-
-  it("non-master_admin roles cannot access (admin / manager / employee / contractor → 403)", () => {
     for (const role of ["admin", "manager", "employee", "contractor"]) {
       expect(canAccessRoute("SettingsCalibrationSessions", role)).toBe(false);
     }

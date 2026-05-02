@@ -85,17 +85,14 @@ function renderPage(initialPath = "/SettingsAISuggestions") {
   );
 }
 
-// ── 1. Route access ────────────────────────────────────────────────────────
-describe("SettingsAISuggestions — route access", () => {
-  it("is registered in ROUTE_ACCESS", () => {
-    expect(ROUTE_ACCESS).toHaveProperty("SettingsAISuggestions");
+// ── 1. Route access — W11.6.21 hard-cut ────────────────────────────────────
+describe("SettingsAISuggestions — route access (post W11.6.21 hard-cut)", () => {
+  it("is NO LONGER registered in ROUTE_ACCESS (consolidated into umbrella)", () => {
+    expect(ROUTE_ACCESS).not.toHaveProperty("SettingsAISuggestions");
   });
 
-  it("master_admin can access", () => {
+  it("unlisted route still defaults to master_admin only", () => {
     expect(canAccessRoute("SettingsAISuggestions", "master_admin")).toBe(true);
-  });
-
-  it("admin / manager / employee / contractor cannot access", () => {
     for (const role of ["admin", "manager", "employee", "contractor"]) {
       expect(canAccessRoute("SettingsAISuggestions", role)).toBe(false);
     }

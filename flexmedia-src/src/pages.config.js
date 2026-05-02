@@ -122,7 +122,10 @@ const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMa
 // SettingsStaffDefaults removed — now a subtab in SettingsTeamsUsers
 const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
 const ShortlistingCommandCenter = React.lazy(() => import('./pages/ShortlistingCommandCenter'));
-const SettingsShortlistingSlots = React.lazy(() => import('./pages/SettingsShortlistingSlots'));
+// W11.6.21 hard-cut: SettingsShortlistingSlots rolled into the
+// SettingsShortlistingCommandCenter umbrella as the "slots" tab. The
+// component is still imported (eagerly inside the umbrella file) but the
+// /SettingsShortlistingSlots URL now 404s.
 const SettingsShortlistingRoomTypes = React.lazy(() => import('./pages/SettingsShortlistingRoomTypes'));
 const SettingsShortlistingStandards = React.lazy(() => import('./pages/SettingsShortlistingStandards'));
 const SettingsShortlistingSignals = React.lazy(() => import('./pages/SettingsShortlistingSignals'));
@@ -131,7 +134,14 @@ const SettingsShortlistingTraining = React.lazy(() => import('./pages/SettingsSh
 const SettingsShortlistingOverrides = React.lazy(() => import('./pages/SettingsShortlistingOverrides'));
 const SettingsShortlistingPrompts = React.lazy(() => import('./pages/SettingsShortlistingPrompts'));
 const SettingsEngineSettings = React.lazy(() => import('./pages/SettingsEngineSettings'));
-const SettingsTierConfigs = React.lazy(() => import('./pages/SettingsTierConfigs'));
+// W11.6.21 hard-cut: SettingsTierConfigs, SettingsObjectRegistry,
+// SettingsObjectRegistryDiscovery, SettingsAISuggestions,
+// SettingsCalibrationSessions, SettingsEngineOverridePatterns, and
+// SettingsPackageTierMapping have been REMOVED from the PAGES map. Their
+// page components are still imported (eagerly, inside the umbrella file)
+// as tab panels of SettingsShortlistingCommandCenter — but visiting their
+// old URLs (e.g. /SettingsObjectRegistry) now 404s. Internal Link refs
+// have been redirected to /SettingsShortlistingCommandCenter?tab=<key>.
 const SettingsVendorComparison = React.lazy(() => import('./pages/SettingsVendorComparison'));
 // Wave 11.7.7 / W11.6 — Shape D operator UX surfaces.
 const MasterListingReview = React.lazy(() => import('./pages/MasterListingReview'));
@@ -141,17 +151,9 @@ const EngineDashboard = React.lazy(() => import('./pages/EngineDashboard'));
 const CalibrationDashboard = React.lazy(() => import('./pages/CalibrationDashboard'));
 // Wave 15a — internal finals scoring QA dashboard.
 const FinalsQADashboard = React.lazy(() => import('./pages/FinalsQADashboard'));
-// Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
-const SettingsObjectRegistryDiscovery = React.lazy(() => import('./pages/SettingsObjectRegistryDiscovery'));
-// Wave 12.B — full object registry admin: browse + queue + normalisation.
-const SettingsObjectRegistry = React.lazy(() => import('./pages/SettingsObjectRegistry'));
-// Wave 12.7-12.8 — AI suggestion engine review surface (slot + room-type proposals).
-const SettingsAISuggestions = React.lazy(() => import('./pages/SettingsAISuggestions'));
-// Wave 14 — calibration session admin (editor-vs-AI ground-truth diff capture).
-const SettingsCalibrationSessions = React.lazy(() => import('./pages/SettingsCalibrationSessions'));
-// W11.6.10 — engine override patterns analytics dashboard.
-const SettingsEngineOverridePatterns = React.lazy(() => import('./pages/SettingsEngineOverridePatterns'));
-const SettingsPackageTierMapping = React.lazy(() => import('./pages/SettingsPackageTierMapping'));
+// W11.6.21 — Shortlisting Command Center umbrella (master_admin only).
+// Folds 8+ scattered owner settings pages into one tabbed admin surface.
+const SettingsShortlistingCommandCenter = React.lazy(() => import('./pages/SettingsShortlistingCommandCenter'));
 const SettingsDataConsistency = React.lazy(() => import('./pages/SettingsDataConsistency'));
 const SettingsLegacyPackageMapping = React.lazy(() => import('./pages/SettingsLegacyPackageMapping'));
 const SettingsLegacyImport = React.lazy(() => import('./pages/SettingsLegacyImport'));
@@ -165,8 +167,8 @@ const TalentPulse = React.lazy(() => import('./pages/TalentPulse'));
 const Users = React.lazy(() => import('./pages/Users'));
 // Wave 15b.9 — Pulse Missed-Opportunity Command Center (master_admin only).
 const PulseMissedOpportunityCommandCenter = React.lazy(() => import('./pages/PulseMissedOpportunityCommandCenter'));
-// Wave 11.6 — Rejection Reasons Dashboard (master_admin only).
-const SettingsRejectionReasonsDashboard = React.lazy(() => import('./pages/SettingsRejectionReasonsDashboard'));
+// W11.6.21 hard-cut: SettingsRejectionReasonsDashboard rolled into the
+// SettingsShortlistingCommandCenter umbrella as the "rejection" tab.
 
 
 export const PAGES = {
@@ -224,7 +226,10 @@ export const PAGES = {
     "SettingsAI": SettingsAI,
     "SettingsAutomationRules": SettingsAutomationRules,
     "ShortlistingCommandCenter": ShortlistingCommandCenter,
-    "SettingsShortlistingSlots": SettingsShortlistingSlots,
+    // W11.6.21 — umbrella page that hosts the 9 consolidated owner settings
+    // panels (tiers, mappings, slots, registry, suggestions, rejection,
+    // calibration, overrides, discovery) plus a new Overview KPI tab.
+    "SettingsShortlistingCommandCenter": SettingsShortlistingCommandCenter,
     "SettingsShortlistingRoomTypes": SettingsShortlistingRoomTypes,
     "SettingsShortlistingStandards": SettingsShortlistingStandards,
     "SettingsShortlistingSignals": SettingsShortlistingSignals,
@@ -233,19 +238,23 @@ export const PAGES = {
     "SettingsShortlistingOverrides": SettingsShortlistingOverrides,
     "SettingsShortlistingPrompts": SettingsShortlistingPrompts,
     "SettingsEngineSettings": SettingsEngineSettings,
-    "SettingsTierConfigs": SettingsTierConfigs,
     "SettingsVendorComparison": SettingsVendorComparison,
     "MasterListingReview": MasterListingReview,
     "Stage4Overrides": Stage4Overrides,
     "EngineDashboard": EngineDashboard,
     "CalibrationDashboard": CalibrationDashboard,
     "FinalsQADashboard": FinalsQADashboard,
-    "SettingsObjectRegistryDiscovery": SettingsObjectRegistryDiscovery,
-    "SettingsObjectRegistry": SettingsObjectRegistry,
-    "SettingsAISuggestions": SettingsAISuggestions,
-    "SettingsCalibrationSessions": SettingsCalibrationSessions,
-    "SettingsEngineOverridePatterns": SettingsEngineOverridePatterns,
-    "SettingsPackageTierMapping": SettingsPackageTierMapping,
+    // W11.6.21 hard-cut: the following entries previously lived here but
+    // are now subtabs on SettingsShortlistingCommandCenter. Their old URLs
+    // (/SettingsObjectRegistry etc) 404 by design.
+    //   SettingsTierConfigs              → ?tab=tiers
+    //   SettingsPackageTierMapping       → ?tab=mappings
+    //   SettingsObjectRegistry           → ?tab=registry
+    //   SettingsObjectRegistryDiscovery  → ?tab=discovery
+    //   SettingsAISuggestions            → ?tab=suggestions
+    //   SettingsCalibrationSessions      → ?tab=calibration
+    //   SettingsEngineOverridePatterns   → ?tab=overrides
+    //   SettingsRejectionReasonsDashboard → ?tab=rejection
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,
     "SettingsClients": SettingsClients,
@@ -273,7 +282,6 @@ export const PAGES = {
     "UserSettings": UserSettings,
     "Users": Users,
     "PulseMissedOpportunityCommandCenter": PulseMissedOpportunityCommandCenter,
-    "SettingsRejectionReasonsDashboard": SettingsRejectionReasonsDashboard,
 }
 
 export const pagesConfig = {

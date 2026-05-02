@@ -1,17 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { canAccessRoute, ROUTE_ACCESS } from '@/components/lib/routeAccess';
 
-describe('SettingsEngineOverridePatterns — route access', () => {
-  it('is registered in ROUTE_ACCESS', () => {
-    expect(ROUTE_ACCESS).toHaveProperty('SettingsEngineOverridePatterns');
+describe('SettingsEngineOverridePatterns — route access (post W11.6.21 hard-cut)', () => {
+  it('is NO LONGER registered in ROUTE_ACCESS (consolidated into umbrella)', () => {
+    expect(ROUTE_ACCESS).not.toHaveProperty('SettingsEngineOverridePatterns');
   });
-  it('master_admin can access', () => {
+  it('unlisted route now defaults to master_admin only (admin loses access)', () => {
     expect(canAccessRoute('SettingsEngineOverridePatterns', 'master_admin')).toBe(true);
-  });
-  it('admin can access', () => {
-    expect(canAccessRoute('SettingsEngineOverridePatterns', 'admin')).toBe(true);
-  });
-  it('manager / employee / contractor cannot access', () => {
+    // Admin previously had access via ADMIN_AND_ABOVE; under the hard-cut
+    // they reach the page through the umbrella ?tab=overrides instead.
+    expect(canAccessRoute('SettingsEngineOverridePatterns', 'admin')).toBe(false);
     expect(canAccessRoute('SettingsEngineOverridePatterns', 'manager')).toBe(false);
     expect(canAccessRoute('SettingsEngineOverridePatterns', 'employee')).toBe(false);
     expect(canAccessRoute('SettingsEngineOverridePatterns', 'contractor')).toBe(false);

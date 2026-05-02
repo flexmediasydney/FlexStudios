@@ -66,15 +66,13 @@ import {
   totalCostTone,
 } from "@/components/settings/rejection/CostAttributionWidget";
 
-// ── 1. Route gate ──────────────────────────────────────────────────────────
-describe("SettingsRejectionReasonsDashboard — route access", () => {
-  it("is registered in ROUTE_ACCESS", () => {
-    expect(ROUTE_ACCESS).toHaveProperty("SettingsRejectionReasonsDashboard");
+// ── 1. Route gate — W11.6.21 hard-cut ─────────────────────────────────────
+describe("SettingsRejectionReasonsDashboard — route access (post W11.6.21)", () => {
+  it("is NO LONGER registered in ROUTE_ACCESS (consolidated into umbrella)", () => {
+    expect(ROUTE_ACCESS).not.toHaveProperty("SettingsRejectionReasonsDashboard");
   });
-  it("master_admin can access", () => {
+  it("unlisted route still defaults to master_admin only", () => {
     expect(canAccessRoute("SettingsRejectionReasonsDashboard", "master_admin")).toBe(true);
-  });
-  it("admin / manager / employee / contractor cannot access", () => {
     for (const role of ["admin", "manager", "employee", "contractor"]) {
       expect(canAccessRoute("SettingsRejectionReasonsDashboard", role)).toBe(false);
     }

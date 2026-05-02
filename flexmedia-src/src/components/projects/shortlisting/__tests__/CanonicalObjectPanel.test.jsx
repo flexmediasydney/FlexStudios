@@ -137,7 +137,11 @@ describe("CanonicalObjectPanel", () => {
     );
     const link = screen.getByText(/Open in W12 registry/).closest("a");
     expect(link).toBeInTheDocument();
-    expect(link.getAttribute("href")).toContain("SettingsObjectRegistryDiscovery");
+    // W11.6.21 hard-cut: the link target moved from the standalone
+    // /SettingsObjectRegistryDiscovery route to the umbrella
+    // /SettingsShortlistingCommandCenter?tab=discovery&canonical=...
+    expect(link.getAttribute("href")).toContain("SettingsShortlistingCommandCenter");
+    expect(link.getAttribute("href")).toContain("tab=discovery");
     expect(link.getAttribute("href")).toContain("canonical=obj_arch_kitchen_cab_001");
   });
 

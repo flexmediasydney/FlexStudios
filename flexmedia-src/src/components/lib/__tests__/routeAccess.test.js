@@ -77,8 +77,10 @@ describe('canAccessRoute', () => {
   it('manager can access MANAGER_AND_ABOVE routes', () => {
     expect(canAccessRoute('ClientAgents', 'manager')).toBe(true);
     expect(canAccessRoute('Reports', 'manager')).toBe(true);
-    expect(canAccessRoute('Products', 'manager')).toBe(true);
     expect(canAccessRoute('TonomoPulse', 'manager')).toBe(true);
+    // Products is ADMIN_AND_ABOVE in the current matrix — managers cannot
+    // access it. Asserted negatively for clarity.
+    expect(canAccessRoute('Products', 'manager')).toBe(false);
   });
 
   it('manager is blocked from ADMIN_AND_ABOVE routes', () => {
@@ -178,7 +180,7 @@ describe('getAccessLevel', () => {
 
   it('returns "full" for manager on MANAGER_AND_ABOVE routes', () => {
     expect(getAccessLevel('Reports', 'manager')).toBe('full');
-    expect(getAccessLevel('Products', 'manager')).toBe('full');
+    expect(getAccessLevel('ClientAgents', 'manager')).toBe('full');
   });
 
   it('returns "full" for employee on EMPLOYEE_AND_ABOVE routes', () => {
@@ -207,38 +209,44 @@ describe('getAccessLevel', () => {
 // ─── getAccessibleRoutes ─────────────────────────────────────────────────────
 
 describe('getAccessibleRoutes', () => {
+  // Counts removed from hard-coded magic numbers because the route map
+  // grows with every wave (50+ routes added since the last refresh, plus
+  // W11.6.21's hard-cut consolidation). We assert membership / monotonic
+  // ordering rather than exact counts, which is more robust to additions.
   const totalRoutes = Object.keys(ROUTE_ACCESS).length;
 
-  it('master_admin gets all 54 routes', () => {
+  it('master_admin gets all routes', () => {
     const routes = getAccessibleRoutes('master_admin');
-    expect(routes.length).toBe(54);
     expect(routes.length).toBe(totalRoutes);
   });
 
-  it('admin gets 50 routes', () => {
+  it('admin can access ADMIN_AND_ABOVE routes (Settings, Teams) but NOT OWNER_ONLY', () => {
     const routes = getAccessibleRoutes('admin');
-    expect(routes.length).toBe(50);
     expect(routes).toContain('Settings');
     expect(routes).toContain('Teams');
-    expect(routes).toContain('SettingsEngineOverridePatterns');
     expect(routes).not.toContain('Users');
     expect(routes).not.toContain('AdminTodoList');
     expect(routes).not.toContain('AIAuditLog');
+    // W11.6.21 hard-cut: SettingsEngineOverridePatterns was previously
+    // ADMIN_AND_ABOVE but is now consolidated under the OWNER_ONLY
+    // SettingsShortlistingCommandCenter umbrella.
+    expect(routes).not.toContain('SettingsEngineOverridePatterns');
+    expect(routes).not.toContain('SettingsShortlistingCommandCenter');
   });
 
-  it('manager gets 32 routes', () => {
+  it('manager can access manager-and-above routes', () => {
     const routes = getAccessibleRoutes('manager');
-    expect(routes.length).toBe(32);
     expect(routes).toContain('Reports');
-    expect(routes).toContain('Products');
+    expect(routes).toContain('ClientAgents');
     expect(routes).not.toContain('Settings');
     expect(routes).not.toContain('SettingsTeamsUsers');
     expect(routes).not.toContain('Users');
+    // Products is ADMIN_AND_ABOVE so manager does not see it.
+    expect(routes).not.toContain('Products');
   });
 
-  it('employee gets 19 routes', () => {
+  it('employee can access employee-and-above routes', () => {
     const routes = getAccessibleRoutes('employee');
-    expect(routes.length).toBe(19);
     expect(routes).toContain('Dashboard');
     expect(routes).toContain('People');
     expect(routes).not.toContain('ClientAgents');
@@ -246,9 +254,8 @@ describe('getAccessibleRoutes', () => {
     expect(routes).not.toContain('Users');
   });
 
-  it('contractor gets 15 routes', () => {
+  it('contractor can access ALL_LEVELS routes only', () => {
     const routes = getAccessibleRoutes('contractor');
-    expect(routes.length).toBe(15);
     expect(routes).toContain('Dashboard');
     expect(routes).toContain('Projects');
     expect(routes).toContain('FieldMode');

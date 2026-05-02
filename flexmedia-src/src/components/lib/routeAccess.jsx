@@ -39,8 +39,11 @@ export const ROUTE_ACCESS = {
   AdminDroneThemes: OWNER_ONLY, // global system theme — master_admin only
 
   // ── SHORTLISTING MODULE ───────────────────────────────────
+  // W11.6.21 hard-cut: 9 scattered owner settings pages have been folded
+  // into the SettingsShortlistingCommandCenter umbrella. The old route
+  // entries have been REMOVED (no redirect compatibility — pages.config.js
+  // no longer maps them, so direct URLs 404 by design).
   ShortlistingCommandCenter: ADMIN_AND_ABOVE,
-  SettingsShortlistingSlots: OWNER_ONLY,
   SettingsShortlistingRoomTypes: OWNER_ONLY,
   SettingsShortlistingStandards: OWNER_ONLY,
   SettingsShortlistingSignals: OWNER_ONLY,
@@ -49,7 +52,6 @@ export const ROUTE_ACCESS = {
   SettingsShortlistingOverrides: OWNER_ONLY,
   SettingsShortlistingPrompts: OWNER_ONLY,
   SettingsEngineSettings: OWNER_ONLY,
-  SettingsPackageTierMapping: OWNER_ONLY,
   SettingsVendorComparison: OWNER_ONLY,
   // Wave 11.7.7 / W11.6 — Shape D operator UX surfaces.
   MasterListingReview: ADMIN_AND_ABOVE,
@@ -59,23 +61,14 @@ export const ROUTE_ACCESS = {
   CalibrationDashboard: OWNER_ONLY,
   // Wave 15a — internal finals scoring QA dashboard.
   FinalsQADashboard: OWNER_ONLY,
-  // Wave 12 / W11.6.11 — discovery queue for slot + object candidates.
-  SettingsObjectRegistryDiscovery: OWNER_ONLY,
-  // Wave 12.B — full object registry curation: browse canonicals, review
-  // discovery queue, view normalisation stats. master_admin only because
-  // mutations rewrite the canonical taxonomy used by Stage 1 grounding.
-  SettingsObjectRegistry: OWNER_ONLY,
-  // Wave 12.7-12.8 — AI suggestion engine review surface (slot + room-type
-  // proposals). master_admin only because approve/merge mutations extend
-  // the canonical slot/room-type taxonomies.
-  SettingsAISuggestions: OWNER_ONLY,
-  // Wave 14 — 50-project structured calibration session admin (editor-vs-AI
-  // ground-truth diff capture). master_admin only because a calibration
-  // session burns ~$1.50 + 25 editor hours, and the disagreement corpus
-  // tunes Wave 8 tier weights + drives Wave 11 few-shot example library.
-  SettingsCalibrationSessions: OWNER_ONLY,
-  // W11.6.10 — engine override patterns analytics dashboard.
-  SettingsEngineOverridePatterns: ADMIN_AND_ABOVE,
+  // W11.6.21 — Shortlisting Command Center umbrella.
+  // Subsumes: SettingsTierConfigs, SettingsPackageTierMapping,
+  // SettingsObjectRegistry, SettingsObjectRegistryDiscovery,
+  // SettingsAISuggestions, SettingsRejectionReasonsDashboard,
+  // SettingsCalibrationSessions, SettingsEngineOverridePatterns.
+  // Slots tab already routes through the existing SettingsShortlistingSlots
+  // component (which we keep mounted as a sub-tab).
+  SettingsShortlistingCommandCenter: OWNER_ONLY,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────
   ClientAgents: MANAGER_AND_ABOVE,
@@ -167,10 +160,6 @@ export const ROUTE_ACCESS = {
   // master_admin only because it exposes manual override of customer-facing
   // quotes + a queue-pause control that affects production cost.
   PulseMissedOpportunityCommandCenter: OWNER_ONLY,
-  // Wave 11.6 — rejection reasons dashboard. master_admin only because it
-  // surfaces raw human override observations (W11.5 capture) + Gemini cost
-  // attribution + canonical registry coverage.
-  SettingsRejectionReasonsDashboard: OWNER_ONLY,
 };
 
 /**
