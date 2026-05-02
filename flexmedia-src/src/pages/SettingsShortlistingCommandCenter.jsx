@@ -1,29 +1,58 @@
 /**
- * SettingsShortlistingCommandCenter — Wave 11.6.21 master_admin umbrella.
+ * SettingsShortlistingCommandCenter — Wave 11.6.21 + W11.6.21b master_admin umbrella.
  *
- * Spec: W11.6.21. Consolidates 9 scattered shortlisting settings pages
- * under one tabbed admin surface, plus a new Overview KPI tab.
+ * Spec history:
+ *   W11.6.21  — initial umbrella + 9 consolidated pages (Overview NEW, plus
+ *               tiers/mappings/slots/registry/suggestions/rejection/
+ *               calibration/overrides/discovery).
+ *   W11.6.21b — folds in the remaining 9 shortlisting-engine settings pages
+ *               that were left standalone in the W11.6.21 sweep:
+ *               room types, standards, signals, calibration-ops, training,
+ *               overrides-admin, prompts, engine-settings, vendor.
  *
  * URL:        /SettingsShortlistingCommandCenter[?tab=<key>]
  * Permission: master_admin only (gated via PermissionGuard + routeAccess).
  *
- * Tabs:
- *   1. overview  — engine-wide KPIs (NEW; W11.6.21).
- *   2. tiers     — SettingsTierConfigs (W8).
- *   3. mappings  — SettingsPackageTierMapping (W7.7).
- *   4. slots     — SettingsShortlistingSlots (W7.7).
- *   5. registry  — SettingsObjectRegistry (W12.B).
- *   6. suggestions — SettingsAISuggestions (W12.7-W12.8).
- *   7. rejection — SettingsRejectionReasonsDashboard (W11.6).
- *   8. calibration — SettingsCalibrationSessions (W14).
- *   9. overrides — SettingsEngineOverridePatterns (W11.6.10).
- *  10. discovery — SettingsObjectRegistryDiscovery (W12 / W11.6.11).
+ * Tabs (19 total):
+ *   1.  overview        — engine-wide KPIs (W11.6.21).
+ *   2.  tiers           — SettingsTierConfigs (W8).
+ *   3.  mappings        — SettingsPackageTierMapping (W7.7).
+ *   4.  slots           — SettingsShortlistingSlots (W7.7).
+ *   5.  registry        — SettingsObjectRegistry (W12.B).
+ *   6.  suggestions     — SettingsAISuggestions (W12.7-W12.8).
+ *   7.  rejection       — SettingsRejectionReasonsDashboard (W11.6).
+ *   8.  calibration     — SettingsCalibrationSessions (W14).
+ *   9.  overrides       — SettingsEngineOverridePatterns (W11.6.10).
+ *  10.  discovery       — SettingsObjectRegistryDiscovery (W12 / W11.6.11).
+ *  11.  roomtypes       — SettingsShortlistingRoomTypes (W11.6.7).        [W11.6.21b]
+ *  12.  standards       — SettingsShortlistingStandards (W6 P7).          [W11.6.21b]
+ *  13.  signals         — SettingsShortlistingSignals (W6 P7).            [W11.6.21b]
+ *  14.  calibration-ops — ShortlistingCalibration (W6 P8 quarterly bench).[W11.6.21b]
+ *  15.  training        — SettingsShortlistingTraining (W6 P8).           [W11.6.21b]
+ *  16.  overrides-admin — SettingsShortlistingOverrides (W6 P8).          [W11.6.21b]
+ *  17.  prompts         — SettingsShortlistingPrompts (W6 P8).            [W11.6.21b]
+ *  18.  engine-settings — SettingsEngineSettings (W7.7).                  [W11.6.21b]
+ *  19.  vendor          — SettingsVendorComparison (W11.8).               [W11.6.21b]
+ *
+ * Note on the two calibration tabs:
+ *   `calibration` is the W14 50-project structured calibration session
+ *   admin (`calibration_sessions` entity).
+ *   `calibration-ops` is the older W6 quarterly accuracy benchmark page
+ *   that operates on `shortlisting_benchmark_results` + the holdout set on
+ *   `shortlisting_rounds.is_benchmark`. Both belong here — they're
+ *   complementary instruments, not duplicates.
+ *
+ * Note on the two override tabs:
+ *   `overrides` is SettingsEngineOverridePatterns (the W11.6.10 admin for
+ *   engine-suggested override patterns).
+ *   `overrides-admin` is SettingsShortlistingOverrides (the older W6 P8
+ *   aggregated drag/swap analytics dashboard with a recalibration hint
+ *   panel). Different surfaces, different RPCs, kept distinct.
  *
  * Hard-cut policy (per spec):
- *   The old standalone routes for tabs 2-10 are REMOVED from pages.config.js
- *   + Layout.jsx + routeAccess.jsx — visiting /SettingsObjectRegistry now
- *   404s. Internal Link references have been redirected to ?tab=<key> on
- *   this page.
+ *   The old standalone routes are REMOVED from pages.config.js + Layout.jsx
+ *   + routeAccess.jsx — visiting them now 404s. Internal Link references
+ *   have been redirected to ?tab=<key> on this page.
  *
  * Tab implementation: each existing settings page is mounted as-is. They
  * already manage their own ?tab= query state for sub-tabs (e.g. Object
@@ -31,6 +60,9 @@
  * useSearchParams independently — when our top-level tab toggles, the
  * unmounted page's local sub-tab state is naturally torn down. We picked
  * top-level keys that don't collide with any existing sub-tab name.
+ *
+ * Layout: single horizontal `flex flex-wrap` strip (Option A from spec).
+ * 19 tabs wrap to 2-3 rows on a max-w-7xl container; readable + simple.
  *
  * Style mirrors PulseMissedOpportunityCommandCenter (W15b.9).
  */
@@ -45,15 +77,24 @@ import {
 } from "@/components/ui/tabs";
 import {
   Activity,
+  Cog,
   Database,
+  FileEdit,
   Gauge,
+  GraduationCap,
+  Home,
   Layers,
   ListChecks,
+  Microscope,
+  Ruler,
   ScanSearch,
+  ShieldAlert,
+  Shuffle,
+  Signal as SignalIcon,
+  Sliders,
   Sparkles,
   TrendingDown,
-  Sliders,
-  ShieldAlert,
+  Wrench,
 } from "lucide-react";
 
 import OverviewTab from "@/components/settings/shortlisting/OverviewTab";
@@ -66,9 +107,20 @@ import SettingsRejectionReasonsDashboard from "@/pages/SettingsRejectionReasonsD
 import SettingsCalibrationSessions from "@/pages/SettingsCalibrationSessions";
 import SettingsEngineOverridePatterns from "@/pages/SettingsEngineOverridePatterns";
 import SettingsObjectRegistryDiscovery from "@/pages/SettingsObjectRegistryDiscovery";
+// W11.6.21b — second consolidation wave.
+import SettingsShortlistingRoomTypes from "@/pages/SettingsShortlistingRoomTypes";
+import SettingsShortlistingStandards from "@/pages/SettingsShortlistingStandards";
+import SettingsShortlistingSignals from "@/pages/SettingsShortlistingSignals";
+import ShortlistingCalibration from "@/pages/ShortlistingCalibration";
+import SettingsShortlistingTraining from "@/pages/SettingsShortlistingTraining";
+import SettingsShortlistingOverrides from "@/pages/SettingsShortlistingOverrides";
+import SettingsShortlistingPrompts from "@/pages/SettingsShortlistingPrompts";
+import SettingsEngineSettings from "@/pages/SettingsEngineSettings";
+import SettingsVendorComparison from "@/pages/SettingsVendorComparison";
 
 // Tab keys (URL query value `?tab=<key>`). Default = overview.
 export const VALID_TABS = [
+  // — W11.6.21 (initial 10) ——————————————————————————————————————————————
   "overview",
   "tiers",
   "mappings",
@@ -79,6 +131,16 @@ export const VALID_TABS = [
   "calibration",
   "overrides",
   "discovery",
+  // — W11.6.21b (added 9) ————————————————————————————————————————————————
+  "roomtypes",
+  "standards",
+  "signals",
+  "calibration-ops",
+  "training",
+  "overrides-admin",
+  "prompts",
+  "engine-settings",
+  "vendor",
 ];
 
 const TAB_LABELS = {
@@ -92,6 +154,17 @@ const TAB_LABELS = {
   calibration: "Calibration",
   overrides: "Override Patterns",
   discovery: "Object Discovery",
+  // W11.6.21b — explicitly disambiguated labels for the two
+  // calibration / two override tabs.
+  roomtypes: "Room Types",
+  standards: "Standards",
+  signals: "Signals",
+  "calibration-ops": "Calibration Ops",
+  training: "Training",
+  "overrides-admin": "Overrides Admin",
+  prompts: "Prompts",
+  "engine-settings": "Engine Settings",
+  vendor: "Vendor Comparison",
 };
 
 const TAB_ICONS = {
@@ -105,6 +178,15 @@ const TAB_ICONS = {
   calibration: Gauge,
   overrides: ShieldAlert,
   discovery: ScanSearch,
+  roomtypes: Home,
+  standards: Ruler,
+  signals: SignalIcon,
+  "calibration-ops": Microscope,
+  training: GraduationCap,
+  "overrides-admin": Wrench,
+  prompts: FileEdit,
+  "engine-settings": Cog,
+  vendor: Shuffle,
 };
 
 /**
@@ -147,11 +229,12 @@ export default function SettingsShortlistingCommandCenter() {
             Shortlisting Command Center
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            Wave 11.6.21 — single owner control surface for the shortlisting
-            engine. Engine KPIs, tier weights, package mappings, slot taxonomy,
+            Wave 11.6.21 + W11.6.21b — single owner control surface for the
+            shortlisting engine. Engine KPIs, tier weights, package mappings,
+            slot taxonomy, room types, standards, signals, prompts, training,
+            calibration (sessions + ops), override patterns + analytics,
             object registry, AI suggestions, rejection-reason analytics,
-            calibration sessions, override patterns, and the discovery queue
-            all live here.
+            engine settings, and vendor A/B comparison all live here.
           </p>
         </div>
 
@@ -239,6 +322,61 @@ export default function SettingsShortlistingCommandCenter() {
           <TabsContent value="discovery" className="mt-0">
             <Suspense fallback={<TabFallback />}>
               <SettingsObjectRegistryDiscovery />
+            </Suspense>
+          </TabsContent>
+
+          {/* — W11.6.21b — second consolidation wave —————————————————————— */}
+          <TabsContent value="roomtypes" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsShortlistingRoomTypes />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="standards" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsShortlistingStandards />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="signals" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsShortlistingSignals />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="calibration-ops" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <ShortlistingCalibration />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="training" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsShortlistingTraining />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="overrides-admin" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsShortlistingOverrides />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="prompts" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsShortlistingPrompts />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="engine-settings" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsEngineSettings />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="vendor" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SettingsVendorComparison />
             </Suspense>
           </TabsContent>
         </Tabs>

@@ -739,7 +739,10 @@ export default function EngineDashboard() {
             recent reclassifications log (W11.5 dependency), canonical registry
             coverage (W12 dependency), per-room-type override heatmap, drill-down
             navigation from chart cells, CSV export. See{" "}
-            <Link to="/SettingsShortlistingOverrides" className="underline">
+            <Link
+              to="/SettingsShortlistingCommandCenter?tab=overrides-admin"
+              className="underline"
+            >
               W11.6 spec
             </Link>{" "}
             for the full v2 widget set.

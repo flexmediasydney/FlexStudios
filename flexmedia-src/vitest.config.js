@@ -12,6 +12,10 @@ export default defineConfig({
       '@hooks': path.resolve(__dirname, './src/hooks'),
       '@pages': path.resolve(__dirname, './src/pages'),
       '@utils': path.resolve(__dirname, './src/utils'),
+      // Shared pricing lib — mirrors vite.config.js so test files that
+      // import pages.config.js (which transitively pulls in
+      // PriceMatrixSummaryTable → @pricing/matrix) can resolve.
+      '@pricing': path.resolve(__dirname, '../supabase/functions/_shared/pricing'),
     },
   },
   test: {

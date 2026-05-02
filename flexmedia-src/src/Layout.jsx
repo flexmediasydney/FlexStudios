@@ -356,23 +356,16 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers" },
           can("SettingsAI") && { name: "AI Settings", href: "SettingsAI", icon: Sparkles },
           can("AIAuditLog") && { name: "AI Audit", href: "AIAuditLog", icon: Activity },
-          // W11.6.21 hard-cut: 9 scattered shortlisting nav entries replaced
-          // by one umbrella entry. SettingsShortlistingSlots / RoomTypes /
-          // Standards / Signals / Training / Prompts / EngineSettings /
-          // VendorComparison and ShortlistingCalibration remain standalone
-          // because their corresponding component files weren't part of the
-          // umbrella spec — they stay as their own routes for now.
+          // W11.6.21 + W11.6.21b hard-cut: 18 scattered shortlisting nav
+          // entries replaced by one umbrella entry. The umbrella now
+          // hosts: tiers, mappings, slots, registry, suggestions,
+          // rejection, calibration, overrides, discovery (W11.6.21) +
+          // roomtypes, standards, signals, calibration-ops, training,
+          // overrides-admin, prompts, engine-settings, vendor (W11.6.21b)
+          // plus the Overview KPI tab.
           can("SettingsShortlistingCommandCenter") && {
             name: "Shortlist · Command Center", href: "SettingsShortlistingCommandCenter", icon: Sparkles,
           },
-          can("SettingsShortlistingRoomTypes") && { name: "Shortlist · Room Types", href: "SettingsShortlistingRoomTypes", icon: Sparkles },
-          can("SettingsShortlistingStandards") && { name: "Shortlist · Standards", href: "SettingsShortlistingStandards", icon: Sparkles },
-          can("SettingsShortlistingSignals") && { name: "Shortlist · Signals", href: "SettingsShortlistingSignals", icon: Sparkles },
-          can("ShortlistingCalibration") && { name: "Shortlist · Calibration", href: "ShortlistingCalibration", icon: Sparkles },
-          can("SettingsShortlistingTraining") && { name: "Shortlist · Training", href: "SettingsShortlistingTraining", icon: Sparkles },
-          can("SettingsShortlistingPrompts") && { name: "Shortlist · Prompts", href: "SettingsShortlistingPrompts", icon: Sparkles },
-          can("SettingsEngineSettings") && { name: "Shortlist · Engine Settings", href: "SettingsEngineSettings", icon: Sparkles },
-          can("SettingsVendorComparison") && { name: "Shortlist · Vendor Comparison", href: "SettingsVendorComparison", icon: Sparkles },
         ].filter(Boolean)
       },
     ].filter(Boolean);

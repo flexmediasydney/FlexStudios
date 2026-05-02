@@ -122,27 +122,27 @@ const SettingsTonomoMappings = React.lazy(() => import('./pages/SettingsTonomoMa
 // SettingsStaffDefaults removed — now a subtab in SettingsTeamsUsers
 const SettingsAI = React.lazy(() => import('./pages/SettingsAI'));
 const ShortlistingCommandCenter = React.lazy(() => import('./pages/ShortlistingCommandCenter'));
-// W11.6.21 hard-cut: SettingsShortlistingSlots rolled into the
-// SettingsShortlistingCommandCenter umbrella as the "slots" tab. The
-// component is still imported (eagerly inside the umbrella file) but the
-// /SettingsShortlistingSlots URL now 404s.
-const SettingsShortlistingRoomTypes = React.lazy(() => import('./pages/SettingsShortlistingRoomTypes'));
-const SettingsShortlistingStandards = React.lazy(() => import('./pages/SettingsShortlistingStandards'));
-const SettingsShortlistingSignals = React.lazy(() => import('./pages/SettingsShortlistingSignals'));
-const ShortlistingCalibration = React.lazy(() => import('./pages/ShortlistingCalibration'));
-const SettingsShortlistingTraining = React.lazy(() => import('./pages/SettingsShortlistingTraining'));
-const SettingsShortlistingOverrides = React.lazy(() => import('./pages/SettingsShortlistingOverrides'));
-const SettingsShortlistingPrompts = React.lazy(() => import('./pages/SettingsShortlistingPrompts'));
-const SettingsEngineSettings = React.lazy(() => import('./pages/SettingsEngineSettings'));
-// W11.6.21 hard-cut: SettingsTierConfigs, SettingsObjectRegistry,
-// SettingsObjectRegistryDiscovery, SettingsAISuggestions,
-// SettingsCalibrationSessions, SettingsEngineOverridePatterns, and
-// SettingsPackageTierMapping have been REMOVED from the PAGES map. Their
-// page components are still imported (eagerly, inside the umbrella file)
-// as tab panels of SettingsShortlistingCommandCenter — but visiting their
-// old URLs (e.g. /SettingsObjectRegistry) now 404s. Internal Link refs
-// have been redirected to /SettingsShortlistingCommandCenter?tab=<key>.
-const SettingsVendorComparison = React.lazy(() => import('./pages/SettingsVendorComparison'));
+// W11.6.21 + W11.6.21b hard-cut: 18 scattered shortlisting-engine settings
+// pages have been folded into the SettingsShortlistingCommandCenter
+// umbrella. Their page components are still imported (eagerly, inside the
+// umbrella file) as tab panels — but visiting their old URLs (e.g.
+// /SettingsObjectRegistry, /SettingsShortlistingRoomTypes,
+// /SettingsVendorComparison) now 404s by design. Internal Link refs have
+// been redirected to /SettingsShortlistingCommandCenter?tab=<key>.
+//
+// Consolidated by W11.6.21:
+//   SettingsTierConfigs, SettingsPackageTierMapping,
+//   SettingsShortlistingSlots, SettingsObjectRegistry,
+//   SettingsObjectRegistryDiscovery, SettingsAISuggestions,
+//   SettingsRejectionReasonsDashboard, SettingsCalibrationSessions,
+//   SettingsEngineOverridePatterns.
+//
+// Consolidated by W11.6.21b:
+//   SettingsShortlistingRoomTypes, SettingsShortlistingStandards,
+//   SettingsShortlistingSignals, ShortlistingCalibration,
+//   SettingsShortlistingTraining, SettingsShortlistingOverrides,
+//   SettingsShortlistingPrompts, SettingsEngineSettings,
+//   SettingsVendorComparison.
 // Wave 11.7.7 / W11.6 — Shape D operator UX surfaces.
 const MasterListingReview = React.lazy(() => import('./pages/MasterListingReview'));
 const Stage4Overrides = React.lazy(() => import('./pages/Stage4Overrides'));
@@ -226,35 +226,39 @@ export const PAGES = {
     "SettingsAI": SettingsAI,
     "SettingsAutomationRules": SettingsAutomationRules,
     "ShortlistingCommandCenter": ShortlistingCommandCenter,
-    // W11.6.21 — umbrella page that hosts the 9 consolidated owner settings
-    // panels (tiers, mappings, slots, registry, suggestions, rejection,
-    // calibration, overrides, discovery) plus a new Overview KPI tab.
+    // W11.6.21 + W11.6.21b — umbrella page hosts 18 consolidated owner
+    // settings panels (overview + 9 W11.6.21 tabs + 9 W11.6.21b tabs).
     "SettingsShortlistingCommandCenter": SettingsShortlistingCommandCenter,
-    "SettingsShortlistingRoomTypes": SettingsShortlistingRoomTypes,
-    "SettingsShortlistingStandards": SettingsShortlistingStandards,
-    "SettingsShortlistingSignals": SettingsShortlistingSignals,
-    "ShortlistingCalibration": ShortlistingCalibration,
-    "SettingsShortlistingTraining": SettingsShortlistingTraining,
-    "SettingsShortlistingOverrides": SettingsShortlistingOverrides,
-    "SettingsShortlistingPrompts": SettingsShortlistingPrompts,
-    "SettingsEngineSettings": SettingsEngineSettings,
-    "SettingsVendorComparison": SettingsVendorComparison,
     "MasterListingReview": MasterListingReview,
     "Stage4Overrides": Stage4Overrides,
     "EngineDashboard": EngineDashboard,
     "CalibrationDashboard": CalibrationDashboard,
     "FinalsQADashboard": FinalsQADashboard,
-    // W11.6.21 hard-cut: the following entries previously lived here but
-    // are now subtabs on SettingsShortlistingCommandCenter. Their old URLs
-    // (/SettingsObjectRegistry etc) 404 by design.
-    //   SettingsTierConfigs              → ?tab=tiers
-    //   SettingsPackageTierMapping       → ?tab=mappings
-    //   SettingsObjectRegistry           → ?tab=registry
-    //   SettingsObjectRegistryDiscovery  → ?tab=discovery
-    //   SettingsAISuggestions            → ?tab=suggestions
-    //   SettingsCalibrationSessions      → ?tab=calibration
-    //   SettingsEngineOverridePatterns   → ?tab=overrides
-    //   SettingsRejectionReasonsDashboard → ?tab=rejection
+    // W11.6.21 + W11.6.21b hard-cut: the following entries previously
+    // lived here but are now subtabs on SettingsShortlistingCommandCenter.
+    // Their old URLs (e.g. /SettingsObjectRegistry,
+    // /SettingsShortlistingRoomTypes, /SettingsVendorComparison) 404 by
+    // design.
+    //   W11.6.21:
+    //     SettingsTierConfigs              → ?tab=tiers
+    //     SettingsPackageTierMapping       → ?tab=mappings
+    //     SettingsShortlistingSlots        → ?tab=slots
+    //     SettingsObjectRegistry           → ?tab=registry
+    //     SettingsObjectRegistryDiscovery  → ?tab=discovery
+    //     SettingsAISuggestions            → ?tab=suggestions
+    //     SettingsCalibrationSessions      → ?tab=calibration
+    //     SettingsEngineOverridePatterns   → ?tab=overrides
+    //     SettingsRejectionReasonsDashboard → ?tab=rejection
+    //   W11.6.21b:
+    //     SettingsShortlistingRoomTypes    → ?tab=roomtypes
+    //     SettingsShortlistingStandards    → ?tab=standards
+    //     SettingsShortlistingSignals      → ?tab=signals
+    //     ShortlistingCalibration          → ?tab=calibration-ops
+    //     SettingsShortlistingTraining     → ?tab=training
+    //     SettingsShortlistingOverrides    → ?tab=overrides-admin
+    //     SettingsShortlistingPrompts      → ?tab=prompts
+    //     SettingsEngineSettings           → ?tab=engine-settings
+    //     SettingsVendorComparison         → ?tab=vendor
     "SocialMedia": SocialMedia,
     "Tasks": Tasks,
     "SettingsClients": SettingsClients,

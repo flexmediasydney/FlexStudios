@@ -778,37 +778,8 @@ export default function SettingsShortlistingSlots() {
   // `eligible_when_engine_roles` array.
   const saveMutation = useMutation({
     mutationFn: async ({ form, isNew, currentRow }) => {
-      if (isNew) {
-        return await api.entities.ShortlistingSlotDefinition.create({
-          slot_id: form.slot_id,
-          display_name: form.display_name.trim(),
-          phase: Number(form.phase),
-          eligible_when_engine_roles: Array.isArray(form.eligible_when_engine_roles)
-            ? form.eligible_when_engine_roles
-            : [],
-          eligible_room_types: form.eligible_room_types,
-          // W11.6.13 — orthogonal SPACE/ZONE eligibility arrays.
-          eligible_space_types: Array.isArray(form.eligible_space_types)
-            ? form.eligible_space_types : [],
-          eligible_zone_focuses: Array.isArray(form.eligible_zone_focuses)
-            ? form.eligible_zone_focuses : [],
-          max_images: Number(form.max_images),
-          min_images: Number(form.min_images),
-          // W11.6.7 P1-4 / P1-5: new constraint fields.
-          lens_class_constraint: form.lens_class_constraint || null,
-          eligible_composition_types: Array.isArray(form.eligible_composition_types) && form.eligible_composition_types.length > 0
-            ? form.eligible_composition_types
-            : null,
-          same_room_as_slot: form.same_room_as_slot || null,
-          notes: form.notes?.trim() || null,
-          version: 1,
-          is_active: true,
-        });
-      }
-
-      // Insert NEW row for the same slot_id with version+1.
-      const nextVersion = (currentRow?.version ?? 0) + 1;
-      const newRow = await api.entities.ShortlistingSlotDefinition.create({
+      // W11.6.22 — common slot row payload (selection_mode + standard fields).
+      const slotPayload = {
         slot_id: form.slot_id,
         display_name: form.display_name.trim(),
         phase: Number(form.phase),
@@ -829,29 +800,95 @@ export default function SettingsShortlistingSlots() {
           ? form.eligible_composition_types
           : null,
         same_room_as_slot: form.same_room_as_slot || null,
+        // W11.6.22 — selection_mode column.
+        selection_mode: form.selection_mode === "curated_positions"
+          ? "curated_positions"
+          : "ai_decides",
         notes: form.notes?.trim() || null,
-        version: nextVersion,
-        is_active: true,
-      });
+      };
 
-      // Deactivate previous active row.
-      if (currentRow?.id) {
-        try {
-          await api.entities.ShortlistingSlotDefinition.update(currentRow.id, {
-            is_active: false,
-          });
-        } catch (err) {
-          // Roll back the inserted row to keep the table consistent.
+      let newRow;
+      if (isNew) {
+        newRow = await api.entities.ShortlistingSlotDefinition.create({
+          ...slotPayload,
+          version: 1,
+          is_active: true,
+        });
+      } else {
+        // Insert NEW row for the same slot_id with version+1.
+        const nextVersion = (currentRow?.version ?? 0) + 1;
+        newRow = await api.entities.ShortlistingSlotDefinition.create({
+          ...slotPayload,
+          version: nextVersion,
+          is_active: true,
+        });
+
+        // Deactivate previous active row.
+        if (currentRow?.id) {
           try {
-            await api.entities.ShortlistingSlotDefinition.delete(newRow.id);
-          } catch {
-            /* ignore — at least we'll alert */
+            await api.entities.ShortlistingSlotDefinition.update(currentRow.id, {
+              is_active: false,
+            });
+          } catch (err) {
+            try {
+              await api.entities.ShortlistingSlotDefinition.delete(newRow.id);
+            } catch {
+              /* ignore — at least we'll alert */
+            }
+            throw new Error(
+              `Failed to deactivate previous version: ${err.message}`,
+            );
           }
-          throw new Error(
-            `Failed to deactivate previous version: ${err.message}`,
-          );
         }
       }
+
+      // W11.6.22 — persist curated positions. position_preferences is keyed
+      // by slot_id (not version_id) so a single row set serves every version.
+      // Strategy: delete-prior + bulk-insert the current editor state.
+      const positions = Array.isArray(form.curated_positions)
+        ? form.curated_positions
+        : [];
+      try {
+        const existing = await api.entities.ShortlistingSlotPositionPreference.filter(
+          { slot_id: form.slot_id },
+          null,
+          500,
+        );
+        for (const r of existing || []) {
+          try {
+            await api.entities.ShortlistingSlotPositionPreference.delete(r.id);
+          } catch {
+            /* best-effort */
+          }
+        }
+      } catch {
+        /* If filter fails (RLS / 404), proceed to inserts */
+      }
+      if (form.selection_mode === "curated_positions") {
+        // Re-index 1..N to enforce UNIQUE (slot_id, position_index) regardless
+        // of drag-reorder churn.
+        for (let i = 0; i < positions.length; i++) {
+          const p = positions[i];
+          await api.entities.ShortlistingSlotPositionPreference.create({
+            slot_id: form.slot_id,
+            position_index: i + 1,
+            display_label: p.display_label.trim(),
+            preferred_composition_type: p.preferred_composition_type || null,
+            preferred_zone_focus: p.preferred_zone_focus || null,
+            preferred_space_type: p.preferred_space_type || null,
+            preferred_lighting_state: p.preferred_lighting_state || null,
+            preferred_image_type: p.preferred_image_type || null,
+            preferred_signal_emphasis: Array.isArray(p.preferred_signal_emphasis)
+              ? p.preferred_signal_emphasis
+              : [],
+            is_required: Boolean(p.is_required),
+            ai_backfill_on_gap: Boolean(p.ai_backfill_on_gap),
+          });
+        }
+      }
+      // selection_mode='ai_decides' falls through with stale rows already
+      // purged so a flip back from curated to ai_decides doesn't keep
+      // surfacing curated positions in Stage 4 prompts.
 
       return newRow;
     },

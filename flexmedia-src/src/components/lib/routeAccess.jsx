@@ -39,20 +39,14 @@ export const ROUTE_ACCESS = {
   AdminDroneThemes: OWNER_ONLY, // global system theme — master_admin only
 
   // ── SHORTLISTING MODULE ───────────────────────────────────
-  // W11.6.21 hard-cut: 9 scattered owner settings pages have been folded
-  // into the SettingsShortlistingCommandCenter umbrella. The old route
-  // entries have been REMOVED (no redirect compatibility — pages.config.js
-  // no longer maps them, so direct URLs 404 by design).
+  // W11.6.21  — first hard-cut: 9 scattered owner settings pages folded
+  //             into SettingsShortlistingCommandCenter umbrella.
+  // W11.6.21b — second hard-cut: 9 MORE pages folded in (room types,
+  //             standards, signals, calibration-ops, training,
+  //             overrides-admin, prompts, engine-settings, vendor).
+  // No redirect compatibility — pages.config.js no longer maps these,
+  // so direct URLs 404 by design.
   ShortlistingCommandCenter: ADMIN_AND_ABOVE,
-  SettingsShortlistingRoomTypes: OWNER_ONLY,
-  SettingsShortlistingStandards: OWNER_ONLY,
-  SettingsShortlistingSignals: OWNER_ONLY,
-  ShortlistingCalibration: OWNER_ONLY,
-  SettingsShortlistingTraining: OWNER_ONLY,
-  SettingsShortlistingOverrides: OWNER_ONLY,
-  SettingsShortlistingPrompts: OWNER_ONLY,
-  SettingsEngineSettings: OWNER_ONLY,
-  SettingsVendorComparison: OWNER_ONLY,
   // Wave 11.7.7 / W11.6 — Shape D operator UX surfaces.
   MasterListingReview: ADMIN_AND_ABOVE,
   Stage4Overrides: ADMIN_AND_ABOVE,
@@ -61,13 +55,19 @@ export const ROUTE_ACCESS = {
   CalibrationDashboard: OWNER_ONLY,
   // Wave 15a — internal finals scoring QA dashboard.
   FinalsQADashboard: OWNER_ONLY,
-  // W11.6.21 — Shortlisting Command Center umbrella.
-  // Subsumes: SettingsTierConfigs, SettingsPackageTierMapping,
-  // SettingsObjectRegistry, SettingsObjectRegistryDiscovery,
-  // SettingsAISuggestions, SettingsRejectionReasonsDashboard,
-  // SettingsCalibrationSessions, SettingsEngineOverridePatterns.
-  // Slots tab already routes through the existing SettingsShortlistingSlots
-  // component (which we keep mounted as a sub-tab).
+  // W11.6.21 + W11.6.21b — Shortlisting Command Center umbrella.
+  // Subsumes:
+  //   W11.6.21:  SettingsTierConfigs, SettingsPackageTierMapping,
+  //              SettingsShortlistingSlots, SettingsObjectRegistry,
+  //              SettingsObjectRegistryDiscovery, SettingsAISuggestions,
+  //              SettingsRejectionReasonsDashboard,
+  //              SettingsCalibrationSessions,
+  //              SettingsEngineOverridePatterns.
+  //   W11.6.21b: SettingsShortlistingRoomTypes, SettingsShortlistingStandards,
+  //              SettingsShortlistingSignals, ShortlistingCalibration,
+  //              SettingsShortlistingTraining, SettingsShortlistingOverrides,
+  //              SettingsShortlistingPrompts, SettingsEngineSettings,
+  //              SettingsVendorComparison.
   SettingsShortlistingCommandCenter: OWNER_ONLY,
 
   // ── CONTACTS & CRM (manager+) ────────────────────────────

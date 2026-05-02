@@ -164,7 +164,7 @@ function SectionCTierConfigTracker({data,daysBack}){
         </li>
       ))}</ul>)}
     <div className="mt-3 text-[11px]">
-      <Link to="/SettingsEngineSettings" className="text-blue-700 dark:text-blue-400 hover:underline inline-flex items-center gap-1">
+      <Link to="/SettingsShortlistingCommandCenter?tab=engine-settings" className="text-blue-700 dark:text-blue-400 hover:underline inline-flex items-center gap-1">
         Open Engine Settings<ChevronRight className="h-3 w-3"/></Link>
     </div>
   </CardContent></Card>);

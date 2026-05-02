@@ -1,9 +1,9 @@
 /**
- * SettingsShortlistingCommandCenter — vitest suite (W11.6.21).
+ * SettingsShortlistingCommandCenter — vitest suite (W11.6.21 + W11.6.21b).
  *
  * Coverage:
  *   1. Route gate: registered + master_admin only (admin/manager/etc denied).
- *   2. Page renders all 10 tab triggers for master_admin.
+ *   2. Page renders all 19 tab triggers for master_admin.
  *   3. Default tab is "overview".
  *   4. URL ?tab=registry opens the Object Registry tab.
  *   5. resolveActiveTab pure helper handles unknown / missing input.
@@ -12,6 +12,13 @@
  *   8. fmtUsd / fmtPct / fmtCount edge cases.
  *   9. summariseCalibrationStatuses formats correctly.
  *  10. Hard-cut: old standalone routes are no longer in ROUTE_ACCESS.
+ *  11. W11.6.21b new tabs render without crashing (room types, standards,
+ *      signals, calibration-ops, training, overrides-admin, prompts,
+ *      engine-settings, vendor).
+ *  12. W11.6.21b hard-cut: 9 additional standalone routes removed
+ *      (room types ... vendor).
+ *  13. Tab-key disambiguation: `calibration` vs `calibration-ops` and
+ *      `overrides` vs `overrides-admin` resolve to distinct tabs.
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -73,7 +80,14 @@ vi.mock("sonner", () => ({
 // stub so the umbrella's render doesn't fail when one of those pages
 // imports useActivePackages etc.
 vi.mock("@/hooks/useActivePackages", () => ({
-  useActivePackages: () => ({ data: [], isLoading: false, error: null }),
+  // The hook returns { names: string[], isLoading, error } per
+  // src/hooks/useActivePackages.js — the consumers destructure `names`.
+  useActivePackages: () => ({
+    names: [],
+    data: [],
+    isLoading: false,
+    error: null,
+  }),
 }));
 
 import SettingsShortlistingCommandCenter, {
@@ -124,6 +138,7 @@ describe("SettingsShortlistingCommandCenter — route access", () => {
 // ── 2. Hard-cut: old routes have been removed ──────────────────────────────
 describe("W11.6.21 hard-cut — old standalone routes removed", () => {
   const consolidatedRoutes = [
+    // W11.6.21 (first sweep)
     "SettingsTierConfigs",
     "SettingsPackageTierMapping",
     "SettingsShortlistingSlots",
@@ -133,6 +148,16 @@ describe("W11.6.21 hard-cut — old standalone routes removed", () => {
     "SettingsRejectionReasonsDashboard",
     "SettingsCalibrationSessions",
     "SettingsEngineOverridePatterns",
+    // W11.6.21b (second sweep)
+    "SettingsShortlistingRoomTypes",
+    "SettingsShortlistingStandards",
+    "SettingsShortlistingSignals",
+    "ShortlistingCalibration",
+    "SettingsShortlistingTraining",
+    "SettingsShortlistingOverrides",
+    "SettingsShortlistingPrompts",
+    "SettingsEngineSettings",
+    "SettingsVendorComparison",
   ];
 
   for (const r of consolidatedRoutes) {
@@ -148,16 +173,26 @@ describe("W11.6.21 hard-cut — old standalone routes removed", () => {
       expect(canAccessRoute(r, "manager")).toBe(false);
     }
   });
+
+  it("unlisted consolidated routes are NOT in the PAGES map", async () => {
+    // Simulates a hard 404 — App.jsx/RouteGuard look up the route name in
+    // PAGES; missing key → no React route mounted → URL falls through.
+    const { PAGES } = await import("@/pages.config");
+    for (const r of consolidatedRoutes) {
+      expect(PAGES).not.toHaveProperty(r);
+    }
+  });
 });
 
-// ── 3. Page render — 10 tabs ───────────────────────────────────────────────
+// ── 3. Page render — 19 tabs ───────────────────────────────────────────────
 describe("SettingsShortlistingCommandCenter — render", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("renders all 10 tab triggers", () => {
+  it("renders all 19 tab triggers (W11.6.21 ten + W11.6.21b nine)", () => {
     renderPage();
+    // W11.6.21
     expect(screen.getByTestId("tab-overview")).toBeTruthy();
     expect(screen.getByTestId("tab-tiers")).toBeTruthy();
     expect(screen.getByTestId("tab-mappings")).toBeTruthy();
@@ -168,6 +203,16 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     expect(screen.getByTestId("tab-calibration")).toBeTruthy();
     expect(screen.getByTestId("tab-overrides")).toBeTruthy();
     expect(screen.getByTestId("tab-discovery")).toBeTruthy();
+    // W11.6.21b
+    expect(screen.getByTestId("tab-roomtypes")).toBeTruthy();
+    expect(screen.getByTestId("tab-standards")).toBeTruthy();
+    expect(screen.getByTestId("tab-signals")).toBeTruthy();
+    expect(screen.getByTestId("tab-calibration-ops")).toBeTruthy();
+    expect(screen.getByTestId("tab-training")).toBeTruthy();
+    expect(screen.getByTestId("tab-overrides-admin")).toBeTruthy();
+    expect(screen.getByTestId("tab-prompts")).toBeTruthy();
+    expect(screen.getByTestId("tab-engine-settings")).toBeTruthy();
+    expect(screen.getByTestId("tab-vendor")).toBeTruthy();
   });
 
   it("default tab is overview when no ?tab= query param", () => {
@@ -178,6 +223,28 @@ describe("SettingsShortlistingCommandCenter — render", () => {
   it("?tab=invalid_value falls back to overview", () => {
     renderPage("/SettingsShortlistingCommandCenter?tab=NOT_A_REAL_TAB");
     expect(screen.getByTestId("overview-tab")).toBeTruthy();
+  });
+
+  // ── W11.6.21b: each new tab mounts without crashing ───────────────────
+  // Mounting the umbrella with each ?tab= deep-link is the cheapest way
+  // to verify the tab routes don't throw at import or render time.
+  it.each([
+    ["roomtypes"],
+    ["standards"],
+    ["signals"],
+    ["calibration-ops"],
+    ["training"],
+    ["overrides-admin"],
+    ["prompts"],
+    ["engine-settings"],
+    ["vendor"],
+  ])("?tab=%s mounts the umbrella without crashing", (key) => {
+    renderPage(`/SettingsShortlistingCommandCenter?tab=${key}`);
+    expect(
+      screen.getByTestId("settings-shortlisting-command-center"),
+    ).toBeTruthy();
+    // The trigger for the requested tab is present (active state).
+    expect(screen.getByTestId(`tab-${key}`)).toBeTruthy();
   });
 });
 
@@ -197,8 +264,9 @@ describe("resolveActiveTab", () => {
     expect(resolveActiveTab(42)).toBe("overview");
   });
 
-  it("VALID_TABS exports the expected set", () => {
+  it("VALID_TABS exports the expected 19-entry set (W11.6.21 + W11.6.21b)", () => {
     expect(VALID_TABS).toEqual([
+      // W11.6.21
       "overview",
       "tiers",
       "mappings",
@@ -209,7 +277,49 @@ describe("resolveActiveTab", () => {
       "calibration",
       "overrides",
       "discovery",
+      // W11.6.21b
+      "roomtypes",
+      "standards",
+      "signals",
+      "calibration-ops",
+      "training",
+      "overrides-admin",
+      "prompts",
+      "engine-settings",
+      "vendor",
     ]);
+  });
+
+  it("W11.6.21b new tabs resolve via resolveActiveTab", () => {
+    expect(resolveActiveTab("roomtypes")).toBe("roomtypes");
+    expect(resolveActiveTab("standards")).toBe("standards");
+    expect(resolveActiveTab("signals")).toBe("signals");
+    expect(resolveActiveTab("calibration-ops")).toBe("calibration-ops");
+    expect(resolveActiveTab("training")).toBe("training");
+    expect(resolveActiveTab("overrides-admin")).toBe("overrides-admin");
+    expect(resolveActiveTab("prompts")).toBe("prompts");
+    expect(resolveActiveTab("engine-settings")).toBe("engine-settings");
+    expect(resolveActiveTab("vendor")).toBe("vendor");
+  });
+
+  it("calibration vs calibration-ops are distinct (W11.6.21b disambiguation)", () => {
+    expect(resolveActiveTab("calibration")).toBe("calibration");
+    expect(resolveActiveTab("calibration-ops")).toBe("calibration-ops");
+    expect(resolveActiveTab("calibration")).not.toBe(
+      resolveActiveTab("calibration-ops"),
+    );
+  });
+
+  it("overrides vs overrides-admin are distinct (W11.6.21b disambiguation)", () => {
+    expect(resolveActiveTab("overrides")).toBe("overrides");
+    expect(resolveActiveTab("overrides-admin")).toBe("overrides-admin");
+    expect(resolveActiveTab("overrides")).not.toBe(
+      resolveActiveTab("overrides-admin"),
+    );
+  });
+
+  it("VALID_TABS has no duplicates", () => {
+    expect(new Set(VALID_TABS).size).toBe(VALID_TABS.length);
   });
 });
 
@@ -331,5 +441,37 @@ describe("summariseCalibrationStatuses", () => {
       completed: 1,
     });
     expect(result).toBe("4 editor_phase · 1 completed");
+  });
+});
+
+// ── 8. W11.6.21b — internal-link redirect verification ─────────────────────
+// Two `<Link to=...>` references inside engine pages were updated to point
+// at the umbrella with the right ?tab= query. Static-source assertions
+// guard against regressions where someone restores the old standalone URL.
+describe("W11.6.21b — internal-link redirects", () => {
+  it("EngineDashboard links to overrides-admin via the umbrella", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const file = await fs.readFile(
+      path.resolve(__dirname, "../EngineDashboard.jsx"),
+      "utf8",
+    );
+    expect(file).toContain(
+      "/SettingsShortlistingCommandCenter?tab=overrides-admin",
+    );
+    expect(file).not.toMatch(/to="\/SettingsShortlistingOverrides"/);
+  });
+
+  it("SettingsEngineOverridePatterns links to engine-settings via the umbrella", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const file = await fs.readFile(
+      path.resolve(__dirname, "../SettingsEngineOverridePatterns.jsx"),
+      "utf8",
+    );
+    expect(file).toContain(
+      "/SettingsShortlistingCommandCenter?tab=engine-settings",
+    );
+    expect(file).not.toMatch(/to="\/SettingsEngineSettings"/);
   });
 });
