@@ -153,7 +153,7 @@ async function runPersist(
     projectId: PROJECT_ID,
     // deno-lint-ignore no-explicit-any
     result: baseResult(out) as any,
-    promptBlockVersions: { stage1: 'v2.3' },
+    promptBlockVersions: { stage1: 'v2.4' },
     modelVersion: 'gemini-2.5-pro',
     // deno-lint-ignore no-explicit-any
     composition: baseCompositionRow() as any,
@@ -166,45 +166,61 @@ async function runPersist(
 
 // ─── Schema-level assertions (Piece 1) ───────────────────────────────────────
 
-Deno.test('hotfix-5: UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION bumped to v2.3', () => {
-  assertStrictEquals(UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION, 'v2.3');
+Deno.test('schema version bumped to v2.4 (closed-enum drop)', () => {
+  // v2.3 (W11.7.17 hotfix-5) declared space_type / zone_focus with closed
+  // enums. v2.4 (commit 9325f46, 2026-05-02) drops those enums to fit
+  // Gemini's schema state-count limit; canonical lists are now taught via
+  // the property `description` instead. See universalVisionResponseSchemaV2.ts
+  // for the rationale block.
+  assertStrictEquals(UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION, 'v2.4');
 });
 
-Deno.test('hotfix-5: schema declares space_type with the canonical enum', () => {
-  // Walk all 4 source variants — every variant must carry the new field.
+Deno.test('schema declares space_type with canonical taxonomy in description (no closed enum)', () => {
+  // v2.4: `enum: [...SPACE_TYPE_OPTIONS]` was dropped from the responseSchema
+  // because the cumulative state count tipped Gemini's serving threshold.
+  // The canonical list is now embedded in the property `description` and the
+  // persistence layer's normalisation handles drift. We assert the field is
+  // declared as a string AND the description contains a representative slice
+  // of the canonical taxonomy so the model is still taught the closed list.
   for (const src of ['internal_raw', 'internal_finals', 'external_listing', 'floorplan_image'] as const) {
     const schema = universalSchemaForSource(src);
     const props = (schema as { properties: Record<string, unknown> }).properties;
     if (!('space_type' in props)) {
       throw new Error(`space_type missing from ${src} variant`);
     }
-    const st = props.space_type as { type?: string; enum?: string[] };
+    const st = props.space_type as { type?: string; enum?: string[]; description?: string };
     assertStrictEquals(st.type, 'string', `space_type.type should be string in ${src}`);
-    if (!Array.isArray(st.enum) || st.enum.length === 0) {
-      throw new Error(`space_type.enum missing/empty in ${src}`);
+    if (st.enum !== undefined) {
+      throw new Error(`space_type.enum should be DROPPED in v2.4 (${src})`);
     }
-    // Smoke check a handful of canonical entries — ensures the enum is wired
-    // to SPACE_TYPE_OPTIONS, not some divergent ad-hoc list.
-    if (!st.enum.includes('master_bedroom') || !st.enum.includes('kitchen_dedicated')) {
-      throw new Error(`space_type.enum does not look like SPACE_TYPE_OPTIONS in ${src}`);
+    if (typeof st.description !== 'string' || st.description.length < 50) {
+      throw new Error(`space_type.description must teach the taxonomy in v2.4 (${src})`);
+    }
+    // Description must reference enough canonical SPACE_TYPE_OPTIONS values
+    // that the model has the closed list to pick from.
+    if (!st.description.includes('master_bedroom') || !st.description.includes('kitchen_dedicated')) {
+      throw new Error(`space_type.description does not embed canonical SPACE_TYPE_OPTIONS in ${src}`);
     }
   }
 });
 
-Deno.test('hotfix-5: schema declares zone_focus with the canonical enum', () => {
+Deno.test('schema declares zone_focus with canonical taxonomy in description (no closed enum)', () => {
   for (const src of ['internal_raw', 'internal_finals', 'external_listing', 'floorplan_image'] as const) {
     const schema = universalSchemaForSource(src);
     const props = (schema as { properties: Record<string, unknown> }).properties;
     if (!('zone_focus' in props)) {
       throw new Error(`zone_focus missing from ${src} variant`);
     }
-    const zf = props.zone_focus as { type?: string; enum?: string[] };
+    const zf = props.zone_focus as { type?: string; enum?: string[]; description?: string };
     assertStrictEquals(zf.type, 'string', `zone_focus.type should be string in ${src}`);
-    if (!Array.isArray(zf.enum) || zf.enum.length === 0) {
-      throw new Error(`zone_focus.enum missing/empty in ${src}`);
+    if (zf.enum !== undefined) {
+      throw new Error(`zone_focus.enum should be DROPPED in v2.4 (${src})`);
     }
-    if (!zf.enum.includes('bed_focal') || !zf.enum.includes('kitchen_island')) {
-      throw new Error(`zone_focus.enum does not look like ZONE_FOCUS_OPTIONS in ${src}`);
+    if (typeof zf.description !== 'string' || zf.description.length < 50) {
+      throw new Error(`zone_focus.description must teach the taxonomy in v2.4 (${src})`);
+    }
+    if (!zf.description.includes('bed_focal') || !zf.description.includes('kitchen_island')) {
+      throw new Error(`zone_focus.description does not embed canonical ZONE_FOCUS_OPTIONS in ${src}`);
     }
   }
 });
