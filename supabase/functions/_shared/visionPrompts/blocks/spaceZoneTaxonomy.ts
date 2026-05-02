@@ -25,23 +25,83 @@ export interface SpaceZoneTaxonomyBlockOpts {
   // empty — no inputs today; future iterations may scope by property type
 }
 
-const SPACE_TAXONOMY =
-  `master_bedroom | bedroom_secondary | bedroom_third | living_dining_combined | ` +
-  `living_room_dedicated | dining_room_dedicated | kitchen_dining_living_combined | ` +
-  `kitchen_dedicated | studio_open_plan | bathroom | ensuite | powder_room | ` +
-  `entry_foyer | hallway | study | media_room | rumpus | laundry | mudroom | garage | ` +
-  `alfresco_undercover | alfresco_open | balcony | terrace | exterior_facade | ` +
-  `exterior_rear | exterior_side | pool_area | garden | streetscape | ` +
-  `aerial_oblique | aerial_nadir`;
+/**
+ * W11.6.22 — exported canonical lists. The curated-position editor in
+ * SettingsShortlistingSlots imports SPACE_TYPE_OPTIONS / ZONE_FOCUS_OPTIONS
+ * to populate dropdown values without duplicating the vocabulary on the
+ * frontend. Prompt strings below derive from these arrays via .join().
+ */
+export const SPACE_TYPE_OPTIONS = [
+  'master_bedroom',
+  'bedroom_secondary',
+  'bedroom_third',
+  'living_dining_combined',
+  'living_room_dedicated',
+  'dining_room_dedicated',
+  'kitchen_dining_living_combined',
+  'kitchen_dedicated',
+  'studio_open_plan',
+  'bathroom',
+  'ensuite',
+  'powder_room',
+  'entry_foyer',
+  'hallway',
+  'study',
+  'media_room',
+  'rumpus',
+  'laundry',
+  'mudroom',
+  'garage',
+  'alfresco_undercover',
+  'alfresco_open',
+  'balcony',
+  'terrace',
+  'exterior_facade',
+  'exterior_rear',
+  'exterior_side',
+  'pool_area',
+  'garden',
+  'streetscape',
+  'aerial_oblique',
+  'aerial_nadir',
+] as const;
+export type SpaceTypeOption = typeof SPACE_TYPE_OPTIONS[number];
 
-const ZONE_FOCUS_TAXONOMY =
-  `bed_focal | wardrobe_built_in | dining_table | kitchen_island | ` +
-  `kitchen_appliance_wall | kitchen_pantry | lounge_seating | fireplace_focal | ` +
-  `study_desk | tv_media_wall | bath_focal | shower_focal | vanity_detail | ` +
-  `toilet_visible | window_view | door_threshold | stair_focal | feature_wall | ` +
-  `ceiling_detail | floor_detail | material_proof | landscape_overview | ` +
-  `full_facade | pool_focal | outdoor_dining | outdoor_kitchen | bbq_zone | ` +
-  `drying_zone | parking_zone`;
+export const ZONE_FOCUS_OPTIONS = [
+  'bed_focal',
+  'wardrobe_built_in',
+  'dining_table',
+  'kitchen_island',
+  'kitchen_appliance_wall',
+  'kitchen_pantry',
+  'lounge_seating',
+  'fireplace_focal',
+  'study_desk',
+  'tv_media_wall',
+  'bath_focal',
+  'shower_focal',
+  'vanity_detail',
+  'toilet_visible',
+  'window_view',
+  'door_threshold',
+  'stair_focal',
+  'feature_wall',
+  'ceiling_detail',
+  'floor_detail',
+  'material_proof',
+  'landscape_overview',
+  'full_facade',
+  'pool_focal',
+  'outdoor_dining',
+  'outdoor_kitchen',
+  'bbq_zone',
+  'drying_zone',
+  'parking_zone',
+] as const;
+export type ZoneFocusOption = typeof ZONE_FOCUS_OPTIONS[number];
+
+const SPACE_TAXONOMY = SPACE_TYPE_OPTIONS.join(' | ');
+const ZONE_FOCUS_TAXONOMY = ZONE_FOCUS_OPTIONS.join(' | ');
 
 export function spaceZoneTaxonomyBlock(_opts?: SpaceZoneTaxonomyBlockOpts): string {
   return [

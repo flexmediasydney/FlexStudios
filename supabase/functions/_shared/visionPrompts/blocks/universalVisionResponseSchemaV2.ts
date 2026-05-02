@@ -200,6 +200,47 @@ export const UNIVERSAL_SIGNAL_KEYS = [
 export type UniversalSignalKey = typeof UNIVERSAL_SIGNAL_KEYS[number];
 
 /**
+ * W11.6.22 — image_type 11-option enum (Q1 binding from this schema).
+ *
+ * Exported as a frozen array so the per-slot curated-position editor in
+ * SettingsShortlistingSlots can render the dropdown without re-declaring
+ * the list. Mirrors the inline `image_type` description in
+ * UNIVERSAL_CORE_PROPERTIES below — DO NOT diverge.
+ */
+export const IMAGE_TYPE_OPTIONS = [
+  'is_day',
+  'is_dusk',
+  'is_drone',
+  'is_agent_headshot',
+  'is_test_shot',
+  'is_bts',
+  'is_floorplan',
+  'is_video_frame',
+  'is_detail_shot',
+  'is_facade_hero',
+  'is_other',
+] as const;
+export type ImageTypeOption = typeof IMAGE_TYPE_OPTIONS[number];
+
+/**
+ * W11.6.22 — lighting_state 4-option enum (Q2 binding).
+ *
+ * Stage 1's `image_classification.is_dusk/is_day/is_golden_hour/is_night`
+ * booleans roll up into one of these states. The curated-position editor
+ * surfaces them as a dropdown for `preferred_lighting_state`.
+ *
+ * `golden_hour` is intentionally absent — it's a sub-state of either day
+ * or dusk surfaced via signal scores, not as a top-level lighting_state.
+ */
+export const LIGHTING_STATE_OPTIONS = [
+  'day',
+  'dusk',
+  'twilight',
+  'night',
+] as const;
+export type LightingStateOption = typeof LIGHTING_STATE_OPTIONS[number];
+
+/**
  * Mapping of each signal to its rollup dimension. Used by
  * `_shared/dimensionRollup.ts:computeAggregateScores` to produce the 4
  * aggregate axis scores from the 26 underlying signals.

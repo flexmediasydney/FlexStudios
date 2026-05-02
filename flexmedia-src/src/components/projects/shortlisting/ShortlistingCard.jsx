@@ -456,6 +456,44 @@ export default function ShortlistingCard({
     avgScore != null &&
     slotFitScore - Number(avgScore) > 2.0;
 
+  // W11.6.22 — curated position metadata (position_index + position_filled_via)
+  // from the same shortlisting_overrides row that surfaces slot_fit_score.
+  // Both fields are NULL on legacy ai_decides slots → curatedPosition stays
+  // null and the chip never renders. Direct match-by-card-id first, then fall
+  // back to ai_proposed_slot_id for swap cases (mirrors stage4SlotRationale
+  // and slotFitScore lookup semantics).
+  const curatedPosition = (() => {
+    const rows = overridesQuery.data || [];
+    if (!rows.length) return null;
+    const pickRow = (row) => {
+      if (!row) return null;
+      const idx = row.position_index;
+      const via = row.position_filled_via;
+      if (idx == null && via == null) return null;
+      return {
+        position_index: typeof idx === "number" ? idx : null,
+        position_filled_via:
+          via === "curated_match" || via === "ai_backfill" ? via : null,
+      };
+    };
+    const direct = rows.find(
+      (ov) =>
+        ov.human_action === "ai_proposed" && ov.ai_proposed_group_id === cardId,
+    );
+    const fromDirect = pickRow(direct);
+    if (fromDirect) return fromDirect;
+    if (slot?.slot_id) {
+      const slotRow = rows.find(
+        (ov) =>
+          ov.human_action === "ai_proposed" &&
+          ov.ai_proposed_slot_id === slot.slot_id,
+      );
+      const fromSlot = pickRow(slotRow);
+      if (fromSlot) return fromSlot;
+    }
+    return null;
+  })();
+
   const previewPath = c.dropbox_preview_path;
 
   const toggleWhy = (e) => {
@@ -677,6 +715,32 @@ export default function ShortlistingCard({
               <span className="text-[9px] text-muted-foreground">
                 phase {slot.phase}
               </span>
+            )}
+            {/* W11.6.22 — curated position chip. Only renders when the slot
+                used selection_mode='curated_positions' (Stage 4 emitted
+                position_index + position_filled_via). Gold for curated_match,
+                amber for ai_backfill — matches the swimlane's existing
+                slot/voice toolbar chip vocabulary. */}
+            {curatedPosition?.position_index != null && (
+              <Badge
+                variant="outline"
+                data-testid="curated-position-chip"
+                data-position-filled-via={curatedPosition.position_filled_via ?? "unknown"}
+                className={cn(
+                  "text-[9px] h-4 px-1.5 font-medium",
+                  curatedPosition.position_filled_via === "ai_backfill"
+                    ? "border-amber-400 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+                    : "border-yellow-500 bg-yellow-50 text-yellow-800 dark:bg-yellow-950/30 dark:text-yellow-300",
+                )}
+                title={
+                  curatedPosition.position_filled_via === "ai_backfill"
+                    ? `Position ${curatedPosition.position_index} — AI backfill (no candidate matched the curated criteria)`
+                    : `Position ${curatedPosition.position_index} — curated match`
+                }
+              >
+                Position {curatedPosition.position_index}
+                {curatedPosition.position_filled_via === "ai_backfill" ? " · AI" : ""}
+              </Badge>
             )}
           </div>
         )}
