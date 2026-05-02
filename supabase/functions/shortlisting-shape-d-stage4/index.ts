@@ -111,7 +111,16 @@ import {
 import {
   normaliseSlotId,
   SLOT_ENUMERATION_BLOCK_VERSION,
+  // QC-iter2-W3 F-D-007: actually USE the block (was imported for the audit
+  // version map only; the rendered text was never injected into Stage 4's
+  // prompt — model was picking slots blind beyond the enum constraint).
+  slotEnumerationBlock,
 } from '../_shared/visionPrompts/blocks/slotEnumeration.ts';
+import {
+  resolveProjectEngineRoles as resolveProjectEngineRolesPure,
+} from '../_shared/projectEngineRoles.ts';
+import type { ProductRow } from '../_shared/slotEligibility.ts';
+import type { Pass2SlotDefinition } from '../_shared/pass2Prompt.ts';
 
 const GENERATOR = 'shortlisting-shape-d-stage4';
 
@@ -173,6 +182,13 @@ interface RoundContext {
   property_voice_anchor_override: string | null;
   dropbox_root_path: string;
   property_facts: PropertyFacts;
+  // QC-iter2-W3 F-D-007: round-level package info needed to render the
+  // slotEnumerationBlock preamble (which the Stage 4 user prompt is now
+  // wired to include). package_ceiling falls back to expected_count_target
+  // when the legacy column is null.
+  package_type: string;
+  package_ceiling: number;
+  property_address: string | null;
 }
 
 interface EngineSettings {
@@ -568,6 +584,36 @@ async function runStage4Core(
     // "safe to wire unconditionally").
     const canonicalRegistryText = await canonicalRegistryBlock();
 
+    // QC-iter2-W3 F-D-007: load slot definitions for this round and render
+    // the slotEnumerationBlock preamble (PHASE 1 / 2 / 3 + per-position
+    // curated rows + package ceiling). Stage 4 was previously emitting
+    // slot_decisions[] without seeing the slot lattice — only the schema's
+    // closed enum constrained it, so it was picking heroes blind from the
+    // taxonomy. With the block wired in, the model sees the same context
+    // the benchmark-runner gives Pass 2.
+    let slotEnumerationText = '';
+    try {
+      const { slots, engineRoles } = await loadSlotDefinitionsForRound(
+        admin,
+        ctx.project_id,
+      );
+      slotEnumerationText = slotEnumerationBlock({
+        propertyAddress: ctx.property_address,
+        packageType: ctx.package_type,
+        packageDisplayName: ctx.package_type,
+        packageCeiling: ctx.package_ceiling,
+        pricingTier: ctx.property_tier,
+        engineRoles,
+        totalCompositions: stage1Merged.length,
+        slotDefinitions: slots,
+      });
+    } catch (slotErr) {
+      const msg = slotErr instanceof Error ? slotErr.message : String(slotErr);
+      // Non-fatal — Stage 4 still has the canonical-enum constraint on
+      // slot_id. Surface the failure as a warning so ops can see it.
+      warnings.push(`slotEnumerationBlock load failed: ${msg}`);
+    }
+
     const systemText = [
       buildStage4SystemPrompt(),
       '',
@@ -591,17 +637,22 @@ async function runStage4Core(
       imageStemsInOrder: previews.map((p) => p.stem),
       totalImages: previews.length,
     });
-    // Append canonical registry block at the END of user_text so it's the
-    // last cross-project vocabulary the model reads before emitting JSON.
-    // Empty registry → block returns '' and we skip the section entirely.
+    // QC-iter2-W3 F-D-007: prepend the slotEnumerationBlock preamble before
+    // the rest of the user prompt. Sits BEFORE property facts + Stage 1
+    // enrichment so the model reads "here's the slot lattice + ceiling"
+    // before reasoning about which images fill which slots. Append canonical
+    // registry block at the END (unchanged).
+    const userPromptWithSlots = slotEnumerationText.length > 0
+      ? [slotEnumerationText, '', userPromptCore].join('\n')
+      : userPromptCore;
     const userText = canonicalRegistryText.length > 0
       ? [
-          userPromptCore,
+          userPromptWithSlots,
           '',
           '── CANONICAL FEATURE REGISTRY (W12) ──',
           canonicalRegistryText,
         ].join('\n')
-      : userPromptCore;
+      : userPromptWithSlots;
 
     // Call Gemini vision adapter with retries. W11.8.1: Anthropic failover
     // stripped — exhausted retries throw and the round flips to 'failed'.
@@ -896,7 +947,12 @@ async function loadRoundContext(
 ): Promise<RoundContext> {
   const { data: round, error: rErr } = await admin
     .from('shortlisting_rounds')
-    .select('id, project_id, status, property_tier, property_voice_anchor_override')
+    .select(
+      // QC-iter2-W3 F-D-007: pull package_type / package_ceiling /
+      // expected_count_target so the Stage 4 prompt can render the
+      // slotEnumerationBlock preamble (PHASE 1/2/3 + ceiling).
+      'id, project_id, status, property_tier, property_voice_anchor_override, package_type, package_ceiling, expected_count_target',
+    )
     .eq('id', roundId)
     .maybeSingle();
   if (rErr) throw new Error(`round lookup failed: ${rErr.message}`);
@@ -918,8 +974,9 @@ async function loadRoundContext(
   }
 
   const propertyTier = ((round.property_tier as string | null) || 'standard') as PropertyTier;
+  const propertyAddress = (proj.property_address as string | null) ?? null;
   const property_facts: PropertyFacts = {
-    address_line: (proj.property_address as string | null) ?? null,
+    address_line: propertyAddress,
     suburb: (proj.property_suburb as string | null) ?? null,
     state: 'NSW', // single-state CRM today
     bedrooms: null,
@@ -931,6 +988,24 @@ async function loadRoundContext(
     auction_or_private_treaty: null,
   };
 
+  // QC-iter2-W3 F-D-007: derive package metadata. expected_count_target is
+  // the modern field (W7.7); fall back to package_ceiling when null. We
+  // never block Stage 4 if both are missing — slotEnumerationBlock requires
+  // a positive ceiling so default to 1 last (renders a "1 image maximum"
+  // line which is at worst informational, never crashes the render).
+  const expectedCount = typeof round.expected_count_target === 'number'
+    ? round.expected_count_target
+    : null;
+  const legacyCeiling = typeof round.package_ceiling === 'number'
+    ? round.package_ceiling
+    : null;
+  const packageCeiling = (expectedCount && expectedCount > 0)
+    ? expectedCount
+    : (legacyCeiling && legacyCeiling > 0 ? legacyCeiling : 1);
+  const packageType = typeof round.package_type === 'string' && round.package_type.length > 0
+    ? round.package_type
+    : 'unspecified';
+
   return {
     round_id: roundId,
     project_id: round.project_id as string,
@@ -939,7 +1014,140 @@ async function loadRoundContext(
     property_voice_anchor_override: (round.property_voice_anchor_override as string | null) ?? null,
     dropbox_root_path: dropboxRoot,
     property_facts,
+    package_type: packageType,
+    package_ceiling: packageCeiling,
+    property_address: propertyAddress,
   };
+}
+
+// QC-iter2-W3 F-D-007: Stage-4-local helper to fetch slot definitions for
+// the round's project. Mirrors `fetchSlotDefinitions` in
+// shortlisting-benchmark-runner — engine-role filtered + curated_positions
+// joined — so slotEnumerationBlock can render the per-position rows
+// introduced by W11.6.22b. Kept local to Stage 4 (vs lifted to _shared) to
+// minimise blast radius for this hot fix; can be consolidated later.
+export async function loadSlotDefinitionsForRound(
+  admin: ReturnType<typeof getAdminClient>,
+  projectId: string,
+): Promise<{ slots: Pass2SlotDefinition[]; engineRoles: string[] }> {
+  // 1. Resolve project engine_roles
+  const { data: project } = await admin
+    .from('projects')
+    .select('packages, products')
+    .eq('id', projectId)
+    .maybeSingle();
+  const productIds = new Set<string>();
+  // deno-lint-ignore no-explicit-any
+  for (const pkg of (Array.isArray((project as any)?.packages) ? (project as any).packages : [])) {
+    // deno-lint-ignore no-explicit-any
+    for (const ent of (Array.isArray(pkg?.products) ? (pkg as any).products : [])) {
+      if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+    }
+  }
+  // deno-lint-ignore no-explicit-any
+  for (const ent of (Array.isArray((project as any)?.products) ? (project as any).products : [])) {
+    if (ent && typeof ent.product_id === 'string') productIds.add(ent.product_id);
+  }
+  let productsList: ProductRow[] = [];
+  if (productIds.size > 0) {
+    const { data: prodRows } = await admin
+      .from('products')
+      .select('id, engine_role, is_active')
+      .in('id', Array.from(productIds));
+    productsList = ((prodRows ?? []) as ProductRow[]).map((p) => ({
+      id: String(p.id),
+      engine_role: p.engine_role ?? null,
+      is_active: p.is_active === true,
+    }));
+  }
+  // deno-lint-ignore no-explicit-any
+  const engineRoles = resolveProjectEngineRolesPure(project as any, productsList) as string[];
+  const roleSet = new Set<string>(engineRoles);
+
+  // 2. Fetch active slot definitions, filter by engine_role, take latest version
+  const { data, error } = await admin
+    .from('shortlisting_slot_definitions')
+    .select(
+      'slot_id, display_name, phase, eligible_when_engine_roles, eligible_room_types, max_images, min_images, notes, version, is_active, selection_mode',
+    )
+    .eq('is_active', true);
+  if (error) throw new Error(`loadSlotDefinitionsForRound failed: ${error.message}`);
+  if (!data) return { slots: [], engineRoles };
+
+  // deno-lint-ignore no-explicit-any
+  const filtered = (data as any[]).filter((row) => {
+    const roles: string[] = Array.isArray(row.eligible_when_engine_roles)
+      ? row.eligible_when_engine_roles
+      : [];
+    if (roles.length === 0) return false;
+    return roles.some((r) => roleSet.has(r));
+  });
+
+  const byId = new Map<string, Pass2SlotDefinition & { version: number }>();
+  for (const row of filtered) {
+    const cand = {
+      slot_id: row.slot_id,
+      display_name: row.display_name,
+      phase: row.phase,
+      eligible_room_types: row.eligible_room_types || [],
+      max_images: row.max_images,
+      min_images: row.min_images,
+      notes: row.notes,
+      version: row.version || 1,
+      selection_mode: row.selection_mode === 'curated_positions'
+        ? 'curated_positions' as const
+        : 'ai_decides' as const,
+    } as Pass2SlotDefinition & { version: number };
+    const existing = byId.get(cand.slot_id);
+    if (!existing || cand.version > existing.version) byId.set(cand.slot_id, cand);
+  }
+
+  // 3. Hydrate curated_positions for slots in curated_positions mode
+  const curatedSlotIds = Array.from(byId.values())
+    .filter((s) => s.selection_mode === 'curated_positions')
+    .map((s) => s.slot_id);
+  if (curatedSlotIds.length > 0) {
+    const { data: prefRows, error: prefErr } = await admin
+      .from('shortlisting_slot_position_preferences')
+      .select(
+        'slot_id, position_index, display_label, preferred_composition_type, preferred_zone_focus, preferred_space_type, preferred_lighting_state, preferred_image_type, preferred_signal_emphasis, is_required, ai_backfill_on_gap',
+      )
+      .in('slot_id', curatedSlotIds);
+    if (prefErr) {
+      console.warn(`loadSlotDefinitionsForRound: position prefs load failed: ${prefErr.message}`);
+    } else if (Array.isArray(prefRows)) {
+      const bySlot = new Map<string, Array<Record<string, unknown>>>();
+      for (const r of prefRows as Array<Record<string, unknown>>) {
+        const sid = String(r.slot_id);
+        if (!bySlot.has(sid)) bySlot.set(sid, []);
+        bySlot.get(sid)!.push(r);
+      }
+      for (const slot of byId.values()) {
+        if (slot.selection_mode !== 'curated_positions') continue;
+        const rows = (bySlot.get(slot.slot_id) ?? []).slice();
+        rows.sort((a, b) => Number(a.position_index ?? 0) - Number(b.position_index ?? 0));
+        slot.curated_positions = rows.map((r) => ({
+          position_index: Number(r.position_index ?? 0),
+          display_label: typeof r.display_label === 'string' ? r.display_label : '',
+          preferred_composition_type: (r.preferred_composition_type as string | null) ?? null,
+          preferred_zone_focus: (r.preferred_zone_focus as string | null) ?? null,
+          preferred_space_type: (r.preferred_space_type as string | null) ?? null,
+          preferred_lighting_state: (r.preferred_lighting_state as string | null) ?? null,
+          preferred_image_type: (r.preferred_image_type as string | null) ?? null,
+          preferred_signal_emphasis: Array.isArray(r.preferred_signal_emphasis)
+            ? r.preferred_signal_emphasis as string[]
+            : [],
+          is_required: r.is_required === true,
+          ai_backfill_on_gap: r.ai_backfill_on_gap !== false,
+        }));
+      }
+    }
+  }
+
+  const slots = Array.from(byId.values())
+    .map(({ version: _v, ...rest }) => rest)
+    .sort((a, b) => (a.phase - b.phase) || a.slot_id.localeCompare(b.slot_id));
+  return { slots, engineRoles };
 }
 
 // ─── Stage 1 merged JSON loader ──────────────────────────────────────────────

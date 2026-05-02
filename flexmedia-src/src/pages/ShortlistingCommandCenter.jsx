@@ -1024,7 +1024,11 @@ function RecalibrationPlaceholder() {
 // ── Main page ───────────────────────────────────────────────────────────────
 export default function ShortlistingCommandCenter() {
   const queryClient = useQueryClient();
-  const { isAdminOrAbove } = usePermissions();
+  // QC-iter2-W3 F-C-010: read isLoading so we can distinguish "auth still
+  // bootstrapping" (render skeleton) from "auth resolved + denied" (render
+  // Access Denied). Without this, every full reload briefly flashes Access
+  // Denied because `isAdminOrAbove` is `false` until the user resolves.
+  const { isAdminOrAbove, isLoading: isPermissionsLoading } = usePermissions();
   const adminGateOpen = isAdminOrAbove === true;
 
   // ── Stats RPC ────────────────────────────────────────────────────────────
@@ -1337,6 +1341,18 @@ export default function ShortlistingCommandCenter() {
   }, [queryClient]);
 
   // ── Defensive permission check (route guard handles this too) ───────────
+  // QC-iter2-W3 F-C-010: render a loading skeleton while permissions resolve
+  // so we don't flash "Access denied" during auth bootstrap on every reload.
+  if (isPermissionsLoading) {
+    return (
+      <div
+        className="flex items-center justify-center min-h-[60vh] p-8"
+        data-testid="shortlisting-command-center-loading"
+      >
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
   if (!isAdminOrAbove) {
     return (
       <div className="flex items-center justify-center min-h-[60vh] p-8">

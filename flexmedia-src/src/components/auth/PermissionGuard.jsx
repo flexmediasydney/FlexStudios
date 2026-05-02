@@ -22,7 +22,13 @@ export function useCurrentUser() {
 }
 
 export function usePermissions() {
-  const { data: user } = useCurrentUser();
+  // QC-iter2-W3 F-C-010: read `isLoadingAuth` directly from AuthContext (not
+  // useQuery's isLoading) so callers can distinguish "auth bootstrapping"
+  // from "no user / denied". When the underlying query is `enabled: false`
+  // during bootstrap, react-query reports `isLoading: false` even though
+  // auth has not resolved — that's what produced the Access Denied flash.
+  const { user, isLoadingAuth } = useAuth();
+  const isLoading = isLoadingAuth === true;
 
   // A missing role means no access.
   const role = user?.role || null;
@@ -60,6 +66,13 @@ export function usePermissions() {
   return {
     user,
     role,
+    // QC-iter2-W3 F-C-010: bootstrap signal for callers that gate render on a
+    // permission boolean. During auth bootstrap `isAdminOrAbove` is `false`
+    // (because `user` hasn't resolved), which produces a brief "Access denied"
+    // flash on every full reload. Callers should branch on `isLoading` first
+    // and render a skeleton/loader, then check the role booleans.
+    isLoading,
+    isResolved: !isLoading,
 
     // Tier booleans
     isOwner,

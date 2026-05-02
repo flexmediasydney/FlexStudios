@@ -121,6 +121,20 @@ interface RunSummary {
   results: PerUnitResult[];
 }
 
+/**
+ * QC-iter2-W3 F-B-001: pure decision helper exported for unit testing.
+ * Flips a run's shortlisting_jobs.status to 'succeeded' only when the run
+ * top-level reports ok AND zero units failed; otherwise 'failed'. The
+ * shortlisting_jobs.status check constraint allows
+ * ('pending','running','succeeded','failed','dead_letter') so 'failed' is
+ * the canonical sink for any non-clean run.
+ */
+export function decideJobStatusFromSummary(
+  summary: Pick<RunSummary, 'ok' | 'units_failed'>,
+): 'succeeded' | 'failed' {
+  return summary.ok && summary.units_failed === 0 ? 'succeeded' : 'failed';
+}
+
 // ─── Handler ────────────────────────────────────────────────────────────────
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -219,13 +233,19 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const startedIso = new Date().toISOString();
   const bgWork = runExtraction(units, body.cost_cap_usd, body.job_id ?? null)
     .then(async (summary) => {
-      // Self-update job row when dispatcher invoked us
+      // Self-update job row when dispatcher invoked us.
+      // QC-iter2-W3 F-B-001: previous ternary returned 'succeeded' on BOTH
+      // branches, so a run with any per-unit failures persisted as green.
+      // shortlisting_jobs.status enum is
+      // ('pending','running','succeeded','failed','dead_letter') — flip the
+      // row to 'failed' when summary.ok is false OR any unit failed so the
+      // dashboards (and dead-letter sweep) see it.
       if (body.job_id) {
         const admin = getAdminClient();
         await admin
           .from('shortlisting_jobs')
           .update({
-            status: summary.ok && summary.units_failed === 0 ? 'succeeded' : 'succeeded',
+            status: decideJobStatusFromSummary(summary),
             finished_at: new Date().toISOString(),
             result: summary as unknown as Record<string, unknown>,
           })

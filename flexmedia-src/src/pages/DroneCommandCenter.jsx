@@ -768,7 +768,11 @@ function InFlightPipelinesSection() {
 // ── Main page ───────────────────────────────────────────────────────────────
 export default function DroneCommandCenter() {
   const queryClient = useQueryClient();
-  const { isAdminOrAbove } = usePermissions();
+  // QC-iter2-W3 F-C-010: read isLoading so we can distinguish "auth still
+  // bootstrapping" (render skeleton) from "auth resolved + denied" (render
+  // Access Denied). Without this, every full reload briefly flashes Access
+  // Denied because `isAdminOrAbove` is `false` until the user resolves.
+  const { isAdminOrAbove, isLoading: isPermissionsLoading } = usePermissions();
   // #81: Coerce to a strict-boolean so undefined-while-loading doesn't
   // accidentally fire queries with denied auth. We also page-gate below in
   // case `usePermissions` ever returns undefined for an extended period.
@@ -1160,6 +1164,18 @@ export default function DroneCommandCenter() {
 
   // Defensive permission check (route guard handles this too).
   // Placed AFTER all hooks above to satisfy React's rules-of-hooks.
+  // QC-iter2-W3 F-C-010: render a loading skeleton while permissions resolve
+  // so we don't flash "Access denied" during auth bootstrap on every reload.
+  if (isPermissionsLoading) {
+    return (
+      <div
+        className="flex items-center justify-center min-h-[60vh] p-8"
+        data-testid="drone-command-center-loading"
+      >
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
   if (!isAdminOrAbove) {
     return (
       <div className="flex items-center justify-center min-h-[60vh] p-8">

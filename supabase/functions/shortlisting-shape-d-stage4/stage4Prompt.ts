@@ -82,20 +82,29 @@ export interface Stage1MergedEntry {
 export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
+    // QC-iter2-W3 F-D-005: description was hardcoded `Always "v1.0"` so the
+    // model echoed v1.0 forever even after STAGE4_PROMPT_VERSION advanced.
+    // Source the version dynamically from the constant so future bumps stay
+    // in sync without touching the schema.
     schema_version: {
       type: 'string',
-      description: 'Always "v1.0".',
+      description: `Echo "${STAGE4_PROMPT_VERSION}".`,
     },
 
     // ─── Slot decisions ──────────────────────────────────────────────────
+    // QC-iter2-W3 F-D-006: previous examples (`master_bedroom`,
+    // `alfresco/outdoor_hero`) were NOT in the canonical slot_id enum. The
+    // model parroted these and then tripped Gemini's enum constraint or
+    // collapsed onto bad aliases. Use canonical Phase-1 ids only.
     slot_decisions: {
       type: 'array',
       minItems: 4,
       description:
         'Slot-by-slot hero picks made WITH visual cross-comparison. Cover the ' +
         'standard slot lattice for a 3-bed family home: exterior_facade_hero, ' +
-        'kitchen_hero, living_hero, master_bedroom, alfresco/outdoor_hero plus ' +
-        'any obvious supporting slots (additional bedrooms, bathrooms, exterior_rear). ' +
+        'kitchen_hero, living_hero, master_bedroom_hero, alfresco_hero plus ' +
+        'any obvious supporting slots (e.g. bedroom_secondary, bathroom_main, ' +
+        'exterior_rear). See the slot_id enum for the full canonical list. ' +
         'For each slot: pick the single image that best fills the role given ' +
         'lighting, vantage, styling, distractions, and how it sits within the ' +
         'gallery flow. Provide 1-2 alternatives + rationale per slot.',

@@ -119,6 +119,39 @@ export function formatMissingConfirmedError(roundIds: string[]): string {
   return `Round needs lock first — out of scope for v1, lock manually then retry: ${head}${tail}`;
 }
 
+/**
+ * QC-iter2-W3 F-B-002: pure dispatch helper exported for unit testing.
+ * Fires the benchmark-runner request and registers the resulting promise
+ * with the runtime's `waitUntil` hook so Deno's edge worker keeps the
+ * request alive past handler return. The hook is read from
+ * (globalThis.EdgeRuntime?.waitUntil) at call-time so tests can stub it.
+ */
+export function dispatchBenchmarkRunnerWithWaitUntil(opts: {
+  fetchImpl: typeof fetch;
+  invokeUrl: string;
+  serviceKey: string;
+  invokeBody: Record<string, unknown>;
+  callerContext: string;
+  // deno-lint-ignore no-explicit-any
+  waitUntil: ((p: Promise<unknown>) => void) | undefined;
+}): Promise<unknown> {
+  const bgFetch = opts.fetchImpl(opts.invokeUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${opts.serviceKey}`,
+      'Content-Type': 'application/json',
+      'x-caller-context': opts.callerContext,
+    },
+    body: JSON.stringify(opts.invokeBody),
+  }).catch((err) => {
+    console.error(`[${opts.callerContext}] benchmark-runner invocation failed:`, err);
+  });
+  if (typeof opts.waitUntil === 'function') {
+    opts.waitUntil(bgFetch);
+  }
+  return bgFetch;
+}
+
 serveWithAudit(FN_NAME, async (req: Request): Promise<Response> => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -256,16 +289,24 @@ serveWithAudit(FN_NAME, async (req: Request): Promise<Response> => {
   // Fire-and-forget — don't await response (runner is long-running). The
   // caller polls calibration_editor_shortlists.ai_run_completed_at + the
   // calibration_decisions row count to see progress.
-  fetch(invokeUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      'Content-Type': 'application/json',
-      'x-caller-context': FN_NAME,
-    },
-    body: JSON.stringify(invokeBody),
-  }).catch((err) => {
-    console.error(`[${FN_NAME}] benchmark-runner invocation failed:`, err);
+  //
+  // QC-iter2-W3 F-B-002: wrap in EdgeRuntime.waitUntil so Deno's edge runtime
+  // does NOT terminate the dispatch fetch when the wrapping handler returns.
+  // Mirrors the pattern in shortlisting-shape-d/index.ts and other long-
+  // running shortlisting fns. Without this, the runner can be killed mid-
+  // request and the round silently never starts.
+  // deno-lint-ignore no-explicit-any
+  const waitUntil = (globalThis as any).EdgeRuntime?.waitUntil?.bind(
+    // deno-lint-ignore no-explicit-any
+    (globalThis as any).EdgeRuntime,
+  );
+  dispatchBenchmarkRunnerWithWaitUntil({
+    fetchImpl: fetch,
+    invokeUrl,
+    serviceKey,
+    invokeBody,
+    callerContext: FN_NAME,
+    waitUntil: typeof waitUntil === 'function' ? waitUntil : undefined,
   });
 
   return jsonResponse(
