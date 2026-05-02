@@ -67,6 +67,7 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ShortlistingCard from "./ShortlistingCard";
+import ShortlistingLightbox from "./ShortlistingLightbox";
 import LockProgressDialog from "./LockProgressDialog";
 import SignalAttributionModal from "./SignalAttributionModal";
 import ShapeDEngineBanner from "./ShapeDEngineBanner";
@@ -378,6 +379,24 @@ export default function ShortlistingSwimlane({
     overrideId: null,
     actionLabel: null,
   });
+
+  // W11.6.20 swimlane-lightbox: track which bucket + which index is open.
+  // Bucket key is one of "rejected" | "proposed" | "approved"; null means
+  // closed. The lightbox itself reads `columnItems[bucketKey]` and uses
+  // `index` as the initial position; ←/→ nav within the bucket happens
+  // inside the lightbox component, so we don't need to plumb prev/next
+  // handlers from here. We DO want to refresh `index` on open so the
+  // initial card matches what the operator clicked.
+  const [lightboxState, setLightboxState] = useState({
+    bucket: null,
+    index: 0,
+  });
+  const closeLightbox = useCallback(() => {
+    setLightboxState((prev) => ({ ...prev, bucket: null }));
+  }, []);
+  const openLightbox = useCallback((bucket, index) => {
+    setLightboxState({ bucket, index });
+  }, []);
 
   const closeSignalModal = useCallback(() => {
     setSignalModalState((prev) => ({ ...prev, open: false }));
@@ -1521,6 +1540,7 @@ export default function ShortlistingSwimlane({
                 registerCardObserver={registerCardObserver}
                 onAltsDrawerOpen={handleAltsDrawerOpen}
                 previewSize={previewSize}
+                onCardImageClick={(idx) => openLightbox(col.key, idx)}
               />
             );
           })}
@@ -1589,6 +1609,50 @@ export default function ShortlistingSwimlane({
         actionLabel={signalModalState.actionLabel}
         onSubmit={submitSignalAttribution}
       />
+
+      {/* W11.6.20 — swimlane lightbox. Mounts only when bucket !== null so
+          there's zero overhead when closed. Items are derived from the
+          column-keyed `columnItems` map, normalised to the lightbox's item
+          shape (filename + dropbox_path + observed_objects + signal_scores
+          + slot_decision + classification). The lightbox handles its own
+          ←/→ keyboard nav, prev/next buttons, swipe — no plumbing needed
+          from here. */}
+      {lightboxState.bucket && (() => {
+        const bucket = lightboxState.bucket;
+        const bucketItems = columnItems[bucket] || [];
+        if (bucketItems.length === 0) return null;
+        const COLUMN_LABEL = {
+          rejected: "REJECTED",
+          proposed: "AI PROPOSED",
+          approved: "HUMAN APPROVED",
+        };
+        const lightboxItems = bucketItems.map((it) => ({
+          id: it.id,
+          dropbox_path: it.dropbox_preview_path,
+          filename:
+            it.delivery_reference_stem ||
+            it.best_bracket_stem ||
+            it.rep_filename ||
+            it.id,
+          observed_objects: Array.isArray(it.classification?.observed_objects)
+            ? it.classification.observed_objects
+            : [],
+          signal_scores: it.classification?.signal_scores || null,
+          slot_decision: it.slot || null,
+          voice_tier: it.classification?.voice_tier || null,
+          master_listing: it.classification?.master_listing || null,
+          classification: it.classification || null,
+        }));
+        return (
+          <ShortlistingLightbox
+            items={lightboxItems}
+            initialIndex={lightboxState.index}
+            bucketLabel={COLUMN_LABEL[bucket] || bucket}
+            allClassificationsInRound={classifications}
+            onClose={closeLightbox}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -1660,6 +1724,7 @@ function SwimlaneColumn({
   registerCardObserver,
   onAltsDrawerOpen,
   previewSize,
+  onCardImageClick,
 }) {
   return (
     <Droppable droppableId={column.key} isDropDisabled={isLocked}>
@@ -1701,6 +1766,7 @@ function SwimlaneColumn({
                 registerCardObserver={registerCardObserver}
                 onAltsDrawerOpen={onAltsDrawerOpen}
                 previewSize={previewSize}
+                onCardImageClick={onCardImageClick}
               />
             ) : (
               items.map((item, index) => (
@@ -1716,6 +1782,7 @@ function SwimlaneColumn({
                   registerCardObserver={registerCardObserver}
                   onAltsDrawerOpen={onAltsDrawerOpen}
                   previewSize={previewSize}
+                  onCardImageClick={onCardImageClick}
                 />
               ))
             )}
@@ -1747,6 +1814,7 @@ function SwimlaneGroupedList({
   registerCardObserver,
   onAltsDrawerOpen,
   previewSize,
+  onCardImageClick,
 }) {
   // Track per-slot expansion locally — collapsed by default per spec, so the
   // operator sees a compact stack of slot headers and expands the ones they
@@ -1812,6 +1880,7 @@ function SwimlaneGroupedList({
                     registerCardObserver={registerCardObserver}
                     onAltsDrawerOpen={onAltsDrawerOpen}
                     previewSize={previewSize}
+                    onCardImageClick={onCardImageClick}
                   />
                 ))}
               </div>
@@ -1840,6 +1909,7 @@ function SwimlaneCardRenderer({
   registerCardObserver,
   onAltsDrawerOpen,
   previewSize,
+  onCardImageClick,
 }) {
   const slotId = item.slot?.slot_id;
   const altsRaw = slotId ? altsBySlotId.get(slotId) || [] : [];
@@ -1891,6 +1961,11 @@ function SwimlaneCardRenderer({
             registerCardObserver={registerCardObserver}
             onAltsDrawerOpen={onAltsDrawerOpen}
             previewSize={previewSize}
+            onImageClick={
+              onCardImageClick
+                ? () => onCardImageClick(index)
+                : undefined
+            }
           />
         </div>
       )}

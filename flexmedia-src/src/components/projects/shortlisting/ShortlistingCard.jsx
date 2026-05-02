@@ -168,6 +168,14 @@ function useIsExpanded(cardId) {
  *   thumbnail size from the toolbar's SM/MD/LG toggle. Switches the
  *   thumbnail wrapper width so the visual size actually changes when the
  *   operator clicks the toggle. Defaults to 'md'.
+ * @param {function} [props.onImageClick]  W11.6.20 swimlane-lightbox:
+ *   invoked when the operator clicks the THUMBNAIL only (not the body /
+ *   alternatives tray / Why? expander). Receives no args — the swimlane
+ *   already knows which card was clicked because it passes a
+ *   composition-bound callback. Optional: when absent, the thumbnail click
+ *   is a no-op (legacy behaviour). Drag/drop still works because we put
+ *   the handler on a child <button> inside the thumbnail wrapper rather
+ *   than swallowing the whole card's pointer events.
  */
 export default function ShortlistingCard({
   composition,
@@ -178,6 +186,7 @@ export default function ShortlistingCard({
   registerCardObserver,
   onAltsDrawerOpen,
   previewSize = "md",
+  onImageClick,
 }) {
   const [altsExpanded, setAltsExpanded] = useState(false);
   // W11.6.2 P3 #2: which alt is "expanded in place" inside the tray.
@@ -523,7 +532,18 @@ export default function ShortlistingCard({
           W11.6.1-hotfix-2 BUG #3: switch wrapper width on previewSize so
           the toolbar's SM/MD/LG toggle visibly changes the thumbnail size.
           aspect-[3/2] inside DroneThumbnail derives the height; we pin a
-          max-width on the wrapper so the parent column flexes around it. */}
+          max-width on the wrapper so the parent column flexes around it.
+
+          W11.6.20 swimlane-lightbox: when onImageClick is provided, the
+          thumbnail wrapper becomes a button that opens the lightbox. We
+          stop propagation so the @hello-pangea/dnd drag handler on the
+          parent <Draggable> div doesn't see this as a drag-start gesture
+          (it would otherwise interpret the click+release as a phantom
+          drag and re-emit a no-op DnD event). The Why? expander, alt
+          tray, and reclassify pencils all live in the body BELOW this
+          wrapper — they're unaffected. The card's primary surface for
+          inspection (the image) is now click-to-lightbox; everything
+          else still works normally. */}
       <div
         className={cn(
           "relative",
@@ -531,6 +551,47 @@ export default function ShortlistingCard({
           previewSize === "lg" && "max-w-[256px]",
         )}
         data-testid={`shortlisting-card-thumb-${previewSize}`}
+        // Make the thumb itself the click target — semantic role=button
+        // for AT users; cursor-pointer + hover ring for sighted users.
+        // We do NOT wrap a <button> because the inner DroneThumbnail uses
+        // <img> which is fine to nest inside a <button>, but the overlay
+        // includes other text spans. Using a div with role+keyboard
+        // affordances avoids invalid HTML (button-in-button conflicts
+        // with the alts tray's <button> deeper down — though that's in
+        // the body, this guard keeps us safe.)
+        role={onImageClick ? "button" : undefined}
+        tabIndex={onImageClick ? 0 : undefined}
+        aria-label={onImageClick ? `Open ${filename || "image"} in lightbox` : undefined}
+        onClick={
+          onImageClick
+            ? (e) => {
+                e.stopPropagation();
+                onImageClick();
+              }
+            : undefined
+        }
+        onKeyDown={
+          onImageClick
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onImageClick();
+                }
+              }
+            : undefined
+        }
+        // Drag handling lives on the parent draggable wrapper. We swallow
+        // mouseDown propagation only for the click affordance — the
+        // @hello-pangea/dnd draggable threshold is 5px, so a true drag
+        // (mouseDown + drag past threshold) still fires the DnD lift
+        // because the parent's dragHandleProps are attached at a higher
+        // level. A pure click (no drag) gets stopped here.
+        // Note: do NOT stop mouseDown propagation; that breaks DnD. We
+        // only stop the click event itself (above).
+        style={{
+          cursor: onImageClick ? "pointer" : undefined,
+        }}
       >
         <DroneThumbnail
           dropboxPath={previewPath}
