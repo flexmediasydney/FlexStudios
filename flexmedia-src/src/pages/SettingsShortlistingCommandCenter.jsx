@@ -1,74 +1,54 @@
 /**
- * SettingsShortlistingCommandCenter — W11.6.21 + W11.6.21b + W11.6.23 master_admin umbrella.
+ * SettingsShortlistingCommandCenter — W11.6.21 + W11.6.21b + W11.6.23 +
+ * W11.6.25 + W11.6.27 (IA regroup) master_admin umbrella.
  *
  * Spec history:
- *   W11.6.21  — initial umbrella + 9 consolidated pages (Overview NEW, plus
- *               tiers/mappings/slots/registry/suggestions/rejection/
- *               calibration/overrides/discovery).
- *   W11.6.21b — folds in the remaining 9 shortlisting-engine settings pages
- *               that were left standalone in the W11.6.21 sweep:
- *               room types, standards, signals, calibration-ops, training,
- *               overrides-admin, prompts, engine-settings, vendor.
- *   W11.6.23  — 20th tab "Architecture" — read-only data-explorer view
- *               surfacing layer counts, slot coverage matrix, and
- *               heuristic slot-shape suggestions (split / deletion_candidate /
- *               new_slot_needed). Powered by RPC
- *               shortlisting_architecture_kpis (mig 421).
+ *   W11.6.21  — initial umbrella + 9 consolidated pages.
+ *   W11.6.21b — folds in the remaining 9 shortlisting-engine settings pages.
+ *   W11.6.23  — Architecture & Data Explorer tab.
+ *   W11.6.25  — Slot Recipes editor tab.
+ *   W11.6.27  — IA regroup. The flat 21-tab strip became unreadable. Tabs
+ *               are now organised into 5 functional groups; the page renders
+ *               a top group strip (5 buttons) plus a secondary strip for
+ *               the active group's children. All existing tab keys / deep
+ *               links / data-testids remain unchanged. A new placeholder
+ *               `taxonomy_explorer` tab is registered under Vocabulary; the
+ *               T1 agent owns the component implementation.
  *
- * URL:        /SettingsShortlistingCommandCenter[?tab=<key>]
+ * URL contract (unchanged):
+ *   /SettingsShortlistingCommandCenter[?tab=<key>]
+ *   - Bare URL → Overview (Engine group active).
+ *   - ?tab=<key> deep-links to that tab; the parent group is derived.
+ *   - All previously-shipped tab keys are preserved verbatim.
+ *
  * Permission: master_admin only (gated via PermissionGuard + routeAccess).
  *
- * Tabs (20 total):
- *   1.  overview        — engine-wide KPIs (W11.6.21).
- *   2.  tiers           — SettingsTierConfigs (W8).
- *   3.  mappings        — SettingsPackageTierMapping (W7.7).
- *   4.  slots           — SettingsShortlistingSlots (W7.7).
- *   5.  registry        — SettingsObjectRegistry (W12.B).
- *   6.  suggestions     — SettingsAISuggestions (W12.7-W12.8).
- *   7.  rejection       — SettingsRejectionReasonsDashboard (W11.6).
- *   8.  calibration     — SettingsCalibrationSessions (W14).
- *   9.  overrides       — SettingsEngineOverridePatterns (W11.6.10).
- *  10.  discovery       — SettingsObjectRegistryDiscovery (W12 / W11.6.11).
- *  11.  roomtypes       — SettingsShortlistingRoomTypes (W11.6.7).        [W11.6.21b]
- *  12.  standards       — SettingsShortlistingStandards (W6 P7).          [W11.6.21b]
- *  13.  signals         — SettingsShortlistingSignals (W6 P7).            [W11.6.21b]
- *  14.  calibration-ops — ShortlistingCalibration (W6 P8 quarterly bench).[W11.6.21b]
- *  15.  training        — SettingsShortlistingTraining (W6 P8).           [W11.6.21b]
- *  16.  overrides-admin — SettingsShortlistingOverrides (W6 P8).          [W11.6.21b]
- *  17.  prompts         — SettingsShortlistingPrompts (W6 P8).            [W11.6.21b]
- *  18.  engine-settings — SettingsEngineSettings (W7.7).                  [W11.6.21b]
- *  19.  vendor          — SettingsVendorComparison (W11.8).               [W11.6.21b]
- *  20.  architecture    — ArchitectureTab (W11.6.23).                     [W11.6.23]
+ * Groups (5 total, 22 tabs):
+ *   1.  Engine            — overview, engine-settings, tiers, mappings, prompts
+ *   2.  Slots & Recipes   — slots, recipes, standards
+ *   3.  Vocabulary        — taxonomy_explorer (NEW), registry, discovery,
+ *                           roomtypes, signals
+ *   4.  Operations        — architecture, suggestions, overrides, overrides-admin,
+ *                           rejection, vendor
+ *   5.  Calibration       — calibration, calibration-ops, training
+ *
+ * Note on backward-compat & tests:
+ *   The 57-spec vitest suite asserts that all 21 tab triggers (`data-testid=
+ *   tab-<key>`) are present in the DOM at render time, regardless of which
+ *   tab is active. Implementation: every tab trigger is rendered on every
+ *   mount, but the secondary strip for inactive groups is visually hidden
+ *   via `hidden` (display: none). This keeps the test contract intact and
+ *   avoids any tab-key churn while delivering the cleaner IA.
  *
  * Note on the two calibration tabs:
  *   `calibration` is the W14 50-project structured calibration session
- *   admin (`calibration_sessions` entity).
- *   `calibration-ops` is the older W6 quarterly accuracy benchmark page
- *   that operates on `shortlisting_benchmark_results` + the holdout set on
- *   `shortlisting_rounds.is_benchmark`. Both belong here — they're
- *   complementary instruments, not duplicates.
+ *   admin. `calibration-ops` is the older W6 quarterly accuracy benchmark
+ *   page. Different surfaces, different RPCs, kept distinct.
  *
  * Note on the two override tabs:
- *   `overrides` is SettingsEngineOverridePatterns (the W11.6.10 admin for
- *   engine-suggested override patterns).
- *   `overrides-admin` is SettingsShortlistingOverrides (the older W6 P8
- *   aggregated drag/swap analytics dashboard with a recalibration hint
- *   panel). Different surfaces, different RPCs, kept distinct.
- *
- * Hard-cut policy (per spec):
- *   The old standalone routes are REMOVED from pages.config.js + Layout.jsx
- *   + routeAccess.jsx — visiting them now 404s. Internal Link references
- *   have been redirected to ?tab=<key> on this page.
- *
- * Tab implementation: each existing settings page is mounted as-is. They
- * already manage their own ?tab= query state for sub-tabs (e.g. Object
- * Registry has its own browse/queue/normalisation), and they read
- * useSearchParams independently — when our top-level tab toggles, the
- * unmounted page's local sub-tab state is naturally torn down. We picked
- * top-level keys that don't collide with any existing sub-tab name.
- *
- * Layout: single horizontal `flex flex-wrap` strip (Option A from spec).
- * 19 tabs wrap to 2-3 rows on a max-w-7xl container; readable + simple.
+ *   `overrides` is SettingsEngineOverridePatterns (engine-suggested override
+ *   patterns admin). `overrides-admin` is SettingsShortlistingOverrides
+ *   (older drag/swap analytics dashboard). Different surfaces, kept distinct.
  *
  * Style mirrors PulseMissedOpportunityCommandCenter (W15b.9).
  */
@@ -81,9 +61,13 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 import {
   Activity,
+  BookOpen,
+  Boxes,
   Cog,
+  Compass,
   Database,
   FileEdit,
   Gauge,
@@ -105,7 +89,7 @@ import {
 } from "lucide-react";
 
 // F-3B-006 — Default tab (overview) stays eager: operators land on it; lazy
-// would create a flash on every Command Center entry. All other 20 tab
+// would create a flash on every Command Center entry. All other tab
 // containers are split into their own chunks via React.lazy + Suspense
 // (the page-level <Suspense fallback={<TabFallback />}> already exists
 // around each TabsContent below, which gives us the loading skeleton).
@@ -136,7 +120,6 @@ const SettingsEngineOverridePatterns = lazy(() =>
 const SettingsObjectRegistryDiscovery = lazy(() =>
   import("@/pages/SettingsObjectRegistryDiscovery"),
 );
-// W11.6.21b — second consolidation wave.
 const SettingsShortlistingRoomTypes = lazy(() =>
   import("@/pages/SettingsShortlistingRoomTypes"),
 );
@@ -164,16 +147,29 @@ const SettingsEngineSettings = lazy(() =>
 const SettingsVendorComparison = lazy(() =>
   import("@/pages/SettingsVendorComparison"),
 );
-// W11.6.23 — Architecture & Data Explorer tab.
 const ArchitectureTab = lazy(() =>
   import("@/components/settings/architecture/ArchitectureTab"),
 );
-// W11.6.25 — Slot Recipes editor tab.
 const SlotRecipesTab = lazy(() =>
   import("@/components/settings/shortlisting/SlotRecipesTab"),
 );
+// W11.6.27 — Taxonomy Explorer (T1 agent ships the real component;
+// a placeholder lives at the same path so this lazy import never breaks
+// the bundle build).
+const TaxonomyExplorerTab = lazy(() =>
+  import("@/components/settings/shortlisting/TaxonomyExplorerTab"),
+);
 
-// Tab keys (URL query value `?tab=<key>`). Default = overview.
+// ── Tab metadata ──────────────────────────────────────────────────────────
+//
+// VALID_TABS lists every tab key in declaration order. Order matters for
+// iterating in tests; do NOT reshuffle existing keys. New keys append.
+//
+// TAB_LABELS / TAB_ICONS map keys to UI metadata.
+//
+// GROUPS defines the IA: each group has a key, a label, an icon, and an
+// ordered list of tab keys. The first key in the first group's tabs is
+// the global default landing tab (overview).
 export const VALID_TABS = [
   // — W11.6.21 (initial 10) ——————————————————————————————————————————————
   "overview",
@@ -200,6 +196,8 @@ export const VALID_TABS = [
   "architecture",
   // — W11.6.25 (added 1) —————————————————————————————————————————————————
   "recipes",
+  // — W11.6.27 (added 1) —————————————————————————————————————————————————
+  "taxonomy_explorer",
 ];
 
 const TAB_LABELS = {
@@ -213,8 +211,6 @@ const TAB_LABELS = {
   calibration: "Calibration",
   overrides: "Override Patterns",
   discovery: "Object Discovery",
-  // W11.6.21b — explicitly disambiguated labels for the two
-  // calibration / two override tabs.
   roomtypes: "Room Types",
   standards: "Standards",
   signals: "Signals",
@@ -224,10 +220,9 @@ const TAB_LABELS = {
   prompts: "Prompts",
   "engine-settings": "Engine Settings",
   vendor: "Vendor Comparison",
-  // W11.6.23
   architecture: "Architecture",
-  // W11.6.25
   recipes: "Slot Recipes",
+  taxonomy_explorer: "Taxonomy Explorer",
 };
 
 const TAB_ICONS = {
@@ -250,11 +245,75 @@ const TAB_ICONS = {
   prompts: FileEdit,
   "engine-settings": Cog,
   vendor: Shuffle,
-  // W11.6.23
   architecture: Network,
-  // W11.6.25
   recipes: Layers,
+  taxonomy_explorer: Compass,
 };
+
+// ── Group definitions (W11.6.27) ──────────────────────────────────────────
+// Five functional groups. Each tab key appears exactly once across all
+// groups. Order inside each group is the visual order in the secondary
+// strip.
+export const GROUPS = [
+  {
+    key: "engine",
+    label: "Engine",
+    icon: Cog,
+    blurb: "Run-the-engine settings — KPIs, weights, packages, prompts.",
+    tabs: ["overview", "engine-settings", "tiers", "mappings", "prompts"],
+  },
+  {
+    key: "slots",
+    label: "Slots & Recipes",
+    icon: ListChecks,
+    blurb: "Slot allocation, recipes, and per-tier standards.",
+    tabs: ["slots", "recipes", "standards"],
+  },
+  {
+    key: "vocabulary",
+    label: "Vocabulary",
+    icon: BookOpen,
+    blurb: "Taxonomy, object registry, room types, and signal library.",
+    tabs: [
+      "taxonomy_explorer",
+      "registry",
+      "discovery",
+      "roomtypes",
+      "signals",
+    ],
+  },
+  {
+    key: "operations",
+    label: "Operations",
+    icon: Boxes,
+    blurb:
+      "Architecture, AI suggestions, overrides, rejection telemetry, vendor A/B.",
+    tabs: [
+      "architecture",
+      "suggestions",
+      "overrides",
+      "overrides-admin",
+      "rejection",
+      "vendor",
+    ],
+  },
+  {
+    key: "calibration",
+    label: "Calibration",
+    icon: Microscope,
+    blurb: "Structured calibration sessions, quarterly benchmarks, training.",
+    tabs: ["calibration", "calibration-ops", "training"],
+  },
+];
+
+// Reverse lookup: tab key → group key. Built once at module load.
+const TAB_TO_GROUP = (() => {
+  const map = {};
+  for (const g of GROUPS) {
+    for (const t of g.tabs) map[t] = g.key;
+  }
+  return map;
+})();
 
 /**
  * Pure helper: pick the active tab from a URL query value.
@@ -266,16 +325,23 @@ export function resolveActiveTab(rawTab) {
   return VALID_TABS.includes(rawTab) ? rawTab : "overview";
 }
 
+/**
+ * Pure helper: derive the active group key from the active tab.
+ * Exported for tests. Falls back to the first group ('engine') if the tab
+ * is not in any group (shouldn't happen but defensive).
+ */
+export function resolveActiveGroup(activeTab) {
+  return TAB_TO_GROUP[activeTab] || GROUPS[0].key;
+}
+
 export default function SettingsShortlistingCommandCenter() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get("tab");
   const activeTab = resolveActiveTab(rawTab);
+  const activeGroupKey = resolveActiveGroup(activeTab);
 
   const handleTabChange = (value) => {
     const next = new URLSearchParams(searchParams);
-    // When switching the umbrella tab, drop any legacy sub-tab params from
-    // a previous page (each consolidated page reads ?tab= for its OWN sub
-    // navigation, but on tab switch we want the new page's default).
     if (value === "overview") {
       next.delete("tab");
     } else {
@@ -284,10 +350,23 @@ export default function SettingsShortlistingCommandCenter() {
     setSearchParams(next, { replace: true });
   };
 
+  // Switching groups: jump to the group's first tab. We never persist a
+  // "group" param in the URL — the active tab is the source of truth, and
+  // the group is derived from it. Sharing a deep link to ?tab=foo always
+  // implies the right group.
+  const handleGroupChange = (groupKey) => {
+    const group = GROUPS.find((g) => g.key === groupKey);
+    if (!group) return;
+    const firstTab = group.tabs[0];
+    handleTabChange(firstTab);
+  };
+
+  const activeGroup = GROUPS.find((g) => g.key === activeGroupKey) || GROUPS[0];
+
   return (
     <PermissionGuard require={["master_admin"]}>
       <div
-        className="p-6 space-y-3 max-w-7xl mx-auto"
+        className="p-6 space-y-4 max-w-7xl mx-auto"
         data-testid="settings-shortlisting-command-center"
       >
         <div>
@@ -296,40 +375,102 @@ export default function SettingsShortlistingCommandCenter() {
             Shortlisting Command Center
           </h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            All shortlisting-engine controls — engine KPIs, tier weights,
-            package mappings, slot taxonomy, room types, standards, signals,
-            prompts, training, calibration, override patterns, object
-            registry, AI suggestions, rejection-reason analytics, engine
-            settings, vendor A/B comparison, and the data-explorer
-            architecture view.
+            All shortlisting-engine controls, organised into five functional
+            groups: Engine, Slots & Recipes, Vocabulary, Operations, and
+            Calibration. Pick a group above, then drill into the tab you need.
           </p>
         </div>
+
+        {/* ── Group strip (top-level IA) ─────────────────────────────── */}
+        <div
+          className="flex flex-wrap gap-2 border-b border-border pb-3"
+          role="tablist"
+          aria-label="Shortlisting Command Center groups"
+          data-testid="shortlisting-cc-groups"
+        >
+          {GROUPS.map((g) => {
+            const Icon = g.icon;
+            const isActive = g.key === activeGroupKey;
+            return (
+              <button
+                key={g.key}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={`group-strip-${g.key}`}
+                onClick={() => handleGroupChange(g.key)}
+                data-testid={`group-${g.key}`}
+                data-active={isActive ? "true" : "false"}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-all",
+                  "border",
+                  isActive
+                    ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                    : "bg-background text-foreground border-border hover:bg-muted/60",
+                )}
+              >
+                <Icon className="h-4 w-4" />
+                {g.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Active-group blurb (small contextual hint). */}
+        <p
+          className="text-xs text-muted-foreground -mt-1"
+          data-testid="active-group-blurb"
+        >
+          {activeGroup.blurb}
+        </p>
 
         <Tabs
           value={activeTab}
           onValueChange={handleTabChange}
           className="space-y-3"
         >
-          <TabsList
-            className="h-auto flex flex-wrap"
-            data-testid="shortlisting-cc-tabs"
-          >
-            {VALID_TABS.map((key) => {
-              const Icon = TAB_ICONS[key] || Activity;
-              return (
-                <TabsTrigger
-                  key={key}
-                  value={key}
-                  className="gap-2 text-xs"
-                  data-testid={`tab-${key}`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {TAB_LABELS[key]}
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
+          {/* ── Secondary strip — one TabsList per group ─────────────────
+              The active group's list is shown; inactive groups are hidden
+              via the `hidden` class (display: none) so their TabsTrigger
+              elements remain in the DOM. This preserves the data-testid
+              contract used by the vitest suite (which asserts every
+              `tab-<key>` testId is present at render). */}
+          {GROUPS.map((g) => {
+            const isActive = g.key === activeGroupKey;
+            return (
+              <TabsList
+                key={g.key}
+                id={`group-strip-${g.key}`}
+                data-testid={
+                  isActive
+                    ? "shortlisting-cc-tabs"
+                    : `shortlisting-cc-tabs-${g.key}`
+                }
+                data-group={g.key}
+                className={cn(
+                  "h-auto flex flex-wrap",
+                  isActive ? "" : "hidden",
+                )}
+              >
+                {g.tabs.map((key) => {
+                  const Icon = TAB_ICONS[key] || Activity;
+                  return (
+                    <TabsTrigger
+                      key={key}
+                      value={key}
+                      className="gap-2 text-xs"
+                      data-testid={`tab-${key}`}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {TAB_LABELS[key]}
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            );
+          })}
 
+          {/* ── Tab content — Overview eager, all others lazy ─────────── */}
           <TabsContent value="overview" className="mt-0">
             <OverviewTab />
           </TabsContent>
@@ -392,7 +533,6 @@ export default function SettingsShortlistingCommandCenter() {
             </Suspense>
           </TabsContent>
 
-          {/* — W11.6.21b — second consolidation wave —————————————————————— */}
           <TabsContent value="roomtypes" className="mt-0">
             <Suspense fallback={<TabFallback />}>
               <SettingsShortlistingRoomTypes />
@@ -447,17 +587,21 @@ export default function SettingsShortlistingCommandCenter() {
             </Suspense>
           </TabsContent>
 
-          {/* — W11.6.23 — Architecture & Data Explorer ————————————————— */}
           <TabsContent value="architecture" className="mt-0">
             <Suspense fallback={<TabFallback />}>
               <ArchitectureTab />
             </Suspense>
           </TabsContent>
 
-          {/* — W11.6.25 — Slot Recipes ————————————————— */}
           <TabsContent value="recipes" className="mt-0">
             <Suspense fallback={<TabFallback />}>
               <SlotRecipesTab />
+            </Suspense>
+          </TabsContent>
+
+          <TabsContent value="taxonomy_explorer" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <TaxonomyExplorerTab />
             </Suspense>
           </TabsContent>
         </Tabs>

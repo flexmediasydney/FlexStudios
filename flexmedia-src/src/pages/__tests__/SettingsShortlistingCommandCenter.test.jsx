@@ -190,7 +190,7 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     vi.clearAllMocks();
   });
 
-  it("renders all 21 tab triggers (W11.6.21 ten + W11.6.21b nine + W11.6.23 + W11.6.25)", () => {
+  it("renders all 22 tab triggers (W11.6.21 ten + W11.6.21b nine + W11.6.23 + W11.6.25 + W11.6.27)", () => {
     renderPage();
     // W11.6.21
     expect(screen.getByTestId("tab-overview")).toBeTruthy();
@@ -217,6 +217,8 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     expect(screen.getByTestId("tab-architecture")).toBeTruthy();
     // W11.6.25
     expect(screen.getByTestId("tab-recipes")).toBeTruthy();
+    // W11.6.27
+    expect(screen.getByTestId("tab-taxonomy_explorer")).toBeTruthy();
   });
 
   it("default tab is overview when no ?tab= query param", () => {
@@ -243,6 +245,7 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     ["engine-settings"],
     ["vendor"],
     ["recipes"],
+    ["taxonomy_explorer"],
   ])("?tab=%s mounts the umbrella without crashing", (key) => {
     renderPage(`/SettingsShortlistingCommandCenter?tab=${key}`);
     expect(
@@ -250,6 +253,68 @@ describe("SettingsShortlistingCommandCenter — render", () => {
     ).toBeTruthy();
     // The trigger for the requested tab is present (active state).
     expect(screen.getByTestId(`tab-${key}`)).toBeTruthy();
+  });
+});
+
+// ── 3b. W11.6.27 — IA regroup: 5 groups ───────────────────────────────────
+describe("SettingsShortlistingCommandCenter — W11.6.27 IA groups", () => {
+  it("renders the 5 group buttons", () => {
+    renderPage();
+    expect(screen.getByTestId("group-engine")).toBeTruthy();
+    expect(screen.getByTestId("group-slots")).toBeTruthy();
+    expect(screen.getByTestId("group-vocabulary")).toBeTruthy();
+    expect(screen.getByTestId("group-operations")).toBeTruthy();
+    expect(screen.getByTestId("group-calibration")).toBeTruthy();
+  });
+
+  it("default landing has the Engine group active", () => {
+    renderPage();
+    expect(
+      screen.getByTestId("group-engine").getAttribute("data-active"),
+    ).toBe("true");
+  });
+
+  it("?tab=taxonomy_explorer flips the active group to Vocabulary", () => {
+    renderPage("/SettingsShortlistingCommandCenter?tab=taxonomy_explorer");
+    expect(
+      screen.getByTestId("group-vocabulary").getAttribute("data-active"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("group-engine").getAttribute("data-active"),
+    ).toBe("false");
+  });
+
+  it("?tab=calibration-ops flips the active group to Calibration", () => {
+    renderPage("/SettingsShortlistingCommandCenter?tab=calibration-ops");
+    expect(
+      screen.getByTestId("group-calibration").getAttribute("data-active"),
+    ).toBe("true");
+  });
+
+  it("every VALID_TABS entry belongs to exactly one group", async () => {
+    const { GROUPS } = await import("../SettingsShortlistingCommandCenter");
+    const allGroupTabs = GROUPS.flatMap((g) => g.tabs);
+    // Every tab key appears in some group.
+    for (const tab of VALID_TABS) {
+      expect(allGroupTabs).toContain(tab);
+    }
+    // No tab key appears in two groups.
+    expect(new Set(allGroupTabs).size).toBe(allGroupTabs.length);
+    // Group + VALID_TABS counts agree.
+    expect(allGroupTabs.length).toBe(VALID_TABS.length);
+  });
+
+  it("resolveActiveGroup derives the right group from a tab key", async () => {
+    const { resolveActiveGroup } = await import(
+      "../SettingsShortlistingCommandCenter"
+    );
+    expect(resolveActiveGroup("overview")).toBe("engine");
+    expect(resolveActiveGroup("recipes")).toBe("slots");
+    expect(resolveActiveGroup("taxonomy_explorer")).toBe("vocabulary");
+    expect(resolveActiveGroup("vendor")).toBe("operations");
+    expect(resolveActiveGroup("training")).toBe("calibration");
+    // Defensive: unknown tab → first group (engine).
+    expect(resolveActiveGroup("not_a_tab")).toBe("engine");
   });
 });
 
@@ -269,7 +334,7 @@ describe("resolveActiveTab", () => {
     expect(resolveActiveTab(42)).toBe("overview");
   });
 
-  it("VALID_TABS exports the expected 21-entry set (W11.6.21 + W11.6.21b + W11.6.23 + W11.6.25)", () => {
+  it("VALID_TABS exports the expected 22-entry set (W11.6.21 + W11.6.21b + W11.6.23 + W11.6.25 + W11.6.27)", () => {
     expect(VALID_TABS).toEqual([
       // W11.6.21
       "overview",
@@ -296,6 +361,8 @@ describe("resolveActiveTab", () => {
       "architecture",
       // W11.6.25
       "recipes",
+      // W11.6.27 — Taxonomy Explorer (Vocabulary group).
+      "taxonomy_explorer",
     ]);
   });
 
@@ -313,6 +380,10 @@ describe("resolveActiveTab", () => {
 
   it("W11.6.23 architecture tab resolves via resolveActiveTab", () => {
     expect(resolveActiveTab("architecture")).toBe("architecture");
+  });
+
+  it("W11.6.27 taxonomy_explorer tab resolves via resolveActiveTab", () => {
+    expect(resolveActiveTab("taxonomy_explorer")).toBe("taxonomy_explorer");
   });
 
   it("calibration vs calibration-ops are distinct (W11.6.21b disambiguation)", () => {
