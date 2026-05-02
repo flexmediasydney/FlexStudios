@@ -521,35 +521,17 @@ export default function ShortlistingSwimlane({
     setLightboxState({ bucket, index });
   }, []);
 
-  // QC-iter2-W7 F-C-011: hoist the lightboxItems mapping into a memo keyed
-  // on the active bucket. Previously the mapping ran inside an IIFE on every
-  // swimlane render even when the lightbox was closed (the IIFE was guarded
-  // but its captured closure re-allocated `bucketItems.map(...)` on each
-  // re-render once open). Memo eliminates the re-allocation churn so toggling
-  // overlay/Why? inside the lightbox doesn't rebuild the parent's items[].
-  const lightboxItemsMemo = useMemo(() => {
-    const bucket = lightboxState.bucket;
-    if (!bucket) return null;
-    const bucketItems = columnItems[bucket] || [];
-    if (bucketItems.length === 0) return null;
-    return bucketItems.map((it) => ({
-      id: it.id,
-      dropbox_path: it.dropbox_preview_path,
-      filename:
-        it.delivery_reference_stem ||
-        it.best_bracket_stem ||
-        it.rep_filename ||
-        it.id,
-      observed_objects: Array.isArray(it.classification?.observed_objects)
-        ? it.classification.observed_objects
-        : [],
-      signal_scores: it.classification?.signal_scores || null,
-      slot_decision: it.slot || null,
-      voice_tier: it.classification?.voice_tier || null,
-      master_listing: it.classification?.master_listing || null,
-      classification: it.classification || null,
-    }));
-  }, [lightboxState.bucket, columnItems]);
+  // QC-iter2-W7 F-C-011: lightboxItemsMemo originally lived here but
+  // referenced `columnItems` in its dep array, which is declared ~550 lines
+  // later in the same component scope. ESM `const` is in TDZ until the
+  // declaration line executes, so reading it from this earlier hook (under
+  // minification: `[P.bucket, te]` where `te === columnItems`) threw
+  // "Cannot access 'te' before initialization" on every render whenever the
+  // swimlane mounted with rounds present. Empty-round projects never hit it
+  // because ProjectShortlistingTab does not mount the swimlane at all in the
+  // empty-state branch. Moved the memo definition to immediately AFTER
+  // columnItems below (search "F-C-011 (relocated)"). This block intentionally
+  // left as a marker for future refactors so we don't recreate the cycle.
 
   const closeSignalModal = useCallback(() => {
     setSignalModalState((prev) => ({ ...prev, open: false }));
@@ -1169,6 +1151,37 @@ export default function ShortlistingSwimlane({
     }
     return out;
   }, [groups, classByGroupId, slotByGroupId, computedColumns, sort, filter, searchQuery]);
+
+  // QC-iter2-W7 F-C-011 (relocated): hoist the lightboxItems mapping into a
+  // memo keyed on the active bucket. Previously the mapping ran inside an
+  // IIFE on every swimlane render even when the lightbox was closed (the
+  // IIFE was guarded but its captured closure re-allocated bucketItems.map(...)
+  // on each re-render once open). Memo eliminates the re-allocation churn.
+  // MUST live AFTER `columnItems` is declared above — this hook reads it from
+  // the dep array and ESM `const` is in TDZ until the declaration line runs.
+  const lightboxItemsMemo = useMemo(() => {
+    const bucket = lightboxState.bucket;
+    if (!bucket) return null;
+    const bucketItems = columnItems[bucket] || [];
+    if (bucketItems.length === 0) return null;
+    return bucketItems.map((it) => ({
+      id: it.id,
+      dropbox_path: it.dropbox_preview_path,
+      filename:
+        it.delivery_reference_stem ||
+        it.best_bracket_stem ||
+        it.rep_filename ||
+        it.id,
+      observed_objects: Array.isArray(it.classification?.observed_objects)
+        ? it.classification.observed_objects
+        : [],
+      signal_scores: it.classification?.signal_scores || null,
+      slot_decision: it.slot || null,
+      voice_tier: it.classification?.voice_tier || null,
+      master_listing: it.classification?.master_listing || null,
+      classification: it.classification || null,
+    }));
+  }, [lightboxState.bucket, columnItems]);
 
   // W11.6.1 — group-by-slot grouping for the AI PROPOSED column. Keyed by
   // slot_id; a card with no slot lands under a synthetic "no slot" bucket
