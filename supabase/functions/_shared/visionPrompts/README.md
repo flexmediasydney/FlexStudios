@@ -17,7 +17,7 @@ See `docs/design-specs/W7-6-vision-prompt-blocks.md` for the full design rationa
 | `blocks/compositionTypeTaxonomy.ts` | user (P1) | 11 composition types |
 | `blocks/vantagePoint.ts` | user (P1) | alfresco/exterior_rear disambiguation rule |
 | `blocks/clutterSeverity.ts` | user (P1) | Graduated clutter levels + flag rule + output reminder |
-| `blocks/pass1OutputSchema.ts` | user (P1) | Current 22-field JSON schema |
+| ~~`blocks/pass1OutputSchema.ts`~~ | (removed W11.7.17 QC-iter2-W2 P0 / F-D-001) | Replaced by inline `pass1V2Orientation` block in `pass1Prompt.ts`. Per-field instructions live in `universalVisionResponseSchemaV2` `description` strings (Gemini reads them as inline schema docs). |
 | `blocks/pass2Phases.ts` | system (P2) | Three-phase architecture explainer |
 | `blocks/pass2OutputSchema.ts` | user (P2) | Instructions + winner-with-alternatives JSON schema |
 | `blocks/nearDuplicateCulling.ts` | user (P2) | Within-room near-duplicate rule (spec L7) |

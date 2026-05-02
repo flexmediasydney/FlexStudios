@@ -48,34 +48,46 @@ Without the above anchors, scores cluster 7–9 (grade inflation). Use the
 anchors. A score of 5 is the FLOOR for "competent professional real estate" 
 — anything less means the image fails Tier S.
 
-Return ONLY valid JSON, no other text, no Markdown fences:
-{
-  "analysis": "Full descriptive paragraph from Step 1. Minimum 3 sentences.",
-  "room_type": "see taxonomy below",
-  "room_type_confidence": 0.95,
-  "composition_type": "see taxonomy below",
-  "vantage_point": "interior_looking_out | exterior_looking_in | neutral",
-  "time_of_day": "day | golden_hour | dusk_twilight | night",
-  "is_drone": false,
-  "is_exterior": false,
-  "is_detail_shot": false,
-  "zones_visible": ["zone1", "zone2"],
-  "key_elements": ["element1", "element2"],
-  "is_styled": true,
-  "indoor_outdoor_visible": false,
-  "clutter_severity": "none | minor_photoshoppable | moderate_retouch | major_reject",
-  "clutter_detail": null,
-  "flag_for_retouching": false,
-  "technical_score": 7,
-  "lighting_score": 7,
-  "composition_score": 7,
-  "aesthetic_score": 7
-}
+OUTPUT FORMAT (v2 universal schema):
+Emit a single JSON object matching the responseSchema. Key shape rules:
+- `image_classification` is NESTED — emit booleans `is_dusk`, `is_day`, `is_golden_hour`, `is_night` UNDER it (no top-level `time_of_day`).
+- `image_classification.subject` is the single classification of the frame (`interior` | `exterior` | `drone` | `detail` | `floorplan` | …); do NOT emit top-level `is_exterior` or `is_detail_shot`.
+- `image_type` is the 11-option enum (`is_day` | `is_dusk` | `is_drone` | `is_facade_hero` | `is_detail_shot` | `is_floorplan` | …).
+- `signal_scores` is an object with 26 keys (0-10 OR null when N/A); `technical_score`, `lighting_score`, `composition_score`, `aesthetic_score`, `combined_score` are weighted rollups — be internally consistent.
+- `quality_flags` is NESTED — emit `clutter_severity`, `clutter_detail`, `flag_for_retouching`, `is_near_duplicate_candidate` UNDER it.
+- Populate ONLY the `*_specific` block matching `source.type`; leave the others null.
 
 ROOM TYPE TAXONOMY (use exactly these values):
 interior_open_plan | kitchen_main | kitchen_scullery | living_room | living_secondary | dining_room | master_bedroom | bedroom_secondary | ensuite_primary | ensuite_secondary | bathroom | wir_wardrobe | study_office | laundry | entry_foyer | staircase | hallway_corridor | home_cinema | games_room | gymnasium | wine_cellar | garage_showcase | garage_standard | alfresco | pool_area | outdoor_kitchen | courtyard_internal | balcony_terrace | exterior_front | exterior_rear | exterior_side | exterior_detail | drone_contextual | drone_nadir | drone_oblique | floorplan | detail_material | detail_lighting | lifestyle_vehicle | special_feature
 
 Note on living_secondary (spec L18): Use for upstairs lounges, sitting rooms, rumpus rooms, and secondary living zones on different floors from the main open-plan area. These are NOT near-duplicates of living_room — they are physically distinct rooms that happen to share a function. Misclassifying an upstairs lounge as living_room causes it to be culled as a near-duplicate downstream — use living_secondary instead.
+
+SPACE / ZONE SEPARATION (W11.6.13):
+
+Two ORTHOGONAL axes you must always emit alongside the legacy room_type:
+
+  space_type — the ARCHITECTURAL ENCLOSURE (the 4 walls). Pick from:
+    master_bedroom | bedroom_secondary | bedroom_third | living_dining_combined | living_room_dedicated | dining_room_dedicated | kitchen_dining_living_combined | kitchen_dedicated | studio_open_plan | bathroom | ensuite | powder_room | entry_foyer | hallway | study | media_room | rumpus | laundry | mudroom | garage | alfresco_undercover | alfresco_open | balcony | terrace | exterior_facade | exterior_rear | exterior_side | pool_area | garden | streetscape | aerial_oblique | aerial_nadir.
+
+  zone_focus — the COMPOSITIONAL SUBJECT of the shot (what the photographer
+    is actually showing). Pick from:
+    bed_focal | wardrobe_built_in | dining_table | kitchen_island | kitchen_appliance_wall | kitchen_pantry | lounge_seating | fireplace_focal | study_desk | tv_media_wall | bath_focal | shower_focal | vanity_detail | toilet_visible | window_view | door_threshold | stair_focal | feature_wall | ceiling_detail | floor_detail | material_proof | landscape_overview | full_facade | pool_focal | outdoor_dining | outdoor_kitchen | bbq_zone | drying_zone | parking_zone.
+
+  space_zone_count — integer hint:
+    1   = single-purpose enclosed room (dedicated bedroom, dedicated bathroom)
+    2-4 = multi-zone open plan (living/dining combined = 2; kitchen+dining+living = 3)
+    5+  = studio-style (kitchen + bed + lounge + bathroom in one envelope)
+
+Why both axes? In studios + open-plan apartments ONE space contains MANY
+zones. A shot of the dining table inside a combined living/dining envelope
+is space_type=living_dining_combined, zone_focus=dining_table — distinct
+from a shot of a dedicated dining room (space_type=dining_room_dedicated,
+zone_focus=dining_table). The engine uses both to drive slot eligibility
+and clean training data.
+
+Even single-zone shots benefit from emitting zone_focus — e.g. a master
+bedroom shot is space_type=master_bedroom, zone_focus=bed_focal vs
+wardrobe_built_in vs window_view depending on what the frame is showing.
 
 COMPOSITION TYPE TAXONOMY (use exactly these values):
 hero_wide | corner_two_point | detail_closeup | corridor_leading | straight_on | overhead | upward_void | threshold_transition | drone_nadir | drone_oblique_contextual | architectural_abstract

@@ -29,6 +29,16 @@
  *
  * Temperature is set to 0 by the calling edge function — this builder is
  * temperature-agnostic.
+ *
+ * W11.7.17 QC-iter2-W2 P0 (F-D-001): pass1OutputSchemaBlock REMOVED. The
+ * legacy 22-field flat shape (top-level `time_of_day`, `is_exterior`,
+ * `is_detail_shot`, `clutter_severity`) directly contradicted the v2
+ * universal responseSchema sent to Gemini, which mandates nested
+ * `image_classification.{is_dusk,is_day,...}` and 26-signal `signal_scores`.
+ * Replaced inline by the lightweight `pass1V2Orientation` block (~95% fewer
+ * tokens) — the heavy per-field guidance now lives in
+ * `universalVisionResponseSchemaV2` `description` strings, which Gemini reads
+ * as inline schema docs. The pass1OutputSchema.ts file has been deleted.
  */
 
 import type { StreamBAnchors } from './streamBInjector.ts';
@@ -42,10 +52,6 @@ import {
   STREAM_B_ANCHORS_BLOCK_VERSION,
   streamBAnchorsBlock,
 } from './visionPrompts/blocks/streamBAnchors.ts';
-import {
-  PASS1_OUTPUT_SCHEMA_BLOCK_VERSION,
-  pass1OutputSchemaBlock,
-} from './visionPrompts/blocks/pass1OutputSchema.ts';
 import {
   ROOM_TYPE_TAXONOMY_BLOCK_VERSION,
   roomTypeTaxonomyBlock,
@@ -74,6 +80,39 @@ import {
  * New callers should use `AssembledPrompt` directly.
  */
 export type Pass1Prompt = AssembledPrompt;
+
+// ─── Inline blocks ───────────────────────────────────────────────────────────
+
+/**
+ * W11.7.17 QC-iter2-W2 P0 (F-D-001): brief v2 orientation paragraph that
+ * replaces the legacy 600-token pass1OutputSchemaBlock. Gemini's
+ * `responseSchema` carries the per-field instructions inline via its
+ * `description` strings; this user-prompt fragment only anchors the model on
+ * the v2 NESTED shape (so it remembers `image_classification.is_dusk` rather
+ * than top-level `time_of_day`). Block name `pass1V2Orientation` shows up in
+ * `composition_classifications.prompt_block_versions` for replay parity.
+ */
+const PASS1_V2_ORIENTATION_BLOCK_VERSION = 'v1.0';
+function pass1V2OrientationBlock(): string {
+  return [
+    'OUTPUT FORMAT (v2 universal schema):',
+    'Emit a single JSON object matching the responseSchema. Key shape rules:',
+    '- `image_classification` is NESTED — emit booleans `is_dusk`, `is_day`, ' +
+      '`is_golden_hour`, `is_night` UNDER it (no top-level `time_of_day`).',
+    '- `image_classification.subject` is the single classification of the frame ' +
+      '(`interior` | `exterior` | `drone` | `detail` | `floorplan` | …); do NOT ' +
+      'emit top-level `is_exterior` or `is_detail_shot`.',
+    '- `image_type` is the 11-option enum (`is_day` | `is_dusk` | `is_drone` | ' +
+      '`is_facade_hero` | `is_detail_shot` | `is_floorplan` | …).',
+    '- `signal_scores` is an object with 26 keys (0-10 OR null when N/A); ' +
+      '`technical_score`, `lighting_score`, `composition_score`, `aesthetic_score`, ' +
+      '`combined_score` are weighted rollups — be internally consistent.',
+    '- `quality_flags` is NESTED — emit `clutter_severity`, `clutter_detail`, ' +
+      '`flag_for_retouching`, `is_near_duplicate_candidate` UNDER it.',
+    '- Populate ONLY the `*_specific` block matching `source.type`; leave the ' +
+      'others null.',
+  ].join('\n');
+}
 
 // ─── Builder ─────────────────────────────────────────────────────────────────
 
@@ -104,10 +143,11 @@ export function buildPass1Prompt(anchors: StreamBAnchors): AssembledPrompt {
         version: STREAM_B_ANCHORS_BLOCK_VERSION,
         text: streamBAnchorsBlock({ anchors }),
       },
+      // W11.7.17 QC-iter2-W2 P0 (F-D-001): v2 NESTED-shape orientation.
       {
-        name: 'pass1OutputSchema',
-        version: PASS1_OUTPUT_SCHEMA_BLOCK_VERSION,
-        text: pass1OutputSchemaBlock(),
+        name: 'pass1V2Orientation',
+        version: PASS1_V2_ORIENTATION_BLOCK_VERSION,
+        text: pass1V2OrientationBlock(),
       },
       {
         name: 'roomTypeTaxonomy',

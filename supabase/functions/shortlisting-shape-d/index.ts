@@ -1464,6 +1464,47 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
   const clutterSeverityRaw = qualityFlagsRaw.clutter_severity ?? out.clutter_severity;
   const clutterDetailRaw = qualityFlagsRaw.clutter_detail ?? out.clutter_detail;
 
+  // ─── W11.7.17 QC-iter2-W2 P0 (F-D-002): image_classification v2-nested read ──
+  // v2 universal schema places `time_of_day_*`, exterior/detail subject under
+  // `out.image_classification.{is_dusk, is_day, is_golden_hour, is_night,
+  // subject, is_drone}`. The pre-fix persist read the top-level v1 fields
+  // (`out.time_of_day`, `out.is_exterior`, `out.is_detail_shot`) which v2
+  // NEVER emits — so these columns landed NULL on every row since the
+  // W11.7.17 cutover (2026-05-01).
+  //
+  // Now: derive `time_of_day` enum from the 4 nested booleans (priority:
+  // night > dusk > golden_hour > day, mirroring the visual progression).
+  // Derive `is_exterior` from `image_classification.subject === 'exterior'`
+  // and `is_detail_shot` from `subject === 'detail'` OR
+  // `image_type === 'is_detail_shot'` (image_type is the 11-option enum that
+  // flags detail shots even when subject is technically interior/exterior).
+  // Derive `is_drone` from `image_classification.is_drone` too — same
+  // top-level NULL bug. Backwards-compat fallback: when
+  // `image_classification` is null/undefined (defensive — should not happen
+  // post-cutover), fall through to the legacy top-level read so any
+  // straggling v1.x traffic still lands cleanly.
+  const imgClass = (out.image_classification && typeof out.image_classification === 'object')
+    ? out.image_classification as Record<string, unknown>
+    : null;
+  const imageTypeRaw = str(out.image_type);
+  const timeOfDay: string | null = imgClass
+    ? (bool(imgClass.is_night) ? 'night'
+      : bool(imgClass.is_dusk) ? 'dusk_twilight'
+      : bool(imgClass.is_golden_hour) ? 'golden_hour'
+      : bool(imgClass.is_day) ? 'day'
+      : null)
+    : str(out.time_of_day);
+  const subjectRaw = imgClass ? str(imgClass.subject) : null;
+  const isExterior = imgClass
+    ? (subjectRaw === 'exterior')
+    : bool(out.is_exterior);
+  const isDetailShot = imgClass
+    ? (subjectRaw === 'detail' || imageTypeRaw === 'is_detail_shot')
+    : bool(out.is_detail_shot);
+  const isDrone = imgClass
+    ? bool(imgClass.is_drone)
+    : bool(out.is_drone);
+
   const roomType = str(out.room_type);
   const vantage = str(out.vantage_point);
   const eligibleExtRear = roomType === 'alfresco' && vantage === 'exterior_looking_in';
@@ -1507,7 +1548,7 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
       cameraModel: typeof cameraModelRaw === 'string' ? cameraModelRaw : null,
       cameraMake: typeof cameraMakeRaw === 'string' ? cameraMakeRaw : null,
     },
-    { isDrone: bool(out.is_drone) },
+    { isDrone },
   );
 
   // W11.6.13 — orthogonal SPACE/ZONE separation. Both are emitted by
@@ -1606,10 +1647,14 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     space_zone_count: spaceZoneCount,
     composition_type: str(out.composition_type),
     vantage_point: vantageColumn,
-    time_of_day: str(out.time_of_day),
-    is_drone: bool(out.is_drone),
-    is_exterior: bool(out.is_exterior),
-    is_detail_shot: bool(out.is_detail_shot),
+    // W11.7.17 QC-iter2-W2 P0 (F-D-002): time_of_day / is_exterior /
+    // is_detail_shot / is_drone now sourced from the v2-nested
+    // `image_classification` (with legacy top-level fallback). See
+    // derivation block above for full reasoning.
+    time_of_day: timeOfDay,
+    is_drone: isDrone,
+    is_exterior: isExterior,
+    is_detail_shot: isDetailShot,
     zones_visible: arr(out.zones_visible),
     key_elements: arr(out.key_elements),
     is_styled: bool(out.is_styled),
