@@ -189,6 +189,22 @@ interface RequestBody {
   round_id?: string;
   job_id?: string;
   _health_check?: boolean;
+  /**
+   * mig 435 / W11.7.17 backfill bug fix #2: bypass the
+   * "all compositions already classified" skip-guard. When true, every
+   * composition is treated as needing re-classification regardless of
+   * existing composition_classifications rows. Default behaviour
+   * (force=false/undefined) still runs the guard, but with a tightened
+   * predicate — a row only counts as "primed" if its critical fields
+   * (space_type, zone_focus) are populated. Backfill jobs that need to
+   * fill NULL critical fields no longer silently short-circuit Stage 1.
+   *
+   * Caller-controlled because operator-initiated re-fires can have
+   * additional context (e.g. "I just dropped a column and need every row
+   * re-derived") that the in-band predicate can't always infer from row
+   * shape alone.
+   */
+  force?: boolean;
 }
 
 // Wave 11.7.1 immediate-ack contract:
@@ -333,16 +349,37 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // completion (the dispatcher relies on this when mode='background').
   let roundId = body.round_id || null;
   const jobId = body.job_id || null;
-  if (!roundId && jobId) {
+  if (jobId) {
     const admin = getAdminClient();
     const { data: job } = await admin
       .from('shortlisting_jobs')
-      .select('round_id')
+      .select('round_id, payload')
       .eq('id', jobId)
       .maybeSingle();
-    if (job?.round_id) roundId = job.round_id;
+    if (!roundId && job?.round_id) roundId = job.round_id;
+    // mig 435 BUG 2: when invoked via dispatcher, force lives on the
+    // shortlisting_jobs.payload row (the backfill orchestrator already
+    // started writing { force: true } there in anticipation of this
+    // support — see job 6c61ceb6). Pull it through so the preflight sees
+    // the operator-provided override. We always check the payload when a
+    // job_id is present so direct invocations can co-exist with the
+    // dispatcher path.
+    if (
+      body.force === undefined &&
+      job?.payload &&
+      typeof job.payload === 'object' &&
+      // deno-lint-ignore no-explicit-any
+      (job.payload as any).force === true
+    ) {
+      body.force = true;
+    }
   }
   if (!roundId) return errorResponse('round_id (or job_id) required', 400, req);
+  // Honour caller-provided force flag (mig 435 BUG 2). When true, the
+  // skip-guard is bypassed even if every composition has a fully-classified
+  // row. Default behaviour (force unset/false) still runs the guard with the
+  // tightened NULL-critical-fields predicate.
+  const force = body.force === true;
 
   // Project-access guard for non-service callers (former pass1 audit defect #42).
   if (!isService) {
@@ -367,7 +404,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // succeed do we kick the long-running Stage 1 work into the background.
   let preflight: PreflightOk;
   try {
-    preflight = await preflightShapeDStage1(roundId);
+    preflight = await preflightShapeDStage1(roundId, { force });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[${GENERATOR}] preflight failed for round ${roundId}: ${msg}`);
@@ -566,6 +603,13 @@ interface PreflightOk {
   startedAt: number;
 }
 
+interface PreflightOpts {
+  /** mig 435 BUG 2: when true, bypass the "already classified" skip-guard
+   *  entirely. Every composition is treated as needing re-classification
+   *  regardless of existing composition_classifications rows. */
+  force?: boolean;
+}
+
 /**
  * Synchronous pre-flight: run everything that can fail fast (engine settings,
  * round context, mode gate, cost cap, mutex acquisition) BEFORE returning
@@ -574,7 +618,11 @@ interface PreflightOk {
  * timeout. On success, the mutex IS HELD — the caller is responsible for
  * releasing it via bgWork's finally block.
  */
-async function preflightShapeDStage1(roundId: string): Promise<PreflightOk> {
+async function preflightShapeDStage1(
+  roundId: string,
+  opts: PreflightOpts = {},
+): Promise<PreflightOk> {
+  const force = opts.force === true;
   const startedAt = Date.now();
   const admin = getAdminClient();
   const preflightWarnings: string[] = [];
@@ -608,16 +656,36 @@ async function preflightShapeDStage1(roundId: string): Promise<PreflightOk> {
     throw new Error(`round ${roundId} has no composition_groups — Pass 0 must run first`);
   }
 
-  // 5. Idempotency: prime from existing classifications
-  const primedGroupIds = await loadPrimedGroupIds(admin, roundId);
+  // 5. Idempotency: prime from existing classifications.
+  //
+  // mig 435 BUG 2: the original guard treated row EXISTENCE in
+  // composition_classifications as proof of classification. That's wrong
+  // for backfills: a row can exist with NULL critical fields (space_type,
+  // zone_focus, photographer_techniques absent, etc.) and the backfill
+  // wave is precisely meant to fill those NULLs. The fix is two-fold:
+  //   (a) when force=true, skip the guard entirely — every composition is
+  //       re-classified regardless of existing rows
+  //   (b) otherwise, only treat a row as "primed" if its critical fields
+  //       are populated. loadPrimedGroupIds now applies the
+  //       NULL-critical-fields filter at the SQL layer.
+  // Today's hack (DELETE all classifications and re-fire) becomes
+  // unnecessary: backfill jobs pass force=true OR rely on the tightened
+  // predicate to detect the NULL rows automatically.
+  const primedGroupIds = force
+    ? new Set<string>()
+    : await loadPrimedGroupIds(admin, roundId);
   const groupsToRun = compositions.filter((c) => !primedGroupIds.has(c.group_id));
-  if (groupsToRun.length === 0) {
+  if (force) {
     preflightWarnings.push(
-      `all ${compositions.length} compositions already classified — re-dispatching Stage 4 only`,
+      `force=true: bypassing skip-guard — re-classifying all ${compositions.length} compositions regardless of existing classification rows`,
+    );
+  } else if (groupsToRun.length === 0) {
+    preflightWarnings.push(
+      `all ${compositions.length} compositions already classified (with non-NULL space_type AND zone_focus) — re-dispatching Stage 4 only`,
     );
   } else if (primedGroupIds.size > 0) {
     preflightWarnings.push(
-      `${primedGroupIds.size} compositions already classified (primed); re-classifying ${groupsToRun.length}`,
+      `${primedGroupIds.size} compositions already classified (primed); re-classifying ${groupsToRun.length} (includes any with NULL space_type/zone_focus)`,
     );
   }
 
@@ -1504,10 +1572,20 @@ async function loadPrimedGroupIds(
   admin: ReturnType<typeof getAdminClient>,
   roundId: string,
 ): Promise<Set<string>> {
+  // mig 435 BUG 2: a row only counts as "primed" when its critical
+  // fields are populated. Backfill jobs by definition have rows-that-exist
+  // with NULL critical fields (space_type, zone_focus, etc.). Treating
+  // their mere existence as "primed" caused Stage 1 to short-circuit with
+  // `successes:0, per_image_calls_run:0` and the backfill never ran. The
+  // tightened predicate filters those NULL rows back into groupsToRun so
+  // they're re-classified. Predicate is conservative — extend with
+  // additional critical fields here as later waves identify them.
   const { data, error } = await admin
     .from('composition_classifications')
     .select('group_id')
-    .eq('round_id', roundId);
+    .eq('round_id', roundId)
+    .not('space_type', 'is', null)
+    .not('zone_focus', 'is', null);
   if (error) {
     console.warn(`[${GENERATOR}] primed lookup failed: ${error.message} — treating all as fresh`);
     return new Set();
