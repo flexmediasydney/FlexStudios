@@ -75,17 +75,26 @@ const STALE_MS = 60_000; // brief cache as required
 // but the engine has moved to `space_type` + `zone_focus` as the primary
 // orthogonal axes for new diagnostics.
 //
-// TODO(C1 / mig 441-followup): when `shot_scale`, `perspective_compression`,
-// and `orientation` columns ship, register them here in B_AXES_PRIMARY:
-//   shot_scale            — between space_type and zone_focus
-//   perspective_compression — after composition_type
-//   orientation           — after perspective_compression
-// Track owner: agent-af724a488e18c08a9 (this commit) — small follow-up.
+// Mig 442 (C1) shipped 3 new orthogonal axes on composition_classifications:
+// `shot_scale`, `perspective_compression`, `orientation`. Mig 448 extends the
+// taxonomy_b_* RPC allow-lists to cover them. They have no slot-eligibility
+// column on shortlisting_slot_definitions yet — the RPC returns an empty
+// eligible_slots[] for those axes, by design.
 const B_AXES_PRIMARY = [
-  { key: "image_type",       label: "Image type" },
-  { key: "space_type",       label: "Space type" },
-  { key: "zone_focus",       label: "Zone focus" },
-  { key: "composition_type", label: "Composition type" },
+  { key: "image_type",              label: "Image type",
+    description: "Day / night / etc. — top-level visual mode." },
+  { key: "space_type",              label: "Space type",
+    description: "What kind of space the frame depicts (kitchen, master_bedroom…)." },
+  { key: "shot_scale",              label: "Shot scale",
+    description: "How much of the scene is framed (wide -> vignette)." },
+  { key: "zone_focus",              label: "Zone focus",
+    description: "Which zone within the space is the focal subject." },
+  { key: "composition_type",        label: "Composition type",
+    description: "Overall composition / lensing intent of the frame." },
+  { key: "perspective_compression", label: "Perspective",
+    description: "Depth rendering: expanded vs compressed (focal-feel, not lens FOV)." },
+  { key: "orientation",             label: "Orientation",
+    description: "Landscape / portrait / square (derived from EXIF)." },
 ];
 
 const B_AXES_LEGACY = [
