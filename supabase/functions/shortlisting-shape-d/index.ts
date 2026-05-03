@@ -1451,7 +1451,7 @@ async function runShapeDStage1Core(
   // 16k thinking) hit the edge-runtime wall budget. The new chain pivots
   // through detect_instances (Phase 1 LLM clustering, ~30-90s) which itself
   // enqueues stage4_synthesis on success. Insert a `detect_instances` job;
-  // the dispatcher (mig 455 extends the kind enum) routes it to
+  // the dispatcher (mig 456 extends the kind enum) routes it to
   // shortlisting-detect-instances next tick.
   const stage4Dispatch = await dispatchDetectInstancesJob({
     admin,
@@ -2989,7 +2989,7 @@ async function dispatchDetectInstancesJob(
   args: DispatchStage4JobArgs,
 ): Promise<Stage4DispatchResult> {
   // Idempotency: skip if a non-terminal detect_instances job already exists
-  // for this round. The unique partial index (mig 455) also enforces this at
+  // for this round. The unique partial index (mig 456) also enforces this at
   // the DB layer; the explicit check just avoids the noisy unique-violation log.
   const { count: existing } = await args.admin
     .from('shortlisting_jobs')

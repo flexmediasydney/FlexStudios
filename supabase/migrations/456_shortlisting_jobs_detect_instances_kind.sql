@@ -1,5 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- Migration 455 — W11.8 detect_instances job kind for the dispatcher
+-- Migration 456 — W11.8 detect_instances job kind for the dispatcher
+-- (mig 455 was claimed by INST-C's space_instance_operator_rpcs after the
+--  initial planning. Mine bumped to 456 to keep filename ordering stable.)
 -- ═══════════════════════════════════════════════════════════════════════════
 --
 -- Adds a new kind value `detect_instances` to shortlisting_jobs.kind so the
@@ -73,7 +75,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_shortlisting_jobs_active_pass_per_round
     AND status IN ('pending', 'running', 'succeeded');
 
 COMMENT ON INDEX public.uniq_shortlisting_jobs_active_pass_per_round IS
-  'W11.8 (mig 455): prevents dispatcher chain race for legacy two-pass kinds, '
+  'W11.8 (mig 456): prevents dispatcher chain race for legacy two-pass kinds, '
   'Shape D kinds (shape_d_stage1, stage4_synthesis), and the new instance-'
   'detection kind (detect_instances). Two concurrent ticks enqueueing the '
   'same kind for the same round get a unique-violation that chainNextKind '
