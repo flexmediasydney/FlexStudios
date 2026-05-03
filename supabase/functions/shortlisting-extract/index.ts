@@ -239,8 +239,15 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         const result = await extract(input, modalUrl);
         return jsonResponse(result, 200, req);
       }
+      // The dispatcher's fire-and-forget contract (line ~951 of
+      // shortlisting-job-dispatcher/index.ts) recognises the LITERAL string
+      // `"background"` to mean "self-update the job row when bgWork
+      // finishes; do NOT mark succeeded on this 200/202 ack." Any other
+      // value (including "fire_and_forget") would cause the dispatcher to
+      // race the background task and prematurely mark the job succeeded,
+      // breaking chain idempotency.
       return jsonResponse(
-        { ok: true, queued: true, job_id: input.jobId, mode: 'fire_and_forget' },
+        { ok: true, queued: true, job_id: input.jobId, mode: 'background' },
         202,
         req,
       );
