@@ -2573,19 +2573,31 @@ export async function persistPositionDecisions(
   }
 
   // Build a stem -> group_id map from composition_groups for FK resolution.
+  // BUG-FIX 2026-05-03: previously selected `key_image_path` which doesn't
+  // exist on composition_groups (silently returned no rows, leaving every
+  // winner_group_id NULL). The actual columns are best_bracket_stem +
+  // delivery_reference_stem (+ files_in_group[] array). Stage 4 emits
+  // `winner.stem` as the delivery_reference_stem (the chosen visual out of
+  // the 5-bracket group), so we register every known stem of every group
+  // against the same group_id so look-ups by delivery / best / any bracket
+  // member all resolve.
   const stemToGroupId = new Map<string, string>();
   try {
     const { data: groupRows } = await args.admin
       .from('composition_groups')
-      .select('id, key_image_path')
+      .select('id, best_bracket_stem, delivery_reference_stem, files_in_group')
       .eq('round_id', args.roundId);
     for (const r of (groupRows || []) as Array<Record<string, unknown>>) {
       const gid = String(r.id);
-      const path = typeof r.key_image_path === 'string' ? r.key_image_path : '';
-      if (!path) continue;
-      // Stems are usually the basename without extension.
-      const stem = path.split('/').pop()?.replace(/\.[^.]+$/, '') ?? '';
-      if (stem) stemToGroupId.set(stem, gid);
+      const delivery = typeof r.delivery_reference_stem === 'string' ? r.delivery_reference_stem : '';
+      const best = typeof r.best_bracket_stem === 'string' ? r.best_bracket_stem : '';
+      if (delivery) stemToGroupId.set(delivery, gid);
+      if (best) stemToGroupId.set(best, gid);
+      if (Array.isArray(r.files_in_group)) {
+        for (const f of r.files_in_group) {
+          if (typeof f === 'string' && f) stemToGroupId.set(f, gid);
+        }
+      }
     }
   } catch (gerr) {
     const m = gerr instanceof Error ? gerr.message : String(gerr);

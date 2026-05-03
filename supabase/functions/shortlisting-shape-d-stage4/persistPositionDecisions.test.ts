@@ -39,7 +39,17 @@ interface DbCall {
 
 interface FakeStore {
   positionDecisions: Array<Record<string, unknown>>;
-  groups: Array<{ id: string; key_image_path: string }>;
+  // BUG-FIX 2026-05-03: composition_groups schema is best_bracket_stem +
+  // delivery_reference_stem + files_in_group[] — the prior test mock used a
+  // non-existent `key_image_path` column. The production code reads all
+  // three so any of them resolves a stem; tests use delivery_reference_stem
+  // as the canonical winner stem (Stage 4's chosen visual).
+  groups: Array<{
+    id: string;
+    delivery_reference_stem?: string;
+    best_bracket_stem?: string;
+    files_in_group?: string[];
+  }>;
   calls: DbCall[];
   /** When set, every operation against this table simulates "table missing" */
   missingTable?: string;
@@ -146,8 +156,8 @@ Deno.test('persistPositionDecisions: 3 valid decisions persist as 3 rows', async
   const store: FakeStore = {
     positionDecisions: [],
     groups: [
-      { id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_KITCHEN.jpg' },
-      { id: GROUP_ID_LIVING, key_image_path: '/photos/IMG_LIVING.jpg' },
+      { id: GROUP_ID_KITCHEN, delivery_reference_stem: 'IMG_KITCHEN' },
+      { id: GROUP_ID_LIVING, delivery_reference_stem: 'IMG_LIVING' },
     ],
     calls: [],
   };
@@ -241,7 +251,7 @@ Deno.test('mig 451: position_constraints filtered to canonical axis set (drops r
   // the migration cutover window.
   const store: FakeStore = {
     positionDecisions: [],
-    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    groups: [{ id: GROUP_ID_KITCHEN, delivery_reference_stem: 'IMG_K' }],
     calls: [],
   };
   // deno-lint-ignore no-explicit-any
@@ -283,7 +293,7 @@ Deno.test('mig 451: position_constraints filtered to canonical axis set (drops r
 Deno.test('persistPositionDecisions: idempotency — second run replaces first', async () => {
   const store: FakeStore = {
     positionDecisions: [],
-    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    groups: [{ id: GROUP_ID_KITCHEN, delivery_reference_stem: 'IMG_K' }],
     calls: [],
   };
   // deno-lint-ignore no-explicit-any
@@ -333,7 +343,7 @@ Deno.test('persistPositionDecisions: idempotency — second run replaces first',
 Deno.test('persistPositionDecisions: invalid phase values are skipped with warning', async () => {
   const store: FakeStore = {
     positionDecisions: [],
-    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    groups: [{ id: GROUP_ID_KITCHEN, delivery_reference_stem: 'IMG_K' }],
     calls: [],
   };
   // deno-lint-ignore no-explicit-any
@@ -493,7 +503,7 @@ Deno.test('persistPositionDecisions: unknown winner stem -> winner_group_id null
 Deno.test('W11.8: persistPositionDecisions captures winner.space_instance_id', async () => {
   const store: FakeStore = {
     positionDecisions: [],
-    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    groups: [{ id: GROUP_ID_KITCHEN, delivery_reference_stem: 'IMG_K' }],
     calls: [],
   };
   // deno-lint-ignore no-explicit-any
@@ -528,7 +538,7 @@ Deno.test('W11.8: persistPositionDecisions captures winner.space_instance_id', a
 Deno.test('W11.8: persistPositionDecisions tolerates missing space_instance_id (legacy round)', async () => {
   const store: FakeStore = {
     positionDecisions: [],
-    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    groups: [{ id: GROUP_ID_KITCHEN, delivery_reference_stem: 'IMG_K' }],
     calls: [],
   };
   // deno-lint-ignore no-explicit-any
@@ -561,7 +571,7 @@ Deno.test('W11.8: persistPositionDecisions tolerates missing space_instance_id (
 Deno.test('persistPositionDecisions: position_index outside resolved set warns but persists', async () => {
   const store: FakeStore = {
     positionDecisions: [],
-    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    groups: [{ id: GROUP_ID_KITCHEN, delivery_reference_stem: 'IMG_K' }],
     calls: [],
   };
   // deno-lint-ignore no-explicit-any
@@ -590,3 +600,102 @@ Deno.test('persistPositionDecisions: position_index outside resolved set warns b
     ),
   );
 });
+
+// ──────────────────────────────────────────────────────────────────────────
+// BUG-FIX 2026-05-03: stem→group_id resolution
+// ──────────────────────────────────────────────────────────────────────────
+// Locks in the contract that persistPositionDecisions resolves winner.stem
+// against ANY of the three composition_groups stem surfaces:
+//   - delivery_reference_stem  (the chosen visual; Stage 4 emits this)
+//   - best_bracket_stem        (luminance-best frame; sometimes the same)
+//   - files_in_group[]         (every bracket member)
+// Prior to the fix, the lookup queried a non-existent `key_image_path`
+// column, silently leaving every winner_group_id NULL on prod.
+Deno.test(
+  'persistPositionDecisions: winner.stem resolves via best_bracket_stem fallback',
+  async () => {
+    const store: FakeStore = {
+      positionDecisions: [],
+      groups: [
+        {
+          id: GROUP_ID_KITCHEN,
+          delivery_reference_stem: '034A7901',
+          best_bracket_stem: '034A7900',
+          files_in_group: ['034A7900', '034A7901', '034A7902', '034A7903', '034A7904'],
+        },
+      ],
+      calls: [],
+    };
+    // deno-lint-ignore no-explicit-any
+    const admin = makeFakeAdmin(store) as any;
+    const warnings: string[] = [];
+
+    // Stage 4 emits best_bracket_stem instead of delivery_reference_stem.
+    const count = await persistPositionDecisions({
+      admin,
+      projectId: PROJECT_ID,
+      roundId: ROUND_ID,
+      positionDecisions: [
+        {
+          position_index: 0,
+          phase: 'mandatory',
+          winner: {
+            stem: '034A7900',
+            rationale: 'best bracket',
+            constraint_match_score: 9,
+            slot_fit_score: 8,
+          },
+        },
+      ],
+      resolvedPositions: makeResolvedPositions(),
+      warnings,
+    });
+    assertStrictEquals(count, 1);
+    assertStrictEquals(store.positionDecisions[0].winner_group_id, GROUP_ID_KITCHEN);
+    assertStrictEquals(store.positionDecisions[0].winner_stem, '034A7900');
+  },
+);
+
+Deno.test(
+  'persistPositionDecisions: winner.stem resolves via files_in_group bracket member',
+  async () => {
+    const store: FakeStore = {
+      positionDecisions: [],
+      groups: [
+        {
+          id: GROUP_ID_LIVING,
+          delivery_reference_stem: '034A7866',
+          best_bracket_stem: '034A7869',
+          files_in_group: ['034A7865', '034A7866', '034A7867', '034A7868', '034A7869'],
+        },
+      ],
+      calls: [],
+    };
+    // deno-lint-ignore no-explicit-any
+    const admin = makeFakeAdmin(store) as any;
+    const warnings: string[] = [];
+
+    // Operator-emitted preview path or a model that picked a non-canonical
+    // bracket member should still resolve to the same group.
+    await persistPositionDecisions({
+      admin,
+      projectId: PROJECT_ID,
+      roundId: ROUND_ID,
+      positionDecisions: [
+        {
+          position_index: 0,
+          phase: 'mandatory',
+          winner: {
+            stem: '034A7867',
+            rationale: 'mid bracket',
+            constraint_match_score: 9,
+            slot_fit_score: 8,
+          },
+        },
+      ],
+      resolvedPositions: makeResolvedPositions(),
+      warnings,
+    });
+    assertStrictEquals(store.positionDecisions[0].winner_group_id, GROUP_ID_LIVING);
+  },
+);

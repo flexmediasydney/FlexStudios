@@ -175,9 +175,11 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
           position_index: {
             type: 'integer',
             description:
-              '0-based index from the gallery_positions list in the prompt. ' +
-              'MUST match exactly — the persistence layer keys decisions to ' +
-              'positions by this integer.',
+              'The integer shown in square brackets at the start of each ' +
+              'line in the GALLERY POSITIONS prompt block (e.g. for line ' +
+              '`[3] mandatory :: …`, emit position_index=3). Echo the value ' +
+              'verbatim — do NOT renumber to 0-based. The persistence layer ' +
+              'keys decisions to positions by this exact integer.',
           },
           phase: {
             type: 'string',
