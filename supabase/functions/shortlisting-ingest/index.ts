@@ -50,6 +50,7 @@ import {
 } from '../_shared/supabase.ts';
 import { listFolder } from '../_shared/dropbox.ts';
 import { getFolderPath } from '../_shared/projectFolders.ts';
+import { getDropboxTempLink } from '../_shared/shortlistingFolders.ts';
 import {
   computeExpectedFileCount,
   flattenProjectProducts,
@@ -398,6 +399,74 @@ async function ingest(
     warnings.push(`projects.current_shortlist_round_id update failed: ${linkErr.message}`);
   }
 
+  // 12b. Wave 3 — pre-bake Dropbox temporary download links.
+  //
+  // The shortlisting engine's biggest scaling pain has been Dropbox /files
+  // rate limits.  Modal extract used to call files/get_temporary_link
+  // (or files_download directly) once per file during its concurrent
+  // processing pass — and Dropbox throttles that bucket aggressively
+  // when the app's recent burst+retry history looks bad.
+  //
+  // Wave 3 shifts ALL the link minting here, into a single SERIAL pass
+  // before any parallel work begins.  We call /files/get_temporary_link
+  // once per file with a 300 ms gap between calls (≈3 calls/sec — well
+  // below any observed limit).  The CDN URLs we get back are valid for
+  // ~4 h, more than enough for the dispatcher to claim and run all
+  // chunks (typical end-to-end <5 min).  The links are persisted into
+  // each chunk's payload as `prebaked_links: { [path]: link }` and the
+  // Modal worker reads them directly — making ZERO Dropbox API calls
+  // during the heavy parallel phase.  This decouples engine throughput
+  // from Dropbox's adaptive rate-limiter entirely.
+  //
+  // Cost: 0.3 s × N files of wall-clock spent in ingest.  At 50 files
+  // that's ~15 s; at 500 files ~2.5 min.  Acceptable given ingest runs
+  // once per round and Modal's parallel phase still does the heavy
+  // CR3 download/exif/preview work in parallel after this completes.
+  const linkBakeStart = Date.now();
+  const prebakedLinkMap: Record<string, string> = {};
+  const linkBakeErrors: Array<{ path: string; error: string }> = [];
+  const LINK_GAP_MS = 300;
+  console.info(
+    `[${GENERATOR}] Wave 3 link-bake START n=${filePaths.length} ` +
+      `gap_ms=${LINK_GAP_MS} est_ms=${filePaths.length * LINK_GAP_MS}`,
+  );
+  for (let i = 0; i < filePaths.length; i++) {
+    const fp = filePaths[i];
+    try {
+      const link = await getDropboxTempLink(fp);
+      prebakedLinkMap[fp] = link;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      linkBakeErrors.push({ path: fp, error: msg });
+      console.warn(`[${GENERATOR}] link-bake fail path=${fp.slice(-40)} err=${msg.slice(0, 200)}`);
+    }
+    // Serialise the burst-start; skip the sleep on the last iteration.
+    if (i < filePaths.length - 1) {
+      await new Promise((r) => setTimeout(r, LINK_GAP_MS));
+    }
+  }
+  const linkBakeElapsedS = ((Date.now() - linkBakeStart) / 1000).toFixed(1);
+  const okCount = Object.keys(prebakedLinkMap).length;
+  console.info(
+    `[${GENERATOR}] Wave 3 link-bake DONE ok=${okCount} err=${linkBakeErrors.length} ` +
+      `elapsed_s=${linkBakeElapsedS}`,
+  );
+  if (linkBakeErrors.length > 0) {
+    warnings.push(
+      `Wave 3 link-bake: ${linkBakeErrors.length}/${filePaths.length} files failed to mint a temp link` +
+        ` (first error: ${linkBakeErrors[0].error.slice(0, 200)}). Modal will fall back to ` +
+        `per-file link minting for these — slower and rate-limit-prone.`,
+    );
+  }
+  if (okCount === 0) {
+    throw new Error(
+      `Wave 3 link-bake produced 0 successful links across ${filePaths.length} files — ` +
+        `aborting the round.  First error: ${linkBakeErrors[0]?.error || 'unknown'}.  ` +
+        `This usually means the Dropbox app is currently rate-limit throttled.  ` +
+        `Wait 10-30 min and re-run.`,
+    );
+  }
+
   // 13. Enqueue extract jobs (chunked).
   const jobIds: string[] = [];
   if (filePaths.length > 0) {
@@ -405,6 +474,13 @@ async function ingest(
     const chunkTotal = Math.ceil(filePaths.length / CHUNK_SIZE);
     for (let i = 0; i < filePaths.length; i += CHUNK_SIZE) {
       const chunk = filePaths.slice(i, i + CHUNK_SIZE);
+      // Wave 3: attach only the slice of pre-baked links relevant to
+      // this chunk.  Keys are full Dropbox paths (matching file_paths
+      // entries) so Modal can do a direct lookup without slicing.
+      const chunkLinks: Record<string, string> = {};
+      for (const p of chunk) {
+        if (prebakedLinkMap[p]) chunkLinks[p] = prebakedLinkMap[p];
+      }
       chunkRows.push({
         project_id: projectId,
         round_id: roundId,
@@ -416,6 +492,10 @@ async function ingest(
           file_paths: chunk,
           chunk_index: Math.floor(i / CHUNK_SIZE),
           chunk_total: chunkTotal,
+          // Wave 3 — pre-baked CDN URLs, keyed by full Dropbox path.
+          // Modal extract reads these and skips its own
+          // files/get_temporary_link API call entirely.
+          prebaked_links: chunkLinks,
         },
         scheduled_for: new Date().toISOString(),
       });

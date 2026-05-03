@@ -45,15 +45,23 @@ async function probeDropbox(
       endpoint,
       status: resp.status,
       wall_ms: Date.now() - t,
+      // BOTH retry_after signals: standard HTTP header AND Dropbox body
+      // field. They USUALLY agree but sometimes diverge — when they
+      // diverge the larger value is the real wait. Joseph reported still
+      // hitting 429 way past body's suggested 5min, so we want to see if
+      // the header gives a longer answer.
+      retry_after_header: resp.headers.get('Retry-After'),
+      // Capture every Dropbox-specific rate-limit hint
+      x_dropbox_retry_after: resp.headers.get('X-Dropbox-Retry-After')
+        ?? resp.headers.get('x-ratelimit-retry-after'),
     };
     if (!resp.ok) {
       out.ok = false;
       out.body = text.slice(0, 300);
-      // Dropbox 429 carries `retry_after` in the body
       try {
         const parsed = JSON.parse(text);
         if (parsed?.error?.retry_after !== undefined) {
-          out.retry_after_s = parsed.error.retry_after;
+          out.retry_after_body_s = parsed.error.retry_after;
         }
       } catch { /* ignore */ }
     } else {

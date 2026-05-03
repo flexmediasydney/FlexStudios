@@ -340,10 +340,57 @@ async function runDispatcherTick(
   let claimedTotal = 0;
   let dispatched = 0;
   let failed = 0;
-  let exitReason: "drained" | "budget_exhausted" | "kind_cap" = "drained";
+  let exitReason:
+    | "drained"
+    | "budget_exhausted"
+    | "kind_cap"
+    | "dropbox_circuit_open" = "drained";
   const results: Array<
     { id: string; kind: string; ok: boolean; error?: string }
   > = [];
+
+  // ── Wave 2 Dropbox circuit breaker ────────────────────────────────────────
+  // Modal photos-extract POSTs a row into public.dropbox_429_log every time
+  // it observes a 429 from Dropbox /files. If we see ≥3 such rows inside the
+  // last 60s the bucket is hot and firing more `extract` jobs at it will
+  // just produce more dead_letters (the recurring 2026-05-03 round-failure
+  // pattern). Skip extract claims this tick, let other kinds (pass0,
+  // shape-d, etc.) keep flowing, and re-evaluate in 60s.
+  //
+  // Single query per tick — cached across the loop iterations.
+  const DROPBOX_CIRCUIT_WINDOW_MS = 60_000;
+  const DROPBOX_CIRCUIT_THRESHOLD = 3;
+  let dropboxCircuitOpen = false;
+  let dropboxCircuit429Count = 0;
+  try {
+    const since = new Date(Date.now() - DROPBOX_CIRCUIT_WINDOW_MS).toISOString();
+    const { count, error: cbErr } = await admin
+      .from("dropbox_429_log")
+      .select("id", { count: "exact", head: true })
+      .eq("bucket", "files")
+      .gte("observed_at", since);
+    if (cbErr) {
+      // Don't fail the tick; just log and behave as if the circuit is closed.
+      console.warn(
+        `[${GENERATOR}] dropbox_429_log probe failed (treating circuit as closed): ${cbErr.message}`,
+      );
+    } else {
+      dropboxCircuit429Count = count ?? 0;
+      dropboxCircuitOpen = dropboxCircuit429Count >= DROPBOX_CIRCUIT_THRESHOLD;
+      if (dropboxCircuitOpen) {
+        console.warn(
+          `[${GENERATOR}] DROPBOX CIRCUIT OPEN — ${dropboxCircuit429Count} files-bucket 429s in the last ` +
+            `${DROPBOX_CIRCUIT_WINDOW_MS / 1000}s; will skip 'extract' claims this tick`,
+        );
+      }
+    }
+  } catch (e) {
+    console.warn(
+      `[${GENERATOR}] dropbox circuit probe threw (treating as closed): ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  }
 
   // Per-kind soft cap on this tick's claim count. extract calls Modal which
   // calls Dropbox; blasting >N concurrent Modal containers fans out into
@@ -400,6 +447,29 @@ async function runDispatcherTick(
     // claim_shortlisting_jobs has no kind filter (it picks the oldest
     // pending of any kind). Letting it claim, then choosing to release if
     // over-cap, is the simplest correct behaviour.
+    // Wave 2 circuit breaker: if Dropbox /files is hot, release any
+    // claimed `extract` row back to pending immediately and exit the
+    // loop. Other kinds (pass0, shape-d, etc.) keep flowing through
+    // this tick — only extract talks to Dropbox /files.
+    if (job.kind === "extract" && dropboxCircuitOpen) {
+      await admin
+        .from("shortlisting_jobs")
+        .update({
+          status: "pending",
+          started_at: null,
+          attempt_count: Math.max(0, (job.attempt_count ?? 1) - 1),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", job.id);
+      exitReason = "dropbox_circuit_open";
+      console.warn(
+        `[${GENERATOR}] dropbox_circuit_open — released extract job ${job.id} back to pending ` +
+          `(${dropboxCircuit429Count} 429s in last ${DROPBOX_CIRCUIT_WINDOW_MS / 1000}s); ` +
+          `next tick will re-evaluate`,
+      );
+      break;
+    }
+
     const kindCap = PER_KIND_CAP[job.kind];
     if (kindCap !== undefined) {
       const so_far = claimedByKind[job.kind] ?? 0;

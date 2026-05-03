@@ -219,13 +219,25 @@ const _inflight = new Map();
 export function fetchMediaProxy(cache, filePath, mode = 'thumb', retries = 2) {
   const cacheKey = `${mode}::${filePath}`;
 
+  // Wave 2: Supabase Storage pass-through.
+  // Shortlisting previews are now stored in a public Supabase Storage
+  // bucket and surfaced as direct https:// URLs. There's no auth or
+  // rate-limit concern, so we skip the Edge proxy entirely and let
+  // the browser <img src> the URL directly. We still cache so callers
+  // get the same string back on the second hit (avoids React jitter).
+  if (typeof filePath === 'string' && /^https?:\/\//i.test(filePath)) {
+    if (!cache.has(cacheKey)) cache.set(cacheKey, filePath);
+    return Promise.resolve(filePath);
+  }
+
   // Layer 1: Already cached blob URL
   if (cache.has(cacheKey)) return Promise.resolve(cache.get(cacheKey));
 
   // Layer 2: Already in-flight — return the SAME promise (critical dedup fix)
   if (_inflight.has(cacheKey)) return _inflight.get(cacheKey);
 
-  // Layer 3: Start new fetch
+  // Layer 3: Start new fetch (Dropbox-rooted paths still go through
+  // the getDeliveryMediaFeed Edge proxy for token-handled blob serving)
   const promise = _doFetch(cache, cacheKey, filePath, mode, retries);
   _inflight.set(cacheKey, promise);
   // Clean up in-flight map when done (success or failure)

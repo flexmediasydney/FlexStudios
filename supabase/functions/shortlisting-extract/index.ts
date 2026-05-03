@@ -41,6 +41,11 @@ interface RequestBody {
   project_id?: string;
   round_id?: string;
   file_paths?: string[];
+  // Wave 3: pre-baked Dropbox CDN URLs keyed by file path. When
+  // present, Modal skips its own files/get_temporary_link API call
+  // and downloads the bytes directly from the CDN — eliminating
+  // ALL Dropbox API pressure during the heavy parallel phase.
+  prebaked_links?: Record<string, string>;
   _health_check?: boolean;
 }
 
@@ -127,6 +132,8 @@ interface ExtractInput {
   projectId: string;
   roundId: string | null;
   filePaths: string[];
+  // Wave 3 — see RequestBody.prebaked_links for full context.
+  prebakedLinks: Record<string, string> | null;
 }
 
 serveWithAudit(GENERATOR, async (req: Request) => {
@@ -290,11 +297,17 @@ async function resolveInput(body: RequestBody): Promise<ExtractInput> {
     if (filePaths.length === 0) {
       throw new Error(`job ${body.job_id} payload has no file_paths`);
     }
+    // Wave 3: surface pre-baked links if ingest minted them.
+    const prebakedLinks =
+      payload.prebaked_links && typeof payload.prebaked_links === 'object'
+        ? (payload.prebaked_links as Record<string, string>)
+        : null;
     return {
       jobId: job.id,
       projectId: job.project_id,
       roundId: job.round_id,
       filePaths,
+      prebakedLinks,
     };
   }
 
@@ -308,6 +321,9 @@ async function resolveInput(body: RequestBody): Promise<ExtractInput> {
     projectId: body.project_id,
     roundId: body.round_id || null,
     filePaths: body.file_paths,
+    // Direct callers may pass prebaked_links explicitly (e.g. test
+    // harnesses that already minted links).
+    prebakedLinks: body.prebaked_links || null,
   };
 }
 
@@ -365,12 +381,27 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
   }
 
   // 4. POST to Modal.
+  // 2026-05-03 — pass dropbox_team_namespace_id so Modal can skip its
+  // users/get_current_account auto-detect call. That call has been observed
+  // hanging for the full 150s edge IDLE_TIMEOUT when Dropbox rate-limits
+  // the /users API bucket (silent SDK retries with exponential backoff).
+  const dropboxTeamNamespaceId = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID') || '';
   const requestBody = {
     _token: SUPABASE_SERVICE_ROLE_KEY,
     project_id: input.projectId,
     file_paths: input.filePaths,
     dropbox_root_path: project.dropbox_root_path,
     dropbox_access_token: dropboxAccessToken,  // Wave 7 P0-3: caller-provided token
+    dropbox_team_namespace_id: dropboxTeamNamespaceId,
+    // Wave 2: scope Supabase Storage upload path to {project_id}/{round_id}/{stem}.jpg
+    // so the 30-day cleanup cron (mig 463) can drop whole rounds.
+    round_id: input.roundId,
+    // Wave 3: forward pre-baked Dropbox CDN URLs to Modal.  When present,
+    // Modal does ZERO Dropbox API calls — just httpx-fetches the bytes
+    // from the CDN URL.  This decouples extract throughput from
+    // Dropbox's adaptive rate-limiter.  Empty/absent means Modal falls
+    // back to per-file files/get_temporary_link (rate-limit-prone).
+    prebaked_links: input.prebakedLinks || {},
   };
 
   let modalResponse: Record<string, unknown> | null = null;
