@@ -143,6 +143,14 @@ export default function RecipeMatrixTab() {
             positions to fit.
           </div>
           <div className="text-blue-800/90 mt-1">
+            <strong>Image shortlisting only.</strong> This authoring surface
+            is scoped to the IMAGE shortlisting engine
+            (<code>photo_day_shortlist</code>, <code>photo_dusk_shortlist</code>,
+            <code> drone_shortlist</code>). Products like video, floor plans,
+            and agent portraits use separate engines and won't appear here —
+            their positions are authored elsewhere.
+          </div>
+          <div className="text-blue-800/90 mt-1">
             <strong>Engine grade</strong> (Volume / Refined / Editorial) is
             derived per-round from the shoot quality and steers the Stage 4
             voice anchor. It does <em>not</em> affect slot allocation —

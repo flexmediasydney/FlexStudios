@@ -37,6 +37,28 @@ export default function HelpDrawer({ open, onOpenChange }) {
         <ScrollArea className="flex-1 mt-4 pr-4">
           <div className="space-y-5 text-sm leading-relaxed">
             <section>
+              <h3 className="font-semibold mb-1.5">Scope: image shortlisting only</h3>
+              <p className="text-muted-foreground">
+                The Recipe Matrix authors per-position constraints for the{" "}
+                <strong>image shortlisting</strong> engine only. The engine
+                roles in scope are:
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-muted-foreground mt-2">
+                <li><code>photo_day_shortlist</code> — Sales / day images</li>
+                <li><code>photo_dusk_shortlist</code> — Dusk images</li>
+                <li><code>drone_shortlist</code> — Aerial / drone shots</li>
+              </ul>
+              <p className="text-muted-foreground mt-2">
+                Products like video (<code>video_day_shortlist</code> /{" "}
+                <code>video_dusk_shortlist</code>), floor plans (
+                <code>floorplan_qa</code>), and agent portraits (
+                <code>agent_portraits</code>) use separate engines and won't
+                appear in the matrix tabs or count toward the cell target.
+                Author those deliverables elsewhere.
+              </p>
+            </section>
+
+            <section>
               <h3 className="font-semibold mb-1.5">What is a position?</h3>
               <p className="text-muted-foreground">
                 A <em>position</em> is a single slot in a finished gallery —

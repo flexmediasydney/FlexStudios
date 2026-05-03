@@ -52,6 +52,8 @@ import PositionRow from "./PositionRow";
 import {
   ENGINE_MODES,
   ENGINE_ROLES,
+  IMAGE_SHORTLIST_ENGINE_ROLES,
+  isImageShortlistEngineRole,
   deriveCellTarget,
   describeTargetBreakdown,
 } from "./constants";
@@ -87,9 +89,53 @@ export default function CellEditorDialog({
   const positions = positionsQuery.data?.positions || [];
   const scopeChain = positionsQuery.data?.scopeChain || [];
 
+  // ── Engine-role tabs (image-shortlist filter, W11.6.28c) ────────────
+  //
+  // The Recipe Matrix authors per-position constraints for the IMAGE
+  // shortlisting engine only. Other engine_roles (video / floorplan_qa /
+  // agent_portraits) have separate processing pipelines and shouldn't
+  // appear here. We only show tabs for image-class engine_roles
+  // (photo_day_shortlist, photo_dusk_shortlist, drone_shortlist).
+  //
+  // Furthermore, we narrow the visible tabs to the engine_roles this
+  // SPECIFIC package actually offers — based on the package's products[]
+  // (e.g. Silver only ships Sales Images so it shouldn't render a Drone
+  // Shots tab). Tier-defaults mode (no package) shows ALL image-class
+  // tabs so operators can author cross-package defaults.
+  const availableRoleKeys = useMemo(() => {
+    if (isDefaults || !cell?.package) {
+      return IMAGE_SHORTLIST_ENGINE_ROLES.slice();
+    }
+    const items = Array.isArray(cell.package.products) ? cell.package.products : [];
+    const set = new Set();
+    for (const item of items) {
+      const prod = productLookup?.get?.(item.product_id);
+      if (prod && isImageShortlistEngineRole(prod.engine_role)) {
+        set.add(prod.engine_role);
+      }
+    }
+    // Preserve the canonical display order from IMAGE_SHORTLIST_ENGINE_ROLES.
+    return IMAGE_SHORTLIST_ENGINE_ROLES.filter((k) => set.has(k));
+  }, [isDefaults, cell?.package, productLookup]);
+
+  const visibleEngineRoles = useMemo(
+    () => ENGINE_ROLES.filter((r) => availableRoleKeys.includes(r.key)),
+    [availableRoleKeys],
+  );
+
+  // Re-anchor the active tab when the active package changes — otherwise
+  // a tab that's not in availableRoleKeys for the new cell would render
+  // an empty TabsContent with no content.
+  useEffect(() => {
+    if (visibleEngineRoles.length === 0) return;
+    if (!visibleEngineRoles.find((r) => r.key === activeRole)) {
+      setActiveRole(visibleEngineRoles[0].key);
+    }
+  }, [visibleEngineRoles, activeRole]);
+
   const positionsByRole = useMemo(() => {
     const out = {};
-    for (const role of ENGINE_ROLES) out[role.key] = [];
+    for (const role of visibleEngineRoles) out[role.key] = [];
     for (const p of positions) {
       const role = p.engine_role || "photo_day_shortlist";
       if (!out[role]) out[role] = [];
@@ -101,7 +147,7 @@ export default function CellEditorDialog({
       );
     }
     return out;
-  }, [positions]);
+  }, [positions, visibleEngineRoles]);
 
   // ── Per-cell + per-engine-role target derivation ─────────────────────
   //
@@ -118,14 +164,17 @@ export default function CellEditorDialog({
 
   const perRoleTargets = useMemo(() => {
     const out = {};
-    for (const role of ENGINE_ROLES) out[role.key] = null;
+    for (const role of visibleEngineRoles) out[role.key] = null;
     if (isDefaults || !cell?.package) return out;
 
     const tierCode = cell.tier?.code || "standard";
     const items = Array.isArray(cell.package.products) ? cell.package.products : [];
     for (const item of items) {
       const prod = productLookup?.get?.(item.product_id);
-      const role = prod?.engine_role || "photo_day_shortlist";
+      // Skip non-image-class products entirely — they don't belong in the
+      // image-shortlist per-role budget (W11.6.28c).
+      if (!prod || !isImageShortlistEngineRole(prod.engine_role)) continue;
+      const role = prod.engine_role;
       // Per-product tier image_count if available.
       const tierKey = tierCode === "premium" ? "premium_tier" : "standard_tier";
       let qty = null;
@@ -143,7 +192,7 @@ export default function CellEditorDialog({
       out[role] = (out[role] || 0) + qty;
     }
     return out;
-  }, [cell, isDefaults, productLookup]);
+  }, [cell, isDefaults, productLookup, visibleEngineRoles]);
 
   const cellAuthoredTotal = positions.length;
   const cellOverTarget =
@@ -490,13 +539,38 @@ export default function CellEditorDialog({
         )}
 
         {/* Engine-role tabs + position list */}
+        {visibleEngineRoles.length === 0 ? (
+          // Package has no image-class products — render an empty state
+          // explaining why no tabs appear (e.g. "Day Video Package" has only
+          // video products, "Floor and Site Plan" only has floorplan_qa).
+          <div
+            className="rounded-md border border-amber-200 bg-amber-50/50 px-3 py-3 text-[12px] text-amber-900 mt-3"
+            data-testid="cell-editor-empty-state"
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" />
+              <div>
+                <div className="font-semibold mb-0.5">
+                  No image-shortlist products in this package.
+                </div>
+                <div>
+                  This authoring surface is for image shortlisting only
+                  (Sales / Dusk / Drone). The package has no products with an
+                  image-class engine_role assigned. Edit the package to add
+                  one, or use a different authoring tool for video / floor
+                  plan / portrait deliverables.
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
         <Tabs
           value={activeRole}
           onValueChange={setActiveRole}
           className="mt-3"
         >
           <TabsList className="h-auto flex flex-wrap">
-            {ENGINE_ROLES.map((role) => {
+            {visibleEngineRoles.map((role) => {
               const authoredCount = positionsByRole[role.key]?.length || 0;
               const tabTarget = perRoleTargets[role.key];
               const tabOver = tabTarget != null && authoredCount > tabTarget;
@@ -521,7 +595,7 @@ export default function CellEditorDialog({
             })}
           </TabsList>
 
-          {ENGINE_ROLES.map((role) => {
+          {visibleEngineRoles.map((role) => {
             const list = positionsByRole[role.key] || [];
             const tabAuthored = list.length;
             const tabTarget = perRoleTargets[role.key];
@@ -658,6 +732,7 @@ export default function CellEditorDialog({
             );
           })}
         </Tabs>
+        )}
       </DialogContent>
     </Dialog>
   );

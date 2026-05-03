@@ -16,6 +16,22 @@
  * package or tier doesn't require a UI redeploy.
  */
 
+// Engine roles that are IMAGE shortlist deliverables — these are the only
+// roles the Recipe Matrix authors positions for. Video has its own shot-list
+// concept (not yet implemented); floorplan_qa is a separate processing path;
+// agent_portraits are headshots with different shortlist criteria. Filter
+// applied at: (a) per-cell target derivation, (b) engine_role tabs in
+// CellEditorDialog, (c) packageOffersTier image-class fallback.
+export const IMAGE_SHORTLIST_ENGINE_ROLES = Object.freeze([
+  "photo_day_shortlist",
+  "photo_dusk_shortlist",
+  "drone_shortlist",
+]);
+
+export function isImageShortlistEngineRole(role) {
+  return IMAGE_SHORTLIST_ENGINE_ROLES.includes(role);
+}
+
 // ── Constraint axes the matrix exposes ────────────────────────────────────
 //
 // `key` is the column name on `gallery_positions` and the axis param fed to
@@ -263,6 +279,23 @@ export function cellHealthColor(positionCount, expectedTarget) {
 // .standard_tier / .premium_tier jsonb. When absent we still try to
 // resolve from the package's products[] entries themselves (each entry
 // already carries `quantity` from PackageFormDialog).
+//
+// IMAGE-CLASS FILTER (W11.6.28c — Joseph: "Silver shows 11 target = 10
+// Sales Images + 1 Floor and Site Plan, but Floor Plans aren't image
+// shortlist deliverables"):
+//
+// The sum-of-products fallback is filtered to image-class engine_roles only
+// (photo_day_shortlist / photo_dusk_shortlist / drone_shortlist). Video,
+// floorplan_qa, and agent_portraits products run through separate engines
+// and don't belong in the image shortlist target. Products with a NULL
+// engine_role (surcharges, declutter, etc.) are also excluded — operators
+// should set engine_role to an image-class value if they want a product to
+// contribute to the recipe matrix target.
+//
+// The tier_image_count primary path stays as-is — it's an explicit
+// authored number on the package's tier jsonb. Operators are expected to
+// only use that number for image-class output; the matrix help banner
+// makes that clear.
 export function deriveCellTarget(pkg, tierCode, productLookup = null) {
   if (!pkg || !tierCode) return { value: null, source: "unknown", breakdown: [] };
 
@@ -270,6 +303,8 @@ export function deriveCellTarget(pkg, tierCode, productLookup = null) {
   const tierJson = pkg[tierKey];
 
   // ── Primary: tier jsonb image_count ────────────────────────────────────
+  // (operators should only set image_count on image-class products /
+  // tiers — non-image deliverables have their own count semantics)
   if (tierJson && typeof tierJson === "object") {
     const ic =
       tierJson.image_count ?? tierJson.images ?? tierJson.deliverable_count;
@@ -287,15 +322,27 @@ export function deriveCellTarget(pkg, tierCode, productLookup = null) {
     }
   }
 
-  // ── Fallback: sum of products[] in this package ─────────────────────────
+  // ── Fallback: sum of IMAGE-CLASS products[] in this package ────────────
   const items = Array.isArray(pkg.products) ? pkg.products : [];
   if (items.length > 0) {
     const breakdown = [];
     let total = 0;
     for (const item of items) {
+      const prod = productLookup?.get?.(item.product_id);
+      // FILTER non-image-class deliverables. We only count toward the
+      // image-shortlist target when the product's engine_role is one of
+      // photo_day_shortlist / photo_dusk_shortlist / drone_shortlist.
+      // Products with NULL engine_role (surcharges, declutter, etc.) or
+      // non-image classes (video, floorplan_qa, agent_portraits) are
+      // EXCLUDED — they don't belong in the image-shortlist sum.
+      //
+      // When we have no productLookup (defensive fallback), we cannot
+      // verify the engine_role and the line item is excluded — better to
+      // under-count the image budget than over-count by including video.
+      if (!prod || !isImageShortlistEngineRole(prod.engine_role)) continue;
+
       // Prefer the product's tier-specific image_count if we have a lookup.
       let qty = null;
-      const prod = productLookup?.get?.(item.product_id);
       if (prod && prod[tierKey] && typeof prod[tierKey] === "object") {
         const pIc =
           prod[tierKey].image_count ??
@@ -307,9 +354,6 @@ export function deriveCellTarget(pkg, tierCode, productLookup = null) {
       if (qty == null && Number.isFinite(Number(item.quantity))) {
         qty = Number(item.quantity);
       }
-      // Filter out non-image deliverables when we know the product (drone,
-      // floor plans, video, etc still count as positions today — keep them
-      // in the sum so the total matches the engine's per-role budget).
       if (qty == null || qty === 0) continue;
       breakdown.push({
         label: item.product_name || prod?.name || "Product",
@@ -352,7 +396,15 @@ export function describeTargetBreakdown(target) {
 // when the tier jsonb has any pricing/image data, or when the package has
 // products[] entries (default-true so the matrix doesn't accidentally hide
 // cells the operator set up).
-export function packageOffersTier(pkg, tierCode) {
+//
+// IMAGE-CLASS FILTER (W11.6.28c): the products[] fallback is filtered to
+// image-class engine_roles only. A package with ONLY video products (e.g.
+// "Day Video Package") would otherwise render image-shortlist cells the
+// engine has no use for. When productLookup is supplied we verify
+// engine_role; when not, the products[] count is treated as a soft signal
+// (back-compat — the older callsites pass no lookup and we don't want to
+// regress their cells). The matrix grid always passes a lookup.
+export function packageOffersTier(pkg, tierCode, productLookup = null) {
   if (!pkg) return false;
   const tierKey = tierCode === "premium" ? "premium_tier" : "standard_tier";
   const tierJson = pkg[tierKey];
@@ -364,9 +416,18 @@ export function packageOffersTier(pkg, tierCode) {
     if (hasFields) return true;
   }
   // Last resort: a package with products[] is offering whichever tier the
-  // operator set up. Default to TRUE for both tiers so the matrix doesn't
-  // accidentally hide cells.
-  if (Array.isArray(pkg.products) && pkg.products.length > 0) return true;
+  // operator set up. With a productLookup, only IMAGE-CLASS products count
+  // (video / floorplan_qa / agent_portraits / null engine_role exclude).
+  if (Array.isArray(pkg.products) && pkg.products.length > 0) {
+    if (productLookup) {
+      const hasImageProduct = pkg.products.some((item) => {
+        const prod = productLookup.get?.(item.product_id);
+        return prod && isImageShortlistEngineRole(prod.engine_role);
+      });
+      return hasImageProduct;
+    }
+    return true;
+  }
   return false;
 }
 

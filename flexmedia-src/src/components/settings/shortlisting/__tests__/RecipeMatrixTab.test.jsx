@@ -43,7 +43,12 @@ vi.mock("@/api/supabaseClient", () => {
     {
       id: "pkg-silver-uuid",
       name: "Silver Package",
-      products: [],
+      // Sales Images product so the cell editor's image-class filter
+      // (W11.6.28c) renders a Sales Images tab. Tier image_count still
+      // drives the cell target.
+      products: [
+        { product_id: "prod-sales", product_name: "Sales Images", quantity: 5 },
+      ],
       standard_tier: { package_price: 100, image_count: 5 },
       premium_tier: { package_price: 150, image_count: 8 },
       expected_count_target: 5,
@@ -88,6 +93,22 @@ vi.mock("@/api/supabaseClient", () => {
       products: [],
       standard_tier: { image_count: 4 },
       premium_tier: { image_count: 6 },
+      expected_count_target: null,
+      expected_count_tolerance_below: null,
+      expected_count_tolerance_above: null,
+      engine_mode_override: null,
+    },
+    {
+      // Video-only package — has only video products, NO image-class
+      // engine_roles. The cell editor should render the empty-state when
+      // operators open this cell (W11.6.28c — image-shortlist filter).
+      id: "pkg-video-uuid",
+      name: "Day Video Package",
+      products: [
+        { product_id: "prod-day-video", product_name: "Day Video", quantity: 1 },
+      ],
+      standard_tier: { package_price: 850 },
+      premium_tier: { package_price: 1450 },
       expected_count_target: null,
       expected_count_tolerance_below: null,
       expected_count_tolerance_above: null,
@@ -138,6 +159,15 @@ vi.mock("@/api/supabaseClient", () => {
       premium_tier: { image_count: 1 },
       min_quantity: 1,
       max_quantity: 5,
+    },
+    {
+      id: "prod-day-video",
+      name: "Day Video",
+      engine_role: "video_day_shortlist",
+      standard_tier: { base_price: 850 },
+      premium_tier: { base_price: 1450 },
+      min_quantity: 1,
+      max_quantity: 1,
     },
   ];
   const SLOT_ROWS_INNER = [
@@ -416,16 +446,18 @@ describe("RecipeMatrixTab — W11.6.28b (price tier axis)", () => {
     expect(silverStd.textContent).toMatch(/5.*target/i);
   });
 
-  it("sum-of-products fallback: target = SUM(products[].quantity) when tier image_count missing", async () => {
+  it("sum-of-products fallback: target = SUM(image-class products[].quantity) when tier image_count missing", async () => {
     mount();
     await waitFor(() => {
       expect(screen.getByTestId("matrix-grid")).toBeTruthy();
     });
     // Gold × Standard: tier jsonb has no image_count, so target =
-    // 2 (Sales) + 3 (Drone) + 1 (Floor Plans) = 6.
+    // 2 (Sales, photo_day_shortlist) + 3 (Drone, drone_shortlist) = 5.
+    // Floor Plans (engine_role='floor_plans') is NOT image-class and is
+    // excluded from the sum (W11.6.28c — image-shortlist filter).
     const goldStd = screen.getByTestId("matrix-cell-pkg-gold-uuid-standard");
     expect(goldStd.textContent).toMatch(/4.*authored/i);
-    expect(goldStd.textContent).toMatch(/6.*target/i);
+    expect(goldStd.textContent).toMatch(/5.*target/i);
   });
 
   it("over-target warning renders when authored > target", async () => {
@@ -514,6 +546,88 @@ describe("RecipeMatrixTab — W11.6.28b (price tier axis)", () => {
       expect(screen.queryByTestId("template-row-kitchen_hero")).toBeNull();
     });
   });
+
+  // ── W11.6.28c: image-shortlist scope filter inside the Cell Editor ──────
+  it("Cell editor renders only image-class engine_role tabs (Silver: Sales only)", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByTestId("matrix-cell-pkg-silver-uuid-standard"),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    // Silver only carries Sales Images (photo_day_shortlist) — no Drone,
+    // no Dusk. The Sales tab MUST render; the others MUST NOT.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("engine-role-tab-photo_day_shortlist"),
+      ).toBeTruthy();
+    });
+    expect(
+      screen.queryByTestId("engine-role-tab-drone_shortlist"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("engine-role-tab-photo_dusk_shortlist"),
+    ).toBeNull();
+
+    // Floor Plans / video tabs MUST NOT appear — those engine_roles aren't
+    // image-class.
+    expect(screen.queryByTestId("engine-role-tab-floor_plans")).toBeNull();
+    expect(
+      screen.queryByTestId("engine-role-tab-video_day_shortlist"),
+    ).toBeNull();
+  });
+
+  it("Cell editor renders Sales + Drone tabs for Gold (image-class products only)", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-gold-uuid-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    // Gold has Sales (photo_day_shortlist) + Drone (drone_shortlist) +
+    // Floor Plans (floor_plans, NOT image-class). The first two render;
+    // Floor Plans tab is suppressed.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("engine-role-tab-photo_day_shortlist"),
+      ).toBeTruthy();
+    });
+    expect(
+      screen.getByTestId("engine-role-tab-drone_shortlist"),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("engine-role-tab-floor_plans")).toBeNull();
+  });
+
+  it("Cell editor renders empty-state for video-only package (no image-class products)", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-video-uuid-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    // The cell editor surfaces the "no image-class products" empty state
+    // and does NOT render any engine-role tabs.
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-empty-state")).toBeTruthy();
+    });
+    expect(
+      screen.queryByTestId("engine-role-tab-photo_day_shortlist"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("engine-role-tab-drone_shortlist"),
+    ).toBeNull();
+  });
 });
 
 // ── Pure unit tests for the constants helpers ──────────────────────────
@@ -522,6 +636,8 @@ import {
   deriveCellTarget,
   describeTargetBreakdown,
   packageOffersTier,
+  IMAGE_SHORTLIST_ENGINE_ROLES,
+  isImageShortlistEngineRole,
 } from "../recipe-matrix/constants";
 
 describe("constants — cellHealthColor (W11.6.28b)", () => {
@@ -559,7 +675,10 @@ describe("constants — deriveCellTarget", () => {
     expect(describeTargetBreakdown(t)).toMatch(/5 images/);
   });
 
-  it("falls back to SUM(products[].quantity) when tier jsonb has no image_count", () => {
+  it("falls back to SUM(image-class products[].quantity) when tier jsonb has no image_count", () => {
+    // W11.6.28c: only image-class engine_roles count toward the
+    // image-shortlist target. Floor Plans (floor_plans / floorplan_qa) and
+    // any non-image-class product is excluded from the sum.
     const pkg = {
       name: "Gold",
       products: [
@@ -570,15 +689,42 @@ describe("constants — deriveCellTarget", () => {
       standard_tier: { package_price: 220 },
       premium_tier: {},
     };
-    const t = deriveCellTarget(pkg, "standard");
-    expect(t.value).toBe(6);
+    const productLookup = new Map([
+      ["a", { id: "a", name: "Sales Images", engine_role: "photo_day_shortlist" }],
+      ["b", { id: "b", name: "Drone Shots", engine_role: "drone_shortlist" }],
+      ["c", { id: "c", name: "Floor Plans", engine_role: "floorplan_qa" }],
+    ]);
+    const t = deriveCellTarget(pkg, "standard", productLookup);
+    expect(t.value).toBe(5); // 2 (Sales) + 3 (Drone) — Floor Plans excluded.
     expect(t.source).toBe("sum_of_products");
-    expect(t.breakdown.length).toBe(3);
+    expect(t.breakdown.length).toBe(2);
     const desc = describeTargetBreakdown(t);
-    expect(desc).toMatch(/Target: 6/);
+    expect(desc).toMatch(/Target: 5/);
     expect(desc).toMatch(/2 \(Sales Images\)/);
     expect(desc).toMatch(/3 \(Drone Shots\)/);
-    expect(desc).toMatch(/1 \(Floor Plans\)/);
+    // Floor Plans MUST NOT appear — it's been filtered out.
+    expect(desc).not.toMatch(/Floor Plans/);
+  });
+
+  it("excludes products with NULL engine_role from sum-of-products", () => {
+    // Surcharges, declutter, and other non-engine products carry NULL
+    // engine_role and must not contribute to the image-shortlist target.
+    const pkg = {
+      name: "Mixed",
+      products: [
+        { product_id: "a", product_name: "Sales Images", quantity: 5 },
+        { product_id: "b", product_name: "Saturday Surcharge", quantity: 1 },
+      ],
+      standard_tier: {},
+      premium_tier: {},
+    };
+    const productLookup = new Map([
+      ["a", { id: "a", name: "Sales Images", engine_role: "photo_day_shortlist" }],
+      ["b", { id: "b", name: "Saturday Surcharge", engine_role: null }],
+    ]);
+    const t = deriveCellTarget(pkg, "standard", productLookup);
+    expect(t.value).toBe(5);
+    expect(t.breakdown.length).toBe(1);
   });
 
   it("prefers per-product tier image_count over line-item quantity", () => {
@@ -596,6 +742,7 @@ describe("constants — deriveCellTarget", () => {
         {
           id: "a",
           name: "Sales",
+          engine_role: "photo_day_shortlist",
           standard_tier: { image_count: 4 },
           premium_tier: { image_count: 7 },
         },
@@ -665,7 +812,10 @@ describe("constants — packageOffersTier", () => {
     expect(packageOffersTier(pkg, "premium")).toBe(false);
   });
 
-  it("returns true when tier jsonb empty but products[] is non-empty (sum-of-products fallback)", () => {
+  it("returns true when tier jsonb empty but products[] is non-empty (sum-of-products fallback, no lookup)", () => {
+    // Without a productLookup, packageOffersTier defaults to TRUE for any
+    // products[] entries (back-compat with the older callsites that don't
+    // pass a lookup — the matrix grid always passes one).
     const pkg = {
       name: "Products",
       products: [
@@ -678,6 +828,43 @@ describe("constants — packageOffersTier", () => {
     expect(packageOffersTier(pkg, "premium")).toBe(true);
   });
 
+  it("returns FALSE when products[] only has non-image-class roles (with productLookup, W11.6.28c)", () => {
+    // A package with ONLY video products (Day Video Package) has no
+    // image-class engine_roles. With a lookup the helper recognises that
+    // and reports the tier as not offered for image shortlisting — the
+    // matrix renders the cell disabled with "tier not offered".
+    const pkg = {
+      name: "Day Video",
+      products: [
+        { product_id: "v1", quantity: 1, product_name: "Day Video" },
+      ],
+      standard_tier: {},
+      premium_tier: {},
+    };
+    const lookup = new Map([
+      ["v1", { id: "v1", name: "Day Video", engine_role: "video_day_shortlist" }],
+    ]);
+    expect(packageOffersTier(pkg, "standard", lookup)).toBe(false);
+    expect(packageOffersTier(pkg, "premium", lookup)).toBe(false);
+  });
+
+  it("returns TRUE when products[] has at least one image-class role (with productLookup)", () => {
+    const pkg = {
+      name: "Mixed",
+      products: [
+        { product_id: "v1", quantity: 1 },
+        { product_id: "s1", quantity: 5 },
+      ],
+      standard_tier: {},
+      premium_tier: {},
+    };
+    const lookup = new Map([
+      ["v1", { id: "v1", engine_role: "video_day_shortlist" }],
+      ["s1", { id: "s1", engine_role: "photo_day_shortlist" }],
+    ]);
+    expect(packageOffersTier(pkg, "standard", lookup)).toBe(true);
+  });
+
   it("returns false when tier jsonb empty and no fallback signals", () => {
     const pkg = {
       name: "Half",
@@ -688,5 +875,31 @@ describe("constants — packageOffersTier", () => {
     };
     expect(packageOffersTier(pkg, "standard")).toBe(true);
     expect(packageOffersTier(pkg, "premium")).toBe(false);
+  });
+});
+
+describe("constants — IMAGE_SHORTLIST_ENGINE_ROLES + isImageShortlistEngineRole", () => {
+  it("includes the three image-shortlist engine_roles", () => {
+    expect(IMAGE_SHORTLIST_ENGINE_ROLES).toEqual([
+      "photo_day_shortlist",
+      "photo_dusk_shortlist",
+      "drone_shortlist",
+    ]);
+  });
+
+  it("isImageShortlistEngineRole returns true for image-class roles", () => {
+    expect(isImageShortlistEngineRole("photo_day_shortlist")).toBe(true);
+    expect(isImageShortlistEngineRole("photo_dusk_shortlist")).toBe(true);
+    expect(isImageShortlistEngineRole("drone_shortlist")).toBe(true);
+  });
+
+  it("isImageShortlistEngineRole returns false for non-image classes", () => {
+    expect(isImageShortlistEngineRole("video_day_shortlist")).toBe(false);
+    expect(isImageShortlistEngineRole("video_dusk_shortlist")).toBe(false);
+    expect(isImageShortlistEngineRole("floorplan_qa")).toBe(false);
+    expect(isImageShortlistEngineRole("agent_portraits")).toBe(false);
+    expect(isImageShortlistEngineRole(null)).toBe(false);
+    expect(isImageShortlistEngineRole(undefined)).toBe(false);
+    expect(isImageShortlistEngineRole("")).toBe(false);
   });
 });

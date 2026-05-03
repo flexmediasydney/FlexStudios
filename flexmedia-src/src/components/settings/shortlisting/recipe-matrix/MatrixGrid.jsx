@@ -148,11 +148,14 @@ export default function MatrixGrid({
 }
 
 function PackageRow({ pkg, cols, cellCounts, productLookup, gridCols, onCellClick }) {
-  // Compute target + offered state per tier once per render.
+  // Compute target + offered state per tier once per render. Both helpers
+  // consume the productLookup so non-image-class products (video,
+  // floorplan_qa, agent_portraits) are filtered from the image-shortlist
+  // sum and don't make a tier "offered" on their own.
   const tierState = useMemo(() => {
     const out = {};
     for (const t of cols) {
-      const offered = packageOffersTier(pkg, t.code);
+      const offered = packageOffersTier(pkg, t.code, productLookup);
       const target = offered
         ? deriveCellTarget(pkg, t.code, productLookup)
         : { value: null, source: "tier_not_offered", breakdown: [] };

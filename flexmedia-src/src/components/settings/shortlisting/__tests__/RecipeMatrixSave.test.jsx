@@ -55,11 +55,17 @@ vi.mock("sonner", () => ({
 }));
 
 vi.mock("@/api/supabaseClient", () => {
+  // Silver carries one image-class product (Sales Images, photo_day_shortlist)
+  // so the cell editor's image-class filter (W11.6.28c) renders the Sales
+  // Images tab. Without this the editor's empty-state would suppress the
+  // Add buttons the tests target.
   const PACKAGE_ROWS = [
     {
       id: "pkg-silver",
       name: "Silver Package",
-      products: [],
+      products: [
+        { product_id: "prod-sales", product_name: "Sales Images", quantity: 5 },
+      ],
       standard_tier: { package_price: 100, image_count: 5 },
       premium_tier: { package_price: 150, image_count: 8 },
       expected_count_tolerance_below: null,
@@ -72,7 +78,17 @@ vi.mock("@/api/supabaseClient", () => {
     { id: "tier-pre", code: "premium", display_name: "Premium", display_order: 2 },
   ];
   const PROJECT_TYPE_ROWS = [{ id: "pt-1", name: "Residential" }];
-  const PRODUCT_ROWS = [];
+  const PRODUCT_ROWS = [
+    {
+      id: "prod-sales",
+      name: "Sales Images",
+      engine_role: "photo_day_shortlist",
+      standard_tier: { image_count: 5 },
+      premium_tier: { image_count: 8 },
+      min_quantity: 1,
+      max_quantity: 30,
+    },
+  ];
   const SLOT_ROWS = [];
 
   // Supabase query builder mock that captures inserts / updates / deletes
@@ -356,5 +372,142 @@ describe("RecipeMatrixTab — Add Position blocker fix (mig 449)", () => {
 
     const insert = cap().inserts.find((c) => c.table === "gallery_positions");
     expect(insert.payload.position_index).toBe(1);
+  });
+});
+
+// ── Engine-mode + tolerance save (W11.6.28c — Joseph: "save doesn't commit") ─
+//
+// The cell editor's Save button (data-testid='save-package-settings') wires
+// to packageMutation which UPDATEs `packages` with the operator's chosen
+// engine_mode_override + tolerance values. These tests pin the contract:
+//
+//  1. Save fires UPDATE on `packages` with the right engine_mode_override
+//     value and the row's id in the .eq filter.
+//  2. Tolerance Above / Below numeric inputs are coerced to numbers (not
+//     left as strings, which Postgres would reject).
+//  3. Toast surfaces "Package settings saved." on success.
+//  4. When engineMode is reset to "(inherit default)", the payload sets
+//     engine_mode_override to NULL (not the empty string).
+describe("CellEditorDialog — engine_mode + tolerance save", () => {
+  const cap = () => globalThis.__recipe_save_capture__;
+
+  beforeEach(() => {
+    cap().inserts.length = 0;
+    cap().updates.length = 0;
+    cap().deletes.length = 0;
+    cap().rpcCalls.length = 0;
+    cap().toastSuccess.length = 0;
+    cap().toastError.length = 0;
+  });
+
+  it("Save package settings — UPDATE fires on `packages` with the active row's id", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-silver-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    // The Save button for the engine-mode + tolerance row.
+    const saveBtn = await waitFor(() =>
+      screen.getByTestId("save-package-settings"),
+    );
+    fireEvent.click(saveBtn);
+
+    // UPDATE must fire on the packages table with .eq('id', pkg.id).
+    await waitFor(() => {
+      expect(
+        cap().updates.some((u) => u.table === "packages"),
+      ).toBe(true);
+    });
+
+    const update = cap().updates.find((u) => u.table === "packages");
+    expect(update.filter).toEqual({ col: "id", val: "pkg-silver" });
+    // Payload always includes engine_mode_override + tolerance band columns.
+    expect(update.payload).toHaveProperty("engine_mode_override");
+    expect(update.payload).toHaveProperty("expected_count_tolerance_below");
+    expect(update.payload).toHaveProperty("expected_count_tolerance_above");
+  });
+
+  it("Save package settings — toast confirms on success", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-silver-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("save-package-settings"));
+
+    await waitFor(() => {
+      expect(
+        cap().toastSuccess.some((m) => /package settings saved/i.test(m)),
+      ).toBe(true);
+    });
+  });
+
+  it("Save package settings — tolerance below input is coerced to a Number", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-silver-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    // Type "3" into the tolerance-below input.
+    const tolBelow = await waitFor(() =>
+      screen.getByTestId("tolerance-below-input"),
+    );
+    fireEvent.change(tolBelow, { target: { value: "3" } });
+
+    fireEvent.click(screen.getByTestId("save-package-settings"));
+
+    await waitFor(() => {
+      expect(
+        cap().updates.some((u) => u.table === "packages"),
+      ).toBe(true);
+    });
+
+    const update = cap().updates.find((u) => u.table === "packages");
+    expect(update.payload.expected_count_tolerance_below).toBe(3);
+    // Tolerance must be a number, not the string "3" (Postgres would
+    // reject a string against an integer column).
+    expect(typeof update.payload.expected_count_tolerance_below).toBe("number");
+  });
+
+  it("Save package settings — empty tolerance inputs serialise to NULL", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-silver-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    // The Silver fixture has tolerance_below = null and _above = null, so
+    // the inputs are blank. Clicking Save should send null for both.
+    fireEvent.click(screen.getByTestId("save-package-settings"));
+
+    await waitFor(() => {
+      expect(
+        cap().updates.some((u) => u.table === "packages"),
+      ).toBe(true);
+    });
+    const update = cap().updates.find((u) => u.table === "packages");
+    expect(update.payload.expected_count_tolerance_below).toBe(null);
+    expect(update.payload.expected_count_tolerance_above).toBe(null);
+    // Engine mode defaults to null (inherit) when nothing is selected.
+    expect(update.payload.engine_mode_override).toBe(null);
   });
 });
