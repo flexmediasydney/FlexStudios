@@ -351,7 +351,7 @@ async function ingest(
       // Legacy column kept populated for back-compat with already-migrated
       // rows; new code paths read expected_count_target instead.
       package_ceiling: photoCount.target,
-      engine_tier_id: engineTierId,
+      engine_grade_id: engineTierId,
       expected_count_target: photoCount.target,
       expected_count_min: photoCount.min,
       expected_count_max: photoCount.max,
@@ -437,7 +437,7 @@ async function ingest(
         trigger_source: triggerSource,
         file_count: fileCount,
         package_type: packageType,
-        engine_tier_id: engineTierId,
+        engine_grade_id: engineTierId,
         expected_count_target: photoCount.target,
         expected_count_min: photoCount.min,
         expected_count_max: photoCount.max,
@@ -525,7 +525,7 @@ async function createManualRound(opts: CreateManualRoundOpts): Promise<IngestRes
       status: 'manual',
       package_type: packageType,
       package_ceiling: photoCount.target,
-      engine_tier_id: engineTierId,
+      engine_grade_id: engineTierId,
       expected_count_target: photoCount.target,
       expected_count_min: photoCount.min,
       expected_count_max: photoCount.max,
@@ -567,7 +567,7 @@ async function createManualRound(opts: CreateManualRoundOpts): Promise<IngestRes
         trigger_source: triggerSource,
         manual_mode_reason: manualReason,
         package_type: packageType,
-        engine_tier_id: engineTierId,
+        engine_grade_id: engineTierId,
         expected_count_target: photoCount.target,
         warnings,
       },
@@ -608,9 +608,13 @@ async function loadProductsCatalog(
 async function loadPackageEngineTierMapping(
   admin: ReturnType<typeof getAdminClient>,
 ): Promise<PackageEngineTierMappingRow[]> {
+  // mig 443 rename: package_engine_tier_mapping.engine_tier_id → engine_grade_id.
+  // Table name kept (legacy "tier" terminology in cross-system contracts);
+  // alias the column back to engine_tier_id so downstream code (resolveEngineTierId
+  // pure helper) stays a single rename point.
   const { data, error } = await admin
     .from('package_engine_tier_mapping')
-    .select('package_id, tier_choice, engine_tier_id');
+    .select('package_id, tier_choice, engine_tier_id:engine_grade_id');
   if (error) throw new Error(`package_engine_tier_mapping fetch failed: ${error.message}`);
   return Array.isArray(data) ? (data as PackageEngineTierMappingRow[]) : [];
 }
@@ -618,11 +622,14 @@ async function loadPackageEngineTierMapping(
 async function loadShortlistingTiers(
   admin: ReturnType<typeof getAdminClient>,
 ): Promise<ShortlistingTierRow[]> {
+  // mig 443 rename: shortlisting_tiers → shortlisting_grades. tier_code column
+  // preserved for cross-system contracts (S/P/A codes still drive scoring +
+  // voice-anchor selection).
   const { data, error } = await admin
-    .from('shortlisting_tiers')
+    .from('shortlisting_grades')
     .select('id, tier_code')
     .eq('is_active', true);
-  if (error) throw new Error(`shortlisting_tiers fetch failed: ${error.message}`);
+  if (error) throw new Error(`shortlisting_grades fetch failed: ${error.message}`);
   return Array.isArray(data) ? (data as ShortlistingTierRow[]) : [];
 }
 

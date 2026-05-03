@@ -225,12 +225,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // ── Load round + project ────────────────────────────────────────────────
   // Wave 7 P1-12 (W7.4): also pull round_number + package_type for the audit
   // JSON mirror written at finalize.
-  // Wave 8 (W8.4): also pull engine_version + tier_config_version + engine_tier_id
+  // Wave 8 (W8.4): also pull engine_version + tier_config_version + engine_grade_id
   // so the audit JSON can include provenance (mig 344).
+  // mig 443: engine_tier_id → engine_grade_id; shortlisting_tiers →
+  // shortlisting_grades; shortlisting_tier_configs → shortlisting_grade_configs.
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
     .select(
-      'id, project_id, status, locked_at, locked_by, round_number, package_type, engine_version, tier_config_version, engine_tier_id',
+      'id, project_id, status, locked_at, locked_by, round_number, package_type, engine_version, tier_config_version, engine_grade_id',
     )
     .eq('id', roundId)
     .maybeSingle();
@@ -450,20 +452,23 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // ── Wave 8 (W8.4): resolve tier_used + tier_config for audit JSON ──────
   // The round.engine_version is already on the row (mig 344). tier_used is
-  // tier_code joined from shortlisting_tiers via engine_tier_id.
-  // tier_config block is the row from shortlisting_tier_configs that was
-  // active at lock time, joined by (engine_tier_id, tier_config_version).
+  // tier_code joined from shortlisting_grades via engine_grade_id.
+  // tier_config block is the row from shortlisting_grade_configs that was
+  // active at lock time, joined by (engine_grade_id, tier_config_version).
   // If no row matches (legacy round / mig timing), tier_config stays null
   // and the audit JSON omits the field per spec §9.
+  // mig 443 rename: shortlisting_tiers → shortlisting_grades, tier_id → grade_id.
+  // The audit JSON shape preserves "tier_*" key names for backwards compat
+  // with existing downstream consumers; only the SOURCE table+column changed.
   const engineVersion = (round.engine_version as string | null) ?? null;
   let tierUsed: string | null = null;
   let tierConfig: AuditMirrorContext['tierConfig'] = null;
-  const engineTierId = (round.engine_tier_id as string | null) ?? null;
+  const engineTierId = (round.engine_grade_id as string | null) ?? null;
   const tierConfigVersion = (round.tier_config_version as number | null) ?? null;
   if (engineTierId) {
     try {
       const { data: tierRow } = await admin
-        .from('shortlisting_tiers')
+        .from('shortlisting_grades')
         .select('tier_code')
         .eq('id', engineTierId)
         .maybeSingle();
@@ -475,9 +480,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (engineTierId && tierConfigVersion != null) {
     try {
       const { data: cfgRow } = await admin
-        .from('shortlisting_tier_configs')
+        .from('shortlisting_grade_configs')
         .select('dimension_weights, signal_weights, hard_reject_thresholds')
-        .eq('tier_id', engineTierId)
+        .eq('grade_id', engineTierId)
         .eq('version', tierConfigVersion)
         .maybeSingle();
       if (cfgRow) {
@@ -1511,11 +1516,14 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
   }));
   const manualEngineVersion = (round.engine_version as string | null) ?? null;
   let manualTierUsed: string | null = null;
-  const manualEngineTierId = (round.engine_tier_id as string | null) ?? null;
+  // mig 443 rename: engine_tier_id → engine_grade_id; shortlisting_tiers →
+  // shortlisting_grades. Source field changed; audit-JSON key (tier_used)
+  // preserved for downstream consumer compatibility.
+  const manualEngineTierId = (round.engine_grade_id as string | null) ?? null;
   if (manualEngineTierId) {
     try {
       const { data: tierRow } = await admin
-        .from('shortlisting_tiers')
+        .from('shortlisting_grades')
         .select('tier_code')
         .eq('id', manualEngineTierId)
         .maybeSingle();
