@@ -45,7 +45,9 @@
 
 import {
   createFolder,
+  createFolderBatch,
   getMetadata,
+  getMetadataBatch,
   listFolder,
   moveFile as dbxMoveFile,
   getOrCreateSharedLink,
@@ -331,20 +333,60 @@ export async function createProjectFolders(
   const effectiveAddress = address ?? proj.property_address ?? null;
   const rootPath = proj.dropbox_root_path || defaultProjectRootPath(projectId, effectiveAddress);
 
-  // 1. Create Dropbox tree (top-down; each call is idempotent).
-  // Provision only NEW_PROJECT_FOLDER_KINDS — deprecated drone kinds
-  // (raw_drones, enrichment_drone_renders_*, final_delivery_drones) are no
-  // longer created for new projects per the 2026-04 drone restructure.
+  // 1. Create Dropbox tree.
+  //
+  // 2026-05-04 — switched from sequential per-path `createFolder` calls
+  // (was 1 root + ~3 intermediates + ~5 leaves + _AUDIT/events = ~10 API
+  // calls per provision) to a single `create_folder_batch_v2` API call.
+  // Drops Dropbox /files API pressure by 10× per project provision.
+  // The batch endpoint is idempotent the same way `createFolder` is —
+  // any path that already exists comes back with `.tag: 'failure'` +
+  // `path/conflict/folder` sub-tag, which we treat as success below.
+  //
+  // We still need to create `rootPath` first because Dropbox's
+  // `create_folder_batch_v2` does NOT auto-create intermediate parents
+  // (despite what the API name might suggest).  Each path in the batch
+  // requires its parent to already exist.  So: 1 sync call for root,
+  // then 1 batch call for everything underneath.  Total: 2 API calls
+  // (vs ~10 before).
   await createFolder(rootPath);
+
+  const childPaths: string[] = [];
   for (const inter of INTERMEDIATE_FOLDERS) {
-    await createFolder(`${rootPath}/${inter}`);
+    childPaths.push(`${rootPath}/${inter}`);
   }
   for (const kind of NEW_PROJECT_FOLDER_KINDS) {
-    await createFolder(`${rootPath}/${FOLDER_RELATIVE_PATHS[kind]}`);
+    childPaths.push(`${rootPath}/${FOLDER_RELATIVE_PATHS[kind]}`);
   }
   // _AUDIT/events/ exists for the per-event mirror (Dropbox uploads do not
   // auto-create parent dirs).
-  await createFolder(`${rootPath}/_AUDIT/events`);
+  childPaths.push(`${rootPath}/_AUDIT/events`);
+
+  // Sort so intermediates create before their leaves (Dropbox requires
+  // parent-exists for each batch entry; the batch processes in the order
+  // we send).  Sorting by depth (path-segment count) ensures shallowest-
+  // first.
+  childPaths.sort((a, b) => a.split('/').length - b.split('/').length);
+
+  const batchResult = await createFolderBatch(childPaths);
+  // Validate — every entry should be either success or "already exists"
+  // (which we accept as success).  Anything else is a real error.
+  for (let i = 0; i < batchResult.length; i++) {
+    const entry = batchResult[i];
+    const entryPath = childPaths[i];
+    if (entry['.tag'] === 'success') continue;
+    const failureTag = entry.failure?.['.tag'] || '';
+    const conflictTag = (entry.failure?.path as { '.tag'?: string } | undefined)?.['.tag'] || '';
+    const isAlreadyExists =
+      failureTag === 'path' &&
+      (conflictTag === 'conflict' || conflictTag === 'conflict/folder');
+    if (!isAlreadyExists) {
+      throw new Error(
+        `createFolderBatch failed for path '${entryPath}': ` +
+          `${JSON.stringify(entry.failure)}`,
+      );
+    }
+  }
 
   // 1.5. Verify Dropbox actually has every leaf folder before we touch the DB.
   //
@@ -399,21 +441,46 @@ export async function createProjectFolders(
   }
 
   if (usedSlowPath) {
-    // Per-leaf existence check. Sequential (not Promise.all) to be polite to
-    // Dropbox rate limits — the dropbox.ts wrapper retries on 429 but firing
-    // 23 parallel calls per project across a 70-project backfill is enough
-    // to soft-throttle.
+    // 2026-05-04 — switched from sequential per-leaf `getMetadata` calls
+    // (was 23 sequential API calls per slow-path verify, polite-but-slow)
+    // to a single `get_metadata_batch` call.  Drops it to 1 API call per
+    // project verify regardless of leaf count, and the batch endpoint is
+    // synchronous so there's no polling overhead either.  The Dropbox cap
+    // is 100 paths per batch — well above our ~23 expected leaves, so a
+    // single call suffices.  We chunk defensively in case NEW_PROJECT_-
+    // FOLDER_KINDS grows beyond the cap.
     const missing: string[] = [];
-    for (const path of expectedLeafPaths) {
+    const BATCH_SIZE = 100;
+    for (let i = 0; i < expectedLeafPaths.length; i += BATCH_SIZE) {
+      const chunk = expectedLeafPaths.slice(i, i + BATCH_SIZE);
+      let entries;
       try {
-        const meta = await getMetadata(path);
-        if (meta['.tag'] !== 'folder') missing.push(path);
+        entries = await getMetadataBatch(chunk);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('not_found')) {
-          missing.push(path);
+        // The batch endpoint itself errored (auth / rate-limit-after-retries
+        // / network). Propagate — same semantics as the old per-call path.
+        throw err;
+      }
+      for (let j = 0; j < entries.length; j++) {
+        const entry = entries[j];
+        const entryPath = chunk[j];
+        if (entry['.tag'] === 'metadata') {
+          const meta = entry.metadata as { '.tag'?: string } | undefined;
+          if (meta?.['.tag'] !== 'folder') missing.push(entryPath);
+        } else if (
+          entry['.tag'] === 'path_lookup_error' ||
+          entry['.tag'] === 'access_error' ||
+          entry['.tag'] === 'failure'
+        ) {
+          // path_lookup_error includes "not_found" — treat as missing.
+          // access_error means we can't see it; treat as missing too
+          // (the caller will surface a clear "Dropbox folder verification
+          // failed" error anyway).
+          missing.push(entryPath);
         } else {
-          throw err; // auth / rate-limit-after-retries / other → propagate
+          // Unexpected tag — be defensive and surface as missing so the
+          // caller's error message is complete.
+          missing.push(entryPath);
         }
       }
     }

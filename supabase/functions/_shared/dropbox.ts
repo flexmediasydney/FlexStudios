@@ -348,6 +348,116 @@ export async function getMetadata(path: string): Promise<DropboxFileMetadata | D
   return dropboxApi('/files/get_metadata', { path });
 }
 
+/**
+ * Get metadata for many paths in ONE Dropbox API call.
+ *
+ * Wraps `/files/get_metadata_batch`.  Synchronous (returns inline, no async
+ * job to poll).  Each input path produces a corresponding entry in the
+ * output array, in the SAME order, with one of three shapes:
+ *   - `{ '.tag': 'metadata', metadata: {...} }`  → present
+ *   - `{ '.tag': 'metadata', metadata: { '.tag': 'deleted', ... } }` → tombstoned
+ *   - `{ '.tag': 'access_error' | 'path_lookup_error', ... }` → not found / permission
+ *
+ * 2026-05-04 — added to replace the per-path `getMetadata` loop in
+ * `projectFolders.ts` post-verify (was 23 sequential calls per project on
+ * the slow path).  Single batch call drops that to 1.  Cap is 100 paths
+ * per batch per Dropbox docs; callers chunk if they exceed it.
+ */
+export interface DropboxMetadataBatchEntry {
+  '.tag': 'metadata' | 'access_error' | 'path_lookup_error' | 'failure';
+  metadata?: DropboxFileMetadata | DropboxFolderMetadata | { '.tag': 'deleted'; name: string; path_lower?: string };
+  access_error?: unknown;
+  path_lookup_error?: unknown;
+}
+
+export async function getMetadataBatch(paths: string[]): Promise<DropboxMetadataBatchEntry[]> {
+  if (paths.length === 0) return [];
+  if (paths.length > 100) {
+    // Dropbox cap.  Caller responsibility to chunk; we just enforce defensively.
+    throw new Error(`getMetadataBatch: max 100 paths per batch (got ${paths.length})`);
+  }
+  return dropboxApi<DropboxMetadataBatchEntry[]>('/files/get_metadata_batch', {
+    paths,
+  });
+}
+
+/**
+ * Create many folders in ONE Dropbox API call.
+ *
+ * Wraps `/files/create_folder_batch_v2`.  May complete sync (small batches)
+ * OR return an async_job_id (large batches, server-side queueing).  This
+ * helper auto-handles the async case by polling `/files/create_folder_batch/check_v2`
+ * until terminal — caller just awaits and gets the final entries.
+ *
+ * 2026-05-04 — added to replace the 9-call sequential `createFolder` loop
+ * in `provisionProjectFolders` (1 root + ~3 intermediates + ~5 leaves +
+ * _AUDIT/events) with one batch call per project provision.
+ *
+ * Idempotency mirrors `createFolder`: if any folder already exists, the
+ * batch entry has `.tag: 'failure'` with a `path/conflict/folder`
+ * sub-tag.  We treat that as success and return the existing folder's
+ * metadata via a follow-up `getMetadata` lookup.  Net: same idempotency
+ * guarantee as the per-path version, in 1-2 API calls instead of N+M.
+ */
+export interface DropboxCreateFolderBatchEntry {
+  '.tag': 'success' | 'failure';
+  metadata?: DropboxFolderMetadata;
+  failure?: { '.tag': string; [key: string]: unknown };
+}
+
+interface CreateFolderBatchAsyncResult {
+  '.tag': 'complete' | 'async_job_id' | 'other';
+  entries?: DropboxCreateFolderBatchEntry[];
+  async_job_id?: string;
+}
+
+interface CreateFolderBatchCheckResult {
+  '.tag': 'in_progress' | 'complete' | 'failed' | 'other';
+  entries?: DropboxCreateFolderBatchEntry[];
+}
+
+export async function createFolderBatch(paths: string[]): Promise<DropboxCreateFolderBatchEntry[]> {
+  if (paths.length === 0) return [];
+  if (paths.length > 1000) {
+    throw new Error(`createFolderBatch: max 1000 paths per batch (got ${paths.length})`);
+  }
+  const submit = await dropboxApi<CreateFolderBatchAsyncResult>(
+    '/files/create_folder_batch_v2',
+    { paths, autorename: false, force_async: false },
+  );
+
+  if (submit['.tag'] === 'complete' && submit.entries) {
+    return submit.entries;
+  }
+  if (submit['.tag'] !== 'async_job_id' || !submit.async_job_id) {
+    throw new Error(`createFolderBatch: unexpected submit result tag '${submit['.tag']}'`);
+  }
+
+  // Poll the async job.  Folder creation is fast — most batches complete in
+  // <2s.  Cap polling at 30s so we don't hang forever on a stuck job.
+  const jobId = submit.async_job_id;
+  const POLL_INTERVAL_MS = 1000;
+  const POLL_MAX_ATTEMPTS = 30;
+  for (let attempt = 0; attempt < POLL_MAX_ATTEMPTS; attempt++) {
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    const check = await dropboxApi<CreateFolderBatchCheckResult>(
+      '/files/create_folder_batch/check_v2',
+      { async_job_id: jobId },
+    );
+    if (check['.tag'] === 'complete' && check.entries) {
+      return check.entries;
+    }
+    if (check['.tag'] === 'failed') {
+      throw new Error(`createFolderBatch: async job ${jobId} failed`);
+    }
+    // 'in_progress' — keep polling
+  }
+  throw new Error(
+    `createFolderBatch: async job ${jobId} did not complete within ` +
+      `${(POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s`,
+  );
+}
+
 interface ListFolderResult {
   entries: DropboxFileMetadata[];
   has_more: boolean;

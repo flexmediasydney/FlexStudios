@@ -451,19 +451,42 @@ async function ingest(
     `[${GENERATOR}] Wave 3 link-bake DONE ok=${okCount} err=${linkBakeErrors.length} ` +
       `elapsed_s=${linkBakeElapsedS}`,
   );
+  // 2026-05-04 (Wave 3 hardening — fail-fast).
+  //
+  // Old behaviour: warn on partial failures, abort only when ALL links
+  // failed.  Hidden cost: Modal's per-file fallback path is rate-limit-
+  // prone — when 30% of links failed at ingest, those 30% would each
+  // wait 300ms in the rate gate then likely 429 anyway, burning Modal
+  // wall-clock and *re-poisoning* the Dropbox app reputation.
+  //
+  // New behaviour: require ≥95% link-bake success.  Below that, the
+  // Dropbox app is clearly already throttled and continuing would just
+  // pile on damage.  Aborting forces the round to wait until conditions
+  // improve, which is what we want.
+  //
+  // Threshold rationale: 5% transient failures is the most we tolerate
+  // for "real-world flaky-ness."  Anything worse means the API itself
+  // is unhealthy; we should not pretend Modal can recover.
+  const failureRate = filePaths.length > 0 ? linkBakeErrors.length / filePaths.length : 0;
+  const FAIL_FAST_THRESHOLD = 0.05; // 5%
+
   if (linkBakeErrors.length > 0) {
     warnings.push(
       `Wave 3 link-bake: ${linkBakeErrors.length}/${filePaths.length} files failed to mint a temp link` +
-        ` (first error: ${linkBakeErrors[0].error.slice(0, 200)}). Modal will fall back to ` +
-        `per-file link minting for these — slower and rate-limit-prone.`,
+        ` (${(failureRate * 100).toFixed(1)}%; first error: ${linkBakeErrors[0].error.slice(0, 200)})`,
     );
   }
-  if (okCount === 0) {
+
+  if (failureRate > FAIL_FAST_THRESHOLD) {
+    // Hard abort — Dropbox is throttled enough that continuing will
+    // make it worse, not better.  Surface a clear actionable error.
     throw new Error(
-      `Wave 3 link-bake produced 0 successful links across ${filePaths.length} files — ` +
-        `aborting the round.  First error: ${linkBakeErrors[0]?.error || 'unknown'}.  ` +
+      `Wave 3 link-bake failed for ${linkBakeErrors.length}/${filePaths.length} files ` +
+        `(${(failureRate * 100).toFixed(1)}%, threshold ${(FAIL_FAST_THRESHOLD * 100).toFixed(0)}%) — ` +
+        `aborting the round to avoid cascading throttle damage.  First error: ` +
+        `${linkBakeErrors[0]?.error || 'unknown'}.  ` +
         `This usually means the Dropbox app is currently rate-limit throttled.  ` +
-        `Wait 10-30 min and re-run.`,
+        `Wait 10-30 min and re-run; the throttle clears as the burst pattern cools.`,
     );
   }
 

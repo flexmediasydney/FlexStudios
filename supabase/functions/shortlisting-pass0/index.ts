@@ -90,8 +90,24 @@ DO NOT reject for:
 - Unusual angles or partially visible rooms
 - Minor clutter, bins, cords, or photoshoppable distractions (flagged in Pass 1, not rejected here)`;
 
-// Concurrency for Haiku calls — 10 is the spec default for a Tier-2 API key.
-const DEFAULT_CONCURRENCY = 10;
+// Concurrency cap for the Pass 0 hard-reject sweep.  Each worker does:
+//   1. /files/get_temporary_link  (Dropbox /files API — adaptive throttle)
+//   2. Anthropic Haiku vision call  (separate budget, much higher ceiling)
+//
+// 2026-05-04 — tightened 10 → 5.  Dropbox's published `/files/get_temporary_link`
+// ceiling is ~30 req/s app-wide, but the *adaptive* throttle tightens that
+// after sustained bursts; we observed a damaged-app state on 2026-05-03 where
+// even single calls were 429-ing.  At 10 concurrent × ~300ms each we'd hit
+// ~30 req/s sustained — exactly the published ceiling, with zero headroom.
+// At 5 concurrent we're at ~15 req/s sustained, well below any throttle and
+// safe even on a recently-stressed app.  Anthropic Haiku at Tier-2 happily
+// handles 50/min so 5 is well below its ceiling too.
+//
+// TODO Wave 3.5: extend ingest's prebaked_links pattern to pass0 so the
+// `/files/get_temporary_link` call here disappears entirely (links pre-baked
+// at round-creation time, fetched from job payload).  Then we can raise
+// concurrency back to 10+ since the Dropbox bottleneck is gone.
+const DEFAULT_CONCURRENCY = 5;
 const HAIKU_MODEL = 'claude-haiku-4-5';
 const HAIKU_MAX_TOKENS = 400;
 
