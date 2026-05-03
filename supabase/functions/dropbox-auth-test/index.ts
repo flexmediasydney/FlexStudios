@@ -18,6 +18,58 @@
  */
 import { getDropboxAccessToken } from '../_shared/dropbox.ts';
 
+/**
+ * Probe a single Dropbox API endpoint and return a verdict object.
+ * Hits a per-bucket rate limit when applicable — Dropbox tracks /users,
+ * /files, /sharing, etc. separately, so a 429 on one doesn't mean the
+ * others are unavailable.
+ */
+async function probeDropbox(
+  token: string,
+  endpoint: string,
+  bodyArg: unknown,
+): Promise<Record<string, unknown>> {
+  const t = Date.now();
+  try {
+    const resp = await fetch(`https://api.dropboxapi.com/2/${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        ...(bodyArg !== null ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: bodyArg !== null ? JSON.stringify(bodyArg) : undefined,
+      signal: AbortSignal.timeout(15_000),
+    });
+    const text = await resp.text();
+    const out: Record<string, unknown> = {
+      endpoint,
+      status: resp.status,
+      wall_ms: Date.now() - t,
+    };
+    if (!resp.ok) {
+      out.ok = false;
+      out.body = text.slice(0, 300);
+      // Dropbox 429 carries `retry_after` in the body
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed?.error?.retry_after !== undefined) {
+          out.retry_after_s = parsed.error.retry_after;
+        }
+      } catch { /* ignore */ }
+    } else {
+      out.ok = true;
+    }
+    return out;
+  } catch (err) {
+    return {
+      endpoint,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      wall_ms: Date.now() - t,
+    };
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST' && req.method !== 'GET') {
     return new Response(JSON.stringify({ ok: false, error: 'method' }), { status: 405 });
@@ -48,45 +100,24 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  // Step 2 — does the minted token actually work against Dropbox API?
-  const t1 = Date.now();
-  try {
-    const resp = await fetch('https://api.dropboxapi.com/2/users/get_current_account', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        // get_current_account takes no arguments. Dropbox is picky:
-        // omit Content-Type entirely OR send `null` body — both work.
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-    const text = await resp.text();
-    result.api_status = resp.status;
-    result.api_wall_ms = Date.now() - t1;
-    if (!resp.ok) {
-      result.api_ok = false;
-      result.api_body = text.slice(0, 400);
-    } else {
-      try {
-        const body = JSON.parse(text);
-        result.api_ok = true;
-        // Just surface the public-facing identity, not the entire account
-        result.api_account_id = body.account_id;
-        result.api_email = body.email;
-        result.api_name = body.name?.display_name;
-      } catch {
-        result.api_ok = false;
-        result.api_body = text.slice(0, 400);
-      }
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    result.api_ok = false;
-    result.api_error = msg;
-    result.api_wall_ms = Date.now() - t1;
-  }
+  // Step 2 — probe the /users API bucket (cheap call, identity check)
+  result.users = await probeDropbox(token, 'users/get_current_account', null);
 
-  result.ok = (result.refresh_ok === true) && (result.api_ok === true);
+  // Step 3 — probe the /files API bucket (this is the bucket that actually
+  // matters for shortlisting-ingest, which calls /files/list_folder to
+  // enumerate the project's photo folder; files API has its OWN per-app
+  // rate limit, separate from users API).
+  // We list the root folder with limit:1 — minimal payload, just enough to
+  // exercise the rate-limit bucket.
+  result.files = await probeDropbox(token, 'files/list_folder', {
+    path: '',
+    limit: 1,
+    recursive: false,
+  });
+
+  result.ok = (result.refresh_ok === true)
+    && (result as { users?: { ok?: boolean } }).users?.ok === true
+    && (result as { files?: { ok?: boolean } }).files?.ok === true;
   return new Response(JSON.stringify(result, null, 2), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
