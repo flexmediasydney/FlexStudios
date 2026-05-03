@@ -912,6 +912,34 @@ function EmptyFolderState() {
   );
 }
 
+// ─── Degraded state: Dropbox temporarily unavailable ────────────────
+// Shown when the edge function returns `degraded: true` because Dropbox
+// rate-limited (or otherwise failed) the listing call.  Distinct from
+// "no files yet" so users don't think the folder is genuinely empty.
+
+function DegradedState({ reason, onRetry, isFetching }) {
+  return (
+    <Card className="border-dashed border-2 border-amber-300 dark:border-amber-700 relative overflow-hidden">
+      <CardContent className="relative flex flex-col items-center justify-center py-16 text-center">
+        <div className="rounded-full bg-amber-100 dark:bg-amber-950/40 p-4 mb-4">
+          <AlertCircle className="h-8 w-8 text-amber-600 dark:text-amber-400" />
+        </div>
+        <h3 className="text-base font-semibold mb-1 text-foreground/90">Dropbox temporarily unavailable</h3>
+        <p className="text-sm text-muted-foreground mb-1 max-w-md leading-relaxed">
+          The folder listing couldn't be fetched right now. This usually clears on its own within a few minutes.
+        </p>
+        {reason && (
+          <p className="text-xs text-muted-foreground/70 mb-5 max-w-md">{reason}</p>
+        )}
+        <Button variant="outline" size="sm" onClick={onRetry} disabled={isFetching}>
+          <RefreshCw className={cn("h-3.5 w-3.5 mr-1.5", isFetching && "animate-spin")} />
+          {isFetching ? 'Retrying…' : 'Retry now'}
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── Empty state: not linked ────────────────────────────────────────
 
 function NotLinkedState() {
@@ -987,7 +1015,12 @@ export default function ProjectMediaGallery({ project }) {
       let folders = [];
       if (data?.folders && Array.isArray(data.folders)) folders = data.folders;
       else if (data?.files && Array.isArray(data.files)) folders = [{ name: "All Files", files: data.files }];
-      return { folders, fetched_at: data?.fetched_at || new Date().toISOString() };
+      return {
+        folders,
+        fetched_at: data?.fetched_at || new Date().toISOString(),
+        degraded: data?.degraded === true,
+        degraded_reason: data?.degraded_reason || null,
+      };
     },
     enabled: !!deliverableLink,
     staleTime: 0,             // Always treat as stale — edge function returns from server cache (~100ms)
@@ -1035,6 +1068,12 @@ export default function ProjectMediaGallery({ project }) {
   const totalFiles = folders.reduce((sum, f) => sum + (f.files?.length || 0), 0);
   const fetchedAt = mediaData?.fetched_at;
 
+  // When Dropbox is throttling we get a degraded response with 0 files —
+  // show a "temporarily unavailable" state instead of "no files yet" so the
+  // user doesn't think the folder is genuinely empty.
+  if (totalFiles === 0 && mediaData?.degraded) {
+    return <DegradedState reason={mediaData?.degraded_reason} onRetry={handleRefresh} isFetching={isFetching} />;
+  }
   if (totalFiles === 0) return <EmptyFolderState />;
 
   return (

@@ -583,22 +583,48 @@ async function fetchListingFromDropbox(
     });
   }
 
-  const subResults = await mapWithConcurrency(subfolders, SUBFOLDER_CONCURRENCY, async (sf) => {
-    const sfPath = (sf.path_display as string) || (sf.path_lower as string) || '';
-    const subPath = useShared
-      ? (sfPath ? sfPath : `/${sf.name}`)
-      : (sfPath ? sfPath : `${listPath}/${sf.name}`);
-    const { entries: subEntries, truncated: subTruncated } = await listAll(token, subPath, useShared ? share_url : undefined);
-    if (subTruncated) anyTruncated = true;
-    const files = subEntries
-      .filter((e: Record<string, unknown>) => e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string)))
-      .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix, base_path));
-    if (files.length === 0) return null;
-    return { name: sf.name as string, files };
+  // Per-subfolder result is a tagged union: ok | empty | fail. This keeps
+  // the ambiguity out of `null` (was: "could mean empty OR failed").  When a
+  // subfolder list 429s or otherwise throws, we MUST flag the parent listing
+  // as degraded so the cache layer doesn't write the empty result as a 30-min
+  // success — that's the cache-poisoning bug that left every Project Media
+  // tab / DeliveryFeed / LiveMediaFeed showing "Empty folder" once Dropbox
+  // entered adaptive throttle.
+  type SubResult =
+    | { kind: 'ok'; data: { name: string; files: FileEntry[] } }
+    | { kind: 'empty' }
+    | { kind: 'fail'; error: string; rate_limited: boolean };
+
+  const subResults = await mapWithConcurrency(subfolders, SUBFOLDER_CONCURRENCY, async (sf): Promise<SubResult> => {
+    try {
+      const sfPath = (sf.path_display as string) || (sf.path_lower as string) || '';
+      const subPath = useShared
+        ? (sfPath ? sfPath : `/${sf.name}`)
+        : (sfPath ? sfPath : `${listPath}/${sf.name}`);
+      const { entries: subEntries, truncated: subTruncated } = await listAll(token, subPath, useShared ? share_url : undefined);
+      if (subTruncated) anyTruncated = true;
+      const files = subEntries
+        .filter((e: Record<string, unknown>) => e['.tag'] === 'file' && !SKIP_EXTS.has(getExt(e.name as string)))
+        .map((f: Record<string, unknown>) => fileEntry(f, sf.name as string, parentShareUrl, pathPrefix, base_path));
+      if (files.length === 0) return { kind: 'empty' };
+      return { kind: 'ok', data: { name: sf.name as string, files } };
+    } catch (err) {
+      const e = err as Error & { dropbox_429?: boolean };
+      const error = e?.message || String(err);
+      const rate_limited = e?.dropbox_429 === true || error.includes('rate limited') || error.includes('429');
+      return { kind: 'fail', error, rate_limited };
+    }
   });
 
+  let failedSubfolders = 0;
+  let rateLimitedSubfolders = 0;
   for (const result of subResults) {
-    if (result) folders.push(result);
+    if (!result) continue; // mapWithConcurrency only nulls on its own catch, which we now bypass
+    if (result.kind === 'ok') folders.push(result.data);
+    else if (result.kind === 'fail') {
+      failedSubfolders++;
+      if (result.rate_limited) rateLimitedSubfolders++;
+    }
   }
 
   const totalFiles = folders.reduce((s, f) => s + f.files.length, 0);
@@ -610,6 +636,16 @@ async function fetchListingFromDropbox(
   if (anyTruncated) {
     listing.truncated = true;
     listing.truncated_message = `Results were capped at ${MAX_LIST_ENTRIES} entries per folder. Some files may not be shown.`;
+  }
+  // Critical: surface partial-failure state so the caller skips the cache
+  // write.  Without this, every empty (rate-limited) listing was being upserted
+  // for 30 min, locking out every downstream view from getting fresh data.
+  if (failedSubfolders > 0) {
+    listing.degraded = true;
+    listing.degraded_subfolder_failures = failedSubfolders;
+    listing.degraded_reason = rateLimitedSubfolders > 0
+      ? `${rateLimitedSubfolders}/${subfolders.length} subfolders rate-limited by Dropbox`
+      : `${failedSubfolders}/${subfolders.length} subfolders failed to list`;
   }
 
   return listing;
@@ -1149,6 +1185,16 @@ Deno.serve(async (req) => {
             const freshListing = await fetchListingFromDropbox(
               token, share_url, path, base_path, parentShareUrl, pathPrefix
             );
+            // Don't poison the cache with degraded results.  When subfolders
+            // 429 we get an empty listing that looks successful — caching
+            // that for 30 min locks every downstream view into "Empty folder"
+            // until Dropbox cools off AND the TTL expires.
+            if (freshListing.degraded) {
+              console.warn(
+                `Background refresh degraded (key=${listingCacheKey}, reason=${freshListing.degraded_reason}), skipping cache write`,
+              );
+              return;
+            }
             await upsertCacheEntry({
               cache_key: listingCacheKey,
               cache_type: 'listing',
@@ -1225,26 +1271,38 @@ Deno.serve(async (req) => {
       throw err;
     }
 
-    // Store in cache (don't block the response)
-    const cacheWritePromise = upsertCacheEntry({
-      cache_key: listingCacheKey,
-      cache_type: 'listing',
-      data: listing,
-      project_id: body.project_id || undefined,
-      expires_at: new Date(Date.now() + LISTING_CACHE_TTL_MS).toISOString(),
-    });
-    try {
-      // deno-lint-ignore no-explicit-any
-      (globalThis as any).EdgeRuntime?.waitUntil?.(cacheWritePromise);
-    } catch { /* ignore */ }
+    // Store in cache (don't block the response).  Skip when degraded so a
+    // partial-failure listing doesn't get pinned for 30 min — every empty
+    // listing was being cached as success during Dropbox throttle storms,
+    // which is what poisoned every Project Media tab on 2026-05-03.
+    const isDegraded = listing.degraded === true;
+    if (!isDegraded) {
+      const cacheWritePromise = upsertCacheEntry({
+        cache_key: listingCacheKey,
+        cache_type: 'listing',
+        data: listing,
+        project_id: body.project_id || undefined,
+        expires_at: new Date(Date.now() + LISTING_CACHE_TTL_MS).toISOString(),
+      });
+      try {
+        // deno-lint-ignore no-explicit-any
+        (globalThis as any).EdgeRuntime?.waitUntil?.(cacheWritePromise);
+      } catch { /* ignore */ }
+    } else {
+      console.warn(
+        `Foreground listing degraded (key=${listingCacheKey}, reason=${listing.degraded_reason}), skipping cache write`,
+      );
+    }
 
     return new Response(JSON.stringify(listing), {
       status: 200,
       headers: {
         ...getCorsHeaders(req),
         'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=300',
-        'X-Cache': 'MISS',
+        // Short browser cache for degraded so the user gets a real retry
+        // soon; full TTL for healthy listings (matches client-side staleness).
+        'Cache-Control': isDegraded ? 'public, max-age=30' : 'public, max-age=300',
+        'X-Cache': isDegraded ? 'DEGRADED-PARTIAL' : 'MISS',
       },
     });
 
