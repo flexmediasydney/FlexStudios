@@ -284,9 +284,20 @@ export function usePositionsForCell({
         throw new Error(res.error.message);
       }
 
+      // BUG-2 FIX (QC v2 — 2026-05-02): the direct-SELECT fallback can't
+      // distinguish a row authored AT this cell from a row INHERITED from a
+      // broader scope (the scope_chain isn't materialised here — only the
+      // RPC returns it). The previous build set
+      //   is_overridden_at_cell: !isDefaults
+      // for every row in the cell scope, which is wrong: an inherited row
+      // would render as "overridden at cell" with the amber star icon.
+      //
+      // We now leave `is_overridden_at_cell` UNDEFINED in the fallback path.
+      // PositionRow reads `position?.is_overridden_at_cell` as a truthy
+      // check; undefined → no star. The RPC path (which DOES know the
+      // chain) is the only producer of a definitive value.
       const positions = (res.data || []).map((row) => ({
         ...row,
-        is_overridden_at_cell: !isDefaults,
         inherited_from_scope: scopeType,
       }));
 
@@ -350,8 +361,23 @@ export function useAxisDistribution(axisKey) {
  * "this position is appearing organically — promote to a template"
  * candidates; the operator approves / rejects from the UI.
  *
- * Pre-mig the table doesn't exist; return an empty list so the
- * notification card stays hidden.
+ * BUG-3 FIX (QC v2 — 2026-05-02): the previous build queried
+ * `gallery_position_template_suggestions` (wrong name) — R2's mig 444
+ * actually created `shortlisting_position_template_suggestions`. We now
+ * query the real table and remap its columns to the legacy shape the
+ * AutoPromotionCard renders:
+ *
+ *   suggested_template_slot_id  ←  approved_template_slot_id (when set)
+ *                                  fallback: proposed_template_label
+ *   sample_count                ←  evidence_total_proposals
+ *   created_at                  ←  created_at (unchanged)
+ *   status                      ←  status (unchanged)
+ *
+ * This keeps the AutoPromotionCard component stable while the underlying
+ * source-of-truth is mig 444's table.
+ *
+ * Pre-mig (fresh DB / RLS-blocked) the table is unreachable; return an
+ * empty list so the notification card stays hidden.
  */
 export function usePromotionSuggestions() {
   return useQuery({
@@ -359,10 +385,12 @@ export function usePromotionSuggestions() {
     queryFn: async () => {
       try {
         const res = await supabase
-          .from("gallery_position_template_suggestions")
-          .select("id, suggested_template_slot_id, sample_count, created_at, status")
+          .from("shortlisting_position_template_suggestions")
+          .select(
+            "id, proposed_template_label, approved_template_slot_id, evidence_total_proposals, evidence_round_count, created_at, status",
+          )
           .eq("status", "pending")
-          .order("sample_count", { ascending: false })
+          .order("evidence_total_proposals", { ascending: false })
           .limit(50);
         if (res.error) {
           if (
@@ -372,7 +400,16 @@ export function usePromotionSuggestions() {
           }
           throw new Error(res.error.message);
         }
-        return res.data || [];
+        // Adapt the mig-444 shape to the existing AutoPromotionCard contract.
+        return (res.data || []).map((row) => ({
+          id: row.id,
+          suggested_template_slot_id:
+            row.approved_template_slot_id || row.proposed_template_label,
+          sample_count: row.evidence_total_proposals,
+          evidence_round_count: row.evidence_round_count,
+          created_at: row.created_at,
+          status: row.status,
+        }));
       } catch (err) {
         if (/(does not exist|relation .* does not exist)/i.test(String(err?.message || err))) {
           return [];

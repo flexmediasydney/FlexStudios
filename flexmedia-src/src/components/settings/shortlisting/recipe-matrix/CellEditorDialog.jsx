@@ -185,6 +185,12 @@ export default function CellEditorDialog({
       const sanitised = { ...row };
       for (const k of transientKeys) delete sanitised[k];
 
+      // BUG-4 FIX (QC v2 — 2026-05-02): empty `notes` strings round-trip
+      // to NULL in the DB, but the textarea-driven draft can still produce
+      // "" if a future change ever bypasses normalisePosition. Coerce here
+      // defensively so the upsert payload is always canonical.
+      if (sanitised.notes === "") sanitised.notes = null;
+
       const payload = { ...sanitised, ...scopePayload };
       const id = payload.id;
       delete payload.id;

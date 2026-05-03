@@ -244,9 +244,14 @@ export default function PositionRow({
             <Textarea
               className="text-xs min-h-[48px]"
               placeholder="Optional free-text note (visible to operators only)."
-              value={draft.notes || ""}
+              value={draft.notes ?? ""}
               onChange={(e) =>
-                setDraft((d) => ({ ...d, notes: e.target.value }))
+                setDraft((d) => ({
+                  ...d,
+                  // BUG-4 FIX (QC v2): empty notes become null, not "" — keeps
+                  // round-trip parity with the DB and avoids spurious isDirty.
+                  notes: e.target.value === "" ? null : e.target.value,
+                }))
               }
               data-testid={`position-notes-${index}`}
             />
@@ -372,7 +377,8 @@ function ConstraintPicker({ axis, value, onChange, testIdPrefix }) {
   );
 }
 
-function normalisePosition(position) {
+// Exported for unit testing (Bug 4 — notes nullability spurious-isDirty fix).
+export function normalisePosition(position) {
   const base = {
     id: position?.id || null,
     package_id: position?.package_id || null,
@@ -385,7 +391,12 @@ function normalisePosition(position) {
     selection_mode: position?.selection_mode || "ai_decides",
     ai_backfill_on_gap: position?.ai_backfill_on_gap ?? true,
     template_slot_id: position?.template_slot_id || null,
-    notes: position?.notes || "",
+    // BUG-4 FIX (QC v2 — 2026-05-02): keep `notes` strictly null when
+    // unset. Earlier code coerced to "" which made every freshly loaded row
+    // appear "dirty" against the DB-backed null after JSON.stringify diff
+    // (`{notes:null}` vs `{notes:""}` are not equal). Use `?? null` so
+    // empty strings ALSO normalise to null.
+    notes: position?.notes ?? null,
     ...pickConstraints(position),
   };
   // Ensure every constraint axis is present (even if NULL).
