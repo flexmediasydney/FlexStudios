@@ -74,7 +74,17 @@ import {
 } from '../_shared/slotRecipeResolver.ts';
 
 const GENERATOR = 'shortlisting-ingest';
-const CHUNK_SIZE = 50;
+// CHUNK_SIZE = 20: each chunk POSTs to shortlisting-extract → Modal which
+// downloads the .CR3 RAW files from Dropbox, decodes them, extracts EXIF +
+// AEB metadata, generates a preview JPEG, and persists to the round.
+//
+// 2026-05-03 — reduced from 50 → 20 after a 46 Brays run got stuck: each
+// chunk of 50 RAWs (~1.5GB total) couldn't finish inside the dispatcher's
+// 120s extract fetch timeout. Modal would still be working when the
+// dispatcher aborted the call → "Signal timed out" → infinite-retry loop.
+// 20 RAWs (~600MB) finishes well under 120s on a warm Modal worker, with
+// headroom for a cold-start (extract was bumped to 180s in tandem).
+const CHUNK_SIZE = 20;
 const SUPPORTED_RAW_EXT = ['.cr3', '.cr2', '.arw', '.nef', '.raf', '.dng'];
 
 // Engine roles that count toward the photo shortlist target. Drone, video,

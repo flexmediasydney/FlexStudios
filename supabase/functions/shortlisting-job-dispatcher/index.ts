@@ -551,7 +551,12 @@ const KIND_TO_FUNCTION: Record<string, string> = {
  */
 export const KIND_TIMEOUT_MS: Record<string, number> = {
   ingest: 60_000,
-  extract: 120_000,
+  // 2026-05-03: bumped 120_000 → 180_000 after 46 Brays got stuck in a
+  // timeout-retry loop. Even with CHUNK_SIZE reduced from 50 → 20 in
+  // shortlisting-ingest, a cold-start on Modal can take ~80-100s for the
+  // first chunk; 120s left no headroom. 180s gives a comfortable margin
+  // while still finishing well inside the 240s TICK_BUDGET_MS.
+  extract: 180_000,
   pass0: 90_000,
   pass3: 90_000,
   shape_d_stage1: 30_000, // background mode; ack only
