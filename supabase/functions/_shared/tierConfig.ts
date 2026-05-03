@@ -31,7 +31,10 @@ import { getAdminClient } from './supabase.ts';
 
 export interface TierConfigRow {
   id: string;
-  tier_id: string;
+  // mig 443 renamed shortlisting_tier_configs → shortlisting_grade_configs
+  // and tier_id → grade_id. We keep the type alias `TierConfigRow` to avoid
+  // a wider rename across callers; `grade_id` here is the renamed column.
+  grade_id: string;
   version: number;
   dimension_weights: Record<string, number>;
   signal_weights: Record<string, number>;
@@ -83,19 +86,22 @@ export async function getActiveTierConfig(
   }
 
   const admin = getAdminClient();
+  // mig 443 rename: shortlisting_tier_configs → shortlisting_grade_configs,
+  // tier_id → grade_id. Caller passes the round's engine_grade_id; we look
+  // up the active config row keyed on the renamed column.
   const { data, error } = await admin
-    .from('shortlisting_tier_configs')
+    .from('shortlisting_grade_configs')
     .select(
-      'id, tier_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, activated_at, notes',
+      'id, grade_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, activated_at, notes',
     )
-    .eq('tier_id', tierId)
+    .eq('grade_id', tierId)
     .eq('is_active', true)
     .maybeSingle();
 
   if (error) {
     // Don't crash; let the caller fall back to defaults with a warning.
     console.warn(
-      `[tierConfig] active config fetch failed for tier_id=${tierId}: ${error.message}`,
+      `[tierConfig] active grade_config fetch failed for grade_id=${tierId}: ${error.message}`,
     );
     cache.set(tierId, { row: null, fetchedAt: now });
     return null;

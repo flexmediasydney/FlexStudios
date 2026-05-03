@@ -243,7 +243,7 @@ interface RoundContext {
   round_id: string;
   project_id: string;
   status: string;
-  engine_tier_id: string | null;
+  engine_grade_id: string | null;
   property_tier: PropertyTier;
   property_voice_anchor_override: string | null;
   dropbox_root_path: string;
@@ -973,28 +973,31 @@ async function runShapeDStage1Core(
 
   // W11.6.18 — resolve the active tier_config once per round so persist can
   // pick the W11 per-signal weighted rollup when signal_weights is configured.
-  // Falls back to null (legacy hardcoded 4-axis blend) when engine_tier_id is
+  // Falls back to null (legacy hardcoded 4-axis blend) when engine_grade_id is
   // missing or no active config exists; emits a shortlisting_events warning
   // so admin notices.
-  const tierConfig: TierConfigRow | null = ctx.engine_tier_id
-    ? await getActiveTierConfig(ctx.engine_tier_id)
+  // mig 443 renamed engine_tier_id → engine_grade_id everywhere on round +
+  // grade_configs; the legacy log strings still say "tier" for backwards-
+  // compatible event payloads but the field name is now grade-aligned.
+  const tierConfig: TierConfigRow | null = ctx.engine_grade_id
+    ? await getActiveTierConfig(ctx.engine_grade_id)
     : null;
   if (!tierConfig) {
-    const reason = !ctx.engine_tier_id
-      ? 'engine_tier_id is null (legacy round)'
-      : 'no active tier_config row for engine_tier_id';
+    const reason = !ctx.engine_grade_id
+      ? 'engine_grade_id is null (legacy round)'
+      : 'no active grade_config row for engine_grade_id';
     warnings.push(
-      `shape-d tier_config fallback: ${reason} — combined_score uses legacy hardcoded weights`,
+      `shape-d grade_config fallback: ${reason} — combined_score uses legacy hardcoded weights`,
     );
     const { error: warnEvtErr } = await admin
       .from('shortlisting_events')
       .insert({
         project_id: ctx.project_id,
         round_id: roundId,
-        event_type: 'shape_d_tier_config_fallback',
+        event_type: 'shape_d_grade_config_fallback',
         actor_type: 'system',
         payload: {
-          engine_tier_id: ctx.engine_tier_id,
+          engine_grade_id: ctx.engine_grade_id,
           reason,
         },
       });
@@ -1648,7 +1651,7 @@ async function loadRoundContext(
   const { data: round, error: rErr } = await admin
     .from('shortlisting_rounds')
     .select(
-      'id, project_id, status, engine_tier_id, property_tier, property_voice_anchor_override',
+      'id, project_id, status, engine_grade_id, property_tier, property_voice_anchor_override',
     )
     .eq('id', roundId)
     .maybeSingle();
@@ -1686,7 +1689,7 @@ async function loadRoundContext(
     round_id: roundId,
     project_id: round.project_id as string,
     status: round.status as string,
-    engine_tier_id: (round.engine_tier_id as string | null) ?? null,
+    engine_grade_id: (round.engine_grade_id as string | null) ?? null,
     property_tier: propertyTier,
     property_voice_anchor_override: (round.property_voice_anchor_override as string | null) ?? null,
     dropbox_root_path: dropboxRoot,
