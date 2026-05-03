@@ -195,13 +195,65 @@ async function dbxPost(token: string, endpoint: string, body: Record<string, unk
       }
     }
 
-    // Rate limited — honour Retry-After (capped) then retry
-    if (res.status === 429 && attempt < MAX_ATTEMPTS - 1) {
-      const retryAfter = parseInt(res.headers?.get('Retry-After') || '2', 10);
-      const delayMs = Math.min(Math.max(retryAfter, 1), 5) * 1000;
-      console.warn(`Dropbox 429 on ${endpoint}, retrying after ${delayMs}ms (attempt ${attempt + 1}/${MAX_ATTEMPTS})`);
-      await new Promise((r) => setTimeout(r, delayMs));
-      continue;
+    // Rate limited — DO NOT retry from inside the Edge fn.
+    //
+    // 2026-05-03 hotfix — the prior code retried up to 3× with Retry-After
+    // CAPPED at 5s.  When Dropbox is sending retry_after=300 (which it does
+    // for an app whose recent burst pattern tripped the adaptive limiter),
+    // a 5s wait is FAR too short.  Each premature retry extends the
+    // cool-off window, so 3 retries × 5s = 15s of compounded damage that
+    // keeps the bucket permanently hot.  We saw exactly this pattern on
+    // the 46 Brays engine investigation (modal:photos-extract logged
+    // 10 cascading 429s for a 5-file burst).
+    //
+    // New behaviour: surface 429 to the caller IMMEDIATELY with the real
+    // retry_after captured from the header / body.  The browser-side
+    // mediaPerf.fetchMediaProxy now negative-caches the failure for the
+    // duration so click-spam can't re-hammer the bucket.  When a few
+    // hundred seconds pass, the next click succeeds naturally.
+    //
+    // Best-effort observability — log the 429 to dropbox_429_log so the
+    // dispatcher's circuit breaker also sees UI-side pressure (Wave 2
+    // mig 464 schema).  Logging is fire-and-forget; failures don't
+    // affect the response.
+    if (res.status === 429) {
+      const retryAfterHdr = parseInt(res.headers?.get('Retry-After') || '0', 10);
+      const retryAfter = Number.isFinite(retryAfterHdr) && retryAfterHdr > 0 ? retryAfterHdr : null;
+      console.warn(
+        `Dropbox 429 on ${endpoint} (retry_after=${retryAfter ?? 'unspecified'}) — ` +
+          `surfacing to caller WITHOUT retry to avoid compounding the cool-off window`,
+      );
+      // Fire-and-forget logging.  Lazy-import the supabase admin client
+      // helper to avoid pulling it into every getDeliveryMediaFeed cold-
+      // start when no 429 actually occurs.
+      try {
+        const { getAdminClient } = await import('../_shared/supabase.ts');
+        const admin = getAdminClient();
+        admin
+          .from('dropbox_429_log')
+          .insert({
+            bucket: 'files',
+            retry_after_s: retryAfter,
+            source: 'edge:getDeliveryMediaFeed',
+            context: { endpoint, attempt: attempt + 1 },
+          })
+          .then(({ error }) => {
+            if (error) {
+              console.warn(`dropbox_429_log insert failed (non-fatal): ${error.message}`);
+            }
+          });
+      } catch (logErr) {
+        console.warn(`dropbox_429_log import failed (non-fatal): ${logErr}`);
+      }
+      // Custom error so the Edge handler can surface a proper 429 to
+      // the browser (with a retry_after_s field in the JSON body).
+      const err: Error & { dropbox_429?: boolean; retry_after_s?: number | null } = new Error(
+        `Dropbox rate limited on ${endpoint}` +
+          (retryAfter ? ` — retry after ~${retryAfter}s` : ''),
+      );
+      err.dropbox_429 = true;
+      err.retry_after_s = retryAfter;
+      throw err;
     }
 
     // Transient 5xx — exponential backoff
@@ -1207,8 +1259,36 @@ Deno.serve(async (req) => {
     if (msg.includes('invalid_access_token') || msg.includes('expired_access_token')) {
       return errResponse('TOKEN_EXPIRED', 'Dropbox token expired — contact admin', 502, req);
     }
-    if (msg.includes('rate limited')) {
-      return errResponse('RATE_LIMITED', 'Dropbox API rate limit reached — try again shortly', 429, req);
+    // 2026-05-03 — surface retry_after_s on Dropbox 429s so the browser
+    // can negative-cache for the right duration.  The new dbxPost throws
+    // an Error with .dropbox_429=true and .retry_after_s set when we
+    // observe a 429 from /files (typically retry_after=300 right now
+    // because the app is in adaptive throttle).  Including the seconds
+    // hint in the JSON body lets fetchMediaProxy decide how long to
+    // suppress further calls for this path.
+    const dbx429 = err && typeof err === 'object' && (err as Record<string, unknown>).dropbox_429 === true;
+    if (dbx429 || msg.includes('rate limited')) {
+      const retryAfterS = (err && typeof err === 'object'
+        ? ((err as Record<string, unknown>).retry_after_s as number | null | undefined)
+        : null) ?? null;
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: 'RATE_LIMITED',
+          message: 'Dropbox API rate limit reached — try again shortly',
+          retry_after_s: retryAfterS,
+        }),
+        {
+          status: 429,
+          headers: {
+            ...getCorsHeaders(req),
+            'Content-Type': 'application/json',
+            // Standard Retry-After header so browsers and intermediaries
+            // honour the back-off too.
+            ...(retryAfterS ? { 'Retry-After': String(retryAfterS) } : {}),
+          },
+        },
+      );
     }
     // Generic message — never echo raw err.message to the client
     return errResponse('INTERNAL_ERROR', 'An internal error occurred while processing the media request', 500, req);

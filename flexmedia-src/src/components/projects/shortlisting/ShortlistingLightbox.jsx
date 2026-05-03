@@ -51,8 +51,10 @@ import {
   HelpCircle,
   ChevronDown,
   ChevronUp,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
-import { fetchMediaProxy } from "@/utils/mediaPerf";
+import { fetchMediaProxy, getMediaFailureInfo, clearMediaFailure } from "@/utils/mediaPerf";
 import { cn } from "@/lib/utils";
 import useLightboxAnnotations from "@/hooks/useLightboxAnnotations";
 // W11.6.x — full signal score panel grouped by category (technical /
@@ -576,16 +578,27 @@ export default function ShortlistingLightbox({
               <span className="text-xs">Loading full-resolution…</span>
             </div>
           ) : errored ? (
-            <div
-              className="flex flex-col items-center gap-2 text-white/70"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ImageIcon className="h-12 w-12 opacity-40" />
-              <span className="text-sm">Preview unavailable</span>
-              <span className="text-xs text-white/50 max-w-md text-center break-all">
-                {item.dropbox_path}
-              </span>
-            </div>
+            <ImageErrorState
+              item={item}
+              onRetry={() => {
+                clearMediaFailure(item?.dropbox_path, "proxy");
+                setErrored(false);
+                setIsFetching(true);
+                fetchProxyUrl(item?.dropbox_path)
+                  .then((url) => {
+                    if (!mountedRef.current) return;
+                    if (url) {
+                      setImageUrl(url);
+                      setErrored(false);
+                    } else {
+                      setErrored(true);
+                    }
+                  })
+                  .finally(() => {
+                    if (mountedRef.current) setIsFetching(false);
+                  });
+              }}
+            />
           ) : (
             <ImageIcon className="h-12 w-12 text-white/30" />
           )}
@@ -946,6 +959,76 @@ function ExifPanel({ exif }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * Lightbox image-failure state.  Distinguishes between a Dropbox
+ * rate-limit failure (with retry hint) and a generic failure.
+ *
+ * 2026-05-03 — added because today's engine investigation poisoned the
+ * Dropbox app's adaptive throttle reputation, causing every UI media
+ * fetch on pre-Wave-2 rounds (Everton / Rainbow — `dropbox_path` still
+ * points at Dropbox) to 429.  Without this state, operators saw a
+ * silent empty lightbox and didn't know it was a backend cool-off.
+ *
+ * Wave-2+ rounds (Brays etc) store HTTPS Storage URLs and skip this
+ * code path entirely (mediaPerf pass-through), so this component only
+ * fires on legacy data.
+ */
+function ImageErrorState({ item, onRetry }) {
+  // Re-read the failure state on every render so the seconds-remaining
+  // text updates as time passes.  We don't need to set up an interval
+  // here — the parent re-renders on most user interactions, and the
+  // text is approximate ("~5 min") so per-second precision isn't
+  // worth the wasted renders.
+  const failure = getMediaFailureInfo(item?.dropbox_path, "proxy");
+  const isRateLimited = failure?.kind === "rate_limited";
+  const secondsUntilRetry = failure ? Math.ceil(failure.msUntilRetry / 1000) : 0;
+  return (
+    <div
+      className="flex flex-col items-center gap-3 text-white/70 max-w-md"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {isRateLimited ? (
+        <AlertTriangle className="h-12 w-12 text-amber-400/80" />
+      ) : (
+        <ImageIcon className="h-12 w-12 opacity-40" />
+      )}
+      <div className="text-sm font-medium">
+        {isRateLimited
+          ? "Dropbox is rate-limiting our app right now"
+          : "Preview unavailable"}
+      </div>
+      {isRateLimited ? (
+        <div className="text-xs text-white/60 text-center leading-relaxed">
+          The Dropbox file API is in adaptive throttle mode (this clears
+          on its own as the app's burst pattern cools).  We're caching
+          the failure so re-clicking won't extend the cool-off.
+          <br />
+          <br />
+          Suggested retry in{" "}
+          <span className="font-mono text-amber-300">
+            ~{secondsUntilRetry < 60
+              ? `${secondsUntilRetry}s`
+              : `${Math.ceil(secondsUntilRetry / 60)} min`}
+          </span>
+          .
+        </div>
+      ) : (
+        <span className="text-xs text-white/50 break-all text-center">
+          {item?.dropbox_path}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onRetry}
+        className="inline-flex items-center gap-1.5 rounded-md bg-white/10 hover:bg-white/15 px-3 py-1.5 text-xs font-medium transition-colors"
+      >
+        <RefreshCw className="h-3 w-3" />
+        Retry now
+      </button>
     </div>
   );
 }

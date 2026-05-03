@@ -205,6 +205,44 @@ const SUPABASE_ANON = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 // they all await the SAME promise instead of getting null or firing duplicate fetches.
 const _inflight = new Map();
 
+// Negative-cache for failed fetches.  Keyed by cacheKey.  Each entry is
+// `{ failedAt: epoch_ms, kind: 'rate_limited' | 'other', retryAfterMs: number }`.
+//
+// 2026-05-03 hotfix — when the Dropbox app reputation is in adaptive
+// throttle (current state today after the engine investigation that
+// fired ~186 jobs at the API), `getDeliveryMediaFeed` reliably 429s
+// with `retry_after: 300`.  Without negative-caching, every component
+// remount, every navigation, every re-hover fires another live request
+// → each premature retry RESETS the cool-off → bucket stays hot
+// indefinitely.  We respect the retry_after by suppressing further
+// fetches for the same path until the window has elapsed.
+//
+// Cap any single neg-cache TTL at 10 min so we always retry eventually,
+// even if Dropbox sent a wildly long retry_after.
+const _negCache = new Map();
+const NEG_CACHE_MAX_TTL_MS = 10 * 60 * 1000;
+const NEG_CACHE_DEFAULT_RATE_LIMITED_MS = 60 * 1000;
+const NEG_CACHE_DEFAULT_OTHER_MS = 5 * 1000;
+
+function _negCacheCheck(cacheKey) {
+  const entry = _negCache.get(cacheKey);
+  if (!entry) return null;
+  const elapsed = Date.now() - entry.failedAt;
+  if (elapsed >= entry.retryAfterMs) {
+    _negCache.delete(cacheKey);
+    return null;
+  }
+  return entry;
+}
+
+function _negCacheSet(cacheKey, kind, retryAfterMs) {
+  _negCache.set(cacheKey, {
+    failedAt: Date.now(),
+    kind,
+    retryAfterMs: Math.min(retryAfterMs, NEG_CACHE_MAX_TTL_MS),
+  });
+}
+
 /**
  * Fetch a media file through the edge function proxy.
  * Deduplicates concurrent requests — if the same file is already being fetched,
@@ -233,6 +271,14 @@ export function fetchMediaProxy(cache, filePath, mode = 'thumb', retries = 2) {
   // Layer 1: Already cached blob URL
   if (cache.has(cacheKey)) return Promise.resolve(cache.get(cacheKey));
 
+  // Layer 1b: Negative-cache hit — recent fetch failed, don't retry yet.
+  // This is the critical fix for the Dropbox-throttle compounding loop:
+  // a remount or click-spam could otherwise refire the request and each
+  // premature retry resets Dropbox's cool-off window.  Returning null
+  // immediately tells callers "use the errored UI state"; they can call
+  // getMediaFailureInfo() to learn why.
+  if (_negCacheCheck(cacheKey)) return Promise.resolve(null);
+
   // Layer 2: Already in-flight — return the SAME promise (critical dedup fix)
   if (_inflight.has(cacheKey)) return _inflight.get(cacheKey);
 
@@ -243,6 +289,42 @@ export function fetchMediaProxy(cache, filePath, mode = 'thumb', retries = 2) {
   // Clean up in-flight map when done (success or failure)
   promise.finally(() => _inflight.delete(cacheKey));
   return promise;
+}
+
+/**
+ * Look up why the last fetch for `filePath` (in this `mode`) failed.
+ *
+ * Used by lightbox / card components to render a useful message instead
+ * of a silent empty state.  Returns null when there's no record (path
+ * was never tried, or the negative-cache TTL has expired).
+ *
+ * Shape:
+ *   {
+ *     kind: 'rate_limited' | 'other',
+ *     retryAfterMs: number,        // total backoff window
+ *     msSinceFailure: number,      // for "failed Ns ago" text
+ *     msUntilRetry: number,        // for "retry in Ns" text
+ *   }
+ */
+export function getMediaFailureInfo(filePath, mode = 'thumb') {
+  const cacheKey = `${mode}::${filePath}`;
+  const entry = _negCacheCheck(cacheKey);
+  if (!entry) return null;
+  const msSinceFailure = Date.now() - entry.failedAt;
+  return {
+    kind: entry.kind,
+    retryAfterMs: entry.retryAfterMs,
+    msSinceFailure,
+    msUntilRetry: Math.max(0, entry.retryAfterMs - msSinceFailure),
+  };
+}
+
+/**
+ * Manually clear the failure record for a path so a subsequent fetch
+ * tries again.  Useful for "retry now" buttons in error UIs.
+ */
+export function clearMediaFailure(filePath, mode = 'thumb') {
+  _negCache.delete(`${mode}::${filePath}`);
 }
 
 async function _doFetch(cache, cacheKey, filePath, mode, retries) {
@@ -256,10 +338,35 @@ async function _doFetch(cache, cacheKey, filePath, mode, retries) {
       signal: controller.signal,
     });
 
-    // 503 = token refreshed, 429 = rate limited → retry with backoff
-    if ((res.status === 503 || res.status === 429) && retries > 0) {
-      const delay = res.status === 429 ? 2000 : 500; // longer backoff for rate limits
-      await new Promise(r => setTimeout(r, delay * (3 - retries))); // escalating delay
+    // 429 = Dropbox rate limit.  DO NOT retry — the Edge fn has already
+    // surfaced the 429 immediately (per its 2026-05-03 hotfix) precisely
+    // to avoid compounding the cool-off.  Negative-cache the failure
+    // for the duration Dropbox asked us to wait, then return null.
+    if (res.status === 429) {
+      let retryAfterS = null;
+      const hdrRA = parseInt(res.headers?.get('Retry-After') || '', 10);
+      if (Number.isFinite(hdrRA) && hdrRA > 0) retryAfterS = hdrRA;
+      try {
+        const body = await res.clone().json().catch(() => null);
+        if (body && typeof body.retry_after_s === 'number' && body.retry_after_s > 0) {
+          retryAfterS = body.retry_after_s;
+        }
+      } catch {
+        /* ignore body parse — header was good enough */
+      }
+      const ttlMs = retryAfterS != null ? retryAfterS * 1000 : NEG_CACHE_DEFAULT_RATE_LIMITED_MS;
+      _negCacheSet(cacheKey, 'rate_limited', ttlMs);
+      console.warn(
+        `[mediaPerf] ${filePath?.slice?.(-40) || filePath} rate-limited; ` +
+          `negative-cached for ${Math.round(ttlMs / 1000)}s`,
+      );
+      return null;
+    }
+
+    // 503 = token refreshed → retry with short backoff (this is internal,
+    // not a Dropbox rate-limit).  503 is fast to recover from.
+    if (res.status === 503 && retries > 0) {
+      await new Promise(r => setTimeout(r, 500 * (3 - retries)));
       return _doFetch(cache, cacheKey, filePath, mode, retries - 1);
     }
 
@@ -269,10 +376,17 @@ async function _doFetch(cache, cacheKey, filePath, mode, retries) {
       return _doFetch(cache, cacheKey, filePath, mode, retries - 1);
     }
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // Brief negative-cache so a re-render doesn't spam the same failed path.
+      _negCacheSet(cacheKey, 'other', NEG_CACHE_DEFAULT_OTHER_MS);
+      return null;
+    }
     const blob = await res.blob();
     // Reject tiny error responses but not tiny valid images (lowered threshold)
-    if (!blob.type?.startsWith('image/') && blob.size < 200) return null;
+    if (!blob.type?.startsWith('image/') && blob.size < 200) {
+      _negCacheSet(cacheKey, 'other', NEG_CACHE_DEFAULT_OTHER_MS);
+      return null;
+    }
     const url = URL.createObjectURL(blob);
     cache.set(cacheKey, url);
 
@@ -286,6 +400,7 @@ async function _doFetch(cache, cacheKey, filePath, mode, retries) {
     if (err.name === 'AbortError') {
       console.warn('[mediaPerf] Thumbnail fetch timed out:', filePath);
     }
+    _negCacheSet(cacheKey, 'other', NEG_CACHE_DEFAULT_OTHER_MS);
     return null;
   } finally {
     clearTimeout(timeoutId);
