@@ -18,7 +18,7 @@
  * The position editor itself is a child component (PositionRow) that
  * expands inline when ▶ is clicked.
  */
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -235,6 +235,12 @@ export default function CellEditorDialog({
   });
 
   // ── Engine-mode override + tolerance ────────────────────────────
+  //
+  // The dialog stays mounted across cell switches (RecipeMatrixTab toggles
+  // `open` instead of unmounting), so useState would hold stale values
+  // from the PREVIOUS cell. The useEffect below re-syncs whenever the
+  // active cell changes — without it, opening Silver→Gold leaves Silver's
+  // tolerance / engine_mode showing in the Gold dialog.
   const pkg = cell?.package || null;
   const [engineMode, setEngineMode] = useState(
     pkg?.engine_mode_override || "",
@@ -245,6 +251,18 @@ export default function CellEditorDialog({
   const [tolAbove, setTolAbove] = useState(
     pkg?.expected_count_tolerance_above ?? "",
   );
+
+  useEffect(() => {
+    setEngineMode(pkg?.engine_mode_override || "");
+    setTolBelow(pkg?.expected_count_tolerance_below ?? "");
+    setTolAbove(pkg?.expected_count_tolerance_above ?? "");
+    setActiveRole("photo_day_shortlist");
+  }, [
+    pkg?.id,
+    pkg?.engine_mode_override,
+    pkg?.expected_count_tolerance_below,
+    pkg?.expected_count_tolerance_above,
+  ]);
 
   const packageMutation = useMutation({
     mutationFn: async () => {

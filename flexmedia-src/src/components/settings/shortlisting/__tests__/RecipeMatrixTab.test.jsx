@@ -606,17 +606,23 @@ describe("constants — deriveCellTarget", () => {
     expect(t.source).toBe("sum_of_products");
   });
 
-  it("falls back to expected_count_target when nothing else known", () => {
+  // Hotfix 7cc89a4 (2026-05-02) dropped the legacy expected_count_target
+  // fallback — that column lives on shortlisting_rounds, not packages,
+  // and was a phantom reference. With no tier image_count and no
+  // products[], deriveCellTarget now returns {value: null, source:
+  // 'unknown'}. The test below pins that contract.
+  it("returns unknown (no expected_count_target fallback) when only legacy field present", () => {
     const pkg = {
       name: "Legacy",
       products: [],
       standard_tier: {},
       premium_tier: {},
+      // expected_count_target was the old phantom — derive ignores it.
       expected_count_target: 11,
     };
     const t = deriveCellTarget(pkg, "standard");
-    expect(t.value).toBe(11);
-    expect(t.source).toBe("expected_count_target");
+    expect(t.value).toBe(null);
+    expect(t.source).toBe("unknown");
   });
 
   it("returns null when no source available", () => {
@@ -644,13 +650,29 @@ describe("constants — packageOffersTier", () => {
     expect(packageOffersTier(pkg, "premium")).toBe(true);
   });
 
-  it("returns true when tier jsonb is empty but expected_count_target is set", () => {
+  it("returns false when tier jsonb empty and no products[] (legacy expected_count_target NOT a signal)", () => {
+    // Hotfix 7cc89a4: expected_count_target was a phantom — packageOffersTier
+    // no longer treats it as a signal. With empty tier jsonb and no
+    // products[], the package doesn't offer the tier.
     const pkg = {
       name: "Legacy",
       products: [],
       standard_tier: {},
       premium_tier: {},
       expected_count_target: 10,
+    };
+    expect(packageOffersTier(pkg, "standard")).toBe(false);
+    expect(packageOffersTier(pkg, "premium")).toBe(false);
+  });
+
+  it("returns true when tier jsonb empty but products[] is non-empty (sum-of-products fallback)", () => {
+    const pkg = {
+      name: "Products",
+      products: [
+        { product_id: "a", quantity: 5 },
+      ],
+      standard_tier: {},
+      premium_tier: {},
     };
     expect(packageOffersTier(pkg, "standard")).toBe(true);
     expect(packageOffersTier(pkg, "premium")).toBe(true);
