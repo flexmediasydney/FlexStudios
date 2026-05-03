@@ -422,7 +422,7 @@ export default function CellEditorDialog({
               <Label className="text-xs flex items-center gap-1">
                 Tolerance below
                 <IconTip
-                  text="How many positions short of expected_count_target the round may be without flagging a health warning."
+                  text="How many positions short of the package target the round may be without flagging a health warning."
                 />
               </Label>
               <Input
@@ -439,7 +439,7 @@ export default function CellEditorDialog({
                 <Label className="text-xs flex items-center gap-1">
                   Tolerance above
                   <IconTip
-                    text="How many positions over expected_count_target the round may be without flagging a health warning."
+                    text="How many positions over the package target the round may be without flagging a health warning."
                   />
                 </Label>
                 <Input

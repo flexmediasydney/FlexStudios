@@ -163,10 +163,10 @@ export default function HelpDrawer({ open, onOpenChange }) {
               <h3 className="font-semibold mb-1.5">Tolerance band</h3>
               <p className="text-muted-foreground">
                 Each cell carries a <code>±N</code> tolerance band on top of
-                <code> expected_count_target</code>. The engine treats
-                anything in <code>[target − below, target + above]</code> as
-                acceptable. Out-of-band counts surface as health warnings on
-                the round dashboard.
+                the package target. The engine treats anything in{" "}
+                <code>[target − below, target + above]</code> as acceptable.
+                Out-of-band counts surface as health warnings on the round
+                dashboard.
               </p>
             </section>
 

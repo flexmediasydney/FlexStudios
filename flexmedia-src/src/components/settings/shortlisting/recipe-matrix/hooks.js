@@ -42,8 +42,10 @@ const STALE_MS = 60_000;
 /**
  * Reference data for the matrix:
  *   packages   — id, name, products[] jsonb, standard_tier/premium_tier
- *                jsonb, expected_count_target, tolerance bands,
- *                engine_mode_override.
+ *                jsonb, tolerance bands, engine_mode_override. Target
+ *                count derives from products[].quantity sum (or per-tier
+ *                jsonb.image_count when present); there is no top-level
+ *                `expected_count_target` column on `packages`.
  *   priceTiers — package_price_tiers rows (Standard / Premium). NEW in
  *                W11.6.28b — replaces engine grades on the column axis.
  *   project_types — id, name
@@ -59,10 +61,15 @@ export function useRecipeRefs() {
     queryKey: ["recipe-matrix-refs"],
     queryFn: async () => {
       // ── Packages (full tier jsonb + products[] for target derivation) ──
+      // Hotfix 2026-05-02: removed `expected_count_target` from SELECT —
+      // the column doesn't exist on `packages` (it's on shortlisting_rounds).
+      // Target count derives from products[].quantity (sum) or tier
+      // jsonb.image_count when present; constants.js#deriveCellTarget
+      // owns that derivation.
       const packagesRes = await supabase
         .from("packages")
         .select(
-          "id, name, products, standard_tier, premium_tier, expected_count_target, expected_count_tolerance_below, expected_count_tolerance_above, engine_mode_override",
+          "id, name, products, standard_tier, premium_tier, expected_count_tolerance_below, expected_count_tolerance_above, engine_mode_override",
         )
         .eq("is_active", true)
         .order("name");
@@ -73,7 +80,7 @@ export function useRecipeRefs() {
         const fallback = await supabase
           .from("packages")
           .select(
-            "id, name, products, standard_tier, premium_tier, expected_count_target, expected_count_tolerance_below, expected_count_tolerance_above",
+            "id, name, products, standard_tier, premium_tier, expected_count_tolerance_below, expected_count_tolerance_above",
           )
           .eq("is_active", true)
           .order("name");

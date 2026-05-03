@@ -249,9 +249,11 @@ export function cellHealthColor(positionCount, expectedTarget) {
 //                 own products[] jsonb array; the per-product image
 //                 contribution is taken from the product's tier jsonb when
 //                 present, otherwise from the per-product quantity field.
-//   3. HARD FALLBACK → packages.expected_count_target (legacy single-tier
-//                      target — the same number across both columns).
-//   4. UNKNOWN  → null (cell renders without a target gauge).
+//   3. UNKNOWN  → null (cell renders without a target gauge).
+//
+// Note: there is NO top-level `packages.expected_count_target` column
+// (that lives on `shortlisting_rounds` and is per-round). Earlier code
+// referenced it as a hard fallback; that path was a phantom.
 //
 // The fallback breakdown is exposed to the UI as a tooltip explaining
 // "Target: 5 (Sales) + 3 (Drone) + 1 (Floor Plans) = 9".
@@ -324,23 +326,6 @@ export function deriveCellTarget(pkg, tierCode, productLookup = null) {
     }
   }
 
-  // ── Hard fallback: legacy expected_count_target column ─────────────────
-  if (Number.isFinite(Number(pkg.expected_count_target))) {
-    const v = Number(pkg.expected_count_target);
-    if (v > 0) {
-      return {
-        value: v,
-        source: "expected_count_target",
-        breakdown: [
-          {
-            label: `${pkg.name || "Package"} legacy target`,
-            value: v,
-          },
-        ],
-      };
-    }
-  }
-
   return { value: null, source: "unknown", breakdown: [] };
 }
 
@@ -351,9 +336,6 @@ export function describeTargetBreakdown(target) {
   }
   if (target.source === "tier_image_count") {
     return `Target: ${target.value} images (from package tier image_count).`;
-  }
-  if (target.source === "expected_count_target") {
-    return `Target: ${target.value} images (legacy expected_count_target — tier jsonb has no image_count).`;
   }
   if (target.source === "sum_of_products") {
     const parts = target.breakdown
@@ -367,9 +349,9 @@ export function describeTargetBreakdown(target) {
 // Whether a package OFFERS this price tier — used to disable cells that
 // don't make sense for a package that doesn't sell in this tier (e.g. an
 // AI package may only have a Standard tier). We treat the tier as "offered"
-// when EITHER the tier jsonb has any pricing/image data OR the legacy
-// expected_count_target is non-null (since the legacy column is per-package
-// not per-tier, we assume both tiers are offered).
+// when the tier jsonb has any pricing/image data, or when the package has
+// products[] entries (default-true so the matrix doesn't accidentally hide
+// cells the operator set up).
 export function packageOffersTier(pkg, tierCode) {
   if (!pkg) return false;
   const tierKey = tierCode === "premium" ? "premium_tier" : "standard_tier";
@@ -380,15 +362,6 @@ export function packageOffersTier(pkg, tierCode) {
       return v != null && v !== 0 && v !== "" && !Number.isNaN(v);
     });
     if (hasFields) return true;
-  }
-  // Legacy package with no per-tier jsonb but a global target → both tiers
-  // are considered offered.
-  if (
-    pkg.expected_count_target != null &&
-    Number.isFinite(Number(pkg.expected_count_target)) &&
-    Number(pkg.expected_count_target) > 0
-  ) {
-    return true;
   }
   // Last resort: a package with products[] is offering whichever tier the
   // operator set up. Default to TRUE for both tiers so the matrix doesn't
