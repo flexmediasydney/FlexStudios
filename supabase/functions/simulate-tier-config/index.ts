@@ -178,10 +178,14 @@ async function runSimulation(draftId: string): Promise<SimulationResult> {
   const admin = getAdminClient();
 
   // ── 1. Load draft tier_config ────────────────────────────────────────────
+  // mig 443 rename: shortlisting_tier_configs → shortlisting_grade_configs
+  // and the table's tier_id column → grade_id. PostgREST aliases preserve
+  // the API response field names so downstream consumers (tests, UI) don't
+  // need a coordinated rollout.
   const { data: draftRow, error: draftErr } = await admin
-    .from('shortlisting_tier_configs')
+    .from('shortlisting_grade_configs')
     .select(
-      'id, tier_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, notes',
+      'id, tier_id:grade_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, notes',
     )
     .eq('id', draftId)
     .maybeSingle();
@@ -190,8 +194,10 @@ async function runSimulation(draftId: string): Promise<SimulationResult> {
   const draft = draftRow as DraftTierConfigRow;
 
   // Pull tier_code for the response (UI displays it).
+  // mig 443: shortlisting_tiers → shortlisting_grades. tier_code column
+  // preserved on the renamed table.
   const { data: tierRow } = await admin
-    .from('shortlisting_tiers')
+    .from('shortlisting_grades')
     .select('id, tier_code')
     .eq('id', draft.tier_id)
     .maybeSingle();
@@ -200,13 +206,14 @@ async function runSimulation(draftId: string): Promise<SimulationResult> {
   // ── 2. Load last 30 locked rounds for this tier ──────────────────────────
   // Filter on tier_config_version IS NOT NULL: pre-W8 rounds can't be
   // replayed because we don't have the old weight set to compare against.
+  // mig 443: shortlisting_rounds.engine_tier_id → engine_grade_id.
   const { data: roundRows, error: roundsErr } = await admin
     .from('shortlisting_rounds')
     .select(
-      'id, round_number, project_id, locked_at, engine_tier_id, tier_config_version, package_type',
+      'id, round_number, project_id, locked_at, engine_tier_id:engine_grade_id, tier_config_version, package_type',
     )
     .eq('status', 'locked')
-    .eq('engine_tier_id', draft.tier_id)
+    .eq('engine_grade_id', draft.tier_id)
     .not('tier_config_version', 'is', null)
     .order('locked_at', { ascending: false })
     .limit(REPLAY_ROUND_LIMIT);

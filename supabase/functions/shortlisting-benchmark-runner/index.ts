@@ -246,7 +246,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const roundQuery = admin
     .from('shortlisting_rounds')
     .select(
-      'id, project_id, status, package_type, package_ceiling, expected_count_target, engine_tier_id, confirmed_shortlist_group_ids',
+      // mig 443 rename: shortlisting_rounds.engine_tier_id → engine_grade_id.
+      // PostgREST alias `engine_tier_id:engine_grade_id` keeps every downstream
+      // consumer of `round.engine_tier_id` working without further changes.
+      'id, project_id, status, package_type, package_ceiling, expected_count_target, engine_tier_id:engine_grade_id, confirmed_shortlist_group_ids',
     )
     .eq('status', 'locked');
   const { data: rounds, error: rerr } =

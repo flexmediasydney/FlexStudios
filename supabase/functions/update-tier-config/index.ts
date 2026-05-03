@@ -175,17 +175,21 @@ async function handleSaveDraft(
   // catches that (23505); we retry once.
   const insertOnce = async (): Promise<{ row: Record<string, unknown> | null; error: string | null; conflict: boolean }> => {
     const { data: latest } = await admin
-      .from('shortlisting_tier_configs')
+      .from('shortlisting_grade_configs')
       .select('version')
-      .eq('tier_id', tierId)
+      .eq('grade_id', tierId)
       .order('version', { ascending: false })
       .limit(1);
     const nextVersion = ((latest?.[0]?.version as number) ?? 0) + 1;
 
     const { data: inserted, error: insertErr } = await admin
-      .from('shortlisting_tier_configs')
+      .from('shortlisting_grade_configs')
       .insert({
-        tier_id: tierId,
+        // mig 443: tier_id column on this table renamed to grade_id.
+        // We keep `tier_id` in request/response field names so the admin
+        // UI doesn't need a coordinated rollout — only the SQL boundary
+        // changed.
+        grade_id: tierId,
         version: nextVersion,
         dimension_weights: draft.dimension_weights,
         signal_weights: draft.signal_weights,
@@ -194,7 +198,7 @@ async function handleSaveDraft(
         created_by: userId,
         notes: draft.notes ?? null,
       })
-      .select('id, tier_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, created_by, notes, created_at')
+      .select('id, tier_id:grade_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, created_by, notes, created_at')
       .single();
     if (insertErr) {
       const isConflict = insertErr.code === '23505' || /duplicate/i.test(insertErr.message);
@@ -231,8 +235,8 @@ async function handleActivate(body: ActivateBody, req: Request): Promise<Respons
 
   // Load the draft.
   const { data: draftRow, error: draftErr } = await admin
-    .from('shortlisting_tier_configs')
-    .select('id, tier_id, is_active')
+    .from('shortlisting_grade_configs')
+    .select('id, tier_id:grade_id, is_active')
     .eq('id', draftId)
     .maybeSingle();
   if (draftErr) return errorResponse(`draft lookup failed: ${draftErr.message}`, 500, req);
@@ -243,9 +247,9 @@ async function handleActivate(body: ActivateBody, req: Request): Promise<Respons
 
   // Find current active row for this tier.
   const { data: activeRow } = await admin
-    .from('shortlisting_tier_configs')
+    .from('shortlisting_grade_configs')
     .select('id')
-    .eq('tier_id', draftRow.tier_id)
+    .eq('grade_id', draftRow.tier_id)
     .eq('is_active', true)
     .maybeSingle();
 
@@ -277,7 +281,7 @@ async function handleActivate(body: ActivateBody, req: Request): Promise<Respons
   if (activeRow && activeRow.id !== draftId) {
     const nowIso = new Date().toISOString();
     const { error: deactErr } = await admin
-      .from('shortlisting_tier_configs')
+      .from('shortlisting_grade_configs')
       .update({ is_active: false, deactivated_at: nowIso, updated_at: nowIso })
       .eq('id', activeRow.id)
       .eq('is_active', true); // optimistic: only succeed if it's still active
@@ -288,12 +292,12 @@ async function handleActivate(body: ActivateBody, req: Request): Promise<Respons
 
   const nowIso = new Date().toISOString();
   const { data: activatedRow, error: actErr } = await admin
-    .from('shortlisting_tier_configs')
+    .from('shortlisting_grade_configs')
     .update({ is_active: true, activated_at: nowIso, updated_at: nowIso })
     .eq('id', draftId)
     .eq('is_active', false) // optimistic: only succeed if it's still a draft
     .select(
-      'id, tier_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, activated_at, deactivated_at, created_by, notes, created_at, updated_at',
+      'id, tier_id:grade_id, version, dimension_weights, signal_weights, hard_reject_thresholds, is_active, activated_at, deactivated_at, created_by, notes, created_at, updated_at',
     )
     .maybeSingle();
   if (actErr) {
@@ -346,7 +350,7 @@ async function handleDiscard(body: DiscardBody, req: Request): Promise<Response>
   const admin = getAdminClient();
 
   const { data: row, error: lookupErr } = await admin
-    .from('shortlisting_tier_configs')
+    .from('shortlisting_grade_configs')
     .select('id, is_active')
     .eq('id', draftId)
     .maybeSingle();
@@ -357,7 +361,7 @@ async function handleDiscard(body: DiscardBody, req: Request): Promise<Response>
   }
 
   const { error: delErr } = await admin
-    .from('shortlisting_tier_configs')
+    .from('shortlisting_grade_configs')
     .delete()
     .eq('id', draftId)
     .eq('is_active', false);

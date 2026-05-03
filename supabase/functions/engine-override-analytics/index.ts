@@ -167,8 +167,11 @@ serveWithAudit(FN_NAME, async (req: Request): Promise<Response> => {
         .gte('created_at', cutoffIso)
         .limit(20000),
       admin
-        .from('shortlisting_tier_configs')
-        .select('tier_id, version, activated_at, notes, is_active')
+        // mig 443 rename: shortlisting_tier_configs → shortlisting_grade_configs;
+        // tier_id column → grade_id. PostgREST alias preserves the API field
+        // name `tier_id` so the aggregator + dashboard don't need to rename.
+        .from('shortlisting_grade_configs')
+        .select('tier_id:grade_id, version, activated_at, notes, is_active')
         .order('activated_at', { ascending: false })
         .limit(200),
       admin
