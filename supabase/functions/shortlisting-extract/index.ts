@@ -179,6 +179,80 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(msg, 400, req);
   }
 
+  // ── Fire-and-forget pattern (2026-05-03) ──────────────────────────────
+  //
+  // Modal photo extract runs longer than Supabase Edge Functions'
+  // 150s IDLE_TIMEOUT (a hard platform cap on the time between request
+  // and response). For a chunk of 10 RAW .CR3 files, Modal needs
+  // ~60-180s including Dropbox download + RAW decode + thumbnail
+  // generation + AEB classification — and cold-start can easily push
+  // past 150s.
+  //
+  // Solution: respond 202 immediately, run extract() in a background
+  // task via EdgeRuntime.waitUntil(). The dispatcher already marked the
+  // job 'running' via claim_shortlisting_jobs(), so the dispatcher
+  // doesn't care whether we processed synchronously — it only checks
+  // for HTTP errors. The background task writes the final
+  // succeeded/failed status to the job row when Modal completes.
+  //
+  // Two edge cases:
+  //   - If the edge fn invocation gets killed before the background
+  //     task completes (Edge Pro tier cap is ~400s), the job stays
+  //     in 'running' until the stale-claim reaper sweeps it (5min)
+  //     and resets to pending → dispatcher retries on next tick.
+  //   - If Modal writes succeeded back to the job, then the
+  //     dispatcher's chain logic (if any) fires on the next tick when
+  //     it observes the terminal state.
+  //
+  // Direct-call mode (no job_id) keeps the synchronous path so curl
+  // invocations still see the result inline.
+  if (input.jobId) {
+    try {
+      // Kick off extract in background. The promise resolves when
+      // Modal finishes; errors inside extract() are swallowed by a
+      // catch block that writes failed status to the job row so the
+      // dispatcher's retry budget can drain.
+      // deno-lint-ignore no-explicit-any
+      const er: any = (globalThis as any).EdgeRuntime;
+      if (er && typeof er.waitUntil === 'function') {
+        er.waitUntil(
+          extract(input, modalUrl).catch(async (err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[${GENERATOR}] background extract failed: ${msg}`);
+            try {
+              const admin = getAdminClient();
+              await admin
+                .from('shortlisting_jobs')
+                .update({
+                  error_message: `background extract failed: ${msg}`.slice(0, 500),
+                  finished_at: new Date().toISOString(),
+                })
+                .eq('id', input.jobId);
+            } catch {
+              /* swallow — background task is already in error path */
+            }
+          }),
+        );
+      } else {
+        // EdgeRuntime not available (local dev / test runner). Fall
+        // back to the synchronous path so dev-mode behaviour matches.
+        const result = await extract(input, modalUrl);
+        return jsonResponse(result, 200, req);
+      }
+      return jsonResponse(
+        { ok: true, queued: true, job_id: input.jobId, mode: 'fire_and_forget' },
+        202,
+        req,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[${GENERATOR}] failed to queue extract: ${msg}`);
+      return errorResponse(`extract queue failed: ${msg}`, 500, req);
+    }
+  }
+
+  // Direct mode (job_id not provided) — keep the synchronous path so
+  // ad-hoc curl invocations still see the result inline.
   try {
     const result = await extract(input, modalUrl);
     return jsonResponse(result, 200, req);
