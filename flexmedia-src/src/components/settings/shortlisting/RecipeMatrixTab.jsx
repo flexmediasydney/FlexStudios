@@ -116,8 +116,9 @@ export default function RecipeMatrixTab() {
 
   return (
     <div className="space-y-3" data-testid="recipe-matrix-tab">
-      {/* Help banner — W11.6.28b copy (price tier axis + dual-number
-          authored/target explanation). */}
+      {/* Help banner — W11.6.28b/29 copy (price tier axis + dual-number
+          authored/target explanation; mig 451 friendly Room labels +
+          decomposed composition axis). */}
       <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900 flex items-start gap-2.5">
         <Sparkles className="h-4 w-4 mt-0.5 text-blue-600 flex-shrink-0" />
         <div className="flex-1 leading-relaxed space-y-1">
@@ -141,6 +142,15 @@ export default function RecipeMatrixTab() {
             <code>engine_mode = recipe_with_ai_backfill</code> (default).
             Over-target authoring (X &gt; Y) drops lowest-priority
             positions to fit.
+          </div>
+          <div>
+            Inside a position editor you set a <strong>Room</strong> (Kitchen,
+            Master bedroom, Pool area, …) plus phase, shot scale, and
+            perspective compression. Niche levers — <em>vantage position</em>{" "}
+            (eye-level / corner / through-doorway / aerial), <em>composition
+            geometry</em> (1-point / leading lines / symmetrical), image type,
+            lens class, and orientation — live behind a "More constraints"
+            expander. Leave anything blank to let the engine pick.
           </div>
           <div className="text-blue-800/90 mt-1">
             <strong>Image shortlisting only.</strong> This authoring surface

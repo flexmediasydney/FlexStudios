@@ -90,16 +90,28 @@ export default function HierarchyBAxes({ axes, legacyAxes, selected, onSelect })
               className="space-y-3 pt-0"
               data-testid="taxonomy-b-legacy-content"
             >
-              <p className="text-[11px] text-muted-foreground italic leading-relaxed">
+<p className="text-[11px] text-muted-foreground italic leading-relaxed">
                 <code className="text-[10px]">room_type</code> is the
-                pre-W11.6.13 single-axis classification. New rows still emit it
-                for backwards compat with{" "}
+                pre-W11.6.13 single-axis classification. New rows still emit
+                it for backwards compat with{" "}
                 <code className="text-[10px]">
                   slot_definitions.eligible_room_types[]
                 </code>
                 . Use <code className="text-[10px]">space_type</code> +{" "}
                 <code className="text-[10px]">zone_focus</code> for new
                 diagnostics.
+              </p>
+              <p className="text-[11px] text-muted-foreground italic leading-relaxed">
+                <code className="text-[10px]">composition_type</code> was the
+                single-axis composition classification before mig 451 (S1).
+                Rows are now classified along two orthogonal axes:{" "}
+                <code className="text-[10px]">vantage_position</code> (where
+                the camera is) and{" "}
+                <code className="text-[10px]">composition_geometry</code> (the
+                geometric pattern of the frame). The legacy{" "}
+                <code className="text-[10px]">composition_type</code> column
+                stays populated for backwards compat and historical
+                analytics.
               </p>
               {legacyAxes.map((a) => (
                 <AxisCard

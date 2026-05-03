@@ -1,5 +1,8 @@
 /**
- * RecipeMatrixTab — vitest suite (W11.6.28b — price tier axis).
+ * RecipeMatrixTab — vitest suite (W11.6.28b — price tier axis;
+ * W11.6.29 / mig 451 — Position Editor restructure: friendly Room labels +
+ * "More constraints" expander; Taxonomy Explorer registers
+ * vantage_position + composition_geometry as primary axes).
  *
  * Coverage:
  *   1. Renders the help banner + matrix once references load.
@@ -15,6 +18,10 @@
  *   9. Over-target warning renders when authored > target.
  *  10. Engine-grade explanatory pill is present in the Cell Editor.
  *  11. Disabled cell when a package doesn't offer a tier.
+ *  12. (mig 451) Position editor splits constraints into default-visible (4
+ *      axes) and a collapsible "More constraints" expander (5 axes).
+ *  13. (mig 451) Friendly Room labels: dropdown shows "Kitchen" not
+ *      "kitchen_dedicated".
  */
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -189,6 +196,11 @@ vi.mock("@/api/supabaseClient", () => {
   // Over   × Standard: 8 rows (8 authored / 4 target → amber, over-target)
   const POSITION_ROWS_INNER = [
     // Silver × Standard
+    //
+    // Mig 451 (S1 / W11.6.29): `room_type` and `composition_type` columns
+    // were dropped from gallery_positions. Fixture rows mirror the post-451
+    // shape — `space_type` is the discriminator, `vantage_position` and
+    // `composition_geometry` carry the decomposed composition axis.
     {
       id: "gp-silver-1",
       scope_type: "package_x_price_tier",
@@ -201,14 +213,15 @@ vi.mock("@/api/supabaseClient", () => {
       ai_backfill_on_gap: true,
       template_slot_id: null,
       notes: null,
-      room_type: "kitchen_main",
       space_type: "kitchen_dedicated",
       zone_focus: null,
       image_type: null,
-      composition_type: null,
       shot_scale: "wide",
       perspective_compression: "compressed",
+      vantage_position: "eye_level",
+      composition_geometry: "two_point_perspective",
       lens_class: null,
+      orientation: null,
     },
     // Gold × Standard (4 rows)
     ...Array.from({ length: 4 }).map((_, i) => ({
@@ -901,5 +914,147 @@ describe("constants — IMAGE_SHORTLIST_ENGINE_ROLES + isImageShortlistEngineRol
     expect(isImageShortlistEngineRole(null)).toBe(false);
     expect(isImageShortlistEngineRole(undefined)).toBe(false);
     expect(isImageShortlistEngineRole("")).toBe(false);
+  });
+});
+
+// ── mig 451 — Position Editor restructure ─────────────────────────────────
+import {
+  CONSTRAINT_AXES,
+  CONSTRAINT_KEYS_DEFAULT,
+  CONSTRAINT_KEYS_MORE,
+  VANTAGE_POSITION_LABELS,
+  COMPOSITION_GEOMETRY_LABELS,
+  SPACE_TYPE_FRIENDLY_LABELS,
+  friendlyLabelForSpaceType,
+  friendlyLabelGeneric,
+} from "../recipe-matrix/constants";
+
+describe("constants — Position Editor restructure (mig 451)", () => {
+  it("CONSTRAINT_KEYS_DEFAULT lists exactly 4 default-visible axes", () => {
+    expect(CONSTRAINT_KEYS_DEFAULT).toEqual([
+      "space_type",
+      "zone_focus",
+      "shot_scale",
+      "perspective_compression",
+    ]);
+  });
+
+  it("CONSTRAINT_KEYS_MORE lists exactly 5 collapsed-by-default axes", () => {
+    expect(CONSTRAINT_KEYS_MORE).toEqual([
+      "vantage_position",
+      "composition_geometry",
+      "image_type",
+      "lens_class",
+      "orientation",
+    ]);
+  });
+
+  it("CONSTRAINT_AXES no longer includes room_type or composition_type", () => {
+    const keys = CONSTRAINT_AXES.map((a) => a.key);
+    expect(keys).not.toContain("room_type");
+    expect(keys).not.toContain("composition_type");
+  });
+
+  it("space_type axis is labelled 'Room' for operator copy", () => {
+    const spaceAxis = CONSTRAINT_AXES.find((a) => a.key === "space_type");
+    expect(spaceAxis).toBeTruthy();
+    expect(spaceAxis.label).toBe("Room");
+    expect(spaceAxis.group).toBe("default");
+  });
+
+  it("vantage_position + composition_geometry sit in the More group", () => {
+    const vantage = CONSTRAINT_AXES.find((a) => a.key === "vantage_position");
+    const geometry = CONSTRAINT_AXES.find(
+      (a) => a.key === "composition_geometry",
+    );
+    expect(vantage.group).toBe("more");
+    expect(geometry.group).toBe("more");
+  });
+});
+
+describe("constants — friendly Room labels (mig 451)", () => {
+  it("returns the curated label for known space_type values", () => {
+    expect(friendlyLabelForSpaceType("kitchen_dedicated")).toBe("Kitchen");
+    expect(friendlyLabelForSpaceType("kitchen_dining_living_combined")).toBe(
+      "Open-plan kitchen/living",
+    );
+    expect(friendlyLabelForSpaceType("master_bedroom")).toBe("Master bedroom");
+    expect(friendlyLabelForSpaceType("bedroom_secondary")).toBe(
+      "Secondary bedroom",
+    );
+    expect(friendlyLabelForSpaceType("bathroom")).toBe("Bathroom");
+    expect(friendlyLabelForSpaceType("ensuite")).toBe("Ensuite");
+    expect(friendlyLabelForSpaceType("living_room_dedicated")).toBe(
+      "Living room",
+    );
+    expect(friendlyLabelForSpaceType("dining_room_dedicated")).toBe(
+      "Dining room",
+    );
+    expect(friendlyLabelForSpaceType("exterior_facade")).toBe("Front exterior");
+    expect(friendlyLabelForSpaceType("exterior_rear")).toBe("Back exterior");
+    expect(friendlyLabelForSpaceType("pool_area")).toBe("Pool area");
+    expect(friendlyLabelForSpaceType("garden")).toBe("Garden");
+    expect(friendlyLabelForSpaceType("streetscape")).toBe("Streetscape");
+  });
+
+  it("falls back to snake_case → 'Title case' for unknown values", () => {
+    expect(friendlyLabelForSpaceType("garage_internal_carpet")).toBe(
+      "Garage Internal Carpet",
+    );
+    expect(friendlyLabelForSpaceType("brand_new_value")).toBe(
+      "Brand New Value",
+    );
+  });
+
+  it("returns empty string for null/undefined/empty input", () => {
+    expect(friendlyLabelForSpaceType(null)).toBe("");
+    expect(friendlyLabelForSpaceType(undefined)).toBe("");
+    expect(friendlyLabelForSpaceType("")).toBe("");
+  });
+
+  it("SPACE_TYPE_FRIENDLY_LABELS covers the high-frequency rooms operators use", () => {
+    expect(SPACE_TYPE_FRIENDLY_LABELS.kitchen_dedicated).toBe("Kitchen");
+    expect(SPACE_TYPE_FRIENDLY_LABELS.master_bedroom).toBe("Master bedroom");
+    expect(SPACE_TYPE_FRIENDLY_LABELS.pool_area).toBe("Pool area");
+    expect(SPACE_TYPE_FRIENDLY_LABELS.streetscape).toBe("Streetscape");
+  });
+
+  it("friendlyLabelGeneric handles snake_case and edge cases", () => {
+    expect(friendlyLabelGeneric("eye_level")).toBe("Eye Level");
+    expect(friendlyLabelGeneric("rule_of_thirds")).toBe("Rule Of Thirds");
+    expect(friendlyLabelGeneric(null)).toBe("");
+  });
+});
+
+describe("constants — vantage_position + composition_geometry labels (mig 451)", () => {
+  it("VANTAGE_POSITION_LABELS exposes all 9 values with friendly copy", () => {
+    expect(VANTAGE_POSITION_LABELS.eye_level).toBe("Eye level (default)");
+    expect(VANTAGE_POSITION_LABELS.corner).toBe("Corner");
+    expect(VANTAGE_POSITION_LABELS.square_to_wall).toBe("Square to wall");
+    expect(VANTAGE_POSITION_LABELS.through_doorway).toBe("Through doorway");
+    expect(VANTAGE_POSITION_LABELS.down_corridor).toBe("Down corridor");
+    expect(VANTAGE_POSITION_LABELS.aerial_overhead).toBe("Aerial — overhead");
+    expect(VANTAGE_POSITION_LABELS.aerial_oblique).toBe("Aerial — oblique");
+    expect(VANTAGE_POSITION_LABELS.low_angle).toBe("Low angle");
+    expect(VANTAGE_POSITION_LABELS.high_angle).toBe("High angle");
+  });
+
+  it("COMPOSITION_GEOMETRY_LABELS exposes all 8 values with friendly copy", () => {
+    expect(COMPOSITION_GEOMETRY_LABELS.one_point_perspective).toBe(
+      "1-point perspective",
+    );
+    expect(COMPOSITION_GEOMETRY_LABELS.two_point_perspective).toBe(
+      "2-point perspective",
+    );
+    expect(COMPOSITION_GEOMETRY_LABELS.three_point_perspective).toBe(
+      "3-point perspective",
+    );
+    expect(COMPOSITION_GEOMETRY_LABELS.leading_lines).toBe("Leading lines");
+    expect(COMPOSITION_GEOMETRY_LABELS.symmetrical).toBe("Symmetrical");
+    expect(COMPOSITION_GEOMETRY_LABELS.centered).toBe("Centered");
+    expect(COMPOSITION_GEOMETRY_LABELS.rule_of_thirds).toBe("Rule of thirds");
+    expect(COMPOSITION_GEOMETRY_LABELS.asymmetric_balance).toBe(
+      "Asymmetric balance",
+    );
   });
 });

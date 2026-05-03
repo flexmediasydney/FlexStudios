@@ -14,6 +14,13 @@
  * Package + price-tier sets are intentionally NOT hard-coded — they're loaded
  * from the live `packages` and `shortlisting_tiers` tables so adding a new
  * package or tier doesn't require a UI redeploy.
+ *
+ * Mig 451 (S1 / W11.6.29 — 2026-05-02): dropped `room_type` and
+ * `composition_type` columns from gallery_positions. The Position Editor no
+ * longer authors against those columns. Operators see "Room" labels backed by
+ * `space_type`, and the old `composition_type` axis is decomposed into
+ * `vantage_position` (eye_level / corner / through_doorway / aerial / …) and
+ * `composition_geometry` (1-point / leading_lines / symmetrical / …).
  */
 
 // Engine roles that are IMAGE shortlist deliverables — these are the only
@@ -41,24 +48,29 @@ export function isImageShortlistEngineRole(role) {
 //   'shot_scale'      — finite open-vocab (mig 442)
 //   'compression'     — finite open-vocab (mig 442)
 //   'lens_class'      — finite open-vocab
+//   'orientation'     — finite open-vocab
+//   'vantage'         — finite open-vocab (mig 451)
+//   'geometry'        — finite open-vocab (mig 451)
+//   'image_type'      — finite open-vocab (is_day / is_dusk / is_drone / …)
+//
+// `group` says which of the two Position Editor sections the axis lives in:
+//   'default'  — always visible when a position is expanded
+//   'more'     — collapsed inside the "More constraints" expander
 //
 // Every constraint dropdown gets an "(any)" / null option prepended at
 // runtime — picking it leaves the constraint unset (engine-picks).
+//
+// The order here drives the rendered order in the Position Editor; keep
+// "default" axes ahead of "more" axes for cleaner diffs.
 export const CONSTRAINT_AXES = [
-  {
-    key: "room_type",
-    label: "Room type",
-    tooltip:
-      "Pre-Wave-11 single-axis classification. New positions should usually leave this NULL and use space_type + zone_focus instead.",
-    pickerSource: "taxonomy_b",
-    legacy: true,
-  },
+  // ── Default-visible axes ───────────────────────────────────────────────
   {
     key: "space_type",
-    label: "Space type",
+    label: "Room",
     tooltip:
-      "What kind of space the photo shows (kitchen_dedicated, primary_bedroom, etc). Primary discriminator after image_type.",
+      "Which room / space the photo shows. Friendly labels above; raw enum codes hidden. Backed by composition_classifications.space_type.",
     pickerSource: "taxonomy_b",
+    group: "default",
   },
   {
     key: "zone_focus",
@@ -66,34 +78,49 @@ export const CONSTRAINT_AXES = [
     tooltip:
       "Sub-region the shot focuses on (kitchen_island, bedroom_dressing_zone, etc). Use to force a specific framing.",
     pickerSource: "taxonomy_b",
-  },
-  {
-    key: "image_type",
-    label: "Image type",
-    tooltip:
-      "Whether this position should be filled by an interior, exterior, drone, twilight, etc. shot.",
-    pickerSource: "taxonomy_b",
-  },
-  {
-    key: "composition_type",
-    label: "Composition type",
-    tooltip:
-      "Hero / supporting / detail framing — the editorial role of the shot.",
-    pickerSource: "taxonomy_b",
+    group: "default",
   },
   {
     key: "shot_scale",
     label: "Shot scale",
     tooltip:
-      "How much of the space is in frame: wide, medium, tight. Wide reads as 'establishing shot'.",
+      "How much of the space is in frame: wide / medium / tight / detail / vignette. Wide reads as 'establishing shot'.",
     pickerSource: "shot_scale",
+    group: "default",
   },
   {
     key: "perspective_compression",
     label: "Perspective compression",
     tooltip:
-      "Compressed (telephoto) vs spacious (wide-angle) feel. Compressed often reads more editorial.",
+      "Expanded (spacious) vs neutral vs compressed (telephoto-feel). Compressed often reads more editorial.",
     pickerSource: "compression",
+    group: "default",
+  },
+
+  // ── More-constraints axes (collapsed by default) ────────────────────────
+  {
+    key: "vantage_position",
+    label: "Vantage position",
+    tooltip:
+      "Where the camera is positioned in the room — eye_level / corner / through_doorway / aerial_overhead / low_angle. Half of the decomposed composition_type axis (mig 451).",
+    pickerSource: "vantage",
+    group: "more",
+  },
+  {
+    key: "composition_geometry",
+    label: "Composition geometry",
+    tooltip:
+      "Geometric pattern the frame uses — 1-point perspective / leading_lines / symmetrical / rule_of_thirds. Other half of the decomposed composition_type axis (mig 451).",
+    pickerSource: "geometry",
+    group: "more",
+  },
+  {
+    key: "image_type",
+    label: "Image type",
+    tooltip:
+      "Whether this position should be filled by a day / dusk / drone / floorplan / etc. shot.",
+    pickerSource: "image_type",
+    group: "more",
   },
   {
     key: "lens_class",
@@ -101,6 +128,15 @@ export const CONSTRAINT_AXES = [
     tooltip:
       "Approximate equivalent focal length bucket: ultrawide / wide / standard / telephoto.",
     pickerSource: "lens_class",
+    group: "more",
+  },
+  {
+    key: "orientation",
+    label: "Orientation",
+    tooltip:
+      "Landscape / portrait / square. Sales is usually landscape; portrait is common for tall hero shots.",
+    pickerSource: "orientation",
+    group: "more",
   },
 ];
 
@@ -117,9 +153,7 @@ export const SHOT_SCALE_VALUES = [
 // Perspective compression axis values — gallery_positions CHECK constraint.
 export const COMPRESSION_VALUES = ["expanded", "neutral", "compressed"];
 
-// Orientation (mig 443 column) — landscape / portrait / square. Not
-// surfaced as a constraint in the matrix MVP because sales is almost
-// always landscape.
+// Orientation values — landscape / portrait / square.
 export const ORIENTATION_VALUES = ["landscape", "portrait", "square"];
 
 // Lens class — coarse focal-length bucket. Open vocab (text column).
@@ -129,6 +163,175 @@ export const LENS_CLASS_VALUES = [
   "standard",
   "telephoto",
 ];
+
+// Image type — finite vocab on composition_classifications.image_type.
+// Backed by the Hierarchy B axis distribution but cached here as a
+// fallback so the Position Editor doesn't have to round-trip on every
+// open. Keep aligned with composition_classifications.image_type values.
+export const IMAGE_TYPE_VALUES = [
+  "is_day",
+  "is_dusk",
+  "is_night",
+  "is_drone",
+  "is_floorplan",
+  "is_video_frame",
+  "is_styled",
+  "is_amenity",
+];
+
+// ── Vantage position (mig 451) ────────────────────────────────────────────
+//
+// Decomposed half of the old composition_type axis — captures *where the
+// camera is* in the room, independent of the geometric pattern of the frame.
+//
+// Friendly labels exposed via VANTAGE_POSITION_LABELS below for the dropdown.
+export const VANTAGE_POSITION_VALUES = [
+  "eye_level",
+  "corner",
+  "square_to_wall",
+  "through_doorway",
+  "down_corridor",
+  "aerial_overhead",
+  "aerial_oblique",
+  "low_angle",
+  "high_angle",
+];
+
+export const VANTAGE_POSITION_LABELS = Object.freeze({
+  eye_level: "Eye level (default)",
+  corner: "Corner",
+  square_to_wall: "Square to wall",
+  through_doorway: "Through doorway",
+  down_corridor: "Down corridor",
+  aerial_overhead: "Aerial — overhead",
+  aerial_oblique: "Aerial — oblique",
+  low_angle: "Low angle",
+  high_angle: "High angle",
+});
+
+// ── Composition geometry (mig 451) ────────────────────────────────────────
+//
+// Other decomposed half — captures the geometric pattern the frame uses,
+// independent of where the camera is. Operators set this when they want a
+// specific compositional language (e.g. leading lines for a corridor).
+export const COMPOSITION_GEOMETRY_VALUES = [
+  "one_point_perspective",
+  "two_point_perspective",
+  "three_point_perspective",
+  "leading_lines",
+  "symmetrical",
+  "centered",
+  "rule_of_thirds",
+  "asymmetric_balance",
+];
+
+export const COMPOSITION_GEOMETRY_LABELS = Object.freeze({
+  one_point_perspective: "1-point perspective",
+  two_point_perspective: "2-point perspective",
+  three_point_perspective: "3-point perspective",
+  leading_lines: "Leading lines",
+  symmetrical: "Symmetrical",
+  centered: "Centered",
+  rule_of_thirds: "Rule of thirds",
+  asymmetric_balance: "Asymmetric balance",
+});
+
+// ── Friendly Room labels (mig 451) ────────────────────────────────────────
+//
+// Operators think in plain language — "Kitchen", "Master bedroom", "Pool
+// area" — not raw enum codes. The Position Editor's Room dropdown shows
+// these labels and hides the underlying space_type code.
+//
+// The list mirrors the most common values returned by
+// taxonomy_b_axis_distribution('space_type'). Anything not in the table
+// falls through to friendlyLabelForSpaceType() which de-snake-cases and
+// title-cases the raw value (e.g. `garage_internal` → "Garage internal").
+//
+// Kept in display order rather than alphabetical: the editor renders them
+// in this order so the most common picks (Kitchen, bedrooms, bathrooms) are
+// at the top.
+export const SPACE_TYPE_FRIENDLY_LABELS = Object.freeze({
+  // Indoor — primary living
+  kitchen_dedicated: "Kitchen",
+  kitchen_dining_combined: "Open-plan kitchen/dining",
+  kitchen_dining_living_combined: "Open-plan kitchen/living",
+  living_room_dedicated: "Living room",
+  living_dining_combined: "Open-plan living/dining",
+  dining_room_dedicated: "Dining room",
+  family_room: "Family room",
+  rumpus_room: "Rumpus room",
+  // Indoor — sleeping
+  master_bedroom: "Master bedroom",
+  primary_bedroom: "Primary bedroom",
+  bedroom_secondary: "Secondary bedroom",
+  guest_bedroom: "Guest bedroom",
+  // Indoor — wet zones
+  bathroom: "Bathroom",
+  ensuite: "Ensuite",
+  powder_room: "Powder room",
+  laundry: "Laundry",
+  // Indoor — utility / circulation
+  hallway: "Hallway",
+  entry_foyer: "Entry / foyer",
+  staircase: "Staircase",
+  study: "Study",
+  home_office: "Home office",
+  walk_in_robe: "Walk-in robe",
+  butlers_pantry: "Butler's pantry",
+  // Indoor — extras
+  cellar: "Wine cellar",
+  cinema_room: "Cinema room",
+  gym: "Home gym",
+  garage_internal: "Garage (internal)",
+  // Outdoor — facade
+  exterior_facade: "Front exterior",
+  exterior_rear: "Back exterior",
+  // Outdoor — amenity
+  pool_area: "Pool area",
+  spa_area: "Spa area",
+  garden: "Garden",
+  outdoor_alfresco: "Alfresco / outdoor dining",
+  outdoor_kitchen: "Outdoor kitchen",
+  balcony: "Balcony",
+  deck: "Deck",
+  patio: "Patio",
+  courtyard: "Courtyard",
+  // Aerial / drone perspectives
+  streetscape: "Streetscape",
+  aerial_overview: "Aerial overview",
+  // Other
+  view: "View",
+  detail: "Detail",
+});
+
+/**
+ * Resolve a friendly Room label for a space_type enum value.
+ *
+ * 1. If the value is in SPACE_TYPE_FRIENDLY_LABELS → return that.
+ * 2. Otherwise, de-snake-case + capitalize each word so a brand-new
+ *    distribution value lands in the dropdown with a sane label rather
+ *    than the raw `garage_internal_carpet`.
+ * 3. NULL / undefined → returns the empty string.
+ */
+export function friendlyLabelForSpaceType(value) {
+  if (value == null || value === "") return "";
+  if (Object.prototype.hasOwnProperty.call(SPACE_TYPE_FRIENDLY_LABELS, value)) {
+    return SPACE_TYPE_FRIENDLY_LABELS[value];
+  }
+  return friendlyLabelGeneric(value);
+}
+
+/**
+ * Generic snake_case → "Title case" helper. Used as the fallback labeller
+ * for any axis whose dropdown values arrive as snake_case strings (zone_focus,
+ * image_type, etc).
+ */
+export function friendlyLabelGeneric(value) {
+  if (value == null || value === "") return "";
+  return String(value)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 // ── Engine modes (per-package / per-product / per-cell override) ──────────
 export const ENGINE_MODES = [
@@ -434,10 +637,24 @@ export function packageOffersTier(pkg, tierCode, productLookup = null) {
 // ── Shape of a constraint tuple (for snapshot equality + diffing) ────────
 export const CONSTRAINT_KEYS = CONSTRAINT_AXES.map((a) => a.key);
 
+// Subset by group — used by the Position Editor to render the "default"
+// section vs the collapsed "More constraints" expander.
+export const CONSTRAINT_KEYS_DEFAULT = CONSTRAINT_AXES.filter(
+  (a) => a.group === "default",
+).map((a) => a.key);
+export const CONSTRAINT_KEYS_MORE = CONSTRAINT_AXES.filter(
+  (a) => a.group === "more",
+).map((a) => a.key);
+
 /**
  * Pick the constraint tuple from a position row (tolerates both raw DB
  * shape and editor-draft shape). Returns the canonical constraint object
  * with EVERY axis present (NULL = wildcard / engine-picks).
+ *
+ * Mig 451: the legacy `room_type` and `composition_type` columns are NO
+ * LONGER columns on gallery_positions and are deliberately NOT picked
+ * up here even if they happen to ride along on a stale draft object —
+ * the upsert sanitiser would reject the DB write otherwise.
  */
 export function pickConstraints(row) {
   const out = {};

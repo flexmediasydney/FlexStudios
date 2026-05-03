@@ -1,5 +1,6 @@
 /**
- * TaxonomyExplorerTab — vitest suite (W11.6.26 / mig 441 + 448 extensions).
+ * TaxonomyExplorerTab — vitest suite (W11.6.26 / mig 441 + 448 + 451
+ * extensions).
  *
  * Coverage:
  *   1. Renders without throwing when fed mock RPC responses.
@@ -10,9 +11,14 @@
  *      observation rows + filter chips when a node is selected.
  *   5. (mig 441) The legacy-axes collapsible opens on click and reveals the
  *      room_type axis card.
- *   6. (mig 448) All 7 primary axes render: image_type, space_type,
- *      shot_scale, zone_focus, composition_type, perspective_compression,
- *      orientation. room_type stays in the legacy section only.
+ *   6. (mig 448) All primary axes render alongside C1's 3 new axes
+ *      (shot_scale, perspective_compression, orientation).
+ *   7. (mig 451 — S1 / W11.6.29) PRIMARY axes count = 8: image_type,
+ *      space_type, shot_scale, zone_focus, vantage_position,
+ *      composition_geometry, perspective_compression, orientation. The
+ *      legacy section now contains BOTH room_type AND composition_type
+ *      (composition_type was decomposed into vantage_position +
+ *      composition_geometry).
  */
 
 import React from "react";
@@ -115,6 +121,10 @@ const AXIS_DIST = {
   shot_scale: [],
   perspective_compression: [],
   orientation: [],
+  // mig 451 — S1's decomposed composition axes. Empty by design at first,
+  // gets populated by Stage 1 vision once the schema bumps to v2.6.
+  vantage_position: [],
+  composition_geometry: [],
 };
 
 vi.mock("@/api/supabaseClient", () => {
@@ -304,41 +314,49 @@ describe("TaxonomyExplorerTab — W11.6.26 + mig 441", () => {
     });
   });
 
-  it("Hierarchy B primary axes do NOT include room_type (mig 441 demoted it)", async () => {
+  it("Hierarchy B primary axes do NOT include room_type or composition_type (mig 441/451 demoted them)", async () => {
     mount();
     const bTrigger = await screen.findByTestId("taxonomy-mode-b");
     await userEvent.click(bTrigger);
 
-    // Wait for primary axes to render.
+    // Wait for primary axes to render — including the two new mig-451 axes.
     await waitFor(() => {
       expect(screen.getByTestId("taxonomy-b-axis-image_type")).toBeTruthy();
       expect(screen.getByTestId("taxonomy-b-axis-space_type")).toBeTruthy();
       expect(screen.getByTestId("taxonomy-b-axis-zone_focus")).toBeTruthy();
       expect(
-        screen.getByTestId("taxonomy-b-axis-composition_type"),
+        screen.getByTestId("taxonomy-b-axis-vantage_position"),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId("taxonomy-b-axis-composition_geometry"),
       ).toBeTruthy();
     });
 
-    // room_type stays hidden (legacy section closed).
+    // room_type AND composition_type stay hidden (legacy section closed).
     expect(screen.queryByTestId("taxonomy-b-axis-room_type")).toBeFalsy();
+    expect(screen.queryByTestId("taxonomy-b-axis-composition_type")).toBeFalsy();
   });
 
   // ─── mig 448: shot_scale + perspective_compression + orientation ──────────
 
-  it("registers all 7 primary axes (mig 448 follow-up to C1's mig 442)", async () => {
+  it("registers all 8 primary axes (mig 448 + mig 451 follow-ups)", async () => {
     mount();
     const bTrigger = await screen.findByTestId("taxonomy-mode-b");
     await userEvent.click(bTrigger);
 
-    // All 4 original primary axes + 3 new ones from mig 442 must render as
-    // primary cards (NOT inside the legacy collapsible).
+    // 4 original axes + 3 new from mig 442 (C1) + 2 new from mig 451 (S1)
+    // = 9. But mig 451 also DEMOTES composition_type to legacy, leaving 8
+    // primary cards. All 8 render outside the legacy collapsible.
     await waitFor(() => {
       expect(screen.getByTestId("taxonomy-b-axis-image_type")).toBeTruthy();
       expect(screen.getByTestId("taxonomy-b-axis-space_type")).toBeTruthy();
       expect(screen.getByTestId("taxonomy-b-axis-shot_scale")).toBeTruthy();
       expect(screen.getByTestId("taxonomy-b-axis-zone_focus")).toBeTruthy();
       expect(
-        screen.getByTestId("taxonomy-b-axis-composition_type"),
+        screen.getByTestId("taxonomy-b-axis-vantage_position"),
+      ).toBeTruthy();
+      expect(
+        screen.getByTestId("taxonomy-b-axis-composition_geometry"),
       ).toBeTruthy();
       expect(
         screen.getByTestId("taxonomy-b-axis-perspective_compression"),
@@ -363,15 +381,65 @@ describe("TaxonomyExplorerTab — W11.6.26 + mig 441", () => {
         .getByTestId("taxonomy-b-axis-orientation")
         .getAttribute("data-legacy"),
     ).toBe("false");
+    expect(
+      screen
+        .getByTestId("taxonomy-b-axis-vantage_position")
+        .getAttribute("data-legacy"),
+    ).toBe("false");
+    expect(
+      screen
+        .getByTestId("taxonomy-b-axis-composition_geometry")
+        .getAttribute("data-legacy"),
+    ).toBe("false");
 
-    // The 3 new axes have no production data yet — assert the empty-state
-    // copy renders inside their cards.
-    const shotScaleCard = screen.getByTestId("taxonomy-b-axis-shot_scale");
-    expect(shotScaleCard.textContent).toMatch(
+    // The new axes have no production data yet — assert the empty-state
+    // copy renders inside the new mig-451 cards.
+    const vantageCard = screen.getByTestId("taxonomy-b-axis-vantage_position");
+    expect(vantageCard.textContent).toMatch(
+      /No classifications carry this axis yet/i,
+    );
+    const geometryCard = screen.getByTestId(
+      "taxonomy-b-axis-composition_geometry",
+    );
+    expect(geometryCard.textContent).toMatch(
       /No classifications carry this axis yet/i,
     );
 
-    // room_type still hidden (must NOT appear as a primary axis).
+    // room_type AND composition_type still hidden (must NOT appear as
+    // primary axes — both are in the legacy section now).
     expect(screen.queryByTestId("taxonomy-b-axis-room_type")).toBeFalsy();
+    expect(screen.queryByTestId("taxonomy-b-axis-composition_type")).toBeFalsy();
+  });
+
+  // ── mig 451 (S1 / W11.6.29) — composition_type demoted to legacy ─────────
+  it("Legacy section now contains BOTH room_type AND composition_type", async () => {
+    mount();
+    const bTrigger = await screen.findByTestId("taxonomy-mode-b");
+    await userEvent.click(bTrigger);
+
+    // Open the legacy collapsible.
+    const toggle = await screen.findByTestId("taxonomy-b-legacy-toggle");
+    await userEvent.click(toggle);
+
+    await waitFor(() => {
+      expect(toggle.getAttribute("data-open")).toBe("true");
+      // Both legacy axes render INSIDE the legacy section.
+      expect(screen.getByTestId("taxonomy-b-axis-room_type")).toBeTruthy();
+      expect(
+        screen.getByTestId("taxonomy-b-axis-composition_type"),
+      ).toBeTruthy();
+    });
+
+    // Both legacy axis cards are flagged data-legacy="true".
+    expect(
+      screen
+        .getByTestId("taxonomy-b-axis-room_type")
+        .getAttribute("data-legacy"),
+    ).toBe("true");
+    expect(
+      screen
+        .getByTestId("taxonomy-b-axis-composition_type")
+        .getAttribute("data-legacy"),
+    ).toBe("true");
   });
 });

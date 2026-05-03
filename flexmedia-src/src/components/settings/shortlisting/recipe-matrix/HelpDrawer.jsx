@@ -63,10 +63,66 @@ export default function HelpDrawer({ open, onOpenChange }) {
               <p className="text-muted-foreground">
                 A <em>position</em> is a single slot in a finished gallery —
                 one row in <code>gallery_positions</code>. It carries a
-                constraint tuple (room, shot scale, compression, …) plus a
-                phase (mandatory / conditional / optional) and a selection
+                constraint tuple (Room / shot scale / perspective / …) plus
+                a phase (mandatory / conditional / optional) and a selection
                 mode (AI decides / curated). The engine fills positions in
                 phase priority order until the package count is reached.
+              </p>
+              <p className="text-muted-foreground mt-2">
+                The position editor splits constraints into two groups:
+                a <em>default-visible</em> set (Room, Zone focus, Shot scale,
+                Perspective compression) and a collapsible{" "}
+                <strong>"More constraints"</strong> section (Vantage position,
+                Composition geometry, Image type, Lens class, Orientation).
+                Default-visible covers 90% of authoring; the More section is
+                for tighter editorial control.
+              </p>
+            </section>
+
+            <section>
+              <h3 className="font-semibold mb-1.5">Room labels</h3>
+              <p className="text-muted-foreground">
+                The Room dropdown shows operator-friendly labels (Kitchen,
+                Master bedroom, Pool area, Streetscape, …) backed by the
+                orthogonal <code>space_type</code> axis. Earlier versions used
+                a single <code>room_type</code> column with a flat enum;
+                that's gone (mig 451) — the editor only uses{" "}
+                <code>space_type</code> now. The label table sits in
+                <code> recipe-matrix/constants.js</code>; anything not in the
+                table falls back to a snake_case → "Title case" auto-derivation,
+                so brand-new distribution values still read well in the
+                dropdown.
+              </p>
+            </section>
+
+            <section>
+              <h3 className="font-semibold mb-1.5">
+                Vantage position vs composition geometry
+              </h3>
+              <p className="text-muted-foreground">
+                Mig 451 decomposed the old single <code>composition_type</code>{" "}
+                axis into two orthogonal axes:
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-muted-foreground mt-2">
+                <li>
+                  <strong>Vantage position</strong> — where the camera{" "}
+                  <em>is</em> in the room. Values: eye-level (default),
+                  corner, square_to_wall, through_doorway, down_corridor,
+                  aerial_overhead, aerial_oblique, low_angle, high_angle.
+                </li>
+                <li>
+                  <strong>Composition geometry</strong> — the geometric
+                  pattern the frame uses. Values: 1/2/3-point perspective,
+                  leading lines, symmetrical, centered, rule_of_thirds,
+                  asymmetric balance.
+                </li>
+              </ul>
+              <p className="text-muted-foreground mt-2">
+                The two are independent — a "corner" vantage can be either
+                "2-point perspective" or "asymmetric balance" geometry, and
+                the engine can match on either axis without forcing the
+                other. Both live in the "More constraints" expander; leave
+                them blank to let the engine pick.
               </p>
             </section>
 

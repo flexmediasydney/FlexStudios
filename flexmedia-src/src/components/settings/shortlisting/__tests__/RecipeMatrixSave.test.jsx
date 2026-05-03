@@ -275,12 +275,50 @@ describe("RecipeMatrixTab — Add Position blocker fix (mig 449)", () => {
     expect(payload).not.toHaveProperty("scope_ref_id_3");
     expect(payload).not.toHaveProperty("id"); // id is the upsert discriminator, not a column
 
+    // Mig 451: room_type and composition_type were dropped from
+    // gallery_positions — the upsert sanitiser must strip them.
+    expect(payload).not.toHaveProperty("room_type");
+    expect(payload).not.toHaveProperty("composition_type");
+
     // Toast confirms.
     await waitFor(() => {
       expect(cap().toastSuccess.some((m) => /position saved/i.test(m))).toBe(
         true,
       );
     });
+  });
+
+  // ── mig 451 — room_type / composition_type column drop ──────────────────
+  it("Save — defensive: a stale draft carrying room_type / composition_type is sanitised", async () => {
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+
+    // Open Silver × Standard, click Add — but the brief: a future drift
+    // (or a row carried in from a pre-451 cache) might still have
+    // room_type / composition_type on the draft. The blank Add button is
+    // sufficient to exercise the sanitiser because the upsertMutation
+    // strips both keys unconditionally regardless of whether the draft
+    // carried them. We verify by inspecting the captured insert payload.
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-silver-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+    const addBtn = await waitFor(() =>
+      screen.getByTestId("add-blank-position-photo_day_shortlist"),
+    );
+    fireEvent.click(addBtn);
+
+    await waitFor(() => {
+      expect(cap().inserts.length).toBeGreaterThan(0);
+    });
+    const payload = cap().inserts.find(
+      (c) => c.table === "gallery_positions",
+    )?.payload;
+    expect(payload).toBeTruthy();
+    expect(payload).not.toHaveProperty("room_type");
+    expect(payload).not.toHaveProperty("composition_type");
   });
 
   it("Add blank position — Tier defaults pseudo-row uses scope_type='price_tier'", async () => {

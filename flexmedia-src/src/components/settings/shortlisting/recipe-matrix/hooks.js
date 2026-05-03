@@ -35,6 +35,10 @@ import {
   SHOT_SCALE_VALUES,
   COMPRESSION_VALUES,
   LENS_CLASS_VALUES,
+  ORIENTATION_VALUES,
+  VANTAGE_POSITION_VALUES,
+  COMPOSITION_GEOMETRY_VALUES,
+  IMAGE_TYPE_VALUES,
 } from "./constants";
 
 const STALE_MS = 60_000;
@@ -330,6 +334,10 @@ export function useAxisDistribution(axisKey) {
     enabled: Boolean(axisKey),
     queryFn: async () => {
       if (!axis) return [];
+      // Finite open-vocab axes — short-circuit the RPC call entirely so the
+      // dropdown is instant and works even when no DB row carries the axis
+      // yet (mig 451's vantage_position / composition_geometry are
+      // freshly-decomposed and have no production data on day one).
       if (axis.pickerSource === "shot_scale") {
         return SHOT_SCALE_VALUES.map((v) => ({ value: v, n_compositions: null }));
       }
@@ -338,6 +346,18 @@ export function useAxisDistribution(axisKey) {
       }
       if (axis.pickerSource === "lens_class") {
         return LENS_CLASS_VALUES.map((v) => ({ value: v, n_compositions: null }));
+      }
+      if (axis.pickerSource === "orientation") {
+        return ORIENTATION_VALUES.map((v) => ({ value: v, n_compositions: null }));
+      }
+      if (axis.pickerSource === "vantage") {
+        return VANTAGE_POSITION_VALUES.map((v) => ({ value: v, n_compositions: null }));
+      }
+      if (axis.pickerSource === "geometry") {
+        return COMPOSITION_GEOMETRY_VALUES.map((v) => ({ value: v, n_compositions: null }));
+      }
+      if (axis.pickerSource === "image_type") {
+        return IMAGE_TYPE_VALUES.map((v) => ({ value: v, n_compositions: null }));
       }
       // taxonomy_b_axis_distribution returns rows of {value, n_compositions, pct}.
       try {

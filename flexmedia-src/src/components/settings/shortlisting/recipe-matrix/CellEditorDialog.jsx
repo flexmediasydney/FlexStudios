@@ -222,6 +222,9 @@ export default function CellEditorDialog({
           };
 
       // Filter the row down to columns that actually exist on the table.
+      // Mig 451 (S1): `room_type` and `composition_type` were dropped from
+      // gallery_positions — strip them defensively in case any stale draft
+      // (or pre-451 cached query result) carries them onto the upsert.
       const transientKeys = [
         "is_overridden_at_cell",
         "inherited_from_scope",
@@ -230,6 +233,8 @@ export default function CellEditorDialog({
         "project_type_id",
         "product_id",
         "scope_ref_id_3",
+        "room_type",
+        "composition_type",
       ];
       const sanitised = { ...row };
       for (const k of transientKeys) delete sanitised[k];
@@ -703,7 +708,7 @@ export default function CellEditorDialog({
                     Add blank position
                   </Button>
 
-                  <AddFromTemplateButton
+<AddFromTemplateButton
                     templates={templates}
                     onPick={(slot) =>
                       upsertMutation.mutate({
@@ -718,10 +723,18 @@ export default function CellEditorDialog({
                               : "optional",
                         selection_mode: "ai_decides",
                         ai_backfill_on_gap: true,
-                        room_type:
+                        // Mig 451: room_type column was dropped from
+                        // gallery_positions. Templates still carry
+                        // eligible_room_types[] (legacy schema), so we map
+                        // a single-entry list onto the new `space_type`
+                        // axis via the same translation table used in
+                        // PositionRow.
+                        space_type:
                           Array.isArray(slot.eligible_room_types) &&
                           slot.eligible_room_types.length === 1
-                            ? slot.eligible_room_types[0]
+                            ? mapLegacyRoomTypeToSpaceType(
+                                slot.eligible_room_types[0],
+                              )
                             : null,
                       })
                     }
@@ -771,4 +784,35 @@ function AddFromTemplateButton({ templates, onPick, testIdPrefix }) {
       </Select>
     </div>
   );
+}
+
+// ── Legacy room_type → space_type fallback (mig 451) ─────────────────────
+//
+// Mirrors the table inside PositionRow. Kept duplicated rather than
+// imported because the dialog's "Add from template" path is a tiny
+// helper-shaped insert, and breaking the table out into its own module
+// would be more friction than it's worth for a soft-migration table.
+const LEGACY_ROOM_TYPE_TO_SPACE_TYPE_DIALOG = Object.freeze({
+  kitchen_main: "kitchen_dedicated",
+  kitchen_alt: "kitchen_dedicated",
+  master_bedroom_focal: "master_bedroom",
+  master_bedroom: "master_bedroom",
+  bedroom_secondary: "bedroom_secondary",
+  bedroom_focal: "bedroom_secondary",
+  living_main: "living_room_dedicated",
+  living_focal: "living_room_dedicated",
+  dining_focal: "dining_room_dedicated",
+  bathroom_main: "bathroom",
+  ensuite_main: "ensuite",
+  laundry_main: "laundry",
+  exterior_front: "exterior_facade",
+  exterior_back: "exterior_rear",
+  pool_focal: "pool_area",
+  garden_focal: "garden",
+  streetscape: "streetscape",
+});
+
+function mapLegacyRoomTypeToSpaceType(legacyValue) {
+  if (!legacyValue) return null;
+  return LEGACY_ROOM_TYPE_TO_SPACE_TYPE_DIALOG[legacyValue] ?? null;
 }

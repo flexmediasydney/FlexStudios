@@ -9,8 +9,10 @@
  *     level_0_class → level_1_functional → level_2_material →
  *     level_3_specific → level_4_detail   (191 active rows)
  *
- *   Hierarchy B — composition_classifications orthogonal axes
- *     image_type · room_type · space_type · zone_focus · composition_type
+ *   Hierarchy B — composition_classifications orthogonal axes (mig 451)
+ *     image_type · space_type · shot_scale · zone_focus · vantage_position
+ *     · composition_geometry · perspective_compression · orientation
+ *     (legacy: room_type, composition_type)
  *
  * Power-user diagnostic — dense, info-rich, scannable. Operators use this
  * to spot vocabulary issues fast (rare classes, dead values, slot-eligibility
@@ -80,17 +82,26 @@ const STALE_MS = 60_000; // brief cache as required
 // taxonomy_b_* RPC allow-lists to cover them. They have no slot-eligibility
 // column on shortlisting_slot_definitions yet — the RPC returns an empty
 // eligible_slots[] for those axes, by design.
+//
+// Mig 451 (S1 / W11.6.29 — 2026-05-02): decomposed `composition_type` into
+// two orthogonal axes — `vantage_position` (where the camera is) and
+// `composition_geometry` (the geometric pattern of the frame). The legacy
+// `composition_type` axis is kept on composition_classifications for
+// diagnostic visibility, but moves into the Legacy section here. Mig 452
+// extends the taxonomy_b_* RPC allow-lists to cover the two new axes.
 const B_AXES_PRIMARY = [
   { key: "image_type",              label: "Image type",
-    description: "Day / night / etc. — top-level visual mode." },
+    description: "Day / night / drone / floorplan — top-level visual mode." },
   { key: "space_type",              label: "Space type",
     description: "What kind of space the frame depicts (kitchen, master_bedroom…)." },
   { key: "shot_scale",              label: "Shot scale",
     description: "How much of the scene is framed (wide -> vignette)." },
   { key: "zone_focus",              label: "Zone focus",
     description: "Which zone within the space is the focal subject." },
-  { key: "composition_type",        label: "Composition type",
-    description: "Overall composition / lensing intent of the frame." },
+  { key: "vantage_position",        label: "Vantage position",
+    description: "Where the camera is positioned: eye-level / corner / through-doorway / aerial / …" },
+  { key: "composition_geometry",    label: "Composition geometry",
+    description: "Geometric pattern of the frame: 1-point perspective / leading lines / symmetrical / …" },
   { key: "perspective_compression", label: "Perspective",
     description: "Depth rendering: expanded vs compressed (focal-feel, not lens FOV)." },
   { key: "orientation",             label: "Orientation",
@@ -99,6 +110,7 @@ const B_AXES_PRIMARY = [
 
 const B_AXES_LEGACY = [
   { key: "room_type",        label: "Room type" },
+  { key: "composition_type", label: "Composition type" },
 ];
 
 export default function TaxonomyExplorerTab() {
@@ -169,9 +181,11 @@ export default function TaxonomyExplorerTab() {
             Interactive surface over the two vocabularies the shortlisting
             engine relies on. Hierarchy A is the 5-level{" "}
             <code>object_registry</code> tree (191 active canonical objects).
-            Hierarchy B is the 5 orthogonal classification axes on{" "}
-            <code>composition_classifications</code>. Click any node or
-            value to see counts, slot eligibility, and recent observations.
+            Hierarchy B is the 8 orthogonal classification axes on{" "}
+            <code>composition_classifications</code> (image_type, space_type,
+            shot_scale, zone_focus, vantage_position, composition_geometry,
+            perspective_compression, orientation). Click any node or value
+            to see counts, slot eligibility, and recent observations.
           </p>
         </div>
         <Button

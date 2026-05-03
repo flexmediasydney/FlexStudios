@@ -1,15 +1,35 @@
 /**
  * PositionRow — single position list-item with expandable editor.
  *
- * Collapsed: shows the position index, room/space, phase, and a
- * one-line constraint summary. Click ▶ to expand into the full
- * constraint editor.
+ * Collapsed: shows the position index, room (friendly label), phase, and a
+ * one-line constraint summary. Click ▶ to expand into the full constraint
+ * editor.
  *
- * Expanded: every constraint axis appears as a Select with values
- * pulled live from `taxonomy_b_axis_distribution(axis)` (or the
- * shot_scale / compression / lens_class finite vocabs). An "(any)"
- * option always sits at the top — picking it leaves the constraint
- * NULL (engine-picks).
+ * Expanded layout (W11.6.29 / mig 451 — Position Editor restructure):
+ *
+ *   Top strip — phase / selection_mode / ai_backfill_on_gap
+ *
+ *   Default-visible constraints (5):
+ *     • Room              — friendly labels backed by space_type
+ *     • Zone focus        — friendly labels backed by zone_focus
+ *     • Shot scale        — wide / medium / tight / detail / vignette
+ *     • Perspective       — expanded / neutral / compressed
+ *
+ *   "More constraints" expander (collapsed by default; 5 axes):
+ *     • Vantage position       — eye_level / corner / through_doorway / aerial / …
+ *     • Composition geometry   — 1-point / leading_lines / symmetrical / …
+ *     • Image type             — is_day / is_dusk / is_drone / is_floorplan / …
+ *     • Lens class             — ultrawide / wide / standard / telephoto
+ *     • Orientation            — landscape / portrait / square
+ *
+ *   Notes (free-text)  — kept where it was.
+ *
+ *   Insert from template + Save / Reset / Delete actions.
+ *
+ * The legacy `room_type` and `composition_type` columns were dropped from
+ * gallery_positions in mig 451; this editor never references them. The Room
+ * dropdown is backed by `space_type` (operator-friendly: still a single
+ * "which room" choice, but uses the orthogonal v2-schema axis).
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -31,6 +51,7 @@ import {
   Trash2,
   RotateCcw,
   Star,
+  SlidersHorizontal,
 } from "lucide-react";
 import { IconTip } from "./Tip";
 import {
@@ -40,10 +61,30 @@ import {
   CONSTRAINT_KEYS,
   pickConstraints,
   constraintCount,
+  friendlyLabelForSpaceType,
+  friendlyLabelGeneric,
+  VANTAGE_POSITION_LABELS,
+  COMPOSITION_GEOMETRY_LABELS,
 } from "./constants";
 import { useAxisDistribution } from "./hooks";
 
 const ANY_VALUE = "__any__";
+
+// Per-axis picker-side label resolvers. Returns a function (value) => string.
+// Default fallback is friendlyLabelGeneric (snake_case → "Title case").
+function labelFnForAxis(axis) {
+  if (axis.key === "space_type") return friendlyLabelForSpaceType;
+  if (axis.key === "vantage_position") {
+    return (v) => VANTAGE_POSITION_LABELS[v] ?? friendlyLabelGeneric(v);
+  }
+  if (axis.key === "composition_geometry") {
+    return (v) => COMPOSITION_GEOMETRY_LABELS[v] ?? friendlyLabelGeneric(v);
+  }
+  // shot_scale / perspective_compression / lens_class / orientation /
+  // image_type / zone_focus all read cleanly via the generic snake_case
+  // → Title case fallback.
+  return friendlyLabelGeneric;
+}
 
 export default function PositionRow({
   position,
@@ -54,6 +95,7 @@ export default function PositionRow({
   saving,
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [draft, setDraft] = useState(() => normalisePosition(position));
 
   // When the upstream position changes (after save), refresh the draft.
@@ -66,16 +108,36 @@ export default function PositionRow({
     [draft, position],
   );
 
+  // Summary line on the collapsed row — show a friendly room label first,
+  // then up to 2 other set constraints.
   const summaryConstraints = useMemo(() => {
     const out = [];
     for (const axis of CONSTRAINT_AXES) {
       const v = draft[axis.key];
-      if (v) out.push(`${axis.label.toLowerCase()}=${v}`);
+      if (!v) continue;
+      const labelFn = labelFnForAxis(axis);
+      const display = labelFn(v);
+      out.push(`${axis.label.toLowerCase()}=${display}`);
     }
     return out;
   }, [draft]);
 
+  const headerLabel = useMemo(() => {
+    if (draft.space_type) return friendlyLabelForSpaceType(draft.space_type);
+    if (draft.image_type) return friendlyLabelGeneric(draft.image_type);
+    return "—";
+  }, [draft.space_type, draft.image_type]);
+
   const isOverridden = position?.is_overridden_at_cell;
+
+  // Split the constraint axes into the two render groups.
+  const defaultAxes = CONSTRAINT_AXES.filter((a) => a.group === "default");
+  const moreAxes = CONSTRAINT_AXES.filter((a) => a.group === "more");
+  const moreSetCount = moreAxes.reduce(
+    (n, a) =>
+      draft[a.key] != null && draft[a.key] !== "" ? n + 1 : n,
+    0,
+  );
 
   return (
     <div
@@ -102,9 +164,7 @@ export default function PositionRow({
           #{index + 1}
         </span>
 
-        <span className="text-xs font-medium">
-          {draft.space_type || draft.room_type || draft.image_type || "—"}
-        </span>
+        <span className="text-xs font-medium">{headerLabel}</span>
 
         <Badge variant="outline" className="text-[10px]">
           {draft.phase || "optional"}
@@ -217,7 +277,8 @@ export default function PositionRow({
             </div>
           </div>
 
-          <div>
+          {/* Default-visible constraints (5 axes) */}
+          <div data-testid={`constraints-default-${index}`}>
             <div className="text-[11px] font-semibold flex items-center gap-1 mb-1.5">
               Constraints
               <IconTip
@@ -225,7 +286,7 @@ export default function PositionRow({
               />
             </div>
             <div className="grid grid-cols-2 gap-2">
-              {CONSTRAINT_AXES.map((axis) => (
+              {defaultAxes.map((axis) => (
                 <ConstraintPicker
                   key={axis.key}
                   axis={axis}
@@ -237,6 +298,52 @@ export default function PositionRow({
                 />
               ))}
             </div>
+          </div>
+
+          {/* "More constraints" expander — collapsed by default */}
+          <div className="rounded-md border border-dashed bg-background/40">
+            <button
+              type="button"
+              onClick={() => setMoreOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-2.5 py-1.5 text-[11px] hover:bg-muted/40 rounded-md"
+              data-testid={`more-constraints-toggle-${index}`}
+              data-open={moreOpen ? "true" : "false"}
+              aria-expanded={moreOpen}
+            >
+              <span className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                {moreOpen ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+                <SlidersHorizontal className="h-3 w-3" />
+                More constraints
+                <span className="text-[10px] font-normal opacity-80">
+                  (vantage, geometry, image type, lens, orientation)
+                </span>
+              </span>
+              <span className="text-[10px] text-muted-foreground">
+                {moreSetCount} / {moreAxes.length} set
+              </span>
+            </button>
+            {moreOpen && (
+              <div
+                className="p-2.5 pt-0 grid grid-cols-2 gap-2"
+                data-testid={`constraints-more-${index}`}
+              >
+                {moreAxes.map((axis) => (
+                  <ConstraintPicker
+                    key={axis.key}
+                    axis={axis}
+                    value={draft[axis.key]}
+                    onChange={(v) =>
+                      setDraft((d) => ({ ...d, [axis.key]: v }))
+                    }
+                    testIdPrefix={`constraint-${index}`}
+                  />
+                ))}
+              </div>
+            )}
           </div>
 
           <div>
@@ -272,13 +379,18 @@ export default function PositionRow({
                 setDraft((d) => ({
                   ...d,
                   template_slot_id: t.slot_id,
-                  // Apply heuristics — slot_definitions only carry
-                  // eligible_room_types so we map that to room_type when
-                  // the template lists exactly one entry.
-                  room_type:
-                    Array.isArray(t.eligible_room_types) && t.eligible_room_types.length === 1
-                      ? t.eligible_room_types[0]
-                      : d.room_type,
+                  // Mig 451: legacy slot_definitions only carry
+                  // eligible_room_types — map a single-entry list onto the
+                  // friendly Room dropdown by setting space_type rather than
+                  // the now-dropped room_type column. The label resolver
+                  // handles unknown values gracefully so we don't lose any
+                  // template that hasn't been re-keyed yet.
+                  space_type:
+                    Array.isArray(t.eligible_room_types) &&
+                    t.eligible_room_types.length === 1
+                      ? mapLegacyRoomTypeToSpaceType(t.eligible_room_types[0]) ??
+                        d.space_type
+                      : d.space_type,
                   phase:
                     t.phase === 1 ? "mandatory" : t.phase === 2 ? "conditional" : "optional",
                 }));
@@ -337,16 +449,12 @@ export default function PositionRow({
 function ConstraintPicker({ axis, value, onChange, testIdPrefix }) {
   const { data = [], isLoading } = useAxisDistribution(axis.key);
   const items = data;
+  const labelFn = labelFnForAxis(axis);
 
   return (
     <div>
       <Label className="text-[11px] flex items-center gap-1">
         {axis.label}
-        {axis.legacy && (
-          <Badge variant="outline" className="text-[9px] py-0 px-1">
-            legacy
-          </Badge>
-        )}
         <IconTip text={axis.tooltip} />
       </Label>
       <Select
@@ -363,7 +471,7 @@ function ConstraintPicker({ axis, value, onChange, testIdPrefix }) {
           <SelectItem value={ANY_VALUE}>(any) — engine picks</SelectItem>
           {items.map((row) => (
             <SelectItem key={row.value} value={row.value}>
-              <span>{row.value}</span>
+              <span>{labelFn(row.value)}</span>
               {row.n_compositions != null && (
                 <span className="text-[10px] text-muted-foreground ml-2">
                   {row.n_compositions}
@@ -377,7 +485,46 @@ function ConstraintPicker({ axis, value, onChange, testIdPrefix }) {
   );
 }
 
-// Exported for unit testing (Bug 4 — notes nullability spurious-isDirty fix).
+// ── Legacy room_type → space_type mapping ────────────────────────────────
+//
+// Templates authored before mig 451 store an `eligible_room_types[]`
+// array with the old vocabulary (kitchen_main / master_bedroom_focal /
+// living_main / etc.). When an operator inserts such a template into a
+// new position, we want the Room dropdown to land on the closest
+// `space_type` value rather than leaving the field blank.
+//
+// Anything outside this map returns null and the editor leaves the Room
+// unset — operators can pick from the friendly list manually. We don't
+// log a warning because this is a soft migration path; templates will
+// drift onto space_type over time and stale entries become harmless.
+const LEGACY_ROOM_TYPE_TO_SPACE_TYPE = Object.freeze({
+  kitchen_main: "kitchen_dedicated",
+  kitchen_alt: "kitchen_dedicated",
+  master_bedroom_focal: "master_bedroom",
+  master_bedroom: "master_bedroom",
+  bedroom_secondary: "bedroom_secondary",
+  bedroom_focal: "bedroom_secondary",
+  living_main: "living_room_dedicated",
+  living_focal: "living_room_dedicated",
+  dining_focal: "dining_room_dedicated",
+  bathroom_main: "bathroom",
+  ensuite_main: "ensuite",
+  laundry_main: "laundry",
+  exterior_front: "exterior_facade",
+  exterior_back: "exterior_rear",
+  pool_focal: "pool_area",
+  garden_focal: "garden",
+  streetscape: "streetscape",
+});
+
+function mapLegacyRoomTypeToSpaceType(legacyValue) {
+  if (!legacyValue) return null;
+  return LEGACY_ROOM_TYPE_TO_SPACE_TYPE[legacyValue] ?? null;
+}
+
+// Exported for unit testing (Bug 4 — notes nullability spurious-isDirty fix
+// and the W11.6.29 / mig 451 restructure: no room_type / composition_type
+// in the canonical draft shape).
 export function normalisePosition(position) {
   const base = {
     id: position?.id || null,

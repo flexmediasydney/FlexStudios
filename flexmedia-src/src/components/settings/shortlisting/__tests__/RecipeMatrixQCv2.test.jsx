@@ -63,6 +63,8 @@ vi.mock("@/api/supabaseClient", () => {
   }
 
   // Bug-2 fixture: 1 fallback-path row (no scope chain).
+  // Mig 451: post-S1 schema — `room_type` column is gone; we use the
+  // friendly Room dropdown's backing axis `space_type` instead.
   const POSITION_ROWS = [
     {
       id: "gp-1",
@@ -76,7 +78,7 @@ vi.mock("@/api/supabaseClient", () => {
       ai_backfill_on_gap: true,
       template_slot_id: null,
       notes: null,
-      room_type: "kitchen_main",
+      space_type: "kitchen_dedicated",
     },
   ];
 
@@ -286,6 +288,9 @@ describe("Bug 4 — notes nullability + no spurious isDirty on clean load", () =
     // Without the fix, the draft normalises notes to "" and JSON.stringify
     // diff fires "dirty" against a freshly-normalised version of the same
     // row — false positive.
+    // Mig 451: the canonical post-S1 DB shape has no room_type /
+    // composition_type columns. Fixture mirrors that shape and adds the
+    // two new decomposed axes.
     const dbRow = {
       id: "gp-load",
       package_id: null, // PositionRow tolerates these even if missing on DB
@@ -296,15 +301,15 @@ describe("Bug 4 — notes nullability + no spurious isDirty on clean load", () =
       ai_backfill_on_gap: true,
       template_slot_id: null,
       notes: null, // ← the canonical DB shape
-      room_type: "kitchen_main",
-      space_type: null,
+      space_type: "kitchen_dedicated",
       zone_focus: null,
       shot_scale: null,
       perspective_compression: null,
+      vantage_position: null,
+      composition_geometry: null,
       orientation: null,
       lens_class: null,
       image_type: null,
-      composition_type: null,
     };
     const draftA = normalisePosition(dbRow);
     const draftB = normalisePosition(dbRow);
@@ -324,5 +329,46 @@ describe("Bug 4 — notes nullability + no spurious isDirty on clean load", () =
     const afterEdit = { ...loaded, notes: "" === "" ? null : "" };
     expect(afterEdit.notes).toBeNull();
     expect(JSON.stringify(loaded)).toEqual(JSON.stringify(afterEdit));
+  });
+});
+
+// ─── Mig 451 — Position Editor restructure: no room_type/composition_type ──
+describe("Mig 451 — normalisePosition drops legacy room_type / composition_type", () => {
+  it("normalisePosition does not include room_type even if the input row carries it", () => {
+    // A draft loaded from a stale (pre-451) cache might still have a
+    // room_type field. The canonical normalised shape must NOT carry it
+    // forward — pickConstraints only reads from CONSTRAINT_KEYS, which
+    // post-451 contains only the 9 active axes (no room_type, no
+    // composition_type).
+    const stale = {
+      id: "gp-stale",
+      room_type: "kitchen_main",
+      composition_type: "wide_angle",
+      space_type: "kitchen_dedicated",
+    };
+    const normalised = normalisePosition(stale);
+    expect(normalised).not.toHaveProperty("room_type");
+    expect(normalised).not.toHaveProperty("composition_type");
+    expect(normalised.space_type).toBe("kitchen_dedicated");
+  });
+
+  it("normalisePosition includes vantage_position + composition_geometry as null when absent", () => {
+    const fresh = { id: "gp-fresh" };
+    const normalised = normalisePosition(fresh);
+    expect(normalised).toHaveProperty("vantage_position");
+    expect(normalised).toHaveProperty("composition_geometry");
+    expect(normalised.vantage_position).toBeNull();
+    expect(normalised.composition_geometry).toBeNull();
+  });
+
+  it("normalisePosition preserves real values for vantage_position + composition_geometry", () => {
+    const row = {
+      id: "gp-x",
+      vantage_position: "corner",
+      composition_geometry: "leading_lines",
+    };
+    const normalised = normalisePosition(row);
+    expect(normalised.vantage_position).toBe("corner");
+    expect(normalised.composition_geometry).toBe("leading_lines");
   });
 });
