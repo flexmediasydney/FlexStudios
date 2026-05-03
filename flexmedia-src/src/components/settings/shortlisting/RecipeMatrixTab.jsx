@@ -149,8 +149,10 @@ export default function RecipeMatrixTab() {
             perspective compression. Niche levers — <em>vantage position</em>{" "}
             (eye-level / corner / through-doorway / aerial), <em>composition
             geometry</em> (1-point / leading lines / symmetrical), image type,
-            lens class, and orientation — live behind a "More constraints"
-            expander. Leave anything blank to let the engine pick.
+            lens class, orientation, plus the new <em>Instance</em> picker and{" "}
+            <em>Force unique instance</em> checkbox for multi-dwelling
+            properties (W11.8) — live behind a "More constraints" expander.
+            Leave anything blank to let the engine pick.
           </div>
           <div className="text-blue-800/90 mt-1">
             <strong>Image shortlisting only.</strong> This authoring surface

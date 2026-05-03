@@ -258,6 +258,42 @@ export default function HelpDrawer({ open, onOpenChange }) {
                 for filler.
               </p>
             </section>
+
+            <section data-testid="help-section-space-instances">
+              <h3 className="font-semibold mb-1.5">Space instances (W11.8)</h3>
+              <p className="text-muted-foreground">
+                When a property has multiple physical rooms of the same type
+                (e.g. two formal lounges, a duplex with two kitchens), the
+                engine clusters them into <em>space instances</em>{" "}
+                automatically after Stage 1. Each instance gets an
+                auto-numbered label ("Living room 2", etc.).
+              </p>
+              <p className="text-muted-foreground mt-2">
+                In the position editor (under "More constraints"):
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-muted-foreground mt-2">
+                <li>
+                  <strong>Instance</strong> — target a specific instance
+                  (1st, 2nd, …) when you want control. Leave as{" "}
+                  <em>"Any"</em> to let the engine pick the best-scoring shot
+                  across all instances.
+                </li>
+                <li>
+                  <strong>Force unique instance</strong> — when authoring{" "}
+                  <em>N</em> positions for the same room type, check this so
+                  the engine spreads coverage across different physical rooms
+                  before duplicating one. On a 2-lounge property with 3
+                  authored lounge positions and "Force unique" on, only 2
+                  positions fill — the 3rd stays empty unless{" "}
+                  <code>ai_backfill_on_gap</code> is enabled.
+                </li>
+              </ul>
+              <p className="text-muted-foreground mt-2">
+                Operators can rename, merge, and split detected instances in
+                the Audit panel under{" "}
+                <strong>Project Details &gt; Shortlisting</strong>.
+              </p>
+            </section>
           </div>
         </ScrollArea>
       </SheetContent>

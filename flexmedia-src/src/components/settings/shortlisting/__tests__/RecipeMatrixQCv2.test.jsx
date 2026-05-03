@@ -372,3 +372,90 @@ describe("Mig 451 — normalisePosition drops legacy room_type / composition_typ
     expect(normalised.composition_geometry).toBe("leading_lines");
   });
 });
+
+// ─── W11.8 / mig 454 — instance_index + instance_unique_constraint ─────────
+describe("Mig 454 — normalisePosition handles instance_index + unique constraint", () => {
+  it("defaults instance_index to null and instance_unique_constraint to false on absence", () => {
+    const fresh = { id: "gp-fresh" };
+    const normalised = normalisePosition(fresh);
+    expect(normalised).toHaveProperty("instance_index");
+    expect(normalised).toHaveProperty("instance_unique_constraint");
+    expect(normalised.instance_index).toBeNull();
+    expect(normalised.instance_unique_constraint).toBe(false);
+  });
+
+  it("preserves real instance_index numeric values", () => {
+    const row = { id: "gp-x", instance_index: 2 };
+    const normalised = normalisePosition(row);
+    expect(normalised.instance_index).toBe(2);
+  });
+
+  it("preserves instance_unique_constraint=true and coerces null/undefined to false", () => {
+    expect(
+      normalisePosition({ id: "x", instance_unique_constraint: true })
+        .instance_unique_constraint,
+    ).toBe(true);
+    expect(
+      normalisePosition({ id: "x", instance_unique_constraint: false })
+        .instance_unique_constraint,
+    ).toBe(false);
+    expect(
+      normalisePosition({ id: "x", instance_unique_constraint: null })
+        .instance_unique_constraint,
+    ).toBe(false);
+    expect(
+      normalisePosition({ id: "x" /* undefined */ }).instance_unique_constraint,
+    ).toBe(false);
+  });
+
+  it("loaded row + immediate resave produces NO isDirty deltas for instance fields", () => {
+    // The DB-canonical shape for an unset position has instance_index=null
+    // and instance_unique_constraint=false. A second normalise of the same
+    // row must JSON.stringify-equal the first — otherwise the editor
+    // would mark the row dirty on open.
+    const dbRow = {
+      id: "gp-load",
+      engine_role: "photo_day_shortlist",
+      position_index: 1,
+      phase: "mandatory",
+      selection_mode: "ai_decides",
+      ai_backfill_on_gap: true,
+      template_slot_id: null,
+      notes: null,
+      space_type: "kitchen_dedicated",
+      zone_focus: null,
+      shot_scale: null,
+      perspective_compression: null,
+      vantage_position: null,
+      composition_geometry: null,
+      orientation: null,
+      lens_class: null,
+      image_type: null,
+      instance_index: null,
+      instance_unique_constraint: false,
+    };
+    const draftA = normalisePosition(dbRow);
+    const draftB = normalisePosition(dbRow);
+    expect(JSON.stringify(draftA)).toEqual(JSON.stringify(draftB));
+    expect(draftA.instance_index).toBeNull();
+    expect(draftA.instance_unique_constraint).toBe(false);
+  });
+
+  it("toggling instance_unique_constraint from false to true marks the row dirty", () => {
+    // PositionRow's isDirty memo is a JSON.stringify diff between the
+    // current draft and a fresh normalise of the upstream position. A
+    // false → true flip on instance_unique_constraint must produce a
+    // non-equal string.
+    const dbRow = {
+      id: "gp-load",
+      engine_role: "photo_day_shortlist",
+      position_index: 1,
+      phase: "mandatory",
+      instance_index: null,
+      instance_unique_constraint: false,
+    };
+    const upstream = normalisePosition(dbRow);
+    const flipped = { ...upstream, instance_unique_constraint: true };
+    expect(JSON.stringify(flipped)).not.toEqual(JSON.stringify(upstream));
+  });
+});

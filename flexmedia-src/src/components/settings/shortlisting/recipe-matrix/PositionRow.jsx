@@ -15,12 +15,14 @@
  *     • Shot scale        — wide / medium / tight / detail / vignette
  *     • Perspective       — expanded / neutral / compressed
  *
- *   "More constraints" expander (collapsed by default; 5 axes):
+ *   "More constraints" expander (collapsed by default; 5 axes + instance pair):
  *     • Vantage position       — eye_level / corner / through_doorway / aerial / …
  *     • Composition geometry   — 1-point / leading_lines / symmetrical / …
  *     • Image type             — is_day / is_dusk / is_drone / is_floorplan / …
  *     • Lens class             — ultrawide / wide / standard / telephoto
  *     • Orientation            — landscape / portrait / square
+ *     • Instance               — Any / 1st / 2nd / 3rd / 4th detected (W11.8)
+ *     • Force unique instance  — checkbox; spreads coverage across rooms (W11.8)
  *
  *   Notes (free-text)  — kept where it was.
  *
@@ -35,6 +37,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -110,10 +113,24 @@ export default function PositionRow({
 
   // Summary line on the collapsed row — show a friendly room label first,
   // then up to 2 other set constraints.
+  //
+  // W11.8 / mig 454: `instance_index` shows as e.g. "instance=1st detected"
+  // when set; `instance_unique_constraint` shows as "unique instance" when
+  // TRUE (false is the default, no-op behaviour, hidden from the summary).
   const summaryConstraints = useMemo(() => {
     const out = [];
     for (const axis of CONSTRAINT_AXES) {
       const v = draft[axis.key];
+      if (axis.key === "instance_unique_constraint") {
+        if (v === true) out.push("unique instance");
+        continue;
+      }
+      if (axis.key === "instance_index") {
+        if (v == null) continue;
+        const opt = axis.options?.find((o) => o.value === v);
+        out.push(`instance=${opt?.label ?? v}`);
+        continue;
+      }
       if (!v) continue;
       const labelFn = labelFnForAxis(axis);
       const display = labelFn(v);
@@ -130,14 +147,30 @@ export default function PositionRow({
 
   const isOverridden = position?.is_overridden_at_cell;
 
-  // Split the constraint axes into the two render groups.
+  // Split the constraint axes into the two render groups. The
+  // `instance` kind axes (W11.8 / mig 454) are rendered as bespoke
+  // controls AFTER the regular ConstraintPicker grid so the layout
+  // and "(any)" semantics stay consistent for the existing 5 axes.
   const defaultAxes = CONSTRAINT_AXES.filter((a) => a.group === "default");
-  const moreAxes = CONSTRAINT_AXES.filter((a) => a.group === "more");
-  const moreSetCount = moreAxes.reduce(
-    (n, a) =>
-      draft[a.key] != null && draft[a.key] !== "" ? n + 1 : n,
-    0,
+  const moreAxes = CONSTRAINT_AXES.filter(
+    (a) => a.group === "more" && a.kind !== "instance",
   );
+  const instanceAxes = CONSTRAINT_AXES.filter(
+    (a) => a.group === "more" && a.kind === "instance",
+  );
+  // moreSetCount counts every "more" axis that's actively constraining
+  // selection. instance_unique_constraint = false is the default (no-op)
+  // behaviour and doesn't count; instance_index = null is "Any" and
+  // doesn't count either.
+  const moreSetCount =
+    moreAxes.reduce(
+      (n, a) =>
+        draft[a.key] != null && draft[a.key] !== "" ? n + 1 : n,
+      0,
+    ) +
+    (draft.instance_index != null ? 1 : 0) +
+    (draft.instance_unique_constraint === true ? 1 : 0);
+  const allMoreAxesCount = moreAxes.length + instanceAxes.length;
 
   return (
     <div
@@ -319,29 +352,61 @@ export default function PositionRow({
                 <SlidersHorizontal className="h-3 w-3" />
                 More constraints
                 <span className="text-[10px] font-normal opacity-80">
-                  (vantage, geometry, image type, lens, orientation)
+                  (vantage, geometry, image type, lens, orientation, instance)
                 </span>
               </span>
               <span className="text-[10px] text-muted-foreground">
-                {moreSetCount} / {moreAxes.length} set
+                {moreSetCount} / {allMoreAxesCount} set
               </span>
             </button>
             {moreOpen && (
               <div
-                className="p-2.5 pt-0 grid grid-cols-2 gap-2"
+                className="p-2.5 pt-0 space-y-2"
                 data-testid={`constraints-more-${index}`}
               >
-                {moreAxes.map((axis) => (
-                  <ConstraintPicker
-                    key={axis.key}
-                    axis={axis}
-                    value={draft[axis.key]}
+                <div className="grid grid-cols-2 gap-2">
+                  {moreAxes.map((axis) => (
+                    <ConstraintPicker
+                      key={axis.key}
+                      axis={axis}
+                      value={draft[axis.key]}
+                      onChange={(v) =>
+                        setDraft((d) => ({ ...d, [axis.key]: v }))
+                      }
+                      testIdPrefix={`constraint-${index}`}
+                    />
+                  ))}
+                </div>
+
+                {/* W11.8 / mig 454: space-instance targeting controls. */}
+                <div
+                  className="grid grid-cols-2 gap-2 pt-1.5 border-t border-dashed"
+                  data-testid={`constraints-more-instance-${index}`}
+                >
+                  <InstanceIndexPicker
+                    axis={instanceAxes.find(
+                      (a) => a.key === "instance_index",
+                    )}
+                    value={draft.instance_index}
                     onChange={(v) =>
-                      setDraft((d) => ({ ...d, [axis.key]: v }))
+                      setDraft((d) => ({ ...d, instance_index: v }))
                     }
-                    testIdPrefix={`constraint-${index}`}
+                    testId={`constraint-${index}-instance_index`}
                   />
-                ))}
+                  <InstanceUniqueCheckbox
+                    axis={instanceAxes.find(
+                      (a) => a.key === "instance_unique_constraint",
+                    )}
+                    value={draft.instance_unique_constraint}
+                    onChange={(v) =>
+                      setDraft((d) => ({
+                        ...d,
+                        instance_unique_constraint: v,
+                      }))
+                    }
+                    testId={`constraint-${index}-instance_unique_constraint`}
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -442,6 +507,70 @@ export default function PositionRow({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Space-instance controls (W11.8 / mig 454) ──────────────────────────
+//
+// Bespoke renderers for the two `kind: 'instance'` axes. They live as
+// columns of a Grid-2 row inside the More-constraints expander, beneath
+// the standard ConstraintPicker grid.
+
+function InstanceIndexPicker({ axis, value, onChange, testId }) {
+  // Hardcoded options (1..4 + Any) — instance_index has a finite ceiling
+  // by design (more than 4 dwellings of the same room type is rare; the
+  // rest can be authored via raw JSON).
+  const ANY = "__any__";
+  const options = axis?.options ?? [];
+  return (
+    <div>
+      <Label className="text-[11px] flex items-center gap-1">
+        {axis?.label || "Instance"}
+        <IconTip text={axis?.tooltip} />
+      </Label>
+      <Select
+        value={value == null ? ANY : String(value)}
+        onValueChange={(v) => onChange(v === ANY ? null : Number(v))}
+      >
+        <SelectTrigger className="h-7 text-xs" data-testid={testId}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((opt) => (
+            <SelectItem
+              key={opt.value == null ? ANY : String(opt.value)}
+              value={opt.value == null ? ANY : String(opt.value)}
+            >
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
+
+function InstanceUniqueCheckbox({ axis, value, onChange, testId }) {
+  const checked = value === true;
+  return (
+    <div className="flex flex-col">
+      <Label className="text-[11px] flex items-center gap-1">
+        {axis?.label || "Force unique instance"}
+        <IconTip text={axis?.tooltip} />
+      </Label>
+      <div className="flex items-center gap-2 h-7">
+        <Checkbox
+          checked={checked}
+          onCheckedChange={(v) => onChange(v === true)}
+          data-testid={testId}
+        />
+        <span className="text-[11px] text-muted-foreground">
+          {checked
+            ? "Spread across different physical rooms"
+            : "Allow positions to share the same room"}
+        </span>
+      </div>
     </div>
   );
 }
@@ -549,6 +678,18 @@ export function normalisePosition(position) {
   // Ensure every constraint axis is present (even if NULL).
   for (const k of CONSTRAINT_KEYS) {
     if (!(k in base)) base[k] = null;
+  }
+  // W11.8 / mig 454: `instance_unique_constraint` defaults to FALSE rather
+  // than NULL — the DB column is NOT NULL with default false, so missing
+  // inputs must canonicalise to false (not the wildcard null) for the
+  // dirty-check + save round-trip to stay in parity. pickConstraints
+  // already enforces this; we override the loop's null assignment here in
+  // case a draft slipped through with the field absent.
+  if (
+    base.instance_unique_constraint == null ||
+    base.instance_unique_constraint === ""
+  ) {
+    base.instance_unique_constraint = false;
   }
   return base;
 }

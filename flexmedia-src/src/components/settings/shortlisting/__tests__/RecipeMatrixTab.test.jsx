@@ -939,14 +939,19 @@ describe("constants — Position Editor restructure (mig 451)", () => {
     ]);
   });
 
-  it("CONSTRAINT_KEYS_MORE lists exactly 5 collapsed-by-default axes", () => {
-    expect(CONSTRAINT_KEYS_MORE).toEqual([
+  it("CONSTRAINT_KEYS_MORE includes the original 5 collapsed-by-default axes (W11.6.29 baseline)", () => {
+    // W11.8 / mig 454 appended `instance_index` + `instance_unique_constraint`
+    // to the More group. The exact-equality contract migrated to the
+    // dedicated W11.8 spec further down — this test guards the original 5.
+    for (const axis of [
       "vantage_position",
       "composition_geometry",
       "image_type",
       "lens_class",
       "orientation",
-    ]);
+    ]) {
+      expect(CONSTRAINT_KEYS_MORE).toContain(axis);
+    }
   });
 
   it("CONSTRAINT_AXES no longer includes room_type or composition_type", () => {
@@ -1056,5 +1061,47 @@ describe("constants — vantage_position + composition_geometry labels (mig 451)
     expect(COMPOSITION_GEOMETRY_LABELS.asymmetric_balance).toBe(
       "Asymmetric balance",
     );
+  });
+});
+
+// ── W11.8 / mig 454 — instance_index + instance_unique_constraint registry ──
+describe("constants — space-instance axes (W11.8 / mig 454)", () => {
+  it("CONSTRAINT_AXES includes instance_index in the More group with select type", () => {
+    const axis = CONSTRAINT_AXES.find((a) => a.key === "instance_index");
+    expect(axis).toBeTruthy();
+    expect(axis.group).toBe("more");
+    expect(axis.kind).toBe("instance");
+    expect(axis.type).toBe("select");
+    // Five options — Any + 1st..4th detected.
+    expect(axis.options.length).toBe(5);
+    expect(axis.options[0]).toEqual({ value: null, label: "Any" });
+    expect(axis.options[1]).toEqual({ value: 1, label: "1st detected" });
+    expect(axis.options[4]).toEqual({ value: 4, label: "4th detected" });
+    // Tooltip mentions multi-dwelling properties.
+    expect(axis.tooltip).toMatch(/multi-dwelling|granny flat|Nth/i);
+  });
+
+  it("CONSTRAINT_AXES includes instance_unique_constraint as a checkbox", () => {
+    const axis = CONSTRAINT_AXES.find(
+      (a) => a.key === "instance_unique_constraint",
+    );
+    expect(axis).toBeTruthy();
+    expect(axis.group).toBe("more");
+    expect(axis.kind).toBe("instance");
+    expect(axis.type).toBe("checkbox");
+    expect(axis.default).toBe(false);
+    expect(axis.tooltip).toMatch(/different physical room|unique/i);
+  });
+
+  it("CONSTRAINT_KEYS_MORE now includes the two new instance axes after the existing 5", () => {
+    expect(CONSTRAINT_KEYS_MORE).toEqual([
+      "vantage_position",
+      "composition_geometry",
+      "image_type",
+      "lens_class",
+      "orientation",
+      "instance_index",
+      "instance_unique_constraint",
+    ]);
   });
 });

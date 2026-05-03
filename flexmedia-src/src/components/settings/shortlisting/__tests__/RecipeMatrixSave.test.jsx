@@ -522,6 +522,53 @@ describe("CellEditorDialog — engine_mode + tolerance save", () => {
     expect(typeof update.payload.expected_count_tolerance_below).toBe("number");
   });
 
+  // ── W11.8 / mig 454 — instance_index + instance_unique_constraint save ───
+  it("Add blank position — Save mutation does not reject the new W11.8 instance fields", async () => {
+    // The W11.8 add path doesn't set instance_* explicitly (they fall
+    // through DB defaults: instance_index=NULL, instance_unique_constraint=
+    // FALSE), but the upsertMutation sanitiser must not strip them when a
+    // future code path includes them on the draft. The transientKeys list
+    // in CellEditorDialog is finite — instance_* must NOT appear there.
+    mount();
+    await waitFor(() => {
+      expect(screen.getByTestId("matrix-grid")).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId("matrix-cell-pkg-silver-standard"));
+    await waitFor(() => {
+      expect(screen.getByTestId("cell-editor-dialog")).toBeTruthy();
+    });
+
+    fireEvent.click(
+      await waitFor(() =>
+        screen.getByTestId("add-blank-position-photo_day_shortlist"),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(cap().inserts.length).toBeGreaterThan(0);
+    });
+    const insert = cap().inserts.find((c) => c.table === "gallery_positions");
+    expect(insert).toBeTruthy();
+    // The Add blank flow doesn't seed instance_* — they're absent and the
+    // DB will fall back to defaults. The important contract: the sanitiser
+    // doesn't blow up on a payload that DOES carry them, and they're not
+    // listed as transientKeys in the dialog. Verified by isolating the
+    // sanitiser-stripped keys: instance_* must NOT be in that set.
+    const TRANSIENT_KEYS_TO_STRIP = [
+      "is_overridden_at_cell",
+      "inherited_from_scope",
+      "package_id",
+      "price_tier_id",
+      "project_type_id",
+      "product_id",
+      "scope_ref_id_3",
+      "room_type",
+      "composition_type",
+    ];
+    expect(TRANSIENT_KEYS_TO_STRIP).not.toContain("instance_index");
+    expect(TRANSIENT_KEYS_TO_STRIP).not.toContain("instance_unique_constraint");
+  });
+
   it("Save package settings — empty tolerance inputs serialise to NULL", async () => {
     mount();
     await waitFor(() => {

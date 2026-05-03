@@ -138,6 +138,49 @@ export const CONSTRAINT_AXES = [
     pickerSource: "orientation",
     group: "more",
   },
+
+  // ── Space-instance targeting axes (W11.8 / mig 454) ─────────────────────
+  //
+  // The Stage 1 → Stage 2 pipeline clusters compositions of the same
+  // `space_type` into "space instances" (a duplex with two kitchens has
+  // two kitchen instances; a property with one master bedroom has one
+  // master_bedroom instance). Each instance gets a stable per-property
+  // index so operators can target the Nth detected room.
+  //
+  // These two fields differ from the other constraint axes — they're not
+  // composition_classifications properties, they're scoped to gallery
+  // positions only. The Position Editor renders them as bespoke controls
+  // (a hardcoded select + a checkbox) instead of the ConstraintPicker
+  // taxonomy_b distribution path, so we tag them with `kind: 'instance'`
+  // and let PositionRow special-case the rendering.
+  {
+    key: "instance_index",
+    label: "Instance",
+    tooltip:
+      "Target the Nth space_instance the engine detected for this room type. Useful for multi-dwelling properties (e.g. position 1 = main kitchen, position 2 = granny flat kitchen). Leave as 'Any' to let the engine pick the best-scoring shot across all instances.",
+    pickerSource: "instance_index",
+    kind: "instance",
+    type: "select",
+    group: "more",
+    options: [
+      { value: null, label: "Any" },
+      { value: 1, label: "1st detected" },
+      { value: 2, label: "2nd detected" },
+      { value: 3, label: "3rd detected" },
+      { value: 4, label: "4th detected" },
+    ],
+  },
+  {
+    key: "instance_unique_constraint",
+    label: "Force unique instance",
+    tooltip:
+      "When checked, every position in this recipe with the same constraint tuple must come from a DIFFERENT physical room. Useful for repeated positions (e.g. 3 lounge positions on a 2-lounge property: only 2 will fill, the 3rd stays empty unless ai_backfill is on).",
+    pickerSource: "instance_unique_constraint",
+    kind: "instance",
+    type: "checkbox",
+    group: "more",
+    default: false,
+  },
 ];
 
 // Shot scale axis values — gallery_positions CHECK constraint (mig 443
@@ -660,6 +703,14 @@ export function pickConstraints(row) {
   const out = {};
   for (const k of CONSTRAINT_KEYS) {
     const v = row?.[k];
+    // W11.8 / mig 454: the boolean `instance_unique_constraint` defaults to
+    // FALSE rather than NULL — its DB column is NOT NULL with default false.
+    // Coerce undefined / null inputs to false for that key only; leave
+    // every other axis at null on absence (the existing wildcard semantics).
+    if (k === "instance_unique_constraint") {
+      out[k] = v === true ? true : false;
+      continue;
+    }
     out[k] = v === undefined || v === "" ? null : v;
   }
   return out;
@@ -668,11 +719,19 @@ export function pickConstraints(row) {
 /**
  * Count how many constraints are non-null on a position row.
  * Used to render the "X constraints set" hint on the position list.
+ *
+ * W11.8 / mig 454: the boolean `instance_unique_constraint` only counts as
+ * "set" when TRUE — its default (false) is the no-op behaviour and
+ * shouldn't bump the constraint counter.
  */
 export function constraintCount(row) {
   let n = 0;
   for (const k of CONSTRAINT_KEYS) {
     const v = row?.[k];
+    if (k === "instance_unique_constraint") {
+      if (v === true) n += 1;
+      continue;
+    }
     if (v !== undefined && v !== null && v !== "") n += 1;
   }
   return n;
