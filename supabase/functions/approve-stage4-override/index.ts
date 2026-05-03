@@ -414,8 +414,20 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // reported: previously the UI invoked approve-stage4-override with the
   // wrong id shape, so the row stayed pending forever. Now the audit row's
   // status mirrors the curation decision.
+  //
+  // 2026-05-03 (Rainbow QA hotfix) — this update is the SOURCE OF TRUTH for
+  // "did this approval commit?". Previously the failure was treated as
+  // non-fatal, which silently swallowed RLS rejections, transient lock
+  // timeouts, and "row was deleted by a Stage 4 re-run" errors — the Edge
+  // fn returned 200 OK to the UI, the optimistic cache removed the card,
+  // then the next refetch fetched the still-pending row from DB and the
+  // approval "reverted" hours later in the user's perception. Now we
+  // (a) chain `.select('id')` so we can detect 0-rows-updated (RLS or
+  // missing-row case), and (b) return 500 on any failure so the UI's
+  // mutation onError fires, the cache rolls back cleanly, and the user
+  // sees a real error toast instead of phantom revert.
   if (inputShape === 'stage4_audit' && stage4Audit) {
-    const { error: statusErr } = await admin
+    const { data: updatedRows, error: statusErr } = await admin
       .from('shortlisting_stage4_overrides')
       .update({
         review_status: 'approved',
@@ -423,12 +435,40 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         reviewed_at: approverIso,
         review_notes: body.review_notes ?? null,
       })
-      .eq('id', stage4AuditId);
+      .eq('id', stage4AuditId)
+      .select('id');
     if (statusErr) {
-      // Non-fatal — graduation already succeeded. Log the warning so we
-      // don't silently drift into a "graduated but still pending" state.
-      console.warn(
-        `[${GENERATOR}] stage4_overrides review_status update failed (non-fatal): ${statusErr.message}`,
+      console.error(
+        `[${GENERATOR}] stage4_overrides review_status update failed for ` +
+          `id=${stage4AuditId}: ${statusErr.message}`,
+      );
+      return errorResponse(
+        `Approval write failed: ${statusErr.message}. ` +
+          `A fewshot example was created at id=${resultRow?.id ?? 'unknown'} ` +
+          `but the audit row was not flipped to approved — manual cleanup ` +
+          `may be required.`,
+        500,
+        req,
+      );
+    }
+    if (!updatedRows || updatedRows.length === 0) {
+      // Most likely cause: the row was deleted by a concurrent Stage 4
+      // re-run between our read at line ~165 and this update.  Less
+      // likely: an RLS policy silently filtered the update.  Either
+      // way the user's intent did NOT commit — surface as 500 so the
+      // UI rolls back cleanly.
+      console.error(
+        `[${GENERATOR}] stage4_overrides UPDATE matched 0 rows for ` +
+          `id=${stage4AuditId} — row may have been deleted by a Stage 4 ` +
+          `re-run, or RLS silently filtered.`,
+      );
+      return errorResponse(
+        `Approval write affected 0 rows for override id=${stage4AuditId}. ` +
+          `The row may have been deleted by a concurrent Stage 4 re-run. ` +
+          `A fewshot example was created (id=${resultRow?.id ?? 'unknown'}) ` +
+          `but the audit row could not be flipped to approved.`,
+        500,
+        req,
       );
     }
   }

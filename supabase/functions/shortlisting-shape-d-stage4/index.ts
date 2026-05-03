@@ -2047,8 +2047,46 @@ export async function persistStage4Overrides(args: PersistStage4OverridesArgs): 
   // persistSlotDecisions' / persistProposedSlots' delete-then-insert pattern:
   // clear the round's prior audit rows first, then insert the fresh batch.
   // Idempotent — re-running on the same round produces the same final state.
-  // Failure to delete is logged but doesn't abort: the INSERT will surface
-  // any residual duplicate-key issue loudly.
+  //
+  // 2026-05-03 (Rainbow QA hotfix) — preserve operator review state across
+  // Stage 4 re-runs.  Previously, every regen wiped review_status →
+  // pending_review for ALL rows on the round, silently destroying the
+  // operator's approve/reject/defer decisions.  Now we snapshot the
+  // non-pending rows BEFORE delete, run the standard delete-then-insert
+  // (so the new content fields land cleanly), then re-apply the snapshot
+  // by (stem, field) to restore review_status, reviewed_by, reviewed_at,
+  // review_notes.  Snapshot key: (stem, field) — Stage 4 may emit a
+  // different stage_4_value this run, but the operator's decision applies
+  // to the same physical correction (this stem, this field), so we
+  // preserve it.  Future enhancement: detect stage_4_value drift and
+  // optionally re-pend on material change.
+  const { data: priorReviewed } = await args.admin
+    .from('shortlisting_stage4_overrides')
+    .select('stem, field, review_status, reviewed_by, reviewed_at, review_notes')
+    .eq('round_id', args.roundId)
+    .neq('review_status', 'pending_review');
+  const snapshot = new Map<string, {
+    review_status: string;
+    reviewed_by: string | null;
+    reviewed_at: string | null;
+    review_notes: string | null;
+  }>();
+  for (const r of (priorReviewed ?? []) as Array<Record<string, unknown>>) {
+    const key = `${String(r.stem)}::${String(r.field)}`;
+    snapshot.set(key, {
+      review_status: String(r.review_status),
+      reviewed_by: (r.reviewed_by as string | null) ?? null,
+      reviewed_at: (r.reviewed_at as string | null) ?? null,
+      review_notes: (r.review_notes as string | null) ?? null,
+    });
+  }
+  if (snapshot.size > 0) {
+    console.info(
+      `[${GENERATOR}] preserve-on-rerun: snapshotted ${snapshot.size} ` +
+        `non-pending review rows before delete-then-insert`,
+    );
+  }
+
   const { error: delErr } = await args.admin
     .from('shortlisting_stage4_overrides')
     .delete()
@@ -2058,21 +2096,47 @@ export async function persistStage4Overrides(args: PersistStage4OverridesArgs): 
   }
 
   // Insert into shortlisting_stage4_overrides (audit table).
-  const auditRows = args.stage4Overrides.map((o) => ({
-    round_id: args.roundId,
-    group_id: stemToGroup.get(String(o.stem)) ?? null,
-    stem: String(o.stem),
-    field: String(o.field),
-    stage_1_value: o.stage_1_value != null ? String(o.stage_1_value) : null,
-    stage_4_value: o.stage_4_value != null ? String(o.stage_4_value) : null,
-    reason: String(o.reason ?? ''),
-  }));
+  // Apply the snapshot inline at insert time so the audit row is born with
+  // the right review state — avoids a brief window where the row is
+  // pending_review and a UI refetch could read it as such.
+  const auditRows = args.stage4Overrides.map((o) => {
+    const stem = String(o.stem);
+    const field = String(o.field);
+    const restored = snapshot.get(`${stem}::${field}`);
+    return {
+      round_id: args.roundId,
+      group_id: stemToGroup.get(stem) ?? null,
+      stem,
+      field,
+      stage_1_value: o.stage_1_value != null ? String(o.stage_1_value) : null,
+      stage_4_value: o.stage_4_value != null ? String(o.stage_4_value) : null,
+      reason: String(o.reason ?? ''),
+      // Restore review state if this (stem, field) had a prior decision.
+      // Brand-new rows fall through to the column default (pending_review).
+      ...(restored
+        ? {
+            review_status: restored.review_status,
+            reviewed_by: restored.reviewed_by,
+            reviewed_at: restored.reviewed_at,
+            review_notes: restored.review_notes,
+          }
+        : {}),
+    };
+  });
   if (auditRows.length > 0) {
     const { error: auditErr } = await args.admin
       .from('shortlisting_stage4_overrides')
       .insert(auditRows);
     if (auditErr) {
       args.warnings.push(`shortlisting_stage4_overrides insert failed: ${auditErr.message}`);
+    } else if (snapshot.size > 0) {
+      const restoredCount = auditRows.filter((r) => r.review_status && r.review_status !== 'pending_review').length;
+      console.info(
+        `[${GENERATOR}] preserve-on-rerun: ${restoredCount}/${snapshot.size} ` +
+          `prior review decisions restored on the new audit rows ` +
+          `(${snapshot.size - restoredCount} skipped — Stage 4 no longer flags ` +
+          `those (stem, field) combinations)`,
+      );
     }
   }
 

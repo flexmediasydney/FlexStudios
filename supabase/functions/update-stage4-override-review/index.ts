@@ -135,13 +135,41 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     return errorResponse(`update failed: ${updErr.message}`, 500, req);
   }
 
+  // 2026-05-03 (Rainbow QA hotfix) — surface the case where 0 rows were
+  // actually updated.  Previously the fn returned `{ ok: true, updated: 0 }`
+  // and the UI treated that as success, optimistically removed the card,
+  // then on refetch saw the still-pending row and the user observed a
+  // phantom revert.  Now we hard-fail when nothing landed (RLS filter,
+  // row deleted by a concurrent Stage 4 re-run, or all rows already
+  // approved).  Partial successes (some rows updated, some skipped)
+  // still return 200 with the count so the UI can show "updated N/M".
+  const updatedRows = updated ?? [];
+  if (updatedRows.length === 0 && ids.length > 0) {
+    return errorResponse(
+      `${body.action} affected 0 of ${ids.length} requested rows. ` +
+        `Possible causes: rows already approved (this endpoint cannot ` +
+        `transition FROM approved — re-approve via approve-stage4-override ` +
+        `if needed), rows deleted by a concurrent Stage 4 re-run, or RLS ` +
+        `silently filtered the update.`,
+      409,
+      req,
+    );
+  }
+  if (updatedRows.length < ids.length) {
+    console.warn(
+      `[${GENERATOR}] partial update: ${updatedRows.length}/${ids.length} ` +
+        `rows transitioned to ${newStatus}.  Remaining ${ids.length - updatedRows.length} ` +
+        `were skipped (likely already approved or no longer exist).`,
+    );
+  }
+
   return jsonResponse(
     {
       ok: true,
-      updated: (updated || []).length,
+      updated: updatedRows.length,
       requested: ids.length,
       new_status: newStatus,
-      rows: updated ?? [],
+      rows: updatedRows,
     },
     200,
     req,
