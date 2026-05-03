@@ -62,6 +62,7 @@ import ShortlistingCoverageMap from "./shortlisting/ShortlistingCoverageMap";
 import ShortlistingRetouchFlags from "./shortlisting/ShortlistingRetouchFlags";
 import ShortlistingQuarantine from "./shortlisting/ShortlistingQuarantine";
 import ShortlistingAuditLog from "./shortlisting/ShortlistingAuditLog";
+import SpaceInstancesPanel from "./shortlisting/audit/SpaceInstancesPanel";
 import { useEntityList } from "@/components/hooks/useEntityData";
 
 // Sub-tab keys
@@ -525,9 +526,12 @@ export default function ProjectShortlistingTab({ project }) {
             )}
           </TabsContent>
 
-          <TabsContent value="audit" className="mt-3">
+          <TabsContent value="audit" className="mt-3 space-y-4">
             {mountedSubtabs.has("audit") && selectedRoundId ? (
-              <ShortlistingAuditLog roundId={selectedRoundId} />
+              <>
+                <SpaceInstancesPanel roundId={selectedRoundId} />
+                <ShortlistingAuditLog roundId={selectedRoundId} />
+              </>
             ) : (
               <SubtabSkeleton />
             )}
