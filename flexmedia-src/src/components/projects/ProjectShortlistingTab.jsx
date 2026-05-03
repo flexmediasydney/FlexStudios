@@ -63,6 +63,8 @@ import ShortlistingRetouchFlags from "./shortlisting/ShortlistingRetouchFlags";
 import ShortlistingQuarantine from "./shortlisting/ShortlistingQuarantine";
 import ShortlistingAuditLog from "./shortlisting/ShortlistingAuditLog";
 import SpaceInstancesPanel from "./shortlisting/audit/SpaceInstancesPanel";
+import PendingIngestsWidget from "@/components/settings/shortlisting/PendingIngestsWidget";
+import ActiveEngineRunsWidget from "@/components/settings/shortlisting/ActiveEngineRunsWidget";
 import { useEntityList } from "@/components/hooks/useEntityData";
 
 // Sub-tab keys
@@ -439,6 +441,17 @@ export default function ProjectShortlistingTab({ project }) {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* Engine pipeline status — per-project view of pending ingests +
+          chain progress. Mounted regardless of round count so operators
+          can see the ingest waiting on the 2h Dropbox-debounce even
+          before any round exists for the project. */}
+      {projectId && (
+        <div className="space-y-2" data-testid="project-engine-status">
+          <PendingIngestsWidget projectId={projectId} compact />
+          <ActiveEngineRunsWidget projectId={projectId} compact />
+        </div>
       )}
 
       {/* Sub-tabs */}

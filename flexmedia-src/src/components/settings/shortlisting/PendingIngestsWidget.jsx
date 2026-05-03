@@ -1,5 +1,5 @@
 /**
- * PendingIngestsWidget — Shortlisting Command Center.
+ * PendingIngestsWidget — Shortlisting Command Center + per-project tab.
  *
  * Surfaces every shortlisting_jobs row with kind='ingest' and status='pending'
  * with a live countdown to scheduled_for. Each pending ingest reflects a
@@ -9,25 +9,37 @@
  * see this — Joseph reported "I added images to 46 Brays, no idea if it
  * was detected and no idea when ingest will fire."
  *
- * Data source: shortlisting_jobs JOIN projects via project_id. RLS allows
- * master_admin / admin / manager / employee SELECT.
+ * Two surfaces:
+ *   - Settings → Shortlisting Command Center → Overview (no projectId prop;
+ *     shows every project with a pending ingest, ordered by scheduled_for).
+ *   - Per-project ProjectShortlistingTab (projectId prop; filters to one).
+ *
+ * Operator affordance — "Fire now" button (master_admin only) calls the
+ * shortlisting_fire_pending_ingest_now(p_job_id) RPC (mig 457) to set
+ * scheduled_for = now(), bypassing the rest of the 2h debounce. Useful
+ * when the photographer signals "all uploaded, run it now."
  *
  * Two refresh cadences:
  *   - useQuery: 30s — picks up new pending jobs + status flips when the
  *     dispatcher claims them.
  *   - Ticking countdown: 1s — purely client-side recomputation against the
  *     cached scheduled_for; no network.
- *
- * Empty state: when no ingests are pending (the common case mid-day), the
- * widget collapses to a single line of muted copy.
  */
-import React, { useEffect, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import React, { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Clock, FolderClock, RefreshCw, AlertTriangle } from "lucide-react";
+import { toast } from "sonner";
+import {
+  Clock,
+  FolderClock,
+  RefreshCw,
+  AlertTriangle,
+  Zap,
+} from "lucide-react";
+import { usePermissions } from "@/components/auth/PermissionGuard";
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -58,9 +70,17 @@ function formatAgo(ms) {
   return `${days}d ${hours % 24}h ago`;
 }
 
-export default function PendingIngestsWidget() {
+/**
+ * @param {object} props
+ * @param {string=} props.projectId — filter to a single project (per-project
+ *   surface); omit for the cross-project command-center surface.
+ * @param {boolean=} props.compact — drop the explanatory paragraph + footer
+ *   note when embedded inline in a denser layout.
+ */
+export default function PendingIngestsWidget({ projectId, compact = false }) {
   const qc = useQueryClient();
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const { isMasterAdmin } = usePermissions() ?? {};
 
   // Tick the local clock every second so countdowns advance without re-fetching.
   useEffect(() => {
@@ -68,11 +88,15 @@ export default function PendingIngestsWidget() {
     return () => clearInterval(id);
   }, []);
 
+  const queryKey = useMemo(
+    () => ["pending-ingest-jobs", projectId ?? "all"],
+    [projectId],
+  );
+
   const { data, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ["pending-ingest-jobs"],
+    queryKey,
     queryFn: async () => {
-      // Embedded select: shortlisting_jobs → projects (FK project_id).
-      const { data: rows, error: err } = await api
+      let q = api
         .from("shortlisting_jobs")
         .select(
           "id, project_id, kind, status, scheduled_for, created_at, payload, " +
@@ -81,11 +105,33 @@ export default function PendingIngestsWidget() {
         .eq("kind", "ingest")
         .eq("status", "pending")
         .order("scheduled_for", { ascending: true });
+      if (projectId) q = q.eq("project_id", projectId);
+      const { data: rows, error: err } = await q;
       if (err) throw err;
       return Array.isArray(rows) ? rows : [];
     },
     refetchInterval: POLL_INTERVAL_MS,
     staleTime: 15_000,
+  });
+
+  const fireNow = useMutation({
+    mutationFn: async (jobId) => {
+      const { data: result, error: err } = await api.rpc(
+        "shortlisting_fire_pending_ingest_now",
+        { p_job_id: jobId },
+      );
+      if (err) throw err;
+      return result;
+    },
+    onSuccess: () => {
+      toast.success(
+        "Fired ingest now — dispatcher claims within 2 minutes.",
+      );
+      qc.invalidateQueries({ queryKey: ["pending-ingest-jobs"] });
+    },
+    onError: (e) => {
+      toast.error(`Fire now failed: ${e?.message || "unknown error"}`);
+    },
   });
 
   const rows = Array.isArray(data) ? data : [];
@@ -120,10 +166,19 @@ export default function PendingIngestsWidget() {
           </Button>
         </div>
 
-        <p className="text-[11px] text-muted-foreground leading-relaxed">
-          A 2-hour Dropbox-touch debounce delays ingest until the photographer
-          stops uploading. Each row below shows when ingest will auto-fire.
-        </p>
+        {!compact && (
+          <p className="text-[11px] text-muted-foreground leading-relaxed">
+            A 2-hour Dropbox-touch debounce delays ingest until the
+            photographer stops uploading. Each row below shows when ingest
+            will auto-fire.
+            {isMasterAdmin && (
+              <>
+                {" "}Use <strong>Fire now</strong> to skip the rest of the
+                debounce window.
+              </>
+            )}
+          </p>
+        )}
 
         {error && (
           <div className="flex items-start gap-2 text-xs text-amber-700">
@@ -139,8 +194,9 @@ export default function PendingIngestsWidget() {
             className="text-xs text-muted-foreground italic"
             data-testid="pending-ingests-empty"
           >
-            No pending ingests. Folders without a 2h-old debounce timer have
-            either already fired or never received a Dropbox touch.
+            {projectId
+              ? "No pending ingest for this project. Either ingest already fired or no Dropbox folder change has been detected since the last run."
+              : "No pending ingests. Folders without a 2h-old debounce timer have either already fired or never received a Dropbox touch."}
           </div>
         )}
 
@@ -171,17 +227,28 @@ export default function PendingIngestsWidget() {
                   }`}
                   data-testid={`pending-ingests-row-${row.id}`}
                 >
-                  <div className="col-span-6 truncate">
-                    <div className="font-medium truncate" title={address}>
-                      {address}
-                    </div>
-                    {suburb && (
-                      <div className="text-[10px] text-muted-foreground truncate">
-                        {suburb}
+                  {!projectId && (
+                    <div className="col-span-5 truncate">
+                      <div
+                        className="font-medium truncate"
+                        title={address}
+                      >
+                        {address}
                       </div>
-                    )}
-                  </div>
-                  <div className="col-span-3 text-[11px] text-muted-foreground">
+                      {suburb && (
+                        <div className="text-[10px] text-muted-foreground truncate">
+                          {suburb}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  <div
+                    className={
+                      projectId
+                        ? "col-span-5 text-[11px] text-muted-foreground"
+                        : "col-span-3 text-[11px] text-muted-foreground"
+                    }
+                  >
                     last touch:{" "}
                     {lastTouchedMs != null ? (
                       <span title={new Date(lastTouchedMs).toISOString()}>
@@ -191,7 +258,13 @@ export default function PendingIngestsWidget() {
                       <span className="italic">unknown</span>
                     )}
                   </div>
-                  <div className="col-span-3 text-right font-mono tabular-nums">
+                  <div
+                    className={
+                      projectId
+                        ? "col-span-4 text-right font-mono tabular-nums"
+                        : "col-span-3 text-right font-mono tabular-nums"
+                    }
+                  >
                     {scheduledMs == null ? (
                       <span className="text-muted-foreground">—</span>
                     ) : isReady ? (
@@ -205,17 +278,47 @@ export default function PendingIngestsWidget() {
                       </span>
                     )}
                   </div>
+                  {isMasterAdmin && (
+                    <div className="col-span-3 text-right">
+                      {!isReady && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-6 px-2 text-[10px]"
+                          disabled={
+                            fireNow.isPending &&
+                            fireNow.variables === row.id
+                          }
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                `Skip the 2h Dropbox-touch debounce and fire ingest for "${address}" now?\n\nThe dispatcher will claim it within 2 minutes.`,
+                              )
+                            ) {
+                              fireNow.mutate(row.id);
+                            }
+                          }}
+                          data-testid={`pending-ingests-fire-${row.id}`}
+                        >
+                          <Zap className="h-3 w-3 mr-1" />
+                          Fire now
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
         )}
 
-        <p className="text-[10px] text-muted-foreground italic pt-1">
-          Dispatcher claims pending jobs every 2 minutes whose{" "}
-          <code className="text-[10px]">scheduled_for</code> ≤ now. Polling
-          every 30s; countdowns tick every second.
-        </p>
+        {!compact && (
+          <p className="text-[10px] text-muted-foreground italic pt-1">
+            Dispatcher claims pending jobs every 2 minutes whose{" "}
+            <code className="text-[10px]">scheduled_for</code> ≤ now. Polling
+            every 30s; countdowns tick every second.
+          </p>
+        )}
       </CardContent>
     </Card>
   );

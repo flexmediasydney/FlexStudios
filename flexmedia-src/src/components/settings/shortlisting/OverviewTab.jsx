@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshCw, AlertCircle } from "lucide-react";
 import KpiStrip from "./KpiStrip";
 import PendingIngestsWidget from "./PendingIngestsWidget";
+import ActiveEngineRunsWidget from "./ActiveEngineRunsWidget";
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -84,6 +85,8 @@ export default function OverviewTab() {
       <KpiStrip data={data} loading={isLoading} />
 
       <PendingIngestsWidget />
+
+      <ActiveEngineRunsWidget />
 
       <Card>
         <CardContent className="p-3 text-xs text-muted-foreground space-y-1.5">
