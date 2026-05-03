@@ -143,7 +143,11 @@ export default function ActiveEngineRunsWidget({ projectId, compact = false }) {
           `status.eq.pending,status.eq.running,and(status.in.(succeeded,failed,dead_letter),finished_at.gte.${cutoffIso})`,
         )
         .order("updated_at", { ascending: false })
-        .limit(50);
+        // Bumped 50 → 250 (2026-05-03): a large round (e.g. 46 Brays at 58
+        // chunks) plus a few in-flight downstream stages can easily exceed
+        // 50 rows. UI was capping the running-lane at 50 and silently
+        // hiding the rest, which made operators think jobs were missing.
+        .limit(250);
       if (projectId) q = q.eq("project_id", projectId);
       const { data: rows, error: err } = await q;
       if (err) throw err;

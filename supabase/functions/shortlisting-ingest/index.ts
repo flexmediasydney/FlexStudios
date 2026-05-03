@@ -74,24 +74,24 @@ import {
 } from '../_shared/slotRecipeResolver.ts';
 
 const GENERATOR = 'shortlisting-ingest';
-// CHUNK_SIZE = 10: each chunk POSTs to shortlisting-extract → Modal which
+// CHUNK_SIZE = 20: each chunk POSTs to shortlisting-extract → Modal which
 // downloads the .CR3 RAW files from Dropbox, decodes them, extracts EXIF +
 // AEB metadata, generates a preview JPEG, and persists to the round.
 //
-// 2026-05-03 — Iteration 2. Reduced 50 → 20 → 10 after sequential failures:
-//   - 50 RAWs (~1.5GB) timed out the dispatcher's 120s fetch.
-//   - 20 RAWs (~600MB) hit Supabase's HARD-CAP edge-function IDLE_TIMEOUT
-//     of 150s — a platform limit on outbound HTTP wait time that the
-//     dispatcher's KIND_TIMEOUT_MS can NOT override. Modal needs >150s
-//     for 20 RAWs especially on cold-start.
-//   - 10 RAWs (~300MB) finishes on Modal in ~40-80s comfortably under
-//     the 150s platform cap.
+// 2026-05-03 — bumped 10 → 20 after the fire-and-forget pattern landed in
+// shortlisting-extract (commit 173dced + 4b4fbf5). With fire-and-forget
+// the 150s edge IDLE_TIMEOUT no longer applies — extract returns 202
+// immediately, the Modal call runs in the background task. Halving total
+// chunk count = ~2× wall-clock speedup with no rate-limit risk because
+// concurrency is bounded server-side via PER_KIND_CAP.extract=5 in the
+// dispatcher (max 5 chunks dispatched per 2-min cron tick).
 //
-// Long-term fix: convert shortlisting-extract to fire-and-forget — POST
-// to Modal + return 200 immediately + Modal callbacks the job row when
-// done. That escapes the IDLE_TIMEOUT entirely and would let us batch
-// larger chunks again. Tracked as a follow-up.
-const CHUNK_SIZE = 10;
+// Earlier iterations (kept for reference):
+//   - 50 RAWs (~1.5GB) — timed out the dispatcher's 120s fetch
+//   - 20 RAWs sync — hit Supabase Edge IDLE_TIMEOUT 150s
+//   - 10 RAWs sync → 10 RAWs fire-and-forget worked but slow
+//   - 20 RAWs fire-and-forget (current) — ~600MB/chunk, Modal 40-100s
+const CHUNK_SIZE = 20;
 const SUPPORTED_RAW_EXT = ['.cr3', '.cr2', '.arw', '.nef', '.raf', '.dng'];
 
 // Engine roles that count toward the photo shortlist target. Drone, video,

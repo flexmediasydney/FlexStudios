@@ -355,7 +355,13 @@ async function runDispatcherTick(
   // (~20 minutes) but never bursts Dropbox. The Modal-side ThreadPool was
   // also reduced from 8 → 2 workers in tandem.
   const PER_KIND_CAP: Record<string, number> = {
-    extract: 3,
+    // 2026-05-03 bumped 3 → 5 after RLS+FK index cleanup (mig 459/460/461)
+    // and Supabase compute Micro→Medium upgrade. With Modal max_workers=4
+    // per container, 5 chunks/tick × 4 workers = 20 concurrent Dropbox
+    // calls — well under the ~88-call ceiling we tripped earlier. Per
+    // Dropbox docs the limits are unpublished, but 20 is a safe headroom
+    // (3.3× our verified-working 6, ~4× under the verified-broken 88).
+    extract: 5,
   };
   const claimedByKind: Record<string, number> = {};
 
