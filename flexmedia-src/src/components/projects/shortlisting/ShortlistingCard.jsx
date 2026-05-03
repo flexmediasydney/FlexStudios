@@ -42,11 +42,28 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { ChevronDown, ChevronUp, HelpCircle, Pencil, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import DroneThumbnail from "@/components/drone/DroneThumbnail";
 import { cn } from "@/lib/utils";
 import ReclassifyDialog from "./ReclassifyDialog";
+// W11.6.x — per-signal score breakdown for the swimlane card hover cards.
+// The 4 dimension scores (C/L/T/A) and the composite avg= now reveal the
+// signals that fed into them on hover, giving operators a fast path from
+// "this card scored 7.4 — why?" to the underlying per-signal evidence
+// without having to open the lightbox.  See utils/signalScores.js for the
+// canonical taxonomy (mirrors the Pass 1 schema).
+import {
+  signalsForDimension,
+  groupSignalsByCategory,
+  scoreColorClass,
+  formatSignalScore,
+} from "@/utils/signalScores";
 
 // Human-readable room type labels — consistent with Pass 1 prompt taxonomy.
 const ROOM_TYPE_LABEL = {
@@ -93,6 +110,135 @@ function humanRoomType(rt) {
 function formatScore(n) {
   if (n == null || isNaN(n)) return "—";
   return Number(n).toFixed(1);
+}
+
+/**
+ * Hover-revealable per-dimension score badge for the swimlane card.
+ *
+ * Renders inline (e.g. "T=7.4") and on hover pops a small card listing
+ * the individual signals that fed into that dimension's weighted mean.
+ *
+ * Falls back to a plain non-hoverable span when there are no per-signal
+ * scores in the classification (legacy rounds pre-Pass-1-v2.x or
+ * incomplete Gemini responses).  We DON'T want a hover-card with empty
+ * content — that just confuses operators.
+ */
+function DimensionScoreHover({ letter, label, dimKey, score, signalScores }) {
+  const signals = signalsForDimension(signalScores, dimKey);
+  const formatted = formatScore(score);
+  if (signals.length === 0) {
+    return <span data-testid={`dim-score-${dimKey}`}>{letter}={formatted}</span>;
+  }
+  return (
+    <HoverCard openDelay={150} closeDelay={80}>
+      <HoverCardTrigger asChild>
+        <span
+          data-testid={`dim-score-${dimKey}`}
+          className="cursor-help underline decoration-dotted underline-offset-2"
+        >
+          {letter}={formatted}
+        </span>
+      </HoverCardTrigger>
+      <HoverCardContent side="top" align="start" className="w-72 p-3 z-[60]">
+        <div className="flex items-baseline justify-between mb-2 pb-1.5 border-b">
+          <div className="text-[11px] font-semibold uppercase tracking-wide">
+            {label}
+          </div>
+          <div className={cn("text-sm font-mono font-semibold", scoreColorClass(score))}>
+            {formatted}
+          </div>
+        </div>
+        <ul className="space-y-1 text-[11px]">
+          {signals.map((s) => (
+            <li key={s.key} className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground truncate">{s.label}</span>
+              <span className={cn("font-mono tabular-nums shrink-0", scoreColorClass(s.value))}>
+                {formatSignalScore(s.value)}
+              </span>
+            </li>
+          ))}
+        </ul>
+        <div className="mt-2 pt-1.5 border-t text-[9px] text-muted-foreground/70">
+          Per-signal scores from Pass 1 (Gemini vision). The {label.toLowerCase()}
+          {" "}score is the weighted mean of these signals.
+        </div>
+      </HoverCardContent>
+    </HoverCard>
+  );
+}
+
+/**
+ * Hover-revealable composite score (avg=) for the swimlane card.
+ *
+ * Pops a wider card showing all 5 categories: Technical, Lighting,
+ * Composition, Aesthetic (the 4 dimensions that contribute to the
+ * composite via tier-config weights), plus Workflow signals
+ * (observability-only — retouch_debt, gallery_arc_position,
+ * social_crop_survival, brochure_print_survival).  Operator gets a
+ * complete picture of every signal in one glance.
+ */
+function CompositeScoreHover({ score, signalScores }) {
+  const grouped = groupSignalsByCategory(signalScores);
+  const formatted = formatScore(score);
+  const totalSignals =
+    grouped.technical.length + grouped.lighting.length +
+    grouped.composition.length + grouped.aesthetic.length +
+    grouped.workflow.length;
+  if (totalSignals === 0) {
+    return <span className="font-semibold text-foreground">avg={formatted}</span>;
+  }
+  return (
+    <HoverCard openDelay={150} closeDelay={80}>
+      <HoverCardTrigger asChild>
+        <span
+          data-testid="composite-score"
+          className="font-semibold text-foreground cursor-help underline decoration-dotted underline-offset-2"
+        >
+          avg={formatted}
+        </span>
+      </HoverCardTrigger>
+      <HoverCardContent side="top" align="end" className="w-80 p-3 z-[60] max-h-[28rem] overflow-y-auto">
+        <div className="flex items-baseline justify-between mb-2 pb-1.5 border-b">
+          <div className="text-[11px] font-semibold uppercase tracking-wide">
+            All signals · {totalSignals} of 26
+          </div>
+          <div className={cn("text-sm font-mono font-semibold", scoreColorClass(score))}>
+            {formatted}
+          </div>
+        </div>
+        {[
+          { key: "technical", label: "Technical" },
+          { key: "lighting", label: "Lighting" },
+          { key: "composition", label: "Composition" },
+          { key: "aesthetic", label: "Aesthetic" },
+          { key: "workflow", label: "Workflow" },
+        ].map(({ key, label }) => {
+          const sigs = grouped[key];
+          if (sigs.length === 0) return null;
+          return (
+            <div key={key} className="mb-2 last:mb-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
+                {label}
+                {key === "workflow" && (
+                  <span className="ml-1 font-normal normal-case opacity-70">(observability)</span>
+                )}
+              </div>
+              <ul className="space-y-0.5 text-[11px]">
+                {sigs.map((s) => (
+                  <li key={s.key} className="flex items-center justify-between gap-3">
+                    <span className="text-muted-foreground truncate">{s.label}</span>
+                    <span className={cn("font-mono tabular-nums shrink-0", scoreColorClass(s.value))}>
+                      {formatSignalScore(s.value)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </HoverCardContent>
+    </HoverCard>
+  );
 }
 
 function shortFilename(s, max = 32) {
@@ -749,15 +895,15 @@ export default function ShortlistingCard({
           </div>
         )}
 
-        {/* 4-dim scores */}
+        {/* 4-dim scores — each is hover-revealable to show its constituent
+            signals. See utils/signalScores.js for the canonical mapping.
+            avg= shows ALL five categories grouped (4 dimensions + workflow). */}
         <div className="flex items-center gap-1.5 flex-wrap text-[10px] font-mono text-muted-foreground">
-          <span>C={formatScore(compScore)}</span>
-          <span>L={formatScore(lScore)}</span>
-          <span>T={formatScore(tScore)}</span>
-          <span>A={formatScore(aScore)}</span>
-          <span className="font-semibold text-foreground">
-            avg={formatScore(avgScore)}
-          </span>
+          <DimensionScoreHover letter="C" label="Composition" dimKey="composition" score={compScore} signalScores={cls.signal_scores} />
+          <DimensionScoreHover letter="L" label="Lighting" dimKey="lighting" score={lScore} signalScores={cls.signal_scores} />
+          <DimensionScoreHover letter="T" label="Technical" dimKey="technical" score={tScore} signalScores={cls.signal_scores} />
+          <DimensionScoreHover letter="A" label="Aesthetic" dimKey="aesthetic" score={aScore} signalScores={cls.signal_scores} />
+          <CompositeScoreHover score={avgScore} signalScores={cls.signal_scores} />
         </div>
 
         {/* W11.6.15: separate Slot-fit dimension. Only renders when Stage 4

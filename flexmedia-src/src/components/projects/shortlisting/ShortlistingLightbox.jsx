@@ -55,6 +55,16 @@ import {
 import { fetchMediaProxy } from "@/utils/mediaPerf";
 import { cn } from "@/lib/utils";
 import useLightboxAnnotations from "@/hooks/useLightboxAnnotations";
+// W11.6.x — full signal score panel grouped by category (technical /
+// lighting / composition / aesthetic / workflow).  Replaces the prior
+// "top 8 of 26" truncation with the complete picture.  Helpers mirror
+// the canonical Pass 1 signal taxonomy in
+// supabase/functions/_shared/visionPrompts/blocks/universalVisionResponseSchemaV2.ts
+import {
+  groupSignalsByCategory,
+  scoreColorClassOnDark,
+  formatSignalScore,
+} from "@/utils/signalScores";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 import CanonicalObjectPanel from "./CanonicalObjectPanel";
 
@@ -372,23 +382,25 @@ export default function ShortlistingLightbox({
   // signal_scores from composition_classifications.signal_scores JSONB. Schema
   // can be either a flat number map or {raw, normalized} objects — handle
   // both. We surface the top 8 by value so the panel stays scannable.
-  const signalScoresEntries = useMemo(() => {
-    const ss = item?.signal_scores;
-    if (!ss || typeof ss !== "object") return [];
-    const out = [];
-    for (const [k, v] of Object.entries(ss)) {
-      let val = null;
-      if (typeof v === "number") val = v;
-      else if (v && typeof v === "object") {
-        if (typeof v.normalized === "number") val = v.normalized;
-        else if (typeof v.raw === "number") val = v.raw;
-      }
-      if (val == null) continue;
-      out.push({ key: k, label: humanSignalLabel(k), value: val });
-    }
-    out.sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
-    return out.slice(0, 8);
-  }, [item]);
+  // W11.6.x — full signal score breakdown grouped by the 5 canonical
+  // categories.  Replaces the prior "top 8 by value" truncation: a
+  // gallery-arc-position score buried at slot 12 by raw value is still
+  // important context for the operator, and ranking by value drops it.
+  // The grouped layout also shows zero-presence categories ("no
+  // composition signals recorded") so we can spot prompt-output drift.
+  const signalsByCategory = useMemo(
+    () => groupSignalsByCategory(item?.signal_scores),
+    [item],
+  );
+  const totalSignalsRecorded = useMemo(
+    () =>
+      signalsByCategory.technical.length +
+      signalsByCategory.lighting.length +
+      signalsByCategory.composition.length +
+      signalsByCategory.aesthetic.length +
+      signalsByCategory.workflow.length,
+    [signalsByCategory],
+  );
 
   const slot = item?.slot_decision || null;
   const voiceTier = item?.voice_tier || null;
@@ -690,40 +702,75 @@ export default function ShortlistingLightbox({
             </div>
           )}
 
-          {/* 26-signal scores — top 8 */}
+          {/* 26-signal scores — grouped by category */}
           <div className="mb-3">
-            <div className="text-[10px] uppercase tracking-wide text-white/60 mb-1">
-              Top signals (top 8 of 26)
+            <div className="text-[10px] uppercase tracking-wide text-white/60 mb-1.5 flex items-center justify-between">
+              <span>Signal scores</span>
+              <span className="text-white/40 normal-case">
+                {totalSignalsRecorded} of 26 recorded
+              </span>
             </div>
-            {signalScoresEntries.length === 0 ? (
+            {totalSignalsRecorded === 0 ? (
               <div className="text-[10px] text-white/40 italic">
                 No signal scores recorded.
               </div>
             ) : (
-              <ul
-                data-testid="signal-scores-list"
-                className="space-y-0.5"
-              >
-                {signalScoresEntries.map((entry) => (
-                  <li
-                    key={entry.key}
-                    className="flex items-center justify-between gap-2"
-                  >
-                    <span
-                      className="text-white/80 truncate"
-                      title={entry.label}
+              <div data-testid="signal-scores-list" className="space-y-2">
+                {[
+                  { key: "technical", label: "Technical" },
+                  { key: "lighting", label: "Lighting" },
+                  { key: "composition", label: "Composition" },
+                  { key: "aesthetic", label: "Aesthetic" },
+                  {
+                    key: "workflow",
+                    label: "Workflow",
+                    note: "observability",
+                  },
+                ].map(({ key, label, note }) => {
+                  const sigs = signalsByCategory[key];
+                  if (sigs.length === 0) return null;
+                  return (
+                    <div
+                      key={key}
+                      data-signal-category={key}
+                      className="rounded-md bg-white/5 px-2 py-1.5"
                     >
-                      {entry.label}
-                    </span>
-                    <span
-                      className="font-mono tabular-nums text-white/90 shrink-0"
-                      data-signal-key={entry.key}
-                    >
-                      {formatScore(entry.value)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
+                      <div className="text-[9px] uppercase tracking-wide text-white/50 mb-0.5 flex items-center justify-between">
+                        <span className="font-semibold">{label}</span>
+                        {note && (
+                          <span className="font-normal normal-case opacity-70">
+                            {note}
+                          </span>
+                        )}
+                      </div>
+                      <ul className="space-y-0.5">
+                        {sigs.map((entry) => (
+                          <li
+                            key={entry.key}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <span
+                              className="text-white/80 truncate"
+                              title={entry.label}
+                            >
+                              {entry.label}
+                            </span>
+                            <span
+                              className={cn(
+                                "font-mono tabular-nums shrink-0",
+                                scoreColorClassOnDark(entry.value),
+                              )}
+                              data-signal-key={entry.key}
+                            >
+                              {formatSignalScore(entry.value)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 
