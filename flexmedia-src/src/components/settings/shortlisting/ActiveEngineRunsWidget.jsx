@@ -28,7 +28,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
+import { supabase } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -131,7 +131,7 @@ export default function ActiveEngineRunsWidget({ projectId, compact = false }) {
     queryFn: async () => {
       // Cutoff: 60 min ago, applied below to terminal rows.
       const cutoffIso = new Date(Date.now() - 60 * 60_000).toISOString();
-      let q = api
+      let q = supabase
         .from("shortlisting_jobs")
         .select(
           "id, project_id, kind, status, started_at, finished_at, " +

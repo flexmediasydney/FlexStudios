@@ -27,7 +27,7 @@
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -96,7 +96,7 @@ export default function PendingIngestsWidget({ projectId, compact = false }) {
   const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
-      let q = api
+      let q = supabase
         .from("shortlisting_jobs")
         .select(
           "id, project_id, kind, status, scheduled_for, created_at, payload, " +
