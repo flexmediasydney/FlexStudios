@@ -7,19 +7,20 @@
  * `gallery_positions` for Stage 4 to fill.
  *
  * The new engine model (R1's mig 443) replaces the named-slot lattice with a
- * list of constraint tuples. Each row in `gallery_positions` (mig 443
- * schema) has columns:
+ * list of constraint tuples. Mig 451 (2026-05-02) decomposed the
+ * composition_type axis and dropped room_type. Each row in `gallery_positions`
+ * has columns:
  *   - position_index             int        ordering within the scope
  *   - phase                      text       'mandatory' | 'conditional' | 'optional'
- *   - room_type                  text|null  (NULL = wildcard)
  *   - space_type                 text|null
  *   - zone_focus                 text|null
  *   - shot_scale                 text|null  (wide|medium|tight|detail|vignette)
  *   - perspective_compression    text|null  (expanded|neutral|compressed)
  *   - orientation                text|null  (landscape|portrait|square)
+ *   - vantage_position           text|null  (mig 451 — replaces part of composition_type)
+ *   - composition_geometry       text|null  (mig 451 — replaces part of composition_type)
  *   - lens_class                 text|null
  *   - image_type                 text|null
- *   - composition_type           text|null
  *   - selection_mode             text       'ai_decides' | 'curated'
  *   - ai_backfill_on_gap         boolean
  *   - notes                      text|null
@@ -60,20 +61,22 @@ import type { getAdminClient } from './supabase.ts';
 export type GalleryPositionPhase = 'mandatory' | 'conditional' | 'optional';
 
 /** A single resolved gallery_position handed to Stage 4. Field names mirror
- * R1's mig 443 columns 1-to-1 (no prefix transformation). */
+ * the gallery_positions columns 1-to-1 (no prefix transformation).
+ * Mig 451 (2026-05-02): room_type + composition_type axes retired;
+ * vantage_position + composition_geometry axes added. */
 export interface ResolvedGalleryPosition {
   position_index: number;
   phase: GalleryPositionPhase;
   // Constraint axes — NULL means wildcard
-  room_type: string | null;
   space_type: string | null;
   zone_focus: string | null;
   shot_scale: string | null;
   perspective_compression: string | null;
   orientation: string | null;
+  vantage_position: string | null;        // mig 451
+  composition_geometry: string | null;    // mig 451
   lens_class: string | null;
   image_type: string | null;
-  composition_type: string | null;
   // Behaviour
   selection_mode: string; // 'ai_decides' | 'curated'  (per R1's CHECK)
   ai_backfill_on_gap: boolean;
@@ -265,15 +268,15 @@ function normaliseRow(
   return {
     position_index: Number(r.position_index ?? 0),
     phase,
-    room_type: stringOrNull(r.room_type),
     space_type: stringOrNull(r.space_type),
     zone_focus: stringOrNull(r.zone_focus),
     shot_scale: stringOrNull(r.shot_scale),
     perspective_compression: stringOrNull(r.perspective_compression),
     orientation: stringOrNull(r.orientation),
+    vantage_position: stringOrNull(r.vantage_position),       // mig 451
+    composition_geometry: stringOrNull(r.composition_geometry), // mig 451
     lens_class: stringOrNull(r.lens_class),
     image_type: stringOrNull(r.image_type),
-    composition_type: stringOrNull(r.composition_type),
     selection_mode:
       typeof r.selection_mode === 'string' && r.selection_mode.length > 0
         ? r.selection_mode
@@ -317,8 +320,9 @@ export async function resolveGalleryPositions(
       .from('gallery_positions')
       .select(
         'position_index, phase, ' +
-          'room_type, space_type, zone_focus, shot_scale, perspective_compression, ' +
-          'orientation, lens_class, image_type, composition_type, ' +
+          'space_type, zone_focus, shot_scale, perspective_compression, ' +
+          'orientation, vantage_position, composition_geometry, ' +
+          'lens_class, image_type, ' +
           'selection_mode, ai_backfill_on_gap, notes, template_slot_id',
       )
       .eq('scope_type', f.scope_type)
@@ -383,15 +387,15 @@ export function renderGalleryPositionsBlock(
   lines.push('');
   for (const p of positions) {
     const axes: string[] = [];
-    axes.push(`room_type=${p.room_type ?? 'any'}`);
     axes.push(`space_type=${p.space_type ?? 'any'}`);
     axes.push(`zone_focus=${p.zone_focus ?? 'any'}`);
     axes.push(`shot_scale=${p.shot_scale ?? 'any'}`);
     axes.push(`perspective_compression=${p.perspective_compression ?? 'any'}`);
     axes.push(`orientation=${p.orientation ?? 'any'}`);
+    axes.push(`vantage_position=${p.vantage_position ?? 'any'}`);
+    axes.push(`composition_geometry=${p.composition_geometry ?? 'any'}`);
     axes.push(`lens_class=${p.lens_class ?? 'any'}`);
     axes.push(`image_type=${p.image_type ?? 'any'}`);
-    axes.push(`composition_type=${p.composition_type ?? 'any'}`);
     const tplBit = p.template_slot_id ? ` template=${p.template_slot_id}` : '';
     const backfill = p.ai_backfill_on_gap ? '' : ' ai_backfill_on_gap=false';
     const modeBit = p.selection_mode === 'curated' ? ' (curated)' : '';
@@ -403,4 +407,7 @@ export function renderGalleryPositionsBlock(
   return lines.join('\n');
 }
 
-export const RESOLVE_GALLERY_POSITIONS_VERSION = 'v1.1';
+// v1.1 — original (mig 444)
+// v1.2 — mig 451 (2026-05-02): drop room_type + composition_type from
+//        constraint axes; add vantage_position + composition_geometry.
+export const RESOLVE_GALLERY_POSITIONS_VERSION = 'v1.2';

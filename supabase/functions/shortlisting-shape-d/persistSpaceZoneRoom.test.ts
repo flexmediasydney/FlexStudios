@@ -166,7 +166,7 @@ async function runPersist(
 
 // ─── Schema-level assertions (Piece 1) ───────────────────────────────────────
 
-Deno.test('schema version bumped to v2.5 (mig 442 composition axes)', () => {
+Deno.test('schema version bumped to v2.6 (mig 451 composition_type decomposition)', () => {
   // v2.3 (W11.7.17 hotfix-5) declared space_type / zone_focus with closed
   // enums. v2.4 (commit 9325f46, 2026-05-02) drops those enums to fit
   // Gemini's schema state-count limit; canonical lists are now taught via
@@ -175,7 +175,10 @@ Deno.test('schema version bumped to v2.5 (mig 442 composition axes)', () => {
   // shot_scale, perspective_compression (REQUIRED) + orientation (optional,
   // derived from EXIF at persist time). is_detail_shot dropped from
   // IMAGE_TYPE_OPTIONS — replaced by shot_scale="detail".
-  assertStrictEquals(UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION, 'v2.5');
+  // v2.6 (mig 451, 2026-05-02) decomposes the legacy composition_type axis
+  // into vantage_position + composition_geometry as separate top-level
+  // properties.
+  assertStrictEquals(UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION, 'v2.6');
 });
 
 Deno.test('schema declares space_type with canonical taxonomy in description (no closed enum)', () => {
@@ -656,4 +659,147 @@ Deno.test('mig 442: orientation NULL when neither EXIF nor model emission availa
   delete out.orientation;
   const row = await runPersist(out);
   assertStrictEquals(row.orientation, null);
+});
+
+// ─── Mig 451 (schema v2.6) — composition_type decomposition ─────────────────
+
+Deno.test('mig 451: schema declares vantage_position + composition_geometry as STRING properties (no closed enum)', () => {
+  for (const src of ['internal_raw', 'internal_finals', 'external_listing', 'floorplan_image'] as const) {
+    const schema = universalSchemaForSource(src);
+    const props = (schema as { properties: Record<string, unknown> }).properties;
+
+    // vantage_position
+    if (!('vantage_position' in props)) {
+      throw new Error(`vantage_position missing from ${src} variant`);
+    }
+    const vp = props.vantage_position as { type?: string; enum?: string[]; description?: string; nullable?: boolean };
+    assertStrictEquals(vp.type, 'string', `vantage_position.type should be string in ${src}`);
+    if (vp.enum !== undefined) {
+      throw new Error(`vantage_position.enum must NOT be declared in v2.6 (${src}) — taxonomy is taught via description`);
+    }
+    if (typeof vp.description !== 'string' || vp.description.length < 80) {
+      throw new Error(`vantage_position.description must teach the canonical list (>=80 chars) in ${src}`);
+    }
+    // Description must reference enough canonical VANTAGE_POSITION_OPTIONS values.
+    for (const required of ['eye_level', 'corner', 'square_to_wall', 'through_doorway', 'down_corridor']) {
+      if (!vp.description.includes(required)) {
+        throw new Error(`vantage_position.description missing canonical token "${required}" in ${src}`);
+      }
+    }
+
+    // composition_geometry
+    if (!('composition_geometry' in props)) {
+      throw new Error(`composition_geometry missing from ${src} variant`);
+    }
+    const cg = props.composition_geometry as { type?: string; enum?: string[]; description?: string; nullable?: boolean };
+    assertStrictEquals(cg.type, 'string', `composition_geometry.type should be string in ${src}`);
+    if (cg.enum !== undefined) {
+      throw new Error(`composition_geometry.enum must NOT be declared in v2.6 (${src})`);
+    }
+    if (typeof cg.description !== 'string' || cg.description.length < 80) {
+      throw new Error(`composition_geometry.description must teach the canonical list (>=80 chars) in ${src}`);
+    }
+    for (const required of ['one_point_perspective', 'two_point_perspective', 'leading_lines', 'symmetrical']) {
+      if (!cg.description.includes(required)) {
+        throw new Error(`composition_geometry.description missing canonical token "${required}" in ${src}`);
+      }
+    }
+  }
+});
+
+Deno.test('mig 451: vantage_position + composition_geometry are REQUIRED (values nullable)', () => {
+  if (!UNIVERSAL_CORE_REQUIRED.includes('vantage_position')) {
+    throw new Error('vantage_position missing from UNIVERSAL_CORE_REQUIRED');
+  }
+  if (!UNIVERSAL_CORE_REQUIRED.includes('composition_geometry')) {
+    throw new Error('composition_geometry missing from UNIVERSAL_CORE_REQUIRED');
+  }
+  for (const src of ['internal_raw', 'internal_finals', 'external_listing', 'floorplan_image'] as const) {
+    const schema = universalSchemaForSource(src) as { required: string[] };
+    if (!schema.required.includes('vantage_position')) {
+      throw new Error(`vantage_position missing from required[] in ${src}`);
+    }
+    if (!schema.required.includes('composition_geometry')) {
+      throw new Error(`composition_geometry missing from required[] in ${src}`);
+    }
+  }
+});
+
+Deno.test('mig 451: persist normalises vantage_position + composition_geometry against canonical lists', async () => {
+  const out = baseV2Output({
+    space_type: 'living_dining_combined',
+    zone_focus: 'lounge_seating',
+    shot_scale: 'wide',
+    perspective_compression: 'expanded',
+    vantage_position: '  CORNER  ',                   // drift: caps + whitespace
+    composition_geometry: 'Two_Point_Perspective',    // drift: caps
+    room_classification: {
+      room_type: 'living_room', room_type_confidence: 0.9,
+      composition_type: 'wide_establishing', vantage_point: 'neutral',
+      is_styled: true, indoor_outdoor_visible: false,
+      eligible_for_exterior_rear: false,
+    },
+  });
+  const row = await runPersist(out);
+  assertStrictEquals(row.vantage_position, 'corner');
+  assertStrictEquals(row.composition_geometry, 'two_point_perspective');
+});
+
+Deno.test('mig 451: persist drops non-canonical vantage_position + composition_geometry with warning', async () => {
+  const captured: Captured = { table: null, row: null, conflict: null };
+  const warnings: string[] = [];
+  await persistOneClassification({
+    // deno-lint-ignore no-explicit-any
+    admin: makeFakeAdmin(captured) as any,
+    roundId: ROUND_ID,
+    projectId: PROJECT_ID,
+    // deno-lint-ignore no-explicit-any
+    result: baseResult(baseV2Output({
+      space_type: 'kitchen_dedicated',
+      zone_focus: 'kitchen_island',
+      shot_scale: 'wide',
+      perspective_compression: 'neutral',
+      vantage_position: 'sky_view',          // non-canonical
+      composition_geometry: 'wonky',         // non-canonical
+      room_classification: {
+        room_type: 'kitchen', room_type_confidence: 0.9,
+        composition_type: 'wide_establishing', vantage_point: 'neutral',
+        is_styled: true, indoor_outdoor_visible: false,
+        eligible_for_exterior_rear: false,
+      },
+    })) as any,
+    promptBlockVersions: { stage1: 'v2.6' },
+    modelVersion: 'gemini-2.5-pro',
+    // deno-lint-ignore no-explicit-any
+    composition: baseCompositionRow() as any,
+    tierConfig: null,
+    sourceType: 'internal_raw',
+    warnings,
+  });
+  const row = captured.row!;
+  assertStrictEquals(row.vantage_position, null);
+  assertStrictEquals(row.composition_geometry, null);
+  // warnings emitted (one per non-canonical axis)
+  if (warnings.filter((w) => w.includes('vantage_position') || w.includes('composition_geometry')).length < 2) {
+    throw new Error(`expected at least 2 mig-451 warnings, got: ${JSON.stringify(warnings)}`);
+  }
+});
+
+Deno.test('mig 451: vantage_position + composition_geometry NULL when omitted', async () => {
+  const out = baseV2Output({
+    space_type: 'master_bedroom',
+    zone_focus: 'bed_focal',
+    shot_scale: 'wide',
+    perspective_compression: 'neutral',
+    // no vantage_position, no composition_geometry
+    room_classification: {
+      room_type: 'bedroom', room_type_confidence: 0.9,
+      composition_type: 'wide_establishing', vantage_point: 'neutral',
+      is_styled: true, indoor_outdoor_visible: false,
+      eligible_for_exterior_rear: false,
+    },
+  });
+  const row = await runPersist(out);
+  assertStrictEquals(row.vantage_position, null);
+  assertStrictEquals(row.composition_geometry, null);
 });

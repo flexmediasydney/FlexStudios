@@ -163,7 +163,26 @@ import {
 //     shot_scale='detail' / 'tight'). Column on composition_classifications
 //     stays for backwards-compat with v1/v1.x/v2 traffic; persist writes
 //     `false` going forward.
-export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.5';
+//
+// 2026-05-02 (mig 451): bumped to v2.6. Decomposes the legacy `composition_type`
+// axis (5 values: corner_two_point / straight_on / hero_wide /
+// threshold_transition / corridor_leading) into two cleaner axes:
+//   - vantage_position     — where is the camera relative to the scene?
+//                            (eye_level / corner / square_to_wall /
+//                            through_doorway / down_corridor /
+//                            aerial_overhead / aerial_oblique / low_angle /
+//                            high_angle)
+//   - composition_geometry — what's the geometric statement of the frame?
+//                            (one_point_perspective / two_point_perspective /
+//                            three_point_perspective / leading_lines /
+//                            symmetrical / centered / rule_of_thirds /
+//                            asymmetric_balance)
+// Both REQUIRED, both nullable values acceptable when no specific statement
+// applies. Same closed-enum-drop pattern as space_type/zone_focus
+// (commit 9325f46) — canonical lists taught via description, no closed enum.
+// composition_type stays on composition_classifications for backwards compat
+// with old rows; new emissions populate it via the prompt's legacy alias too.
+export const UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION = 'v2.6';
 export const UNIVERSAL_VISION_RESPONSE_TOOL_NAME = 'classify_image';
 
 /**
@@ -301,6 +320,49 @@ export const ORIENTATION_OPTIONS = [
   'square',
 ] as const;
 export type OrientationOption = typeof ORIENTATION_OPTIONS[number];
+
+/**
+ * Mig 451 (schema v2.6) — vantage_position 9-option canonical list.
+ *
+ * Where the camera is positioned relative to the scene. Distinct from
+ * `space_type` (the architectural enclosure) and `zone_focus` (the
+ * compositional subject) — this axis is purely about CAMERA POSITION.
+ *
+ * Same closed-enum-drop pattern as SHOT_SCALE_OPTIONS and SPACE_TYPE_OPTIONS:
+ * canonical list taught via property description, no closed `enum:` in the
+ * responseSchema, persistence-layer normalisation handles drift.
+ */
+export const VANTAGE_POSITION_OPTIONS = [
+  'eye_level',
+  'corner',
+  'square_to_wall',
+  'through_doorway',
+  'down_corridor',
+  'aerial_overhead',
+  'aerial_oblique',
+  'low_angle',
+  'high_angle',
+] as const;
+export type VantagePositionOption = typeof VANTAGE_POSITION_OPTIONS[number];
+
+/**
+ * Mig 451 (schema v2.6) — composition_geometry 8-option canonical list.
+ *
+ * The geometric statement of the frame. Distinct from `shot_scale` (HOW MUCH
+ * is framed) and `perspective_compression` (DEPTH FEEL) — this axis is about
+ * the LINES / AXES of the frame.
+ */
+export const COMPOSITION_GEOMETRY_OPTIONS = [
+  'one_point_perspective',
+  'two_point_perspective',
+  'three_point_perspective',
+  'leading_lines',
+  'symmetrical',
+  'centered',
+  'rule_of_thirds',
+  'asymmetric_balance',
+] as const;
+export type CompositionGeometryOption = typeof COMPOSITION_GEOMETRY_OPTIONS[number];
 
 /**
  * W11.6.22 — lighting_state 4-option enum (Q2 binding).
@@ -919,7 +981,7 @@ const LISTING_COPY_SCHEMA: Record<string, unknown> = {
 const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
   schema_version: {
     type: 'string',
-    description: "Echo 'v2.5' — Mig 442 adds shot_scale/perspective_compression/orientation composition observability axes.",
+    description: "Echo 'v2.6' — Mig 451 decomposes composition_type into vantage_position + composition_geometry top-level axes.",
   },
   source: SOURCE_SCHEMA,
   analysis: {
@@ -1066,6 +1128,62 @@ const UNIVERSAL_CORE_PROPERTIES: Record<string, unknown> = {
       'first vertical crops), square (1:1, very rare in real estate finals). ' +
       'Null is acceptable when the frame aspect is ambiguous.',
   },
+  // ─── Mig 451 (schema v2.6, 2026-05-02): composition_type decomposition ───
+  // The legacy `composition_type` axis (5 values) conflated CAMERA POSITION,
+  // FRAME GEOMETRY, and SHOT SCALE. We split it into two cleaner axes here.
+  // shot_scale already lives above (mig 442). Same closed-enum-drop pattern
+  // as space_type/zone_focus (commit 9325f46): canonical list taught via
+  // description, persistence layer normalises drift.
+  vantage_position: {
+    type: 'string',
+    nullable: true,
+    description:
+      'Where the CAMERA is positioned relative to the scene. Use ONE OF: ' +
+      'eye_level | corner | square_to_wall | through_doorway | down_corridor | ' +
+      'aerial_overhead | aerial_oblique | low_angle | high_angle. ' +
+      '"eye_level" = standard eye-height frontal shot (the default). ' +
+      '"corner" = shot taken from a corner of the room (typically yields a ' +
+      '2-point perspective composition). ' +
+      '"square_to_wall" = frontal, square-on to a wall or feature (often ' +
+      '1-point perspective). ' +
+      '"through_doorway" = shot framed through a doorway / threshold into a ' +
+      'deeper space. ' +
+      '"down_corridor" = shot taken along the long axis of a corridor / ' +
+      'hallway / open-plan envelope. ' +
+      '"aerial_overhead" = top-down view (drone nadir or ceiling-down ' +
+      'architectural). ' +
+      '"aerial_oblique" = angled aerial view (drone oblique). ' +
+      '"low_angle" = camera below eye-level looking up (emphasises ceiling/sky). ' +
+      '"high_angle" = camera above eye-level looking down (mezzanine, stair ' +
+      'landing). ' +
+      'CRITICAL: distinct from `space_type` (the architectural enclosure / ' +
+      'room) and `zone_focus` (the compositional subject inside the ' +
+      'enclosure). This axis is about CAMERA POSITION ONLY. ' +
+      'NULL is acceptable when no specific vantage statement is intended.',
+  },
+  composition_geometry: {
+    type: 'string',
+    nullable: true,
+    description:
+      'The GEOMETRIC STATEMENT of the frame — the lines / axes the ' +
+      'photographer organised the shot around. Use ONE OF: ' +
+      'one_point_perspective | two_point_perspective | three_point_perspective | ' +
+      'leading_lines | symmetrical | centered | rule_of_thirds | asymmetric_balance. ' +
+      '"one_point_perspective" = single vanishing point (square-on shots). ' +
+      '"two_point_perspective" = two vanishing points (corner shots). ' +
+      '"three_point_perspective" = three vanishing points (looking dramatically ' +
+      'up or down). ' +
+      '"leading_lines" = strong directional lines drawing the eye through ' +
+      'the frame. ' +
+      '"symmetrical" = frame organised along an axis of symmetry. ' +
+      '"centered" = primary subject in the centre of the frame. ' +
+      '"rule_of_thirds" = primary subject on a thirds intersection. ' +
+      '"asymmetric_balance" = off-centre but visually balanced. ' +
+      'CRITICAL: distinct from `shot_scale` (HOW MUCH of the scene is ' +
+      'framed) and `perspective_compression` (the DEPTH FEEL — flattened vs ' +
+      'expanded). This axis is about LINES / AXES of the frame. ' +
+      'NULL is acceptable when no specific geometric statement is intended.',
+  },
   observed_objects: OBSERVED_OBJECTS_SCHEMA,
   observed_attributes: OBSERVED_ATTRIBUTES_SCHEMA,
   signal_scores: SIGNAL_SCORES_SCHEMA,
@@ -1210,6 +1328,13 @@ export const UNIVERSAL_CORE_REQUIRED: string[] = [
   // emission is just a cross-check.
   'shot_scale',
   'perspective_compression',
+  // Mig 451 (schema v2.6): vantage_position + composition_geometry are
+  // REQUIRED. Both can be null when no specific statement applies (the value
+  // itself is nullable per the property declaration), but the model MUST
+  // emit the property so we capture explicit "no specific statement"
+  // signals rather than missing-data ambiguity.
+  'vantage_position',
+  'composition_geometry',
   'signal_scores',
   'technical_score',
   'lighting_score',
@@ -1292,7 +1417,7 @@ export const UNIVERSAL_VISION_RESPONSE_SCHEMA: Record<string, unknown> = univers
  * persist-layer typing in `shortlisting-shape-d/index.ts`.
  */
 export interface UniversalVisionResponseV2 {
-  schema_version: '2.0' | '2.1' | '2.2' | '2.3' | 'v2.5';
+  schema_version: '2.0' | '2.1' | '2.2' | '2.3' | 'v2.5' | 'v2.6';
   source: {
     type: 'internal_raw' | 'internal_finals' | 'external_listing' | 'floorplan_image';
     media_kind: 'still_image' | 'video_frame' | 'drone_image' | 'floorplan_image';
@@ -1352,6 +1477,10 @@ export interface UniversalVisionResponseV2 {
   shot_scale: string;
   perspective_compression: string;
   orientation?: string | null;
+  // Mig 451 (schema v2.6): composition_type decomposition. Both REQUIRED but
+  // VALUES are nullable when no specific statement is intended.
+  vantage_position: string | null;
+  composition_geometry: string | null;
   observed_objects: Array<{
     raw_label: string;
     proposed_canonical_id: string | null;

@@ -5,12 +5,13 @@
  *   deno test --no-check --allow-all \
  *     supabase/functions/_shared/resolveGalleryPositions.test.ts
  *
- * Covers the mig 443 schema:
+ * Covers the mig 443 schema (post-mig 451 — composition_type axis decomposed):
  *   gallery_positions (
  *     scope_type, scope_ref_id, scope_ref_id_2, scope_ref_id_3,
  *     position_index, phase,
- *     room_type, space_type, zone_focus, shot_scale, perspective_compression,
- *     orientation, lens_class, image_type, composition_type,
+ *     space_type, zone_focus, shot_scale, perspective_compression,
+ *     orientation, vantage_position, composition_geometry,
+ *     lens_class, image_type,
  *     selection_mode, ai_backfill_on_gap, notes, template_slot_id
  *   )
  *
@@ -121,13 +122,15 @@ Deno.test('buildScopeFilters: package scope resolves with only package_id', () =
 });
 
 Deno.test('mergePositionsByScope: last-wins per position_index', () => {
+  // Mig 451: room_type axis retired from gallery_positions; constraints are
+  // expressed via space_type + zone_focus instead.
   const merged = mergePositionsByScope([
     {
       scope_type: 'project_type',
       scope_ref_id: PROJECT_TYPE_ID,
       rows: [
-        { position_index: 0, phase: 'mandatory', room_type: 'kitchen', selection_mode: 'ai_decides' },
-        { position_index: 1, phase: 'optional', room_type: 'bedroom', selection_mode: 'ai_decides' },
+        { position_index: 0, phase: 'mandatory', space_type: 'kitchen_dedicated', selection_mode: 'ai_decides' },
+        { position_index: 1, phase: 'optional', space_type: 'master_bedroom', selection_mode: 'ai_decides' },
       ],
     },
     {
@@ -138,8 +141,8 @@ Deno.test('mergePositionsByScope: last-wins per position_index', () => {
         {
           position_index: 0,
           phase: 'mandatory',
-          room_type: 'kitchen',
-          zone_focus: 'island',
+          space_type: 'kitchen_dedicated',
+          zone_focus: 'kitchen_island',
           selection_mode: 'curated',
         },
       ],
@@ -147,30 +150,64 @@ Deno.test('mergePositionsByScope: last-wins per position_index', () => {
   ]);
   assertStrictEquals(merged.size, 2);
   assertStrictEquals(merged.get(0)?.resolved_from_scope_type, 'package_x_price_tier');
-  assertStrictEquals(merged.get(0)?.zone_focus, 'island');
+  assertStrictEquals(merged.get(0)?.zone_focus, 'kitchen_island');
   assertStrictEquals(merged.get(0)?.selection_mode, 'curated');
   // Position 1 stayed at project_type (no override)
   assertStrictEquals(merged.get(1)?.resolved_from_scope_type, 'project_type');
-  assertStrictEquals(merged.get(1)?.room_type, 'bedroom');
+  assertStrictEquals(merged.get(1)?.space_type, 'master_bedroom');
 });
 
 Deno.test('mergePositionsByScope: NULL constraints become wildcards', () => {
+  // Mig 451: only space_type set; every other axis (including the new
+  // vantage_position + composition_geometry) is null = wildcard.
   const merged = mergePositionsByScope([
     {
       scope_type: 'project_type',
       scope_ref_id: PROJECT_TYPE_ID,
       rows: [
-        // Only room_type set; everything else null
-        { position_index: 0, phase: 'mandatory', room_type: 'kitchen' },
+        { position_index: 0, phase: 'mandatory', space_type: 'kitchen_dedicated' },
       ],
     },
   ]);
   const pos = merged.get(0)!;
-  assertStrictEquals(pos.room_type, 'kitchen');
-  assertStrictEquals(pos.space_type, null);
+  assertStrictEquals(pos.space_type, 'kitchen_dedicated');
   assertStrictEquals(pos.zone_focus, null);
   assertStrictEquals(pos.shot_scale, null);
   assertStrictEquals(pos.orientation, null);
+  assertStrictEquals(pos.vantage_position, null);
+  assertStrictEquals(pos.composition_geometry, null);
+});
+
+Deno.test('mig 451: vantage_position + composition_geometry round-trip from row', () => {
+  // The decomposition keeps both axes independent — a row that sets only
+  // vantage_position leaves composition_geometry as null wildcard, and vice
+  // versa. Verifies the resolver normalisation handles each axis correctly.
+  const merged = mergePositionsByScope([
+    {
+      scope_type: 'project_type',
+      scope_ref_id: PROJECT_TYPE_ID,
+      rows: [
+        {
+          position_index: 0,
+          phase: 'mandatory',
+          space_type: 'living_dining_combined',
+          vantage_position: 'corner',
+          composition_geometry: 'two_point_perspective',
+        },
+        {
+          position_index: 1,
+          phase: 'optional',
+          space_type: 'master_bedroom',
+          vantage_position: 'square_to_wall',
+          // composition_geometry left null — single-axis intent
+        },
+      ],
+    },
+  ]);
+  assertStrictEquals(merged.get(0)?.vantage_position, 'corner');
+  assertStrictEquals(merged.get(0)?.composition_geometry, 'two_point_perspective');
+  assertStrictEquals(merged.get(1)?.vantage_position, 'square_to_wall');
+  assertStrictEquals(merged.get(1)?.composition_geometry, null);
 });
 
 Deno.test('mergePositionsByScope: phase defaults to optional when missing', () => {
@@ -231,19 +268,22 @@ Deno.test('renderGalleryPositionsBlock: empty list renders empty string', () => 
 });
 
 Deno.test('renderGalleryPositionsBlock: NULL constraints render as "any"', () => {
+  // Mig 451: room_type + composition_type retired; the rendered axes are now
+  // space_type, zone_focus, shot_scale, perspective_compression, orientation,
+  // vantage_position, composition_geometry, lens_class, image_type.
   const positions: ResolvedGalleryPosition[] = [
     {
       position_index: 0,
       phase: 'mandatory',
-      room_type: 'kitchen',
-      space_type: null,
-      zone_focus: 'island',
+      space_type: 'kitchen_dedicated',
+      zone_focus: 'kitchen_island',
       shot_scale: null,
       perspective_compression: null,
       orientation: null,
+      vantage_position: null,
+      composition_geometry: null,
       lens_class: null,
       image_type: null,
-      composition_type: null,
       selection_mode: 'ai_decides',
       ai_backfill_on_gap: true,
       notes: null,
@@ -257,31 +297,37 @@ Deno.test('renderGalleryPositionsBlock: NULL constraints render as "any"', () =>
   assert(block.includes('mandatory'));
   assert(block.includes('[0]'));
   // Filled axes
-  assert(block.includes('room_type=kitchen'));
-  assert(block.includes('zone_focus=island'));
+  assert(block.includes('space_type=kitchen_dedicated'));
+  assert(block.includes('zone_focus=kitchen_island'));
   // Wildcards
-  assert(block.includes('space_type=any'));
   assert(block.includes('shot_scale=any'));
   assert(block.includes('orientation=any'));
+  assert(block.includes('vantage_position=any'));
+  assert(block.includes('composition_geometry=any'));
+  // Retired axes must NOT appear
+  assert(!block.includes('room_type='));
+  assert(!block.includes('composition_type='));
 });
 
 Deno.test('renderGalleryPositionsBlock: ai_backfill_on_gap=false + curated mode render flags', () => {
+  // Mig 451: room_type axis retired — express the wine-cellar intent via
+  // space_type instead.
   const positions: ResolvedGalleryPosition[] = [
     {
       position_index: 7,
       phase: 'conditional',
-      room_type: 'wine_room',
-      space_type: null,
+      space_type: 'wine_cellar',
       zone_focus: null,
       shot_scale: null,
       perspective_compression: null,
       orientation: null,
+      vantage_position: null,
+      composition_geometry: null,
       lens_class: null,
       image_type: null,
-      composition_type: null,
       selection_mode: 'curated',
       ai_backfill_on_gap: false,
-      notes: 'leave empty if no wine room visible',
+      notes: 'leave empty if no wine cellar visible',
       template_slot_id: null,
       resolved_from_scope_type: 'product',
       resolved_from_scope_ref_id: PRODUCT_ID,
@@ -291,5 +337,5 @@ Deno.test('renderGalleryPositionsBlock: ai_backfill_on_gap=false + curated mode 
   assert(block.includes('[7]'));
   assert(block.includes('ai_backfill_on_gap=false'));
   assert(block.includes('(curated)'));
-  assert(block.includes('leave empty if no wine room visible'));
+  assert(block.includes('leave empty if no wine cellar visible'));
 });

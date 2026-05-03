@@ -36,7 +36,14 @@ import { CANONICAL_SLOT_IDS } from '../_shared/visionPrompts/blocks/slotEnumerat
 //     window). Audit + swimlane queries continue to consume slot_decisions
 //     until R3 validation lands; the follow-up will drop slot_decisions and
 //     keep position_decisions only.
-export const STAGE4_PROMPT_VERSION = 'v1.3';
+//
+// Mig 451 (taxonomy decompose, 2026-05-02) — bumped to v1.4:
+//   - position_constraints + constraint_pattern: DROPPED room_type and
+//     composition_type (no longer columns on gallery_positions).
+//   - position_constraints + constraint_pattern: ADDED vantage_position
+//     and composition_geometry (the new decomposed axes).
+//   - Constraint axis surface now mirrors the gallery_positions schema 1:1.
+export const STAGE4_PROMPT_VERSION = 'v1.4';
 export const STAGE4_TOOL_NAME = 'synthesise_round';
 
 /**
@@ -74,6 +81,10 @@ export interface Stage1MergedEntry {
   zone_focus?: string | null;
   space_zone_count?: number | null;
   composition_type?: string | null;
+  // Mig 451 (2026-05-02): new orthogonal axes that decompose composition_type.
+  // composition_type stays as a backwards-compat alias.
+  vantage_position?: string | null;
+  composition_geometry?: string | null;
   vantage_point?: string | null;
   technical_score?: number | null;
   lighting_score?: number | null;
@@ -145,16 +156,18 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
             type: 'object',
             description:
               'Echo the position\'s constraint tuple back so we can confirm ' +
-              'the model parsed the position correctly. Mirrors the prompt input.',
+              'the model parsed the position correctly. Mirrors the prompt input. ' +
+              'Mig 451: room_type + composition_type axes were retired; ' +
+              'vantage_position + composition_geometry axes were added.',
             properties: {
-              room_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
               space_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
               zone_focus: { type: 'string', nullable: true, description: 'NULL = wildcard' },
               shot_scale: { type: 'string', nullable: true, description: 'NULL = wildcard' },
               perspective_compression: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              vantage_position: { type: 'string', nullable: true, description: 'NULL = wildcard' },
+              composition_geometry: { type: 'string', nullable: true, description: 'NULL = wildcard' },
               lens_class: { type: 'string', nullable: true, description: 'NULL = wildcard' },
               image_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
-              composition_type: { type: 'string', nullable: true, description: 'NULL = wildcard' },
             },
           },
           winner: {
@@ -247,16 +260,18 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
             type: 'object',
             description:
               'The constraint tuple that defines this template. NULL axes ' +
-              'are wildcards. Mirrors position_constraints shape.',
+              'are wildcards. Mirrors position_constraints shape. Mig 451: ' +
+              'room_type + composition_type axes retired; vantage_position + ' +
+              'composition_geometry axes added.',
             properties: {
-              room_type: { type: 'string', nullable: true },
               space_type: { type: 'string', nullable: true },
               zone_focus: { type: 'string', nullable: true },
               shot_scale: { type: 'string', nullable: true },
               perspective_compression: { type: 'string', nullable: true },
+              vantage_position: { type: 'string', nullable: true },
+              composition_geometry: { type: 'string', nullable: true },
               lens_class: { type: 'string', nullable: true },
               image_type: { type: 'string', nullable: true },
-              composition_type: { type: 'string', nullable: true },
             },
           },
           candidate_stems: {
@@ -878,6 +893,9 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     zone_focus: e.zone_focus ?? null,
     space_zone_count: e.space_zone_count ?? null,
     composition_type: e.composition_type ?? null,
+    // Mig 451 (2026-05-02): orthogonal axes that decompose composition_type.
+    vantage_position: e.vantage_position ?? null,
+    composition_geometry: e.composition_geometry ?? null,
     vantage: e.vantage_point ?? null,
     scores: {
       tech: e.technical_score ?? null,

@@ -105,10 +105,11 @@ function makeFakeAdmin(store: FakeStore): unknown {
 }
 
 function makeResolvedPositions(): ResolvedGalleryPosition[] {
+  // Mig 451: room_type axis retired; constraints expressed via space_type.
   return [
-    mkPos(0, 'mandatory', { room_type: 'kitchen' }),
-    mkPos(1, 'mandatory', { room_type: 'living' }),
-    mkPos(2, 'optional', { room_type: 'wine_cellar', template_slot_id: 'wine_cellar_hero' }),
+    mkPos(0, 'mandatory', { space_type: 'kitchen_dedicated' }),
+    mkPos(1, 'mandatory', { space_type: 'living_dining_combined' }),
+    mkPos(2, 'optional', { space_type: 'wine_cellar', template_slot_id: 'wine_cellar_hero' }),
   ];
 }
 
@@ -120,15 +121,15 @@ function mkPos(
   return {
     position_index: idx,
     phase,
-    room_type: null,
     space_type: null,
     zone_focus: null,
     shot_scale: null,
     perspective_compression: null,
     orientation: null,
+    vantage_position: null,        // mig 451
+    composition_geometry: null,    // mig 451
     lens_class: null,
     image_type: null,
-    composition_type: null,
     selection_mode: 'ai_decides',
     ai_backfill_on_gap: true,
     notes: null,
@@ -152,11 +153,19 @@ Deno.test('persistPositionDecisions: 3 valid decisions persist as 3 rows', async
   const admin = makeFakeAdmin(store) as any;
   const warnings: string[] = [];
 
+  // Mig 451 (2026-05-02): position_constraints uses space_type +
+  // vantage_position + composition_geometry; room_type and composition_type
+  // axes retired. Persistence layer FILTERS the JSONB to the canonical axis
+  // set so any stale legacy fields the model emits get dropped before insert.
   const decisions = [
     {
       position_index: 0,
       phase: 'mandatory',
-      position_constraints: { room_type: 'kitchen' },
+      position_constraints: {
+        space_type: 'kitchen_dedicated',
+        vantage_position: 'corner',
+        composition_geometry: 'two_point_perspective',
+      },
       winner: {
         stem: 'IMG_KITCHEN',
         rationale: 'Best kitchen with island in foreground.',
@@ -169,7 +178,7 @@ Deno.test('persistPositionDecisions: 3 valid decisions persist as 3 rows', async
     {
       position_index: 1,
       phase: 'mandatory',
-      position_constraints: { room_type: 'living' },
+      position_constraints: { space_type: 'living_dining_combined' },
       winner: {
         stem: 'IMG_LIVING',
         rationale: 'Open living through to alfresco.',
@@ -182,7 +191,7 @@ Deno.test('persistPositionDecisions: 3 valid decisions persist as 3 rows', async
     {
       position_index: 2,
       phase: 'optional',
-      position_constraints: { room_type: 'wine_cellar' },
+      position_constraints: { space_type: 'wine_cellar' },
       winner: {
         stem: 'IMG_WINE',
         rationale: 'Wine room visible.',
@@ -214,8 +223,59 @@ Deno.test('persistPositionDecisions: 3 valid decisions persist as 3 rows', async
   assertStrictEquals(r0.winner_stem, 'IMG_KITCHEN');
   assertStrictEquals(r0.constraint_match_score, 9);
   assertStrictEquals(r0.slot_fit_score, 8.5);
+  // Mig 451: position_constraints landed with the new decomposed axes.
+  const r0Constraints = r0.position_constraints as Record<string, unknown>;
+  assertEquals(r0Constraints.space_type, 'kitchen_dedicated');
+  assertEquals(r0Constraints.vantage_position, 'corner');
+  assertEquals(r0Constraints.composition_geometry, 'two_point_perspective');
   // Row[2] template_slot_id from resolver carries through
   assertStrictEquals(store.positionDecisions[2].template_slot_id, 'wine_cellar_hero');
+});
+
+Deno.test('mig 451: position_constraints filtered to canonical axis set (drops room_type/composition_type)', async () => {
+  // Defensive guard: if a stale prompt or buggy model emits the retired
+  // room_type / composition_type axes, the persistence layer must drop them
+  // rather than land them in the JSONB. Belt-and-braces protection during
+  // the migration cutover window.
+  const store: FakeStore = {
+    positionDecisions: [],
+    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    calls: [],
+  };
+  // deno-lint-ignore no-explicit-any
+  const admin = makeFakeAdmin(store) as any;
+  const warnings: string[] = [];
+
+  await persistPositionDecisions({
+    admin,
+    projectId: PROJECT_ID,
+    roundId: ROUND_ID,
+    positionDecisions: [
+      {
+        position_index: 0,
+        phase: 'mandatory',
+        position_constraints: {
+          // Retired axes — must be filtered out
+          room_type: 'kitchen',
+          composition_type: 'corner_two_point',
+          // Allowed axes — must be kept
+          space_type: 'kitchen_dedicated',
+          vantage_position: 'corner',
+          composition_geometry: 'two_point_perspective',
+        },
+        winner: { stem: 'IMG_K', rationale: 'r', constraint_match_score: 8, slot_fit_score: 8 },
+      },
+    ],
+    resolvedPositions: makeResolvedPositions(),
+    warnings,
+  });
+
+  const persisted = store.positionDecisions[0].position_constraints as Record<string, unknown>;
+  assertStrictEquals(persisted.room_type, undefined);
+  assertStrictEquals(persisted.composition_type, undefined);
+  assertEquals(persisted.space_type, 'kitchen_dedicated');
+  assertEquals(persisted.vantage_position, 'corner');
+  assertEquals(persisted.composition_geometry, 'two_point_perspective');
 });
 
 Deno.test('persistPositionDecisions: idempotency — second run replaces first', async () => {

@@ -1464,6 +1464,8 @@ async function loadStage1Merged(
       zone_focus,
       space_zone_count,
       composition_type,
+      vantage_position,
+      composition_geometry,
       vantage_point,
       technical_score,
       lighting_score,
@@ -1506,6 +1508,8 @@ async function loadStage1Merged(
       zone_focus: (row.zone_focus as string | null) ?? null,
       space_zone_count: (row.space_zone_count as number | null) ?? null,
       composition_type: (row.composition_type as string | null) ?? null,
+      vantage_position: (row.vantage_position as string | null) ?? null,         // mig 451
+      composition_geometry: (row.composition_geometry as string | null) ?? null, // mig 451
       vantage_point: (row.vantage_point as string | null) ?? null,
       technical_score: (row.technical_score as number | null) ?? null,
       lighting_score: (row.lighting_score as number | null) ?? null,
@@ -2567,12 +2571,36 @@ export async function persistPositionDecisions(
         `persistPositionDecisions: position_index=${positionIndex} not in round's resolved positions (model emitted unknown index) — persisting anyway`,
       );
     }
+    // Mig 451 (2026-05-02): the position_constraints JSONB no longer includes
+    // room_type or composition_type — both retired. Add vantage_position +
+    // composition_geometry. Filter the model's emission to the canonical
+    // axis set so downstream UIs see consistent shape regardless of any
+    // stale legacy fields the model carried over from older prompt versions.
+    const ALLOWED_CONSTRAINT_AXES = new Set([
+      'space_type',
+      'zone_focus',
+      'shot_scale',
+      'perspective_compression',
+      'orientation',
+      'vantage_position',
+      'composition_geometry',
+      'lens_class',
+      'image_type',
+    ]);
+    const rawConstraints = (d.position_constraints && typeof d.position_constraints === 'object'
+      ? d.position_constraints
+      : null) as Record<string, unknown> | null;
+    const filteredConstraints = rawConstraints
+      ? Object.fromEntries(
+          Object.entries(rawConstraints).filter(([k]) => ALLOWED_CONSTRAINT_AXES.has(k)),
+        )
+      : null;
     rows.push({
       round_id: args.roundId,
       project_id: args.projectId,
       position_index: positionIndex,
       phase,
-      position_constraints: (d.position_constraints ?? null) as Record<string, unknown> | null,
+      position_constraints: filteredConstraints,
       winner_group_id: winnerGroupId,
       winner_stem: winnerStem,
       winner_rationale: typeof winner.rationale === 'string' ? winner.rationale : null,

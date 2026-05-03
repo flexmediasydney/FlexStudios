@@ -121,6 +121,7 @@ import {
 // STAGE4_TOOL_SCHEMA stays on its current schema (W11.7.17 spec is per-image
 // only; cross-image master_listing moved to a future W11.7 spec).
 import {
+  COMPOSITION_GEOMETRY_OPTIONS,
   ORIENTATION_OPTIONS,
   PERSPECTIVE_COMPRESSION_OPTIONS,
   SHOT_SCALE_OPTIONS,
@@ -128,6 +129,7 @@ import {
   UNIVERSAL_VISION_RESPONSE_SCHEMA_VERSION,
   UNIVERSAL_VISION_RESPONSE_TOOL_NAME,
   universalSchemaForSource,
+  VANTAGE_POSITION_OPTIONS,
 } from '../_shared/visionPrompts/blocks/universalVisionResponseSchemaV2.ts';
 import {
   signalMeasurementBlock,
@@ -2278,6 +2280,33 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     );
   }
 
+  // ─── Mig 451 (schema v2.6): vantage_position + composition_geometry ──────
+  // The legacy `composition_type` axis (5 values) decomposed into two
+  // orthogonal axes:
+  //   - vantage_position     (where the camera is positioned relative to
+  //                          the scene)
+  //   - composition_geometry (the geometric statement of the frame)
+  // Both model-emitted and normalised against canonical lists. Drift produces
+  // a warning and a null write so dashboards surface model-prompt mismatches
+  // rather than silently corrupting the columns.
+  // composition_type column STAYS on composition_classifications for
+  // backwards compat — populated from room_classification.composition_type
+  // below.
+  const vantagePosition = normaliseClosedAxis(
+    out.vantage_position,
+    VANTAGE_POSITION_OPTIONS,
+    'vantage_position',
+    args.result,
+    args.warnings,
+  );
+  const compositionGeometry = normaliseClosedAxis(
+    out.composition_geometry,
+    COMPOSITION_GEOMETRY_OPTIONS,
+    'composition_geometry',
+    args.result,
+    args.warnings,
+  );
+
   // W11.2 — per-signal 0-10 scores. The 22 canonical keys live in
   // STAGE1_SIGNAL_KEYS (stage1ResponseSchema.ts); the schema requires the
   // model emits all 22, but persistence is graceful — missing/malformed
@@ -2371,6 +2400,12 @@ export async function persistOneClassification(args: PersistOneArgs): Promise<vo
     shot_scale: shotScale,
     perspective_compression: perspectiveCompression,
     orientation: orientation,
+    // Mig 451 (schema v2.6): composition_type decomposition. Both axes are
+    // model-emitted + normalised against canonical lists. composition_type
+    // column stays for backwards compat with old rows; new emissions still
+    // populate it via room_classification.composition_type for consistency.
+    vantage_position: vantagePosition,
+    composition_geometry: compositionGeometry,
     composition_type: str(roomClassRaw?.composition_type ?? out.composition_type),
     vantage_point: vantageColumn,
     // W11.7.17 QC-iter2-W2 P0 (F-D-002): time_of_day / is_exterior /
