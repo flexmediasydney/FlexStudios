@@ -340,10 +340,24 @@ async function runDispatcherTick(
   let claimedTotal = 0;
   let dispatched = 0;
   let failed = 0;
-  let exitReason: "drained" | "budget_exhausted" = "drained";
+  let exitReason: "drained" | "budget_exhausted" | "kind_cap" = "drained";
   const results: Array<
     { id: string; kind: string; ok: boolean; error?: string }
   > = [];
+
+  // Per-kind soft cap on this tick's claim count. extract calls Modal which
+  // calls Dropbox; blasting >N concurrent Modal containers fans out into
+  // >N concurrent Dropbox download calls, which trips Dropbox's
+  // too_many_requests rate limit (verified 2026-05-03 via the
+  // dropbox-auth-test edge fn — GET /users/get_current_account returned
+  // 429 retry_after: 300s after a 58-chunk burst). With chunk_size=10 and
+  // max_extract_per_tick=3, a 30-chunk round drains over ~10 cron ticks
+  // (~20 minutes) but never bursts Dropbox. The Modal-side ThreadPool was
+  // also reduced from 8 → 2 workers in tandem.
+  const PER_KIND_CAP: Record<string, number> = {
+    extract: 3,
+  };
+  const claimedByKind: Record<string, number> = {};
 
   while (true) {
     if (Date.now() - startedAt + TICK_LOOP_SAFETY_MS >= TICK_BUDGET_MS) {
@@ -369,6 +383,39 @@ async function runDispatcherTick(
     const jobs: ShortlistingJob[] = claimed || [];
     if (jobs.length === 0) break;
     const job = jobs[0];
+
+    // Per-kind cap enforcement (2026-05-03). After claiming a job we check
+    // whether dispatching it would exceed this kind's per-tick cap. If yes,
+    // release the row back to pending (decrementing attempt_count, clearing
+    // started_at) and stop the loop — the next cron tick will pick it up
+    // when in-flight peers have drained.
+    //
+    // We claim-then-release rather than gate-before-claim because
+    // claim_shortlisting_jobs has no kind filter (it picks the oldest
+    // pending of any kind). Letting it claim, then choosing to release if
+    // over-cap, is the simplest correct behaviour.
+    const kindCap = PER_KIND_CAP[job.kind];
+    if (kindCap !== undefined) {
+      const so_far = claimedByKind[job.kind] ?? 0;
+      if (so_far >= kindCap) {
+        await admin
+          .from("shortlisting_jobs")
+          .update({
+            status: "pending",
+            started_at: null,
+            attempt_count: Math.max(0, (job.attempt_count ?? 1) - 1),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", job.id);
+        exitReason = "kind_cap";
+        console.info(
+          `[${GENERATOR}] kind_cap reached for ${job.kind} (${so_far}/${kindCap}); ` +
+            `released ${job.id} back to pending; next tick will pick up`,
+        );
+        break;
+      }
+      claimedByKind[job.kind] = so_far + 1;
+    }
     claimedTotal++;
 
     try {

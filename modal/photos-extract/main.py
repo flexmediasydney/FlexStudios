@@ -506,7 +506,19 @@ def extract_http(payload: Dict[str, Any], authorization: Optional[str] = None):
     try:
         # Concurrent — Dropbox + exiftool are I/O bound so a small thread pool
         # gives us most of the wall-clock win without overwhelming the API.
-        max_workers = min(8, len(file_paths))
+        #
+        # 2026-05-03 — reduced 8 → 2 after 46 Brays burst hit Dropbox 429
+        # too_many_requests. With 11 chunks × 8 workers = 88 concurrent
+        # Dropbox download calls, we triggered the rate limit. The SDK
+        # retries with exponential backoff, blocking each ThreadPoolExecutor
+        # worker for the full 900s container timeout. Verified via
+        # dropbox-auth-test edge fn: GET /users/get_current_account returned
+        # 429 retry_after: 300s.
+        #
+        # 2 workers/container × ~3 concurrent containers (dispatcher
+        # claim-loop is being capped server-side too) = ~6 concurrent
+        # Dropbox calls, well under any plausible rate limit.
+        max_workers = min(2, len(file_paths))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = [
                 pool.submit(_process_one, client, project_id, fp, previews_dir, workroot)
