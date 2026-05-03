@@ -43,7 +43,19 @@ import { CANONICAL_SLOT_IDS } from '../_shared/visionPrompts/blocks/slotEnumerat
 //   - position_constraints + constraint_pattern: ADDED vantage_position
 //     and composition_geometry (the new decomposed axes).
 //   - Constraint axis surface now mirrors the gallery_positions schema 1:1.
-export const STAGE4_PROMPT_VERSION = 'v1.4';
+//
+// W11.8 (mig 453+454, 2026-05-02) — bumped to v1.5:
+//   - position_decisions[]: ADDED `space_instance_id` (string, nullable) so
+//     each decision records which physical-room instance was selected.
+//   - User prompt: NEW round-level summary block listing the
+//     shortlisting_space_instances rows and which composition_groups belong
+//     to each instance. Stage 4 reads this BEFORE position selection so it
+//     can prefer DIFFERENT instances when multiple positions share a
+//     constraint tuple, and respect instance_unique_constraint=true.
+//   - Stage 1 entry shape: ADDED space_instance_id (per-group instance id
+//     populated by detect_instances). The model uses this to group its
+//     candidates per position.
+export const STAGE4_PROMPT_VERSION = 'v1.5';
 export const STAGE4_TOOL_NAME = 'synthesise_round';
 
 /**
@@ -96,6 +108,26 @@ export interface Stage1MergedEntry {
   flag_for_retouching?: boolean | null;
   key_elements?: string[] | null;
   zones_visible?: string[] | null;
+  // W11.8 — per-group physical-room instance id (UUID) populated by
+  // detect_instances. NULL when the round has not had detect_instances run
+  // yet (legacy rounds, partial replays).
+  space_instance_id?: string | null;
+}
+
+/**
+ * W11.8 — round-level instance summary entry. One per detected instance.
+ * Injected into the Stage 4 user prompt before the gallery_positions block so
+ * the model can reason about which instances exist before assigning images
+ * to positions.
+ */
+export interface SpaceInstanceSummary {
+  id: string;
+  space_type: string;
+  instance_index: number;
+  display_label: string;
+  member_group_count: number;
+  cluster_confidence: number;
+  distinctive_features: string[];
 }
 
 // ─── Stage 4 schema (Gemini responseSchema-compatible) ──────────────────────
@@ -196,6 +228,17 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
                   'position\'s compositional intent independent of per-image ' +
                   'quality. Preserved from the legacy slot model so dual-emit ' +
                   'parity stays intact during the cutover window.',
+              },
+              space_instance_id: {
+                type: 'string',
+                nullable: true,
+                description:
+                  'W11.8 — UUID of the shortlisting_space_instances row this ' +
+                  'winner belongs to. Echo the value from the candidate ' +
+                  'group\'s space_instance_id in the Stage 1 enrichment JSON. ' +
+                  'NULL when the round has no instance clustering data (legacy ' +
+                  'rounds) OR when the candidate group\'s space_type is in the ' +
+                  'no-disambiguation list (exterior_facade, floorplan, etc.).',
               },
             },
             required: ['stem', 'rationale', 'constraint_match_score', 'slot_fit_score'],
@@ -792,6 +835,23 @@ export function buildStage4SystemPrompt(): string {
     '  When no image satisfies, lower the constraint_match_score honestly —',
     '  do NOT fabricate a match. The score tells the operator how loose the',
     '  fill was.',
+    '',
+    'INSTANCE-CYCLING DISCIPLINE (W11.8 — mig 453+454)',
+    '- The SPACE INSTANCES block (when present) lists which physically-',
+    '  distinct rooms exist per space_type. Each Stage 1 entry carries a',
+    '  space_instance_id pointing at one of those instances.',
+    '- When multiple positions share the same constraint tuple (e.g. two',
+    '  bedroom positions, two living-room positions), prefer DIFFERENT',
+    '  space_instance_ids before duplicating from the same instance. The',
+    '  goal: a gallery that shows ALL the rooms, not 3 angles of the same',
+    '  one.',
+    '- Echo the chosen image\'s space_instance_id into the winner.space_',
+    '  instance_id field. NULL is fine when the candidate has no instance.',
+    '- A position rendered with `uniq` flag (instance_unique_constraint=true)',
+    '  must have a winner from an instance not used by any other position',
+    '  with the same constraint tuple. If the round has fewer instances than',
+    '  positions, leave the surplus positions empty (or ai_backfill if the',
+    '  position allows).',
     '- Phase = mandatory: fill if ANY image plausibly satisfies the tuple,',
     '  even at constraint_match_score 4-5. The position is required for the',
     '  package; only omit when the round genuinely has zero candidates AND',
@@ -862,6 +922,13 @@ export interface BuildStage4UserPromptOpts {
   stage1Merged: Stage1MergedEntry[];
   imageStemsInOrder: string[];
   totalImages: number;
+  /**
+   * W11.8 — round-level shortlisting_space_instances summary. Empty array when
+   * detect_instances has not run for this round (legacy rounds), in which
+   * case the instance-aware sections of the prompt are omitted (the model
+   * will simply not emit space_instance_id values).
+   */
+  spaceInstances?: SpaceInstanceSummary[];
 }
 
 export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
@@ -886,6 +953,9 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
   // W11.6.13 — surface space_type / zone_focus / space_zone_count next to
   // the legacy room_type so Stage 4 can reason about both axes when emitting
   // overrides.
+  // W11.8 — surface space_instance_id so the model can group candidates per
+  // position by instance and prefer cycling across instances when multiple
+  // positions share a constraint tuple.
   const compactStage1 = opts.stage1Merged.map((e) => ({
     stem: e.stem,
     room_type: e.room_type ?? null,
@@ -897,6 +967,7 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     vantage_position: e.vantage_position ?? null,
     composition_geometry: e.composition_geometry ?? null,
     vantage: e.vantage_point ?? null,
+    space_instance_id: e.space_instance_id ?? null,
     scores: {
       tech: e.technical_score ?? null,
       light: e.lighting_score ?? null,
@@ -931,6 +1002,13 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     ? [opts.galleryPositionsBlockText, '']
     : [];
 
+  // W11.8: round-level space_instances summary. Sits BEFORE positions so the
+  // model reads the instance lattice (which physical rooms exist per
+  // space_type) before assigning images to positions.
+  const instanceSection = (opts.spaceInstances && opts.spaceInstances.length > 0)
+    ? [renderSpaceInstancesBlock(opts.spaceInstances), '']
+    : [];
+
   return [
     opts.sourceContextBlockText,
     '',
@@ -940,6 +1018,7 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     '── PROPERTY FACTS (authoritative; do NOT invent) ──',
     factLines.join('\n'),
     '',
+    ...instanceSection,
     ...positionsSection,
     ...exifTableSection,
     `── STAGE 1 PER-IMAGE ENRICHMENT (${opts.stage1Merged.length} entries) ──`,
@@ -965,5 +1044,63 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     'above; omitted only when the round resolved to zero positions) AND the',
     'legacy `slot_decisions[]`. The dual emission is intentional — the engine',
     'is in a one-cycle cutover window.',
+    'W11.8: when a candidate group has a non-null space_instance_id in the',
+    'Stage 1 enrichment JSON, ECHO that id into the position_decisions[].winner',
+    '.space_instance_id field. NULL is acceptable for groups whose space_type',
+    'does not require disambiguation (exterior_facade, floorplan, etc.) or for',
+    'legacy rounds with no instance clustering data.',
   ].join('\n');
+}
+
+/**
+ * W11.8 — render the round-level space_instances summary as a numbered list
+ * grouped by space_type. Stage 4 reads this BEFORE position assignment so it
+ * can prefer cycling across instances when multiple positions share a
+ * constraint tuple, and respect instance_unique_constraint=true.
+ */
+export function renderSpaceInstancesBlock(
+  instances: SpaceInstanceSummary[],
+): string {
+  if (instances.length === 0) return '';
+  const bySpaceType = new Map<string, SpaceInstanceSummary[]>();
+  for (const i of instances) {
+    const arr = bySpaceType.get(i.space_type) ?? [];
+    arr.push(i);
+    bySpaceType.set(i.space_type, arr);
+  }
+  const lines: string[] = [];
+  lines.push('── SPACE INSTANCES (W11.8 — physically-distinct rooms in the round) ──');
+  lines.push('Each space_type may have one OR MORE detected instances. Two kitchens');
+  lines.push('in a duplex → 2 instances; one master bedroom → 1 instance. The');
+  lines.push('space_instance_id values appear in the Stage 1 enrichment JSON below.');
+  lines.push('');
+  lines.push('POSITION-FILLING DISCIPLINE — INSTANCE CYCLING');
+  lines.push('1. List candidate composition_groups per position from the prompt.');
+  lines.push('2. Group them by space_instance_id (using the Stage 1 enrichment).');
+  lines.push('3. Fill positions in instance-cycling order: when multiple positions');
+  lines.push('   share the same constraint tuple (same room, same shot_scale, etc.),');
+  lines.push('   prefer DIFFERENT space_instance_ids before duplicating from the');
+  lines.push('   same instance.');
+  lines.push('4. If a position has instance_unique_constraint=true (rendered above');
+  lines.push('   as a uniq flag): the winner MUST come from an instance not used by');
+  lines.push('   any other position with the same constraint tuple in the recipe.');
+  lines.push('   If no available instance, leave the position empty (unless');
+  lines.push('   ai_backfill_on_gap=true).');
+  lines.push('');
+  for (const [spaceType, group] of bySpaceType.entries()) {
+    group.sort((a, b) => a.instance_index - b.instance_index);
+    lines.push(`── ${spaceType} (${group.length} instance${group.length === 1 ? '' : 's'}) ──`);
+    for (const inst of group) {
+      const features = inst.distinctive_features.length > 0
+        ? ` features=[${inst.distinctive_features.join(' | ')}]`
+        : '';
+      const conf = `conf=${inst.cluster_confidence.toFixed(2)}`;
+      lines.push(
+        `  [${inst.instance_index}] id=${inst.id} label="${inst.display_label}" ` +
+        `members=${inst.member_group_count} ${conf}${features}`,
+      );
+    }
+    lines.push('');
+  }
+  return lines.join('\n').trimEnd();
 }

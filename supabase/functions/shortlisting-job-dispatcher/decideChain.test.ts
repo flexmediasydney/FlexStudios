@@ -24,6 +24,9 @@ Deno.test('decideChain: pass3 is terminal (fires round-complete notification)', 
 
 Deno.test('decideChain: Shape D terminal kinds are all terminal', () => {
   assertEquals(decideChain('shape_d_stage1'), { action: 'terminal' });
+  // W11.8: detect_instances is terminal here — its edge fn enqueues
+  // stage4_synthesis inline on success.
+  assertEquals(decideChain('detect_instances'), { action: 'terminal' });
   assertEquals(decideChain('stage4_synthesis'), { action: 'terminal' });
   assertEquals(decideChain('canonical_rollup'), { action: 'terminal' });
 });

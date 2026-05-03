@@ -130,6 +130,8 @@ function mkPos(
     composition_geometry: null,    // mig 451
     lens_class: null,
     image_type: null,
+    instance_index: null,                // W11.8 / mig 454
+    instance_unique_constraint: false,   // W11.8 / mig 454
     selection_mode: 'ai_decides',
     ai_backfill_on_gap: true,
     notes: null,
@@ -486,6 +488,74 @@ Deno.test('persistPositionDecisions: unknown winner stem -> winner_group_id null
   assertStrictEquals(count, 1);
   assertStrictEquals(store.positionDecisions[0].winner_group_id, null);
   assertStrictEquals(store.positionDecisions[0].winner_stem, 'GHOST_STEM');
+});
+
+Deno.test('W11.8: persistPositionDecisions captures winner.space_instance_id', async () => {
+  const store: FakeStore = {
+    positionDecisions: [],
+    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    calls: [],
+  };
+  // deno-lint-ignore no-explicit-any
+  const admin = makeFakeAdmin(store) as any;
+  const warnings: string[] = [];
+
+  const INSTANCE_ID = 'cafefade-1111-2222-3333-444455556666';
+  const count = await persistPositionDecisions({
+    admin,
+    projectId: PROJECT_ID,
+    roundId: ROUND_ID,
+    positionDecisions: [
+      {
+        position_index: 0,
+        phase: 'mandatory',
+        winner: {
+          stem: 'IMG_K',
+          rationale: 'kitchen instance 1',
+          constraint_match_score: 9,
+          slot_fit_score: 8,
+          space_instance_id: INSTANCE_ID,
+        },
+      },
+    ],
+    resolvedPositions: makeResolvedPositions(),
+    warnings,
+  });
+  assertStrictEquals(count, 1);
+  assertStrictEquals(store.positionDecisions[0].space_instance_id, INSTANCE_ID);
+});
+
+Deno.test('W11.8: persistPositionDecisions tolerates missing space_instance_id (legacy round)', async () => {
+  const store: FakeStore = {
+    positionDecisions: [],
+    groups: [{ id: GROUP_ID_KITCHEN, key_image_path: '/photos/IMG_K.jpg' }],
+    calls: [],
+  };
+  // deno-lint-ignore no-explicit-any
+  const admin = makeFakeAdmin(store) as any;
+  const warnings: string[] = [];
+
+  await persistPositionDecisions({
+    admin,
+    projectId: PROJECT_ID,
+    roundId: ROUND_ID,
+    positionDecisions: [
+      {
+        position_index: 0,
+        phase: 'mandatory',
+        winner: {
+          stem: 'IMG_K',
+          rationale: 'no instance',
+          constraint_match_score: 9,
+          slot_fit_score: 8,
+          // no space_instance_id — legacy round
+        },
+      },
+    ],
+    resolvedPositions: makeResolvedPositions(),
+    warnings,
+  });
+  assertStrictEquals(store.positionDecisions[0].space_instance_id, null);
 });
 
 Deno.test('persistPositionDecisions: position_index outside resolved set warns but persists', async () => {

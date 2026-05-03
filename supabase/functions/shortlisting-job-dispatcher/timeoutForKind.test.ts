@@ -40,6 +40,12 @@ Deno.test('timeoutForKind: shape_d_stage1 = 30s (background mode; ack only)', ()
   assertEquals(timeoutForKind('shape_d_stage1'), 30_000);
 });
 
+Deno.test('W11.8: detect_instances = 150s (synchronous LLM clustering call)', () => {
+  // detect_instances is NOT background-mode — single Gemini call (~30-90s
+  // typical). 150s gives 60s of headroom over the worst-case wall.
+  assertEquals(timeoutForKind('detect_instances'), 150_000);
+});
+
 Deno.test('timeoutForKind: pass3 = 90s (pure DB orchestration, no AI calls)', () => {
   assertEquals(timeoutForKind('pass3'), 90_000);
 });

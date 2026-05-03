@@ -1445,13 +1445,15 @@ async function runShapeDStage1Core(
     runningCostUsd,
   });
 
-  // ── Dispatch Stage 4 as a separate edge job ──────────────────────────────
+  // ── W11.8: dispatch detect_instances as the next chained edge job ────────
   // Important production lesson from iter-5a: Stage 4 must NOT chain in this
   // same worker. Stage 1 (per-image parallel, ~3-4 min) + Stage 4 (60-90s +
-  // 16k thinking) hit the edge-runtime wall budget. Insert a
-  // `stage4_synthesis` job; the dispatcher (mig 377 extends the kind enum)
-  // routes it to shortlisting-shape-d-stage4 next tick.
-  const stage4Dispatch = await dispatchStage4Job({
+  // 16k thinking) hit the edge-runtime wall budget. The new chain pivots
+  // through detect_instances (Phase 1 LLM clustering, ~30-90s) which itself
+  // enqueues stage4_synthesis on success. Insert a `detect_instances` job;
+  // the dispatcher (mig 455 extends the kind enum) routes it to
+  // shortlisting-detect-instances next tick.
+  const stage4Dispatch = await dispatchDetectInstancesJob({
     admin,
     projectId: ctx.project_id,
     roundId,
@@ -1460,12 +1462,12 @@ async function runShapeDStage1Core(
   const stage4JobId = stage4Dispatch.jobId;
 
   // ── Mig 437: manual_chain_required observability event ───────────────────
-  // When Stage 1 succeeded (we got past the allFailed throw above) but Stage
-  // 4 was NOT auto-dispatched, we want a notification immediately rather than
-  // waiting for the stranded-round auditor cron to flag it ~10min later. The
-  // skipReason captures the gating cause — most-common is a stale
-  // stage4_synthesis row from a prior run blocking the new insert (the
-  // Saladine 6c61ceb6 case on 2026-05-02).
+  // When Stage 1 succeeded (we got past the allFailed throw above) but the
+  // next-stage job was NOT auto-dispatched, we want a notification immediately
+  // rather than waiting for the stranded-round auditor cron to flag it ~10min
+  // later. The skipReason captures the gating cause — most-common is a stale
+  // detect_instances/stage4_synthesis row from a prior run blocking the new
+  // insert (W11.8 keeps the same idempotency contract).
   if (stage4Dispatch.skipReason !== null) {
     try {
       await admin.from('shortlisting_events').insert({
@@ -2944,7 +2946,7 @@ async function uploadStage1AuditJson(args: AuditJsonArgs): Promise<string | null
   }
 }
 
-// ─── Stage 4 dispatch ────────────────────────────────────────────────────────
+// ─── Stage 4 / detect_instances dispatch ─────────────────────────────────────
 
 interface DispatchStage4JobArgs {
   admin: ReturnType<typeof getAdminClient>;
@@ -2960,9 +2962,14 @@ interface DispatchStage4JobArgs {
  * triage). skipReason='duplicate_active_job' is the most-common case and the
  * one that hit Saladine on 2026-05-02 — a stale stage4_synthesis row blocked
  * a clean Stage 1 from auto-chaining.
+ *
+ * W11.8: shape-d now chains to `detect_instances` instead of going straight to
+ * `stage4_synthesis`. detect_instances itself enqueues `stage4_synthesis` on
+ * success. The skip-reason taxonomy is unchanged because both kinds share the
+ * same idempotency guard (uniq_shortlisting_jobs_active_pass_per_round).
  */
 type Stage4DispatchSkipReason =
-  | 'duplicate_active_job'  // an existing pending/running/succeeded stage4 row blocks insert
+  | 'duplicate_active_job'  // an existing pending/running/succeeded row blocks insert
   | 'db_insert_error'       // postgrest returned an error on the insert path
   | 'unknown';              // null id with no error captured (defensive sentinel)
 
@@ -2973,25 +2980,31 @@ interface Stage4DispatchResult {
   detail?: string;
 }
 
-async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<Stage4DispatchResult> {
-  // Idempotency: skip if a non-terminal stage4_synthesis job already exists
-  // for this round. The unique partial index (mig 377) also enforces this at
-  // the DB layer; the explicit check just avoids the noisy unique-violation
-  // log.
+/**
+ * W11.8: dispatch the detect_instances job (the new Phase 1 → Phase 2 pivot).
+ * Replaces the old dispatchStage4Job — Stage 4 is now chained downstream by
+ * the detect_instances fn itself once clustering succeeds.
+ */
+async function dispatchDetectInstancesJob(
+  args: DispatchStage4JobArgs,
+): Promise<Stage4DispatchResult> {
+  // Idempotency: skip if a non-terminal detect_instances job already exists
+  // for this round. The unique partial index (mig 455) also enforces this at
+  // the DB layer; the explicit check just avoids the noisy unique-violation log.
   const { count: existing } = await args.admin
     .from('shortlisting_jobs')
     .select('id', { count: 'exact', head: true })
     .eq('round_id', args.roundId)
-    .eq('kind', 'stage4_synthesis')
+    .eq('kind', 'detect_instances')
     .in('status', ['pending', 'running', 'succeeded']);
   if ((existing ?? 0) > 0) {
     console.log(
-      `[${GENERATOR}] stage4_synthesis job already exists for round ${args.roundId} — skipping insert`,
+      `[${GENERATOR}] detect_instances job already exists for round ${args.roundId} — skipping insert`,
     );
     return {
       jobId: null,
       skipReason: 'duplicate_active_job',
-      detail: `${existing} active stage4_synthesis row(s) already exist for round`,
+      detail: `${existing} active detect_instances row(s) already exist for round`,
     };
   }
 
@@ -3001,7 +3014,7 @@ async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<Stage4Dis
       project_id: args.projectId,
       round_id: args.roundId,
       group_id: null,
-      kind: 'stage4_synthesis',
+      kind: 'detect_instances',
       status: 'pending',
       payload: {
         project_id: args.projectId,
@@ -3013,14 +3026,16 @@ async function dispatchStage4Job(args: DispatchStage4JobArgs): Promise<Stage4Dis
     .select('id')
     .maybeSingle();
   if (error) {
-    args.warnings.push(`stage4_synthesis dispatch failed: ${error.message}`);
+    args.warnings.push(`detect_instances dispatch failed: ${error.message}`);
     return {
       jobId: null,
       skipReason: 'db_insert_error',
       detail: error.message,
     };
   }
-  console.log(`[${GENERATOR}] dispatched stage4_synthesis job ${data?.id} for round ${args.roundId}`);
+  console.log(
+    `[${GENERATOR}] dispatched detect_instances job ${data?.id} for round ${args.roundId}`,
+  );
   const jobId = (data?.id as string) || null;
   if (!jobId) {
     return {

@@ -284,6 +284,8 @@ Deno.test('renderGalleryPositionsBlock: NULL constraints render as "any"', () =>
       composition_geometry: null,
       lens_class: null,
       image_type: null,
+      instance_index: null,
+      instance_unique_constraint: false,
       selection_mode: 'ai_decides',
       ai_backfill_on_gap: true,
       notes: null,
@@ -307,6 +309,10 @@ Deno.test('renderGalleryPositionsBlock: NULL constraints render as "any"', () =>
   // Retired axes must NOT appear
   assert(!block.includes('room_type='));
   assert(!block.includes('composition_type='));
+  // W11.8: instance fields default to off — instance_index NOT rendered as
+  // a numeric axis when null, and the `uniq` flag absent when false.
+  assert(!block.includes('instance_index='));
+  assert(!block.includes(' uniq '));
 });
 
 Deno.test('renderGalleryPositionsBlock: ai_backfill_on_gap=false + curated mode render flags', () => {
@@ -325,6 +331,8 @@ Deno.test('renderGalleryPositionsBlock: ai_backfill_on_gap=false + curated mode 
       composition_geometry: null,
       lens_class: null,
       image_type: null,
+      instance_index: null,
+      instance_unique_constraint: false,
       selection_mode: 'curated',
       ai_backfill_on_gap: false,
       notes: 'leave empty if no wine cellar visible',
@@ -338,4 +346,72 @@ Deno.test('renderGalleryPositionsBlock: ai_backfill_on_gap=false + curated mode 
   assert(block.includes('ai_backfill_on_gap=false'));
   assert(block.includes('(curated)'));
   assert(block.includes('leave empty if no wine cellar visible'));
+});
+
+// ─── W11.8: instance fields ─────────────────────────────────────────────────
+
+Deno.test('W11.8: mergePositionsByScope normalises instance_index + instance_unique_constraint', () => {
+  const merged = mergePositionsByScope([
+    {
+      scope_type: 'project_type',
+      scope_ref_id: PROJECT_TYPE_ID,
+      rows: [
+        {
+          position_index: 0,
+          phase: 'mandatory',
+          space_type: 'master_bedroom',
+          instance_index: 1,
+          instance_unique_constraint: true,
+        },
+        {
+          position_index: 1,
+          phase: 'mandatory',
+          space_type: 'master_bedroom',
+          instance_index: 2,
+          instance_unique_constraint: true,
+        },
+        {
+          // any-instance position — both fields default to NULL/false
+          position_index: 2,
+          phase: 'optional',
+          space_type: 'living_dining_combined',
+        },
+      ],
+    },
+  ]);
+  assertStrictEquals(merged.get(0)?.instance_index, 1);
+  assertStrictEquals(merged.get(0)?.instance_unique_constraint, true);
+  assertStrictEquals(merged.get(1)?.instance_index, 2);
+  assertStrictEquals(merged.get(2)?.instance_index, null);
+  assertStrictEquals(merged.get(2)?.instance_unique_constraint, false);
+});
+
+Deno.test('W11.8: renderGalleryPositionsBlock surfaces instance_index + uniq flag', () => {
+  const positions: ResolvedGalleryPosition[] = [
+    {
+      position_index: 0,
+      phase: 'mandatory',
+      space_type: 'master_bedroom',
+      zone_focus: null,
+      shot_scale: null,
+      perspective_compression: null,
+      orientation: null,
+      vantage_position: null,
+      composition_geometry: null,
+      lens_class: null,
+      image_type: null,
+      instance_index: 2,
+      instance_unique_constraint: true,
+      selection_mode: 'ai_decides',
+      ai_backfill_on_gap: true,
+      notes: null,
+      template_slot_id: null,
+      resolved_from_scope_type: 'package',
+      resolved_from_scope_ref_id: PACKAGE_ID,
+    },
+  ];
+  const block = renderGalleryPositionsBlock(positions);
+  assert(block.includes('[0]'));
+  assert(block.includes('instance_index=2'));
+  assert(block.includes(' uniq '));
 });

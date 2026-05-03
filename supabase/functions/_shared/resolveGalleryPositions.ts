@@ -63,7 +63,10 @@ export type GalleryPositionPhase = 'mandatory' | 'conditional' | 'optional';
 /** A single resolved gallery_position handed to Stage 4. Field names mirror
  * the gallery_positions columns 1-to-1 (no prefix transformation).
  * Mig 451 (2026-05-02): room_type + composition_type axes retired;
- * vantage_position + composition_geometry axes added. */
+ * vantage_position + composition_geometry axes added.
+ * W11.8 (mig 454, 2026-05-02): instance_index + instance_unique_constraint
+ * fields surface to Stage 4 so the model can target the Nth detected
+ * physical-room instance and enforce instance-uniqueness across positions. */
 export interface ResolvedGalleryPosition {
   position_index: number;
   phase: GalleryPositionPhase;
@@ -77,6 +80,12 @@ export interface ResolvedGalleryPosition {
   composition_geometry: string | null;    // mig 451
   lens_class: string | null;
   image_type: string | null;
+  // W11.8 (mig 454) — instance targeting
+  /** 1-indexed; NULL = match any instance. */
+  instance_index: number | null;
+  /** When true, this position must be filled from an instance not used by
+   *  any other position with the same constraint tuple in the recipe. */
+  instance_unique_constraint: boolean;
   // Behaviour
   selection_mode: string; // 'ai_decides' | 'curated'  (per R1's CHECK)
   ai_backfill_on_gap: boolean;
@@ -265,6 +274,13 @@ function normaliseRow(
     phaseRaw === 'mandatory' || phaseRaw === 'conditional' || phaseRaw === 'optional'
       ? phaseRaw
       : 'optional';
+  // W11.8 (mig 454) — instance fields. instance_index NULL = match any
+  // instance; instance_unique_constraint defaults to false so existing
+  // recipes are unchanged.
+  const instanceIndexRaw = r.instance_index;
+  const instanceIndex = typeof instanceIndexRaw === 'number' && Number.isFinite(instanceIndexRaw)
+    ? instanceIndexRaw
+    : null;
   return {
     position_index: Number(r.position_index ?? 0),
     phase,
@@ -277,6 +293,8 @@ function normaliseRow(
     composition_geometry: stringOrNull(r.composition_geometry), // mig 451
     lens_class: stringOrNull(r.lens_class),
     image_type: stringOrNull(r.image_type),
+    instance_index: instanceIndex,
+    instance_unique_constraint: r.instance_unique_constraint === true,
     selection_mode:
       typeof r.selection_mode === 'string' && r.selection_mode.length > 0
         ? r.selection_mode
@@ -323,6 +341,7 @@ export async function resolveGalleryPositions(
           'space_type, zone_focus, shot_scale, perspective_compression, ' +
           'orientation, vantage_position, composition_geometry, ' +
           'lens_class, image_type, ' +
+          'instance_index, instance_unique_constraint, ' +
           'selection_mode, ai_backfill_on_gap, notes, template_slot_id',
       )
       .eq('scope_type', f.scope_type)
@@ -396,11 +415,16 @@ export function renderGalleryPositionsBlock(
     axes.push(`composition_geometry=${p.composition_geometry ?? 'any'}`);
     axes.push(`lens_class=${p.lens_class ?? 'any'}`);
     axes.push(`image_type=${p.image_type ?? 'any'}`);
+    // W11.8 — surface instance targeting in the rendered prompt block.
+    if (p.instance_index !== null) {
+      axes.push(`instance_index=${p.instance_index}`);
+    }
     const tplBit = p.template_slot_id ? ` template=${p.template_slot_id}` : '';
     const backfill = p.ai_backfill_on_gap ? '' : ' ai_backfill_on_gap=false';
+    const uniq = p.instance_unique_constraint ? ' uniq' : '';
     const modeBit = p.selection_mode === 'curated' ? ' (curated)' : '';
     lines.push(
-      `[${p.position_index}] ${p.phase}${modeBit}${tplBit}${backfill} :: ${axes.join(' ')}`,
+      `[${p.position_index}] ${p.phase}${modeBit}${uniq}${tplBit}${backfill} :: ${axes.join(' ')}`,
     );
     if (p.notes) lines.push(`     note: ${p.notes}`);
   }
@@ -410,4 +434,7 @@ export function renderGalleryPositionsBlock(
 // v1.1 — original (mig 444)
 // v1.2 — mig 451 (2026-05-02): drop room_type + composition_type from
 //        constraint axes; add vantage_position + composition_geometry.
-export const RESOLVE_GALLERY_POSITIONS_VERSION = 'v1.2';
+// v1.3 — W11.8 / mig 454 (2026-05-02): add instance_index +
+//        instance_unique_constraint fields to the resolved tuple, plus the
+//        uniq flag + instance_index axis in renderGalleryPositionsBlock.
+export const RESOLVE_GALLERY_POSITIONS_VERSION = 'v1.3';

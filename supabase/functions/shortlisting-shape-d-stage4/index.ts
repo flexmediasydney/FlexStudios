@@ -103,6 +103,7 @@ import {
   buildStage4UserPrompt,
   type PropertyFacts,
   type Stage1MergedEntry,
+  type SpaceInstanceSummary,
 } from './stage4Prompt.ts';
 import {
   canonicalRegistryBlock,
@@ -754,6 +755,12 @@ async function runStage4Core(
     const exifRowsForPreviews = stage1ExifRows.filter((r) => previewStemSet.has(r.stem));
     const exifContextTableText = exifContextTable(exifRowsForPreviews);
 
+    // W11.8 — load round-level space_instances so the prompt can teach the
+    // model which physically-distinct rooms exist per space_type. Empty when
+    // detect_instances has not run for this round (legacy rounds, partial
+    // replays).
+    const spaceInstances = await loadSpaceInstancesSummary(admin, roundId, warnings);
+
     const userPromptCore = buildStage4UserPrompt({
       sourceContextBlockText: sourceContextBlock(sourceType),
       photographerTechniquesBlockText: photographerTechniquesBlock(),
@@ -765,6 +772,7 @@ async function runStage4Core(
       stage1Merged,
       imageStemsInOrder: previews.map((p) => p.stem),
       totalImages: previews.length,
+      spaceInstances,
     });
     // QC-iter2-W3 F-D-007: prepend the slotEnumerationBlock preamble before
     // the rest of the user prompt. Sits BEFORE property facts + Stage 1
@@ -1481,7 +1489,8 @@ async function loadStage1Merged(
         group_index,
         delivery_reference_stem,
         best_bracket_stem,
-        exif_metadata
+        exif_metadata,
+        space_instance_id
       )
     `)
     .eq('round_id', roundId)
@@ -1521,6 +1530,9 @@ async function loadStage1Merged(
       flag_for_retouching: (row.flag_for_retouching as boolean | null) ?? null,
       key_elements: (row.key_elements as string[] | null) ?? null,
       zones_visible: (row.zones_visible as string[] | null) ?? null,
+      // W11.8 — per-group instance id from detect_instances. NULL when
+      // detect_instances has not yet run (legacy rounds).
+      space_instance_id: (grp?.space_instance_id as string | null) ?? null,
     });
 
     // W11.6.14: pull per-image EXIF for THIS stem from the linked
@@ -1556,6 +1568,50 @@ async function loadStage1Merged(
     if (r) sortedExifRows.push(r);
   }
   return { entries: out, exifRows: sortedExifRows };
+}
+
+// ─── W11.8: load space_instances summary for the round ─────────────────────
+
+async function loadSpaceInstancesSummary(
+  admin: ReturnType<typeof getAdminClient>,
+  roundId: string,
+  warnings: string[],
+): Promise<SpaceInstanceSummary[]> {
+  const { data, error } = await admin
+    .from('shortlisting_space_instances')
+    .select(
+      'id, space_type, instance_index, display_label, member_group_count, ' +
+      'cluster_confidence, distinctive_features',
+    )
+    .eq('round_id', roundId)
+    .order('space_type', { ascending: true })
+    .order('instance_index', { ascending: true });
+  if (error) {
+    const msg = String(error.message ?? error);
+    // detect_instances may not have run; fall back to empty list.
+    if (msg.includes('does not exist') || msg.includes('PGRST205')) {
+      warnings.push(
+        'shortlisting_space_instances table missing (mig 453 not applied yet) — Stage 4 will not surface instance summary',
+      );
+      return [];
+    }
+    warnings.push(`shortlisting_space_instances load failed: ${msg}`);
+    return [];
+  }
+  if (!data || data.length === 0) return [];
+  const out: SpaceInstanceSummary[] = [];
+  for (const row of data as unknown as Array<Record<string, unknown>>) {
+    out.push({
+      id: row.id as string,
+      space_type: row.space_type as string,
+      instance_index: row.instance_index as number,
+      display_label: (row.display_label as string | null) ?? (row.space_type as string),
+      member_group_count: (row.member_group_count as number) ?? 0,
+      cluster_confidence: (row.cluster_confidence as number) ?? 0,
+      distinctive_features: (row.distinctive_features as string[] | null) ?? [],
+    });
+  }
+  return out;
 }
 
 // ─── Preview fetcher ────────────────────────────────────────────────────────
@@ -2565,6 +2621,14 @@ export async function persistPositionDecisions(
     const winner = (d.winner ?? {}) as Record<string, unknown>;
     const winnerStem = typeof winner.stem === 'string' ? winner.stem : null;
     const winnerGroupId = winnerStem ? stemToGroupId.get(winnerStem) ?? null : null;
+    // W11.8 — capture the space_instance_id Stage 4 emits on the winner. The
+    // model is taught to echo the id from the candidate group's Stage 1
+    // entry; we accept null silently for legacy rounds + skip-disambiguation
+    // space_types.
+    const winnerSpaceInstanceId = typeof winner.space_instance_id === 'string'
+      && winner.space_instance_id.length > 0
+        ? winner.space_instance_id
+        : null;
     const resolvedPos = byIndex.get(positionIndex);
     if (!resolvedPos) {
       args.warnings.push(
@@ -2613,6 +2677,10 @@ export async function persistPositionDecisions(
         ? d.rejected_near_duplicates
         : [],
       template_slot_id: resolvedPos?.template_slot_id ?? null,
+      // W11.8: instance attribution for the position decision. Mig 453 added
+      // this column; it is nullable so older clients (legacy rounds, skip-
+      // disambiguation space_types) still write rows without conflict.
+      space_instance_id: winnerSpaceInstanceId,
       created_at: nowIso,
     });
   }

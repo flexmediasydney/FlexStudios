@@ -506,6 +506,11 @@ const KIND_TO_FUNCTION: Record<string, string> = {
   pass0: "shortlisting-pass0",
   pass3: "shortlisting-pass3",
   shape_d_stage1: "shortlisting-shape-d",
+  // W11.8 — instance clustering between Stage 1 and Stage 4. Detects
+  // physically-distinct rooms of the same space_type per round and writes
+  // shortlisting_space_instances + composition_groups.space_instance_id.
+  // Synchronous fn (~30-90s wall) — does NOT use background mode.
+  detect_instances: "shortlisting-detect-instances",
   stage4_synthesis: "shortlisting-shape-d-stage4",
   canonical_rollup: "canonical-rollup",
   // Wave 13b — text-only Gemini 2.5 Pro extractor over pulse_listings.description.
@@ -550,6 +555,9 @@ export const KIND_TIMEOUT_MS: Record<string, number> = {
   pass0: 90_000,
   pass3: 90_000,
   shape_d_stage1: 30_000, // background mode; ack only
+  // W11.8 detect_instances: single Gemini call (~30-60s typical, 120s ceiling)
+  // covering all multi-group buckets. Synchronous — no background mode.
+  detect_instances: 150_000,
   stage4_synthesis: 240_000, // declared internal budget
   canonical_rollup: 120_000,
   pulse_description_extract: 30_000, // background mode; ack only
@@ -608,7 +616,10 @@ export type ChainDecision =
 const TERMINAL_KINDS = new Set([
   'ingest', // shortlisting-ingest enqueues its own extract chunks
   'pass3', // pass3 fires the round-complete notification
-  'shape_d_stage1', // shape-d itself enqueues stage4_synthesis
+  // W11.8: shape-d now enqueues detect_instances inline (was: stage4_synthesis).
+  'shape_d_stage1', // shape-d itself enqueues detect_instances
+  // W11.8: detect_instances enqueues stage4_synthesis inline on success.
+  'detect_instances', // detect_instances itself enqueues stage4_synthesis
   'stage4_synthesis', // Stage 4 persistence transitions round.status to proposed
   'canonical_rollup', // Stage 1.5 normalisation; standalone sidecar
   'pulse_description_extract', // batch text extractor; standalone
@@ -635,10 +646,15 @@ async function chainNextKind(
   if (job.kind === "pass3") return;
 
   // Wave 11.7.1: Shape D terminal kinds.
-  // shape_d_stage1 itself enqueues stage4_synthesis at the end of its run
-  // (the orchestrator inserts the row inline so it can carry round-state
-  // context). The dispatcher does NOT chain after shape_d_stage1.
+  // W11.8: shape_d_stage1 now enqueues detect_instances inline (was:
+  // stage4_synthesis). The orchestrator inserts the row at end of Stage 1 so
+  // it can carry round-state context. The dispatcher does NOT chain after
+  // shape_d_stage1.
   if (job.kind === "shape_d_stage1") return;
+  // W11.8: detect_instances is terminal here — its edge fn enqueues
+  // stage4_synthesis inline on success (and emits a manual_chain_required
+  // event when it fails so the operator can re-fire from the command center).
+  if (job.kind === "detect_instances") return;
   // stage4_synthesis is terminal in Shape D (Stage 4's persistence transitions
   // shortlisting_rounds.status to 'proposed', matching legacy pass2's terminal
   // state — no further chain).
