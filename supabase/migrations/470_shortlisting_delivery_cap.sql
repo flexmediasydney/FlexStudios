@@ -180,12 +180,16 @@ BEGIN
       lo.human_action,
       lo.auto_trim_source,
       CASE
-        -- Latest action says proposed
-        WHEN lo.human_action IN ('approved_as_proposed', 'added_from_rejects', 'swapped')
-          THEN TRUE
-        -- Latest action says removed
+        -- Only 'removed' is a not-proposed terminal state. Everything else
+        -- (ai_proposed seed, approved_as_proposed, added_from_rejects, swapped,
+        -- reverted_to_ai_proposed) is some flavour of "in proposed lane".
+        -- Discovered during in-prod testing 2026-05-04: the engine seeds
+        -- proposed groups with human_action='ai_proposed' and operators can
+        -- emit 'reverted_to_ai_proposed' via the swimlane Why? popover —
+        -- both must count as proposed for the cap-trim ranking to include
+        -- them.
         WHEN lo.human_action = 'removed' THEN FALSE
-        -- No override yet → proposed iff in initial AI picks
+        WHEN lo.human_action IS NOT NULL THEN TRUE
         WHEN lo.human_action IS NULL
           THEN c.group_id IN (SELECT group_id FROM initial_proposed)
         ELSE FALSE
@@ -288,12 +292,8 @@ BEGIN
       created_at DESC
   )
   SELECT
-    COUNT(*) FILTER (
-      WHERE human_action IN ('approved_as_proposed', 'added_from_rejects', 'swapped')
-    ),
-    COUNT(*) FILTER (
-      WHERE human_action = 'removed' AND auto_trim_source = 'delivery_cap'
-    )
+    COUNT(*) FILTER (WHERE human_action IS NOT NULL AND human_action != 'removed'),
+    COUNT(*) FILTER (WHERE human_action = 'removed' AND auto_trim_source = 'delivery_cap')
   INTO v_kept_count, v_reverted_count
   FROM latest_override;
 
