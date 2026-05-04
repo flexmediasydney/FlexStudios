@@ -55,7 +55,26 @@ import { CANONICAL_SLOT_IDS } from '../_shared/visionPrompts/blocks/slotEnumerat
 //   - Stage 1 entry shape: ADDED space_instance_id (per-group instance id
 //     populated by detect_instances). The model uses this to group its
 //     candidates per position.
-export const STAGE4_PROMPT_VERSION = 'v1.5';
+//
+// Mig 465 (editorial engine, 2026-05-04) — bumped to v1.6:
+//   - NEW top-level `editorial_picks[]` array. Replaces the static slot
+//     lattice with package-quota-driven editorial selection. Each pick
+//     carries a quota_bucket (sales_images / dusk_images / aerial_images),
+//     a free-form role_label invented by the model, a rationale, and an
+//     editorial_score (the model's confidence in its own pick).
+//   - NEW top-level `editorial_coverage_warnings[]` so the model can
+//     self-flag rooms a typical AU listing would expect but the round
+//     doesn't have a viable candidate for. Surfaced to operators as
+//     warning chips in the swimlane.
+//   - User prompt: NEW EDITORIAL DIRECTIVE block injected when the round's
+//     package has classifiable products. Carries the per-bucket quota
+//     resolved from packages.products[].quantity + the global editorial
+//     policy text (shortlisting_engine_policy.policy.editorial_principles
+//     and tie_breaks).
+//   - slot_decisions[] + position_decisions[] are STILL emitted in the
+//     same response — kept for back-compat through the migration window.
+//     The persistence layer prefers editorial_picks when present.
+export const STAGE4_PROMPT_VERSION = 'v1.6';
 export const STAGE4_TOOL_NAME = 'synthesise_round';
 
 /**
@@ -278,58 +297,42 @@ export const STAGE4_TOOL_SCHEMA: Record<string, unknown> = {
     },
 
     // ─── Proposed position templates (mig 444) ──────────────────────────
-    // Mig 444 replaces `proposed_slots[]` with a constraint-based equivalent.
-    // When Gemini sees a recurring composition pattern across rounds that
-    // isn't already a saved template, it surfaces it here. The W12-style
-    // promotion fn in mig 444 aggregates these across rounds and auto-promotes
-    // patterns with sufficient evidence into shortlisting_slot_definitions
-    // (initially is_active=false so an operator review still gates them).
-    proposed_position_templates: {
+    // proposed_position_templates[]: REMOVED in mig 465 to free state-count
+    // budget for editorial_picks[].  The auto-promotion surface was a niche
+    // discovery feature; it can come back as a separate, smaller schema
+    // call once we drop the legacy slot_decisions[] in the post-cutover
+    // follow-up.  Persistence layer tolerates its absence (the helper
+    // returns 0 when the array is missing).
+
+    // ─── Editorial picks (mig 465 — package-quota-driven engine) ─────────
+    // Schema is INTENTIONALLY MINIMAL — Gemini's response-schema state-count
+    // limit forces us to keep this lean. role_label is free-form text (no
+    // enum) so the model is the authority on naming. Coverage warnings ride
+    // in `coverage_notes` (existing string field) rather than a structured
+    // array, again to stay under the state-count budget.
+    editorial_picks: {
       type: 'array',
       description:
-        'Suggested NEW position templates when Stage 4 sees a recurring ' +
-        'composition pattern that no existing template covers. Empty array ' +
-        'when nothing warrants a new template — do NOT manufacture proposals. ' +
-        'Threshold for human review: an operator-readable label, the constraint ' +
-        'pattern that defines the template, and the candidate stems that would ' +
-        'fill it in this round.',
+        'Editorial shortlist keyed to package quota buckets. Fill EXACTLY ' +
+        'the per-bucket counts in the EDITORIAL DIRECTIVE. quota_bucket ' +
+        'must be one of: "sales_images", "dusk_images", "aerial_images" ' +
+        '(matching the directive). role_label is free-form snake_case ' +
+        'invented by you — be specific (e.g. "kitchen_hero", ' +
+        '"exterior_dusk_facade", "master_bedroom_wide"). When the round ' +
+        'lacks viable candidates for a quota, come in UNDER and write a ' +
+        'sentence in `coverage_notes` explaining why — do NOT pad with ' +
+        'weak picks. Use the directive\'s editorial principles + ' +
+        'tie-breaks when ranking candidates.',
       items: {
         type: 'object',
         properties: {
-          proposed_template_label: {
-            type: 'string',
-            description:
-              'Operator-readable label, e.g. "Kitchen — gulley with island foreground".',
-          },
-          constraint_pattern: {
-            type: 'object',
-            description:
-              'The constraint tuple that defines this template. NULL axes ' +
-              'are wildcards. Mirrors position_constraints shape. Mig 451: ' +
-              'room_type + composition_type axes retired; vantage_position + ' +
-              'composition_geometry axes added.',
-            properties: {
-              space_type: { type: 'string', nullable: true },
-              zone_focus: { type: 'string', nullable: true },
-              shot_scale: { type: 'string', nullable: true },
-              perspective_compression: { type: 'string', nullable: true },
-              vantage_position: { type: 'string', nullable: true },
-              composition_geometry: { type: 'string', nullable: true },
-              lens_class: { type: 'string', nullable: true },
-              image_type: { type: 'string', nullable: true },
-            },
-          },
-          candidate_stems: {
-            type: 'array',
-            description: 'Stems from THIS round that would fill the template.',
-            items: { type: 'string' },
-          },
-          reasoning: {
-            type: 'string',
-            description: '1-3 sentences why this should be a saved template.',
-          },
+          quota_bucket: { type: 'string' },
+          stem: { type: 'string' },
+          role_label: { type: 'string' },
+          rationale: { type: 'string' },
+          editorial_score: { type: 'number' },
         },
-        required: ['proposed_template_label', 'candidate_stems', 'reasoning'],
+        required: ['quota_bucket', 'stem', 'role_label', 'rationale', 'editorial_score'],
       },
     },
 
@@ -812,20 +815,28 @@ export function buildStage4SystemPrompt(): string {
     'authoritative property facts from the CRM, plus a voice anchor rubric.',
     '',
     'Your job is to:',
-    '  1. Mig 444: Fill the round\'s GALLERY POSITIONS — each position is a',
-    '     constraint tuple (partial, NULL = wildcard). Match images to positions',
-    '     by satisfying as many constraint axes as possible. Phase governs how',
-    '     hard you try (mandatory/conditional/optional). Emit one entry per',
-    '     position into `position_decisions[]`.',
-    '  2. Also emit the legacy `slot_decisions[]` array for one deploy cycle —',
+    '  1. Mig 465: When the user prompt carries an EDITORIAL DIRECTIVE block,',
+    '     populate `editorial_picks[]` with EXACTLY the per-bucket counts the',
+    '     directive requests (e.g. 25 sales_images + 4 dusk_images). Each pick',
+    '     names a quota_bucket, the chosen stem, a free-form role_label (you',
+    '     invent the label — be precise), a rationale, an editorial_score, and',
+    '     optional principles_applied. Self-flag shortfalls via',
+    '     `editorial_coverage_warnings[]` rather than padding with weak picks.',
+    '  2. Mig 444 (legacy): Fill the round\'s GALLERY POSITIONS — each position',
+    '     is a constraint tuple (partial, NULL = wildcard). Match images to',
+    '     positions by satisfying as many constraint axes as possible. Phase',
+    '     governs how hard you try (mandatory/conditional/optional). Emit one',
+    '     entry per position into `position_decisions[]`. KEPT FOR BACK-COMPAT',
+    '     during the editorial-engine cutover.',
+    '  3. Also emit the legacy `slot_decisions[]` array for one deploy cycle —',
     '     keep the slot_id-based output flowing while operators validate the',
-    '     position-based output (R3 validation window).',
-    "  3. Draft a complete publication-ready master listing in the property's",
+    '     editorial-engine output.',
+    "  4. Draft a complete publication-ready master listing in the property's",
     '     tier voice.',
-    '  4. Sequence the marketing gallery (ordered stems, narrative arc).',
-    '  5. Group near-duplicates so production knows where to cull.',
-    "  6. Call out missing shots the photographer didn't capture.",
-    '  7. Where your visual cross-comparison shows Stage 1 was wrong on any',
+    '  5. Sequence the marketing gallery (ordered stems, narrative arc).',
+    '  6. Group near-duplicates so production knows where to cull.',
+    "  7. Call out missing shots the photographer didn't capture.",
+    '  8. Where your visual cross-comparison shows Stage 1 was wrong on any',
     '     per-image field, emit a stage_4_overrides[] row rather than silently',
     '     changing the answer. The override entries are first-class training',
     '     data for the engine and operator review surface.',
@@ -863,10 +874,6 @@ export function buildStage4SystemPrompt(): string {
     '  the position decision.',
     '- Phase = optional: fill ONLY when there is a strong, clear match',
     '  (constraint_match_score >= 7). Otherwise omit.',
-    '- If you see a recurring composition pattern across the round that no',
-    '  existing template covers, propose a new template via',
-    '  `proposed_position_templates[]`. Empty array when nothing warrants a',
-    '  new template — don\'t manufacture proposals.',
     '',
     'DISCIPLINE',
     "- Never invent factual figures. If a number isn't in property_facts, omit",
@@ -931,6 +938,132 @@ export interface BuildStage4UserPromptOpts {
    * will simply not emit space_instance_id values).
    */
   spaceInstances?: SpaceInstanceSummary[];
+  /**
+   * Mig 465 — pre-rendered EDITORIAL DIRECTIVE block.  Empty string when
+   * the round's package has no shortlistable products (e.g. a drone-only
+   * package), in which case Stage 4 falls back to the legacy slot lattice
+   * exclusively.  Production callers always pass this even when empty so
+   * the prompt structure is consistent.
+   */
+  editorialDirectiveBlockText?: string;
+}
+
+/**
+ * Mig 465 — render the EDITORIAL DIRECTIVE block injected into the Stage 4
+ * user prompt.  Combines per-bucket quotas (resolved from packages.products)
+ * with the global editorial policy (from shortlisting_engine_policy) into
+ * a single self-contained section the model treats as its primary
+ * shortlist directive.
+ */
+export interface EditorialDirectiveOpts {
+  /** Per-bucket quota counts to deliver, e.g. { sales_images: 25, dusk_images: 4 }. */
+  quotas: Record<string, number>;
+  /** Pre-rendered quota line for the prompt header (e.g. "25 sales_images + 4 dusk_images"). */
+  quotaLine: string;
+  /** Free-form editorial principles markdown (from policy.editorial_principles). */
+  editorialPrinciples: string;
+  /** Free-form tie-break rules markdown (from policy.tie_breaks). */
+  tieBreaks: string;
+  /** Quality floor (0-10) — picks with editorial_score below this are surfaced as warnings. */
+  qualityFloor: number;
+  /** Common AU residential rooms (from policy.common_residential_rooms). */
+  commonResidentialRooms: string[];
+  /** Preferred dusk subject types (from policy.dusk_subjects). */
+  duskSubjects: string[];
+  /** Source of the quotas — useful context for the model when the package
+   *  was unrecognised and we fell back to the ceiling. */
+  quotaSource: 'package_products' | 'fallback_ceiling';
+  /** Non-shortlisting deliverables on the package (drone, floorplan, video).
+   *  Surfaced as context only — the engine does NOT fill these. */
+  nonShortlistingProducts?: Array<{ product_name: string; quantity: number }>;
+  /** Unrecognised products on the package (typo / new product type that
+   *  PRODUCT_TO_BUCKET doesn't know about yet).  Surfaced for ops awareness. */
+  unknownProducts?: Array<{ product_name: string; quantity: number }>;
+}
+
+export function renderEditorialDirective(opts: EditorialDirectiveOpts): string {
+  const lines: string[] = [];
+  lines.push('── EDITORIAL DIRECTIVE (mig 465 — package-driven) ──');
+  lines.push('');
+  lines.push(
+    `THIS ROUND\'S DELIVERABLE QUOTA (from the project\'s package): ${opts.quotaLine}.`,
+  );
+  if (opts.quotaSource === 'fallback_ceiling') {
+    lines.push(
+      '  (NOTE: package products were unrecognised — quota fell back to the round ceiling.)',
+    );
+  }
+  if (opts.nonShortlistingProducts && opts.nonShortlistingProducts.length > 0) {
+    const nonShorts = opts.nonShortlistingProducts
+      .map((p) => `${p.quantity} ${p.product_name}`)
+      .join(', ');
+    lines.push(
+      `  Non-shortlisting deliverables on this package (handled by other ` +
+        `pipelines, do NOT include in editorial_picks): ${nonShorts}.`,
+    );
+  }
+  if (opts.unknownProducts && opts.unknownProducts.length > 0) {
+    const unk = opts.unknownProducts
+      .map((p) => `${p.quantity} ${p.product_name}`)
+      .join(', ');
+    lines.push(
+      `  Unrecognised products on this package (skipped): ${unk}. ` +
+        `Treat as a config gap, not a shortlist instruction.`,
+    );
+  }
+  lines.push('');
+  lines.push('YOUR TASK');
+  lines.push(
+    '  Populate `editorial_picks[]` with EXACTLY the per-bucket counts above. ' +
+      'Each pick assigns one composition_group from the candidate pool below ' +
+      'to a quota bucket, with a free-form role_label, a rationale, and a ' +
+      'self-reported editorial_score (0-10). When you cannot fill a quota, ' +
+      'come in UNDER and write a sentence in `coverage_notes` (existing ' +
+      'string field at the top level of your response) explaining the ' +
+      'shortfall — do NOT pad with weak picks. The slot_decisions[] and ' +
+      'position_decisions[] arrays are LEGACY surfaces for back-compat; fill ' +
+      'them per their existing instructions, but `editorial_picks[]` is the ' +
+      'primary output.',
+  );
+  lines.push('');
+  lines.push('EDITORIAL PRINCIPLES (from FlexStudios global policy)');
+  lines.push(opts.editorialPrinciples);
+  lines.push('');
+  lines.push('TIE-BREAK RULES');
+  lines.push(opts.tieBreaks);
+  lines.push('');
+  lines.push(
+    `QUALITY FLOOR — editorial_score < ${opts.qualityFloor.toFixed(1)} ` +
+      'should never appear in editorial_picks unless the round genuinely has ' +
+      'no better candidate AND the quota mandates a fill (mandatory hero ' +
+      'rooms only). When forced to dip below the floor, also emit a ' +
+      '`weak_candidate_pool` coverage warning.',
+  );
+  lines.push('');
+  if (opts.commonResidentialRooms.length > 0) {
+    lines.push(
+      'COMMON AU RESIDENTIAL ROOMS — typical buyer expectation. If a candidate ' +
+        'exists for any of these and you OMIT it from editorial_picks, emit a ' +
+        '`common_room_omitted` warning explaining why:',
+    );
+    lines.push(`  ${opts.commonResidentialRooms.join(', ')}`);
+    lines.push('');
+  }
+  if (opts.duskSubjects.length > 0) {
+    lines.push(
+      'DUSK SUBJECT GUIDANCE — when filling the dusk_images bucket, prefer ' +
+        'images whose subject is in this set. Dusk interiors require explicit ' +
+        'editorial justification:',
+    );
+    lines.push(`  ${opts.duskSubjects.join(', ')}`);
+    lines.push('');
+  }
+  lines.push(
+    'OUTPUT FIELDS (recap): editorial_picks[].quota_bucket, .stem, ' +
+      '.role_label, .rationale, .editorial_score. Self-reported shortfalls ' +
+      'go in `coverage_notes` (top-level string field).',
+  );
+  return lines.join('\n');
 }
 
 export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
@@ -1011,9 +1144,19 @@ export function buildStage4UserPrompt(opts: BuildStage4UserPromptOpts): string {
     ? [renderSpaceInstancesBlock(opts.spaceInstances), '']
     : [];
 
+  // Mig 465: EDITORIAL DIRECTIVE — sits AT THE TOP of the prompt body so the
+  // model treats it as the primary task framing.  Empty string when the
+  // round's package has no shortlistable products (drone-only, floorplan-
+  // only, etc.) — in that case Stage 4 falls back to slot_decisions /
+  // position_decisions exclusively and editorial_picks[] is left empty.
+  const editorialSection = opts.editorialDirectiveBlockText && opts.editorialDirectiveBlockText.length > 0
+    ? [opts.editorialDirectiveBlockText, '']
+    : [];
+
   return [
     opts.sourceContextBlockText,
     '',
+    ...editorialSection,
     ...photographerTechniquesSection,
     opts.voiceBlockText,
     '',

@@ -36,6 +36,7 @@ import MatrixGrid from "./recipe-matrix/MatrixGrid";
 import CellEditorDialog from "./recipe-matrix/CellEditorDialog";
 import AdvancedSlotTemplates from "./recipe-matrix/AdvancedSlotTemplates";
 import AutoPromotionCard from "./recipe-matrix/AutoPromotionCard";
+import EditorialPolicyEditor from "./EditorialPolicyEditor";
 import { useRecipeRefs, usePromotionSuggestions } from "./recipe-matrix/hooks";
 
 export default function RecipeMatrixTab() {
@@ -115,7 +116,27 @@ export default function RecipeMatrixTab() {
   }
 
   return (
-    <div className="space-y-3" data-testid="recipe-matrix-tab">
+    <div className="space-y-4" data-testid="recipe-matrix-tab">
+      {/* Mig 465 — global editorial policy editor. THIS IS THE PRIMARY
+          recipe surface from now on; the per-package matrix below is for
+          niche overrides only. The editor reads/writes the singleton
+          shortlisting_engine_policy row directly; saves take effect on
+          the next Stage 4 run with no deploy required. */}
+      <EditorialPolicyEditor />
+
+      <div className="rounded-md border border-amber-200 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-900 dark:text-amber-100">
+        <div className="font-medium mb-1">Per-package overrides (advanced)</div>
+        <div className="leading-relaxed">
+          The matrix below lets you author per-package position overrides
+          when the global policy above isn't right for a specific
+          package. Most projects do NOT need a row here — the global
+          policy + the package's own deliverable counts (from{" "}
+          <code>packages.products[].quantity</code>) drive the engine
+          automatically. Use the matrix only when a package needs a
+          non-default coverage / phase mix.
+        </div>
+      </div>
+
       {/* Help banner — W11.6.28b/29 copy (price tier axis + dual-number
           authored/target explanation; mig 451 friendly Room labels +
           decomposed composition axis). */}

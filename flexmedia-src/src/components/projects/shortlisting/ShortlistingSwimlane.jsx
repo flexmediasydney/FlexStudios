@@ -77,6 +77,7 @@ import SwimlaneToolbar, {
   SwimlaneSlotCounter,
   useSwimlaneElapsedTimer,
 } from "./SwimlaneToolbar";
+import EditorialQuotaPanel from "./EditorialQuotaPanel";
 import { useSwimlaneSettings, PREVIEW_SIZES } from "@/hooks/useSwimlaneSettings";
 import {
   PHASE_OF_SLOT,
@@ -1619,9 +1620,13 @@ export default function ShortlistingSwimlane({
         isProcessing={isProcessing}
       />
 
-      {/* W11.6.1 sub-feature 4 — Phase 1/2/3 filled-vs-expected banner.
-          Reactive to overrides + AI proposals. */}
-      <SwimlaneSlotCounter
+      {/* Mig 465 — engine recipe + per-quota_bucket fill panel. Replaces
+          the legacy Phase 1/2/3 slot-lattice counter for rounds where the
+          editorial engine ran (post-mig 465). Falls back to the legacy
+          counter inline when no editorial event exists. */}
+      <EditorialQuotaPanel
+        roundId={round?.id}
+        packageType={round?.package_type}
         proposedSlotIds={proposedSlotIds}
         packageCeiling={ceiling}
       />

@@ -92,12 +92,19 @@ export const STAGE1_STATE_COUNT_LIMIT = 339;
  * slot_decisions will reduce the proxy back to ~158 and we should re-pin the
  * limit then. Today's measured proxy: 199. Headroom: 199 * 1.10 = 218.9 -> 220.
  *
+ * Mig 465 (editorial engine, 2026-05-04): bumped 220 -> 245 to accommodate
+ * the new `editorial_picks[]` surface. The schema was kept INTENTIONALLY
+ * MINIMAL for state-count reasons (no closed enums, no nested coverage
+ * warnings — those ride in the existing string `coverage_notes` field).
+ * Today's measured proxy on the trimmed schema: ~222. Headroom: 222 * 1.10 = 244.2 -> 245.
+ * Stage 1 operates at 290-310 in production without issue, so 245 is safely
+ * under Gemini's empirical serving threshold.
+ *
  * Rationale for the rebuild: per Joseph (2026-05-02): "the limit was a
  * guardrail against accidents, not a hard architectural ceiling". The new
  * schema is the engine's primary surface — bumping the guardrail to fit it
- * is intentional, documented, and safely under Gemini's empirical serving
- * threshold (Stage 1 schemas operate at 290-310 without issue). */
-export const STAGE4_STATE_COUNT_LIMIT = 220;
+ * is intentional and documented. */
+export const STAGE4_STATE_COUNT_LIMIT = 245;
 
 // ─── State-count proxy ─────────────────────────────────────────────────────
 

@@ -101,10 +101,17 @@ import {
   STAGE4_PROMPT_VERSION,
   buildStage4SystemPrompt,
   buildStage4UserPrompt,
+  renderEditorialDirective,
   type PropertyFacts,
   type Stage1MergedEntry,
   type SpaceInstanceSummary,
 } from './stage4Prompt.ts';
+import {
+  resolvePackageQuotasByName,
+  renderQuotaLine,
+  type QuotaResolution,
+} from '../_shared/packageQuotas.ts';
+import { readEditorialPolicy } from '../_shared/engineEditorialPolicy.ts';
 import {
   canonicalRegistryBlock,
   CANONICAL_REGISTRY_BLOCK_VERSION,
@@ -767,6 +774,64 @@ async function runStage4Core(
     // replays).
     const spaceInstances = await loadSpaceInstancesSummary(admin, roundId, warnings);
 
+    // Mig 465 — resolve per-quota_bucket counts from packages.products and
+    // load the global editorial policy.  Both reads are non-fatal: if either
+    // fails we fall back to defaults so Stage 4 always has a usable directive.
+    // The directive is injected into the Stage 4 user prompt as the new
+    // primary task framing (editorial_picks[] supersedes slot_decisions and
+    // position_decisions during the cutover window).
+    let quotaResolution: QuotaResolution;
+    try {
+      quotaResolution = await resolvePackageQuotasByName(
+        admin,
+        ctx.package_type,
+        ctx.package_ceiling,
+      );
+    } catch (qErr) {
+      const msg = qErr instanceof Error ? qErr.message : String(qErr);
+      warnings.push(`mig 465 quota resolver threw: ${msg} (using ceiling fallback)`);
+      quotaResolution = {
+        quotas: { sales_images: Math.max(1, Math.floor(ctx.package_ceiling || 1)) },
+        total: Math.max(1, Math.floor(ctx.package_ceiling || 1)),
+        non_shortlisting_products: [],
+        unknown_products: [],
+        source: 'fallback_ceiling',
+      };
+    }
+
+    const policyResult = await readEditorialPolicy(admin);
+    if (policyResult.warning) {
+      warnings.push(`mig 465 editorial policy read: ${policyResult.warning} (using DEFAULT_POLICY)`);
+    }
+    const policy = policyResult.policy;
+
+    // Render the EDITORIAL DIRECTIVE block once per Stage 4 run.  Empty when
+    // the package has zero shortlistable buckets (vanishingly rare — would
+    // require a drone-only or floorplan-only package), in which case the
+    // legacy slot lattice path stays in control.
+    const editorialDirectiveBlockText = quotaResolution.total > 0
+      ? renderEditorialDirective({
+          quotas: quotaResolution.quotas as Record<string, number>,
+          quotaLine: renderQuotaLine(quotaResolution.quotas),
+          editorialPrinciples: policy.editorial_principles,
+          tieBreaks: policy.tie_breaks,
+          qualityFloor: policy.quality_floor,
+          commonResidentialRooms: policy.common_residential_rooms,
+          duskSubjects: policy.dusk_subjects,
+          quotaSource: quotaResolution.source,
+          nonShortlistingProducts: quotaResolution.non_shortlisting_products,
+          unknownProducts: quotaResolution.unknown_products,
+        })
+      : '';
+
+    console.log(
+      `[${GENERATOR}] mig 465 directive resolved: package="${ctx.package_type}" ` +
+        `quota=${renderQuotaLine(quotaResolution.quotas)} ` +
+        `source=${quotaResolution.source} policy=${policyResult.source} ` +
+        `non_shortlisting=${quotaResolution.non_shortlisting_products.length} ` +
+        `unknown=${quotaResolution.unknown_products.length}`,
+    );
+
     const userPromptCore = buildStage4UserPrompt({
       sourceContextBlockText: sourceContextBlock(sourceType),
       photographerTechniquesBlockText: photographerTechniquesBlock(),
@@ -779,6 +844,7 @@ async function runStage4Core(
       imageStemsInOrder: previews.map((p) => p.stem),
       totalImages: previews.length,
       spaceInstances,
+      editorialDirectiveBlockText,
     });
     // QC-iter2-W3 F-D-007: prepend the slotEnumerationBlock preamble before
     // the rest of the user prompt. Sits BEFORE property facts + Stage 1
@@ -865,6 +931,19 @@ async function runStage4Core(
     // can succeed without either when the resolver returned zero positions.
     const positionDecisions = (output.position_decisions as Array<Record<string, unknown>> | undefined) || [];
     const proposedPositionTemplates = (output.proposed_position_templates as Array<Record<string, unknown>> | undefined) || [];
+    // Mig 465 — editorial_picks[] is the new primary surface (package-quota-
+    // driven editorial selection).  Empty when the directive wasn't injected
+    // (drone-only / floorplan-only packages) — in that case the legacy
+    // slot_decisions path drives persistence.
+    const editorialPicks = (output.editorial_picks as Array<Record<string, unknown>> | undefined) || [];
+    // Coverage warnings ride in the existing free-form `coverage_notes`
+    // string field rather than a structured array (state-count discipline:
+    // adding a 2nd nested array tipped Stage 4 over Gemini's serving limit).
+    const editorialCoverageNotesText = typeof output.coverage_notes === 'string'
+      ? output.coverage_notes
+      : Array.isArray(output.coverage_notes)
+        ? (output.coverage_notes as unknown[]).filter((s): s is string => typeof s === 'string').join('\n')
+        : '';
     const gallerySeq = (output.gallery_sequence as string[] | undefined) || null;
     const dedupGroups = (output.dedup_groups as Array<Record<string, unknown>> | undefined) || null;
     const missingShots = (output.missing_shot_recommendations as string[] | undefined) || null;
@@ -935,16 +1014,40 @@ async function runStage4Core(
       warnings,
     });
 
-    // Persist slot_decisions to shortlisting_overrides — the swimlane's
-    // primary data source. One row per (slot, winner-or-alternative).
-    const slotDecisionsPersisted = await persistSlotDecisions({
-      admin,
-      roundId,
-      projectId: ctx.project_id,
-      propertyTier: ctx.property_tier,
-      slotDecisions,
-      warnings,
-    });
+    // Persist editorial_picks (mig 465 primary) — falls back to slot_decisions
+    // when editorial_picks is empty (drone-only / floorplan-only packages, or
+    // the model failed to fill the new field for some reason).  The two
+    // helpers write to the SAME table (shortlisting_overrides) with
+    // human_action='ai_proposed', so we only call ONE per round to avoid
+    // double-stacking.
+    let slotDecisionsPersisted = 0;
+    let editorialPersistedCount = 0;
+    if (editorialPicks.length > 0) {
+      editorialPersistedCount = await persistEditorialPicks({
+        admin,
+        roundId,
+        projectId: ctx.project_id,
+        propertyTier: ctx.property_tier,
+        editorialPicks,
+        editorialCoverageNotesText,
+        quotaResolution,
+        policySource: policyResult.source,
+        warnings,
+      });
+      console.log(
+        `[${GENERATOR}] mig 465 editorial_picks persisted=${editorialPersistedCount} ` +
+          `(slot_decisions skipped — editorial path took over)`,
+      );
+    } else {
+      slotDecisionsPersisted = await persistSlotDecisions({
+        admin,
+        roundId,
+        projectId: ctx.project_id,
+        propertyTier: ctx.property_tier,
+        slotDecisions,
+        warnings,
+      });
+    }
 
     // W11.6.6: persist proposed_slots[] to shortlisting_events for W12's
     // discovery queue. Mirrors persistSlotDecisions' delete-then-insert
@@ -2492,6 +2595,340 @@ export async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Prom
   console.log(
     `[${GENERATOR}] persistSlotDecisions round=${args.roundId} ` +
     `slot_decisions=${args.slotDecisions.length} persisted=${rowsToInsert.length}`,
+  );
+  return rowsToInsert.length;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Mig 465 — editorial_picks[] → shortlisting_overrides (the new primary
+// source for the swimlane).  Replaces the slot_decisions[] write when the
+// EDITORIAL DIRECTIVE was injected into the prompt and the model returned
+// editorial_picks.  Schema-wise this writes to the SAME columns as
+// persistSlotDecisions (ai_proposed_group_id, ai_proposed_slot_id, etc.)
+// — slot_id is just the model-invented role_label, and we stash the
+// editorial-specific metadata (quota_bucket, editorial_score,
+// principles_applied, coverage_warnings) into ai_proposed_analysis as
+// structured JSON so the swimlane can render it without a schema change.
+// ──────────────────────────────────────────────────────────────────────────
+
+interface PersistEditorialPicksArgs {
+  admin: ReturnType<typeof getAdminClient>;
+  roundId: string;
+  projectId: string;
+  propertyTier: PropertyTier;
+  editorialPicks: Array<Record<string, unknown>>;
+  /** Free-form text from output.coverage_notes — model writes shortfall
+   *  explanations here when it can't fill a quota.  Empty string when no
+   *  notes were emitted. */
+  editorialCoverageNotesText: string;
+  /** Resolved package quotas — used to validate quota_bucket values + log
+   *  per-bucket fill ratios for ops dashboards. */
+  quotaResolution: QuotaResolution;
+  /** Whether the policy came from the DB row or the in-code default — used
+   *  for the audit emit so ops can spot rounds that ran on stale defaults. */
+  policySource: 'db' | 'default';
+  warnings: string[];
+}
+
+async function persistEditorialPicks(
+  args: PersistEditorialPicksArgs,
+): Promise<number> {
+  // 1. Map every stem in the round → its composition_groups.id so we can
+  //    resolve role_label-keyed picks back to ai_proposed_group_id.
+  const { data: groupRows, error: gErr } = await args.admin
+    .from('composition_groups')
+    .select('id, best_bracket_stem, delivery_reference_stem')
+    .eq('round_id', args.roundId);
+  if (gErr) {
+    args.warnings.push(`persistEditorialPicks: composition_groups load failed: ${gErr.message}`);
+    return 0;
+  }
+  const stemToGroup = new Map<string, string>();
+  for (const r of groupRows ?? []) {
+    if (typeof r.best_bracket_stem === 'string' && typeof r.id === 'string') {
+      stemToGroup.set(r.best_bracket_stem, r.id);
+    }
+    if (typeof r.delivery_reference_stem === 'string' && typeof r.id === 'string') {
+      stemToGroup.set(r.delivery_reference_stem, r.id);
+    }
+  }
+
+  // 2. Pull combined_score per group for ai_proposed_score reporting
+  const { data: classRows } = await args.admin
+    .from('composition_classifications')
+    .select('group_id, combined_score')
+    .eq('round_id', args.roundId);
+  const groupToScore = new Map<string, number | null>();
+  for (const r of classRows ?? []) {
+    if (typeof r.group_id === 'string') {
+      const s = typeof r.combined_score === 'number' ? r.combined_score : null;
+      groupToScore.set(r.group_id, s);
+    }
+  }
+
+  // 3. Validate every pick — drop malformed ones with explicit warnings
+  //    rather than silently accepting partial data.
+  const validBuckets = new Set(Object.keys(args.quotaResolution.quotas));
+  const projectTier =
+    args.propertyTier === 'standard'
+      || args.propertyTier === 'premium'
+      || args.propertyTier === 'approachable'
+        ? args.propertyTier
+        : null;
+
+  const rowsToInsert: Array<Record<string, unknown>> = [];
+  const fillByBucket: Record<string, number> = {};
+  let droppedNoStem = 0;
+  let droppedBadBucket = 0;
+  let droppedNoGroup = 0;
+
+  for (const pick of args.editorialPicks) {
+    const stem = typeof pick.stem === 'string' ? pick.stem : null;
+    if (!stem) {
+      droppedNoStem++;
+      continue;
+    }
+    const bucket = typeof pick.quota_bucket === 'string' ? pick.quota_bucket : '';
+    if (!bucket || !validBuckets.has(bucket)) {
+      droppedBadBucket++;
+      args.warnings.push(
+        `persistEditorialPicks: dropped pick with invalid/unknown quota_bucket="${bucket}" stem=${stem}`,
+      );
+      continue;
+    }
+    const groupId = stemToGroup.get(stem);
+    if (!groupId) {
+      droppedNoGroup++;
+      args.warnings.push(
+        `persistEditorialPicks: stem ${stem} not found in composition_groups`,
+      );
+      continue;
+    }
+
+    const roleLabel = typeof pick.role_label === 'string' && pick.role_label.length > 0
+      ? pick.role_label.trim().toLowerCase().replace(/\s+/g, '_')
+      : `${bucket}_unlabelled`;
+    const rationale = typeof pick.rationale === 'string' ? pick.rationale : null;
+    const editorialScore = typeof pick.editorial_score === 'number'
+      && Number.isFinite(pick.editorial_score)
+      ? pick.editorial_score
+      : null;
+    const principlesApplied = Array.isArray(pick.principles_applied)
+      ? (pick.principles_applied as unknown[]).filter(
+          (p): p is string => typeof p === 'string',
+        )
+      : [];
+    const compositeScore = groupToScore.get(groupId) ?? null;
+
+    // Stash editorial metadata as a structured JSON envelope on
+    // ai_proposed_analysis.  Keeps the schema unchanged while still surfacing
+    // every field the swimlane needs.
+    const analysisEnvelope = JSON.stringify({
+      editorial: {
+        rationale,
+        editorial_score: editorialScore,
+        principles_applied: principlesApplied,
+        quota_bucket: bucket,
+        role_label: roleLabel,
+        space_instance_id: typeof pick.space_instance_id === 'string'
+          ? pick.space_instance_id
+          : null,
+        // Provenance for debugging — both the source of the quota and the
+        // policy let ops trace why this pick happened.
+        quota_source: args.quotaResolution.source,
+        policy_source: args.policySource,
+      },
+    });
+
+    rowsToInsert.push({
+      project_id: args.projectId,
+      round_id: args.roundId,
+      ai_proposed_group_id: groupId,
+      ai_proposed_slot_id: roleLabel,
+      ai_proposed_score: compositeScore,
+      ai_proposed_analysis: analysisEnvelope,
+      slot_fit_score: editorialScore,
+      // position_index / position_filled_via stay null — these are concepts
+      // from the curated_positions model which the editorial engine
+      // supersedes.
+      position_index: null,
+      position_filled_via: null,
+      human_action: 'ai_proposed',
+      slot_group_id: roleLabel,
+      project_tier: projectTier,
+    });
+    fillByBucket[bucket] = (fillByBucket[bucket] ?? 0) + 1;
+  }
+
+  if (droppedNoStem + droppedBadBucket + droppedNoGroup > 0) {
+    console.warn(
+      `[${GENERATOR}] persistEditorialPicks dropped: no_stem=${droppedNoStem} ` +
+        `bad_bucket=${droppedBadBucket} no_group=${droppedNoGroup}`,
+    );
+  }
+
+  if (rowsToInsert.length === 0) {
+    args.warnings.push('persistEditorialPicks: no resolvable editorial picks to persist');
+    return 0;
+  }
+
+  // 4. Idempotent INSERT — delete prior ai_proposed rows for this round
+  //    (operator overrides are preserved by the human_action filter).
+  const { error: delErr } = await args.admin
+    .from('shortlisting_overrides')
+    .delete()
+    .eq('round_id', args.roundId)
+    .eq('human_action', 'ai_proposed');
+  if (delErr) {
+    args.warnings.push(`persistEditorialPicks delete-prior failed: ${delErr.message}`);
+  }
+
+  const { error: insErr } = await args.admin
+    .from('shortlisting_overrides')
+    .insert(rowsToInsert);
+  if (insErr) {
+    args.warnings.push(`persistEditorialPicks insert failed: ${insErr.message}`);
+    return 0;
+  }
+
+  // 5. Per-bucket fill report — surfaces under-fills as warnings even when
+  //    the model didn't self-flag.  Belt-and-braces against weak prompt
+  //    adherence on small candidate pools.
+  for (const [bucket, requested] of Object.entries(args.quotaResolution.quotas)) {
+    const picked = fillByBucket[bucket] ?? 0;
+    if (typeof requested === 'number' && picked < requested) {
+      args.warnings.push(
+        `editorial fill shortfall: ${bucket} requested=${requested} picked=${picked}`,
+      );
+    }
+  }
+
+  // 5b. Mig 465 Phase 3 — post-check coverage validator.  Reads the policy's
+  //     common_residential_rooms list and checks whether each common room
+  //     either (a) appears as a picked role_label/space_type, or (b) has no
+  //     viable candidate in the round.  When (a) is false AND (b) is false
+  //     (i.e. there WAS a candidate but the engine skipped it) we emit a
+  //     coverage warning so operators can spot the omission.  Hint, never
+  //     blocks — operator can dismiss if intentional.
+  try {
+    const policyRow = await args.admin
+      .from('shortlisting_engine_policy')
+      .select('policy')
+      .eq('id', 1)
+      .maybeSingle();
+    const commonRooms: string[] = Array.isArray(
+      (policyRow.data?.policy as Record<string, unknown> | null)?.common_residential_rooms,
+    )
+      ? ((policyRow.data?.policy as Record<string, unknown>)
+          .common_residential_rooms as string[])
+      : [];
+    if (commonRooms.length > 0) {
+      // Pull the round's space_type set from composition_classifications so
+      // we can tell "no candidate exists" apart from "engine omitted".
+      const { data: classRows } = await args.admin
+        .from('composition_classifications')
+        .select('space_type, room_type')
+        .eq('round_id', args.roundId);
+      const candidateRoomTypes = new Set<string>();
+      for (const c of classRows ?? []) {
+        const st = typeof c.space_type === 'string' ? c.space_type.toLowerCase() : null;
+        if (st) candidateRoomTypes.add(st);
+        const rt = typeof c.room_type === 'string' ? c.room_type.toLowerCase() : null;
+        if (rt) candidateRoomTypes.add(rt);
+      }
+      const pickedRoomTokens = new Set<string>();
+      for (const r of rowsToInsert) {
+        const rl = typeof r.ai_proposed_slot_id === 'string' ? r.ai_proposed_slot_id.toLowerCase() : '';
+        if (rl) {
+          // role_label is free-form snake_case — split on `_` and add every
+          // token + the full label so e.g. `master_bedroom_wide` matches the
+          // common-room list whether the operator put `master_bedroom` or
+          // `bedroom` in the policy.
+          for (const tok of rl.split('_')) {
+            if (tok.length > 2) pickedRoomTokens.add(tok);
+          }
+          pickedRoomTokens.add(rl);
+        }
+      }
+      const omittedWithCandidates: string[] = [];
+      for (const room of commonRooms) {
+        const norm = room.toLowerCase();
+        const picked =
+          pickedRoomTokens.has(norm) ||
+          // also handle multi-word room names that happen to be a substring
+          // of a picked role_label (e.g. 'master_bedroom' inside
+          // 'master_bedroom_hero').
+          Array.from(pickedRoomTokens).some(
+            (tok) => tok.includes(norm) || norm.includes(tok),
+          );
+        if (!picked && candidateRoomTypes.has(norm)) {
+          omittedWithCandidates.push(room);
+        }
+      }
+      for (const room of omittedWithCandidates) {
+        args.warnings.push(
+          `coverage post-check: common room "${room}" had candidates but ` +
+            `was omitted from editorial_picks — operator review recommended`,
+        );
+      }
+      // Also surface as a structured event so the swimlane / dashboard
+      // can render warning chips without re-parsing the warnings string.
+      if (omittedWithCandidates.length > 0) {
+        try {
+          await args.admin.from('shortlisting_events').insert({
+            project_id: args.projectId,
+            round_id: args.roundId,
+            event_type: 'editorial_coverage_post_check',
+            actor_type: 'system',
+            actor_user_id: null,
+            payload: {
+              omitted_common_rooms: omittedWithCandidates,
+              common_rooms_policy: commonRooms,
+              candidate_room_types: Array.from(candidateRoomTypes),
+            },
+          });
+        } catch (eErr) {
+          const m = eErr instanceof Error ? eErr.message : String(eErr);
+          console.warn(`[${GENERATOR}] post-check event insert failed (non-fatal): ${m}`);
+        }
+      }
+    }
+  } catch (postErr) {
+    const m = postErr instanceof Error ? postErr.message : String(postErr);
+    console.warn(`[${GENERATOR}] post-check coverage validator threw (non-fatal): ${m}`);
+  }
+
+  // 6. Emit a single shortlisting_events row capturing the editorial run
+  //    summary.  Lets ops dashboards trend "rounds that hit quota cleanly"
+  //    vs "rounds that warned out".
+  try {
+    await args.admin.from('shortlisting_events').insert({
+      project_id: args.projectId,
+      round_id: args.roundId,
+      event_type: 'editorial_picks_persisted',
+      actor_type: 'system',
+      actor_id: null,
+      payload: {
+        quotas_requested: args.quotaResolution.quotas,
+        fill_by_bucket: fillByBucket,
+        total_picks: rowsToInsert.length,
+        dropped_no_stem: droppedNoStem,
+        dropped_bad_bucket: droppedBadBucket,
+        dropped_no_group: droppedNoGroup,
+        coverage_notes: args.editorialCoverageNotesText || null,
+        quota_source: args.quotaResolution.source,
+        policy_source: args.policySource,
+      },
+    });
+  } catch (eErr) {
+    const m = eErr instanceof Error ? eErr.message : String(eErr);
+    console.warn(`[${GENERATOR}] editorial_picks_persisted event insert failed (non-fatal): ${m}`);
+  }
+
+  console.log(
+    `[${GENERATOR}] persistEditorialPicks round=${args.roundId} ` +
+      `picks=${args.editorialPicks.length} persisted=${rowsToInsert.length} ` +
+      `fill_by_bucket=${JSON.stringify(fillByBucket)}`,
   );
   return rowsToInsert.length;
 }
