@@ -145,7 +145,7 @@ export default function EditorialPolicyEditor() {
       if (errs.length > 0) {
         throw new Error(errs.join(" "));
       }
-      const userId = (await api.client.auth.getUser())?.data?.user?.id || null;
+      const userId = (await supabase.auth.getUser())?.data?.user?.id || null;
 
       const newPolicy = {
         editorial_principles: editorialPrinciples.trim(),
@@ -194,7 +194,7 @@ export default function EditorialPolicyEditor() {
 
   const restoreMutation = useMutation({
     mutationFn: async (entry) => {
-      const userId = (await api.client.auth.getUser())?.data?.user?.id || null;
+      const userId = (await supabase.auth.getUser())?.data?.user?.id || null;
       const { error } = await supabase
         .from("shortlisting_engine_policy")
         .update({

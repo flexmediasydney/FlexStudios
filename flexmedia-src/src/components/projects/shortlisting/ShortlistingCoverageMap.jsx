@@ -80,7 +80,7 @@ function useEditorialEvent(roundId) {
     staleTime: 0,
     refetchOnMount: "always",
     queryFn: async () => {
-      const { data, error } = await api.client
+      const { data, error } = await supabase
         .from("shortlisting_events")
         .select("payload, created_at")
         .eq("round_id", roundId)
@@ -100,7 +100,7 @@ function useCoveragePostCheck(roundId) {
     staleTime: 0,
     refetchOnMount: "always",
     queryFn: async () => {
-      const { data, error } = await api.client
+      const { data, error } = await supabase
         .from("shortlisting_events")
         .select("payload, created_at")
         .eq("round_id", roundId)

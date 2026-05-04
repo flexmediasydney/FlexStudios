@@ -35,7 +35,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { CheckCircle2, AlertCircle, Info, Database, Wand2 } from "lucide-react";
-import { api } from "@/api/supabaseClient";
+import { supabase } from "@/api/supabaseClient";
 import { SwimlaneSlotCounter } from "./SwimlaneToolbar";
 
 const QUOTA_BUCKET_LABELS = {
@@ -90,7 +90,7 @@ function useLatestEditorialEvent(roundId) {
     staleTime: 0,
     refetchOnMount: "always",
     queryFn: async () => {
-      const { data, error } = await api.client
+      const { data, error } = await supabase
         .from("shortlisting_events")
         .select("payload, created_at")
         .eq("round_id", roundId)
@@ -110,7 +110,7 @@ function useCoveragePostCheck(roundId) {
     staleTime: 0,
     refetchOnMount: "always",
     queryFn: async () => {
-      const { data, error } = await api.client
+      const { data, error } = await supabase
         .from("shortlisting_events")
         .select("payload, created_at")
         .eq("round_id", roundId)
