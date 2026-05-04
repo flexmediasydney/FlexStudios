@@ -102,8 +102,11 @@ function renderValue(v) {
 }
 
 // ─── Section primitive ─────────────────────────────────────────────────────
+// Exported so the parent ShortlistingLightbox can wrap its existing
+// 26-signal-scores block (and any other non-detail panels it owns) in
+// the same collapsible chrome — keeps the whole side panel consistent.
 
-function Section({ icon, title, count, defaultOpen = true, children, testId }) {
+export function Section({ icon, title, count, defaultOpen = true, children, testId }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <div

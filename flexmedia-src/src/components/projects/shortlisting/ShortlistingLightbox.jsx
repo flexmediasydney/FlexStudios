@@ -69,7 +69,7 @@ import {
 } from "@/utils/signalScores";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 import CanonicalObjectPanel from "./CanonicalObjectPanel";
-import LightboxDetailPanel from "./LightboxDetailPanel";
+import LightboxDetailPanel, { Section as DetailSection } from "./LightboxDetailPanel";
 
 const SWIPE_THRESHOLD_PX = 50;
 
@@ -716,14 +716,15 @@ export default function ShortlistingLightbox({
             </div>
           )}
 
-          {/* 26-signal scores — grouped by category */}
-          <div className="mb-3">
-            <div className="text-[10px] uppercase tracking-wide text-white/60 mb-1.5 flex items-center justify-between">
-              <span>Signal scores</span>
-              <span className="text-white/40 normal-case">
-                {totalSignalsRecorded} of 26 recorded
-              </span>
-            </div>
+          {/* 26-signal scores — grouped by category. Wrapped in DetailSection
+              (the same primitive LightboxDetailPanel uses) so the whole
+              side panel reads as one consistent collapsible-chrome list. */}
+          <DetailSection
+            title={`Signal scores`}
+            count={totalSignalsRecorded || undefined}
+            defaultOpen
+            testId="signal-scores-section"
+          >
             {totalSignalsRecorded === 0 ? (
               <div className="text-[10px] text-white/40 italic">
                 No signal scores recorded.
@@ -786,7 +787,7 @@ export default function ShortlistingLightbox({
                 })}
               </div>
             )}
-          </div>
+          </DetailSection>
 
           {/* Comprehensive engine detail panel — every classification + decision
               the engine made about this image, grouped into collapsible
@@ -794,17 +795,20 @@ export default function ShortlistingLightbox({
               stays scannable: signals first, full context after. */}
           <LightboxDetailPanel item={item} />
 
-          {/* Master listing snippet */}
-          {masterListing && (
-            <div className="mb-3 border-t border-white/10 pt-2">
-              <div className="text-[10px] uppercase tracking-wide text-white/60 mb-1">
-                Master listing
-              </div>
-              <p className="text-white/80 leading-snug whitespace-pre-wrap">
+          {/* Master listing snippet — wrapped in DetailSection for
+              consistency. Default-collapsed since most operators don't
+              need to scan it on every click; one tap to expand. */}
+          {masterListing ? (
+            <DetailSection
+              title="Master listing"
+              defaultOpen={false}
+              testId="master-listing-section"
+            >
+              <p className="text-white/80 leading-snug whitespace-pre-wrap text-[11px]">
                 {masterListing}
               </p>
-            </div>
-          )}
+            </DetailSection>
+          ) : null}
 
           {/* "Why?" expander — Stage 1 analysis prose */}
           {item?.classification?.analysis && (
