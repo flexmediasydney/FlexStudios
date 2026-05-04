@@ -563,6 +563,22 @@ async function finalizeUnlock(
     };
   }
 
+  // Mirror shortlist-lock — reset project.shortlist_status from 'locked'
+  // back to 'ready_for_review' (the state set by shortlisting-pass3 /
+  // Stage 4 success).  This denormalised field drives the swimlane
+  // header subtitle ("8 rounds · locked") and other dashboard widgets;
+  // without this update the project still showed "locked" after unlock
+  // even though round.status flipped to 'proposed'.
+  const { error: projectUpdErr } = await args.admin
+    .from('projects')
+    .update({ shortlist_status: 'ready_for_review' })
+    .eq('id', args.projectId);
+  if (projectUpdErr) {
+    console.warn(
+      `[${GENERATOR}] project shortlist_status update failed (non-fatal): ${projectUpdErr.message}`,
+    );
+  }
+
   const eventPayload = {
     reason: args.reason,
     unlocked_by: args.unlockedBy,

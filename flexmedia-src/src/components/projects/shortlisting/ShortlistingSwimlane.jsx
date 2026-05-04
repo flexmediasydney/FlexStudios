@@ -2057,16 +2057,25 @@ export default function ShortlistingSwimlane({
             </div>
             <div className="border-l h-8" />
             <div>
-              <div className="text-xs text-muted-foreground">Approved</div>
+              <div className="text-xs text-muted-foreground">
+                {isLocked ? "Locked-in" : "Approved"}
+              </div>
               <div className="text-sm font-medium tabular-nums">
-                {approvedCount} / {ceiling ?? "—"} max
+                {approvedCount + proposedCount} / {ceiling ?? "—"}
+              </div>
+              {/* 2026-05-04 — fix operator-confusion: previously showed
+                  approvedCount only (2/29) but lock actually commits
+                  approved+proposed (31) because AI proposed lane is
+                  default-approved. Now shows total + breakdown. */}
+              <div className="text-[10px] text-muted-foreground/70 tabular-nums leading-tight">
+                {approvedCount} human + {proposedCount} AI
               </div>
             </div>
             <div className="border-l h-8" />
             <div>
-              <div className="text-xs text-muted-foreground">Proposed</div>
+              <div className="text-xs text-muted-foreground">Rejected</div>
               <div className="text-sm font-medium tabular-nums">
-                {proposedCount}
+                {rejectedCount}
               </div>
             </div>
             <div className="border-l h-8" />

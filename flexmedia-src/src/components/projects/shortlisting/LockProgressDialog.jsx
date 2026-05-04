@@ -182,16 +182,21 @@ export default function LockProgressDialog({
   const isFailed = inferredStatus === "failed";
   const isComplete = inferredStatus === "complete";
 
-  // Inline-complete fast path: when initialResponse already returned
-  // status='complete' (e.g. zero work, or the rare sync-complete batch), show
-  // the result counts from initialResponse directly. The progress row may not
-  // even exist for the no-work path.
-  const movedApproved = isComplete
-    ? (initialResponse?.moved?.approved ?? initialApproved)
-    : (progress ? Math.min(succeeded, approvedCount) : initialApproved);
-  const movedRejected = isComplete
-    ? (initialResponse?.moved?.rejected ?? initialRejected)
-    : (progress ? Math.max(0, succeeded - approvedCount) : initialRejected);
+  // 2026-05-04 — fix display bug.  The PRIOR formula read
+  // `initialResponse.moved.approved` first when isComplete, but on the
+  // async path the initial 202 response has moved={approved:0,rejected:0}
+  // (counts populate during background poll into lock_progress).  Result
+  // was "Moved 0 approved + 0 rejected" even when 154 files succeeded.
+  // Fix: prefer polled progress when it has data; fall back to initial
+  // response only for sync-complete / zero-work fast paths where progress
+  // row may not exist.
+  const hasPolledCounts = progress && progress.succeeded_moves != null;
+  const movedApproved = hasPolledCounts
+    ? Math.min(progress.succeeded_moves, progress.approved_count ?? 0)
+    : (initialResponse?.moved?.approved ?? initialApproved);
+  const movedRejected = hasPolledCounts
+    ? Math.max(0, progress.succeeded_moves - (progress.approved_count ?? 0))
+    : (initialResponse?.moved?.rejected ?? initialRejected);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -206,7 +211,9 @@ export default function LockProgressDialog({
           </DialogTitle>
           <DialogDescription>
             {isComplete
-              ? `Moved ${movedApproved} approved + ${movedRejected} rejected file(s) into Dropbox folders.`
+              ? failed > 0
+                ? `Moved ${succeeded} of ${total} file(s) into Final Shortlist/. ${failed} transient failure${failed === 1 ? "" : "s"} (rate-limit retries already exhausted; check errors below).`
+                : `Moved ${succeeded} file(s) into Final Shortlist/.${movedRejected > 0 ? ` (${movedRejected} explicitly rejected → Rejected/.)` : ""}`
               : isFailed
                 ? "The Dropbox batch did not complete. You can resume — files already at their destination will be skipped."
                 : "Dropbox is moving files in the background. You can close this dialog; we'll keep working."}
