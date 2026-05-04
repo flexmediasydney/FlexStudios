@@ -41,9 +41,36 @@ import {
   Clock,
   XCircle,
   Skull,
+  ChevronDown,
+  ChevronRight,
+  ImageOff,
 } from "lucide-react";
 
 const POLL_INTERVAL_MS = 15_000;
+
+// Public Supabase Storage CDN base — built from env so dev/staging/prod
+// all resolve correctly.  Bucket is public (no signed URLs needed).
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
+const PREVIEW_BUCKET_BASE =
+  `${SUPABASE_URL.replace(/\/$/, "")}/storage/v1/object/public/shortlisting-previews`;
+
+/**
+ * Build the public CDN URL for a single CR3's preview JPEG, given the
+ * round's storage scope and the file's stem (basename without extension).
+ * Mirrors Modal's upload path:
+ *   shortlisting-previews/{project_id}/{round_id}/{stem}.jpg
+ */
+function buildPreviewUrl(projectId, roundId, stem) {
+  if (!projectId || !roundId || !stem) return null;
+  return `${PREVIEW_BUCKET_BASE}/${projectId}/${roundId}/${encodeURIComponent(stem)}.jpg`;
+}
+
+/** stem extraction from a Dropbox path: trailing slash component, drop ext. */
+function stemOfPath(path) {
+  if (!path) return "";
+  const last = String(path).split("/").pop() || "";
+  return last.replace(/\.[a-z0-9]+$/i, "");
+}
 
 /** Chain kinds the widget surfaces. extract = the per-image dropbox extract
  *  fan-out. We deliberately exclude 'ingest' (the PendingIngestsWidget owns
@@ -96,6 +123,104 @@ function formatWall(ms) {
   return `${secs}s`;
 }
 
+/**
+ * Per-extract-row expandable preview grid.
+ *
+ * Renders a thumbnail for every CR3 in the chunk's `payload.file_paths`,
+ * pointing directly at the public Supabase Storage CDN URL where Modal
+ * uploaded the JPEG preview.  Each tile shows:
+ *   - The thumbnail (or a "missing" placeholder if Modal didn't produce one)
+ *   - The CR3 stem (e.g. 034A8375)
+ *   - Per-file ok/fail tint sourced from result.modal_response.files[stem]
+ *
+ * No proxy hop — bucket is public, browser <img> hits Cloudflare/Supabase
+ * CDN directly.  No fetches needed beyond the existing job query, since
+ * URL construction is deterministic from project_id + round_id + stem.
+ *
+ * Operator click target: tile click opens the preview in a new tab at
+ * full resolution.  (Could be wired to ShortlistingLightbox later.)
+ */
+function ExtractPreviewGrid({ row }) {
+  const filePaths = Array.isArray(row?.payload?.file_paths) ? row.payload.file_paths : [];
+  const projectId = row?.project_id || row?.payload?.project_id;
+  const roundId = row?.round_id || row?.payload?.round_id;
+  const filesResult = row?.result?.modal_response?.files || row?.result?.files || {};
+
+  if (filePaths.length === 0 || !projectId || !roundId) {
+    return (
+      <div className="mt-2 text-[10px] text-muted-foreground/70 italic px-2 py-1.5 rounded bg-muted/30">
+        No file paths recorded on this chunk.
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded bg-muted/20 p-2">
+      <div className="text-[9px] uppercase tracking-wide text-muted-foreground/60 mb-1.5">
+        Preview output ({filePaths.length} files)
+      </div>
+      <div
+        className="grid gap-1"
+        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(72px, 1fr))" }}
+      >
+        {filePaths.map((path) => {
+          const stem = stemOfPath(path);
+          const fileResult = filesResult[stem];
+          // Tristate: ok=true → green outline, ok=false → red, undefined → muted (still in flight or no result)
+          const ok = fileResult?.ok === true;
+          const failed = fileResult?.ok === false;
+          // Prefer the Storage URL Modal returned in its result (canonical source);
+          // fall back to the deterministic URL pattern when result hasn't landed yet.
+          const url = fileResult?.preview_url || buildPreviewUrl(projectId, roundId, stem);
+          return (
+            <a
+              key={path}
+              href={url || undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={
+                failed
+                  ? `${stem} — ${fileResult?.error || "Modal reported failure"}`
+                  : ok
+                    ? `${stem} — click to open full size`
+                    : `${stem} — preview not yet available`
+              }
+              className={`block aspect-square rounded overflow-hidden ring-1 ${
+                failed
+                  ? "ring-rose-300 dark:ring-rose-700/50"
+                  : ok
+                    ? "ring-emerald-300/60 dark:ring-emerald-700/40 hover:ring-emerald-500"
+                    : "ring-border/50"
+              } bg-muted/50 relative group`}
+            >
+              {failed ? (
+                <div className="w-full h-full flex items-center justify-center text-rose-500/70">
+                  <ImageOff className="h-5 w-5" />
+                </div>
+              ) : (
+                <img
+                  src={url}
+                  alt={stem}
+                  loading="lazy"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    // Modal hasn't produced this preview yet — show a placeholder
+                    // instead of the broken-image icon.
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
+              )}
+              <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent text-[8px] text-white/90 font-mono px-1 py-0.5 truncate">
+                {stem}
+              </div>
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function formatAgo(ms) {
   if (ms < 0) return "soon";
   const totalSec = Math.floor(ms / 1000);
@@ -114,6 +239,12 @@ function formatAgo(ms) {
 export default function ActiveEngineRunsWidget({ projectId, compact = false }) {
   const qc = useQueryClient();
   const [nowMs, setNowMs] = useState(() => Date.now());
+
+  // 2026-05-04 — accordion state.  Single open row at a time keeps the
+  // widget compact when many extract chunks are running concurrently.
+  // Click the chevron to expand a row and see its preview thumbnails;
+  // click again or click another row's chevron to collapse this one.
+  const [expandedRowId, setExpandedRowId] = useState(null);
 
   // Tick the local clock for live wall-time on running jobs.
   useEffect(() => {
@@ -352,16 +483,45 @@ export default function ActiveEngineRunsWidget({ projectId, compact = false }) {
         </div>
         {(() => {
           const subtitle = buildContextSubtitle(row);
-          return subtitle ? (
-            <div className="mt-0.5 text-[10px] text-muted-foreground/80 font-mono truncate" title={subtitle}>
-              {subtitle}
+          // Extract rows are accordion-expandable to show preview thumbnails.
+          // Other kinds (pass0, stage1, etc.) just show the subtitle as text.
+          const isExpandable = row.kind === "extract" && Array.isArray(row.payload?.file_paths) && row.payload.file_paths.length > 0;
+          const isExpanded = expandedRowId === row.id;
+          if (!subtitle && !isExpandable) return null;
+          return (
+            <div className="mt-0.5">
+              {isExpandable ? (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpandedRowId(isExpanded ? null : row.id);
+                  }}
+                  className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/80 font-mono hover:text-foreground transition-colors"
+                  title={`${isExpanded ? "Hide" : "Show"} preview thumbnails for this chunk`}
+                >
+                  {isExpanded ? (
+                    <ChevronDown className="h-3 w-3 shrink-0" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 shrink-0" />
+                  )}
+                  <span className="truncate" title={subtitle}>{subtitle}</span>
+                </button>
+              ) : subtitle ? (
+                <div className="text-[10px] text-muted-foreground/80 font-mono truncate" title={subtitle}>
+                  {subtitle}
+                </div>
+              ) : null}
             </div>
-          ) : null;
+          );
         })()}
         {isFailed && row.error_message && (
           <div className="mt-1 text-[10px] text-amber-800 dark:text-amber-300 truncate font-mono">
             {row.error_message}
           </div>
+        )}
+        {row.kind === "extract" && expandedRowId === row.id && (
+          <ExtractPreviewGrid row={row} />
         )}
       </div>
     );
