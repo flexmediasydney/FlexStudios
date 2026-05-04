@@ -334,12 +334,18 @@ async function runDispatcherTick(
   // downstream stage queued.
   //
   // The completer scans for rounds where:
+  //   - the round itself is in status='processing' (NOT failed/proposed —
+  //     terminal rounds are out of scope; pass0 will reject them and we'd
+  //     dead-letter pass0 rows in a loop)
   //   - there is at least one extract row with status='succeeded'
   //   - there are zero extract rows still pending/running
-  //   - there is no pass0 row in any non-failed state
+  //   - there is NO pass0 row at all (any status — including dead_letter,
+  //     because the unique partial index only covers pending/running/
+  //     succeeded, so we'd happily insert duplicate pass0s into a loop
+  //     against rounds where pass0 has already exhausted retries)
   // and inserts pass0 for each. The unique index
-  // uniq_shortlisting_jobs_active_pass_per_round (mig 326) makes this
-  // idempotent across racing ticks.
+  // uniq_shortlisting_jobs_active_pass_per_round (mig 326) makes the
+  // happy-path inserts idempotent across racing ticks.
   try {
     const { data: orphanRounds, error: orphanErr } = await admin
       .from("shortlisting_jobs")
@@ -370,54 +376,80 @@ async function runDispatcherTick(
         else if (row.status === "pending" || row.status === "running") cur.in_flight++;
         perRound.set(rid, cur);
       }
-      const candidateRounds = Array.from(perRound.entries()).filter(
-        ([, v]) => v.succeeded > 0 && v.in_flight === 0,
-      );
-      for (const [roundId, v] of candidateRounds) {
-        // Skip rounds that already have a pass0 row in any non-failed state.
-        const { count: existingPass0 } = await admin
-          .from("shortlisting_jobs")
-          .select("id", { count: "exact", head: true })
-          .eq("round_id", roundId)
-          .eq("kind", "pass0")
-          .in("status", ["pending", "running", "succeeded"]);
-        if ((existingPass0 ?? 0) > 0) continue;
-        if (!v.project_id) {
+      const candidateRoundIds = Array.from(perRound.entries())
+        .filter(([, v]) => v.succeeded > 0 && v.in_flight === 0)
+        .map(([rid]) => rid);
+
+      if (candidateRoundIds.length > 0) {
+        // Restrict to rounds still in status='processing'. Rounds that have
+        // already been marked 'failed' (e.g. by the round-stuck-reaper) or
+        // 'proposed' (Stage 4 wrote final state) are terminal — pass0 will
+        // refuse to run on them and we'd just churn dead_letter rows.
+        const { data: processingRounds, error: roundErr } = await admin
+          .from("shortlisting_rounds")
+          .select("id")
+          .in("id", candidateRoundIds)
+          .eq("status", "processing");
+        if (roundErr) {
           console.warn(
-            `[${GENERATOR}] chain-completer: round ${roundId} has no project_id on extract rows — cannot enqueue pass0`,
+            `[${GENERATOR}] chain-completer: round-status filter failed: ${roundErr.message}`,
           );
-          continue;
-        }
-        const { error: insErr } = await admin.from("shortlisting_jobs").insert({
-          project_id: v.project_id,
-          round_id: roundId,
-          group_id: null,
-          kind: "pass0",
-          status: "pending",
-          payload: {
-            project_id: v.project_id,
-            round_id: roundId,
-            chained_from: "chain_completer",
-          },
-          scheduled_for: new Date().toISOString(),
-        });
-        if (insErr) {
-          const isRace =
-            /uniq_shortlisting_jobs_active_pass_per_round/.test(insErr.message) ||
-            /duplicate key value/i.test(insErr.message);
-          if (isRace) {
-            console.log(
-              `[${GENERATOR}] chain-completer: pass0 for round ${roundId} skipped — sibling tick won the race`,
-            );
-          } else {
-            console.warn(
-              `[${GENERATOR}] chain-completer: pass0 insert failed for round ${roundId}: ${insErr.message}`,
-            );
-          }
         } else {
-          console.warn(
-            `[${GENERATOR}] chain-completer: enqueued stranded pass0 for round ${roundId} (succeeded=${v.succeeded}, project=${v.project_id})`,
+          const processingIds = new Set(
+            (processingRounds || []).map((r) => r.id as string),
           );
+          for (const roundId of candidateRoundIds) {
+            if (!processingIds.has(roundId)) continue;
+            const v = perRound.get(roundId)!;
+            // Skip if ANY pass0 row exists for this round (including
+            // dead_letter / failed). We deliberately do NOT use the
+            // unique-partial-index status set ['pending','running','succeeded']
+            // here — without dead_letter in the check we'd loop-insert pass0s
+            // against a round whose pass0 has already exhausted retries.
+            const { count: anyPass0 } = await admin
+              .from("shortlisting_jobs")
+              .select("id", { count: "exact", head: true })
+              .eq("round_id", roundId)
+              .eq("kind", "pass0");
+            if ((anyPass0 ?? 0) > 0) continue;
+            if (!v.project_id) {
+              console.warn(
+                `[${GENERATOR}] chain-completer: round ${roundId} has no project_id on extract rows — cannot enqueue pass0`,
+              );
+              continue;
+            }
+            const { error: insErr } = await admin.from("shortlisting_jobs").insert({
+              project_id: v.project_id,
+              round_id: roundId,
+              group_id: null,
+              kind: "pass0",
+              status: "pending",
+              payload: {
+                project_id: v.project_id,
+                round_id: roundId,
+                chained_from: "chain_completer",
+              },
+              scheduled_for: new Date().toISOString(),
+            });
+            if (insErr) {
+              const isRace =
+                /uniq_shortlisting_jobs_active_pass_per_round/.test(insErr.message) ||
+                /duplicate key value/i.test(insErr.message);
+              if (isRace) {
+                console.log(
+                  `[${GENERATOR}] chain-completer: pass0 for round ${roundId} skipped — sibling tick won the race`,
+                );
+              } else {
+                console.warn(
+                  `[${GENERATOR}] chain-completer: pass0 insert failed for round ${roundId}: ${insErr.message}`,
+                );
+              }
+            } else {
+              console.warn(
+                `[${GENERATOR}] chain-completer: enqueued stranded pass0 for round ${roundId} (succeeded=${v.succeeded}, project=${v.project_id})`,
+              );
+            }
+          }
         }
       }
     }
