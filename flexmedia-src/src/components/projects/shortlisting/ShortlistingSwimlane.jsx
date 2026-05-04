@@ -1833,9 +1833,18 @@ export default function ShortlistingSwimlane({
     return q;
   }, [editorialQuotasQuery.data]);
 
+  // Count BOTH AI PROPOSED + HUMAN APPROVED — at lock time the lock
+  // function moves BOTH lanes into Final Shortlist (the `ai_proposed`
+  // seed-row case in computeApprovedRejectedSets treats AI picks as
+  // default-approved unless the operator explicitly removed them).
+  // So the lock-guard count must mirror the lock function's own
+  // approvedSet, not just the human-confirmed column.  Otherwise the
+  // operator gets blocked from locking even when the AI already
+  // satisfied quota — counterintuitive given the Engine recipe panel
+  // already shows green ticks for the same quota.
   const approvedByBucket = useMemo(() => {
     const counts = { sales_images: 0, dusk_images: 0, aerial_images: 0 };
-    for (const item of columnItems.approved || []) {
+    const tally = (item) => {
       const slot = item?.slot || null;
       const cls = item?.classification || null;
       let bucket = slot?.editorial?.quota_bucket;
@@ -1851,9 +1860,11 @@ export default function ShortlistingSwimlane({
         else bucket = "sales_images";
       }
       counts[bucket] = (counts[bucket] ?? 0) + 1;
-    }
+    };
+    for (const item of columnItems.approved || []) tally(item);
+    for (const item of columnItems.proposed || []) tally(item);
     return counts;
-  }, [columnItems.approved]);
+  }, [columnItems.approved, columnItems.proposed]);
 
   const quotaShortfalls = useMemo(() => {
     if (!requiredQuotas || typeof requiredQuotas !== "object") return null;
