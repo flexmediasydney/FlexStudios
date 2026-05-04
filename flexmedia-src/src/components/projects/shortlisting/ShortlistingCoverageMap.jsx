@@ -1,489 +1,804 @@
 /**
- * ShortlistingCoverageMap — Wave 6 Phase 6 SHORTLIST
- *                          + W11.6.1-hotfix BUG #2 (Shape D plumbing)
- *                          + W11.6.1-followup (engine-roles eligibility)
+ * ShortlistingCoverageMap — Mig 465 engine-coverage report.
  *
- * Visual coverage map for a round.
+ * REPLACES the legacy phase-based slot-lattice view.  The lattice
+ * (`shortlisting_slot_definitions` + the phase 1/2/3 grouping) is no
+ * longer authoritative after the editorial-engine migration: the engine
+ * is now driven by `packages.products[].quantity` quotas + the
+ * `shortlisting_engine_policy` editorial principles.  The Coverage tab
+ * now mirrors that mental model.
  *
- * For each eligible slot definition (filtered by the project's resolved
- * engine_roles — see eligibility derivation below), show:
- *   - filled / unfilled (color-coded)
- *   - winner thumbnail (if filled)
- *   - alternatives count (legacy pass2 only — Shape D doesn't surface alts
- *     in shortlisting_overrides; the swimlane's altsBySlotId carries the
- *     per-slot rank-2/3 alternatives separately)
- *   - gap severity if unfilled
- * Mandatory slots highlighted; gaps in red.
- * Coverage % at top.
+ * Four cards, top → bottom:
  *
- * Data source — Shape D plumbing fix (W11.6.1-hotfix):
- *   PRIMARY:   shortlisting_overrides rows where human_action IN
- *              ('ai_proposed','approved_as_proposed','swapped',
- *               'added_from_rejects')
- *              The Shape D engine writes one override row per slot decision
- *              with human_action='ai_proposed'. Operators upgrade to
- *              'approved_as_proposed' / 'swapped' / 'added_from_rejects'
- *              from the swimlane. We resolve the active slot+group from:
- *                slot_id  = human_selected_slot_id ?? ai_proposed_slot_id
- *                group_id = human_selected_group_id ?? ai_proposed_group_id
- *              and record one winner per slot.
+ *   1. Contract fulfillment   — did we deliver what the package sold?
+ *      Pulls quotas + fill_by_bucket from the editorial_picks_persisted
+ *      event, renders a per-bucket progress rail (sales_images, dusk,
+ *      aerial), surfaces over-fills + under-fills with reason chips.
  *
- *   FALLBACK:  shortlisting_events rows where event_type IN
- *              ('pass2_slot_assigned','pass2_phase3_recommendation')
- *              Pre-Shape-D rounds (Wave 6 / pass-based engine) don't have
- *              shortlisting_overrides ai_proposed rows. We fall back to
- *              the legacy event-based reader so historical coverage maps
- *              still render. The legacy reader is also the source of the
- *              `alternativesCount` chip (rank=2,3 events).
+ *   2. Room coverage          — did the picks span the property?
+ *      Sub-view A: distribution per space_type from
+ *                  composition_classifications, with picks-vs-candidates.
+ *      Sub-view B: common-rooms checklist driven by
+ *                  policy.common_residential_rooms — green = picked,
+ *                  amber = omitted with candidates, grey = no candidate.
+ *      Reads the editorial_coverage_post_check event for the
+ *      omitted-with-candidates list.
  *
- *   Both readers map into the same slotState shape:
- *     Map<slot_id, { winner: { groupId }, alts: [{ groupId, payload }...] }>
- *   so the render path is unchanged.
+ *   3. Quality & decisions    — were the picks strong, did operators agree?
+ *      Editorial score histogram across all ai_proposed picks.  Operator
+ *      action breakdown (ai_proposed / approved / swapped / removed /
+ *      added_from_rejects).  Stage 4 visual-correction queue size.
  *
- * Slot eligibility — W11.6.1-followup:
- *   The legacy `s.package_types` filter referenced a column dropped from
- *   `shortlisting_slot_definitions` in mig 339 (Wave 7 P1-6 / W7.7). With
- *   that column gone, every slot's `package_types` is undefined and the
- *   filter silently dropped every slot. The Coverage tab now mirrors the
- *   backend eligibility resolver (`_shared/slotEligibility.ts`):
+ *   4. Recipe transparency    — what's actually driving this round?
+ *      Quota source (package_products vs fallback_ceiling), policy
+ *      source (db vs default), policy snapshot (quality_floor + common
+ *      rooms + dusk subjects), edit link to the policy editor.
  *
- *     project (products[] + packages[].products[])
- *       ->  productsById -> distinct, active engine_role values
- *           (`projectEngineRoles`)
- *       ->  slot eligible iff slot.eligible_when_engine_roles overlaps
- *           projectEngineRoles
- *
- *   When the project hasn't been loaded yet (or has no resolvable engine
- *   roles), we fall through to ALL active slots — the swimlane will show
- *   the full taxonomy rather than crashing the tab. A misconfigured slot
- *   (is_active=true with empty eligible_when_engine_roles) is dropped just
- *   like the backend resolver.
+ * Legacy rounds (no editorial_picks_persisted event) get a simple
+ * empty-state — there's no slot-lattice fallback.
  */
+
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, CheckCircle2, AlertTriangle } from "lucide-react";
-import DroneThumbnail from "@/components/drone/DroneThumbnail";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Database,
+  Wand2,
+  Sparkles,
+  ChevronRight,
+  Eye,
+  Users,
+  Wrench,
+} from "lucide-react";
+import { Link } from "react-router-dom";
+import { api, supabase } from "@/api/supabaseClient";
 import { cn } from "@/lib/utils";
 
-const PHASE_LABEL = { 1: "Mandatory", 2: "Conditional", 3: "AI Free" };
-const PHASE_TONE = {
-  1: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
-  2: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  3: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
+const QUOTA_BUCKET_LABELS = {
+  sales_images: "Sales / Day",
+  dusk_images: "Dusk",
+  aerial_images: "Aerial",
 };
 
+const HUMAN_ACTION_LABELS = {
+  ai_proposed: "AI proposed (untouched)",
+  approved_as_proposed: "Approved",
+  swapped: "Swapped",
+  removed: "Removed",
+  added_from_rejects: "Added from rejects",
+};
+
+// ─── Data hooks ────────────────────────────────────────────────────────────
+
+function useEditorialEvent(roundId) {
+  return useQuery({
+    queryKey: ["editorial_picks_persisted", roundId],
+    enabled: !!roundId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { data, error } = await api.client
+        .from("shortlisting_events")
+        .select("payload, created_at")
+        .eq("round_id", roundId)
+        .eq("event_type", "editorial_picks_persisted")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (error) throw error;
+      return Array.isArray(data) && data.length > 0 ? data[0] : null;
+    },
+  });
+}
+
+function useCoveragePostCheck(roundId) {
+  return useQuery({
+    queryKey: ["editorial_coverage_post_check", roundId],
+    enabled: !!roundId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { data, error } = await api.client
+        .from("shortlisting_events")
+        .select("payload, created_at")
+        .eq("round_id", roundId)
+        .eq("event_type", "editorial_coverage_post_check")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (error) throw error;
+      return Array.isArray(data) && data.length > 0 ? data[0] : null;
+    },
+  });
+}
+
+function useRoundClassifications(roundId) {
+  return useQuery({
+    queryKey: ["coverage_classifications", roundId],
+    enabled: !!roundId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("composition_classifications")
+        .select("group_id, space_type, room_type, time_of_day")
+        .eq("round_id", roundId);
+      if (error) throw error;
+      return Array.isArray(data) ? data : [];
+    },
+  });
+}
+
+function useRoundOverrides(roundId) {
+  return useQuery({
+    queryKey: ["coverage_overrides", roundId],
+    enabled: !!roundId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shortlisting_overrides")
+        .select(
+          "ai_proposed_slot_id, ai_proposed_group_id, ai_proposed_score, ai_proposed_analysis, human_action, slot_fit_score",
+        )
+        .eq("round_id", roundId);
+      if (error) throw error;
+      return Array.isArray(data) ? data : [];
+    },
+  });
+}
+
+function useGroupSpaceTypes(groupIds) {
+  return useQuery({
+    queryKey: ["coverage_group_space_types", groupIds.sort().join(",")],
+    enabled: Array.isArray(groupIds) && groupIds.length > 0,
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("composition_classifications")
+        .select("group_id, space_type, room_type")
+        .in("group_id", groupIds);
+      if (error) throw error;
+      return Array.isArray(data) ? data : [];
+    },
+  });
+}
+
+function usePolicy() {
+  return useQuery({
+    queryKey: ["shortlisting_engine_policy_for_coverage"],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shortlisting_engine_policy")
+        .select("policy, updated_at")
+        .eq("id", 1)
+        .maybeSingle();
+      if (error) throw error;
+      return data?.policy || null;
+    },
+  });
+}
+
+function useStage4Queue(roundId) {
+  return useQuery({
+    queryKey: ["coverage_stage4_queue", roundId],
+    enabled: !!roundId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("shortlisting_stage4_overrides")
+        .select("id", { count: "exact", head: true })
+        .eq("round_id", roundId)
+        .eq("review_status", "pending_review");
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+function parseEditorialEnvelope(rawAnalysis) {
+  if (typeof rawAnalysis !== "string" || !rawAnalysis) return null;
+  try {
+    const parsed = JSON.parse(rawAnalysis);
+    if (parsed && typeof parsed === "object") {
+      return parsed.editorial || parsed;
+    }
+  } catch {
+    // legacy rounds: rawAnalysis is just prose, no envelope
+  }
+  return null;
+}
+
+function bucketTone(picked, requested) {
+  if (requested <= 0) return "text-muted-foreground";
+  const ratio = picked / requested;
+  if (ratio >= 1) return "text-emerald-700 dark:text-emerald-300";
+  if (ratio >= 0.75) return "text-amber-700 dark:text-amber-300";
+  return "text-rose-700 dark:text-rose-300";
+}
+
+function bucketBarTone(picked, requested) {
+  if (requested <= 0) return "bg-muted";
+  const ratio = picked / requested;
+  if (ratio >= 1) return "bg-emerald-500/70";
+  if (ratio >= 0.75) return "bg-amber-500/70";
+  return "bg-rose-500/70";
+}
+
+function snakeToTitle(s) {
+  if (!s || typeof s !== "string") return s;
+  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ─── Component ─────────────────────────────────────────────────────────────
+
 export default function ShortlistingCoverageMap({ roundId, round }) {
-  // W11.6.1-followup: load the project + product catalog so we can resolve
-  // `projectEngineRoles` the same way the backend does (see
-  // `_shared/slotEligibility.ts`). Slot eligibility for the Coverage view
-  // is driven exclusively by `eligible_when_engine_roles` matching the
-  // resolved roles — the legacy `package_types` substring filter was
-  // retired with mig 339 and the column no longer exists on slot rows.
-  const projectId = round?.project_id || null;
+  const editorialQuery = useEditorialEvent(roundId);
+  const postCheckQuery = useCoveragePostCheck(roundId);
+  const classificationsQuery = useRoundClassifications(roundId);
+  const overridesQuery = useRoundOverrides(roundId);
+  const policyQuery = usePolicy();
+  const stage4QueueQuery = useStage4Queue(roundId);
 
-  const projectQuery = useQuery({
-    queryKey: ["coverage_project", projectId],
-    queryFn: async () => {
-      if (!projectId) return null;
-      const rows = await api.entities.Project.filter({ id: projectId }, null, 1);
-      return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
-    },
-    enabled: Boolean(projectId),
-    staleTime: 60_000,
-  });
-
-  const productsQuery = useQuery({
-    queryKey: ["coverage_products"],
-    queryFn: async () => {
-      const rows = await api.entities.Product.list("name", 1000);
-      return Array.isArray(rows) ? rows : [];
-    },
-    staleTime: 5 * 60_000,
-  });
-
-  // Fetch all active slot definitions; we'll filter to this project's
-  // resolved engine roles client-side (mirrors backend slotEligibility).
-  const slotsQuery = useQuery({
-    queryKey: ["shortlisting_slot_definitions_active"],
-    queryFn: async () => {
-      const rows = await api.entities.ShortlistingSlotDefinition.filter(
-        { is_active: true },
-        "phase",
-        500,
-      );
-      return rows || [];
-    },
-    staleTime: 60_000,
-  });
-
-  // W11.6.1-hotfix BUG #2 — PRIMARY reader: Shape D writes slot decisions
-  // to shortlisting_overrides with human_action='ai_proposed' (and operators
-  // upgrade to approved_as_proposed/swapped/added_from_rejects in the
-  // swimlane). The map row records ai_proposed_* + the post-action
-  // human_selected_*; we resolve to whichever pair has the live values.
-  const overridesQuery = useQuery({
-    queryKey: ["shortlisting_overrides_coverage", roundId],
-    queryFn: async () => {
-      const rows = await api.entities.ShortlistingOverride.filter(
-        {
-          round_id: roundId,
-          human_action: {
-            $in: [
-              "ai_proposed",
-              "approved_as_proposed",
-              "swapped",
-              "added_from_rejects",
-            ],
-          },
-        },
-        "created_at",
-        2000,
-      );
-      return rows || [];
-    },
-    enabled: Boolean(roundId),
-    staleTime: 15_000,
-  });
-
-  // W11.6.1-hotfix BUG #2 — FALLBACK reader: pre-Shape-D rounds had pass-2
-  // events for slot assignment. We KEEP this reader so historical rounds
-  // still render a coverage grid, AND so we can still surface the rank-2/3
-  // `alternativesCount` chip (Shape D doesn't store alts on overrides).
-  const eventsQuery = useQuery({
-    queryKey: ["shortlisting_events_coverage", roundId],
-    queryFn: async () => {
-      const rows = await api.entities.ShortlistingEvent.filter(
-        {
-          round_id: roundId,
-          event_type: { $in: ["pass2_slot_assigned", "pass2_phase3_recommendation"] },
-        },
-        "created_at",
-        2000,
-      );
-      return rows || [];
-    },
-    enabled: Boolean(roundId),
-    staleTime: 15_000,
-  });
-
-  const groupsQuery = useQuery({
-    queryKey: ["composition_groups", roundId],
-    queryFn: async () => {
-      const rows = await api.entities.CompositionGroup.filter(
-        { round_id: roundId },
-        "group_index",
-        2000,
-      );
-      return rows || [];
-    },
-    enabled: Boolean(roundId),
-    staleTime: 15_000,
-  });
-
-  const slots = slotsQuery.data || [];
-  const events = eventsQuery.data || [];
   const overrides = overridesQuery.data || [];
-  const groups = groupsQuery.data || [];
+  const pickedGroupIds = useMemo(
+    () =>
+      overrides
+        .filter((o) => o.human_action === "ai_proposed" && !!o.ai_proposed_group_id)
+        .map((o) => o.ai_proposed_group_id),
+    [overrides],
+  );
+  const pickedSpaceTypesQuery = useGroupSpaceTypes(pickedGroupIds);
 
-  const groupById = useMemo(() => {
-    const m = new Map();
-    for (const g of groups) m.set(g.id, g);
-    return m;
-  }, [groups]);
+  const editorialPayload = editorialQuery.data?.payload || null;
+  const postCheckPayload = postCheckQuery.data?.payload || null;
+  const policy = policyQuery.data || null;
+  const stage4QueuePending = stage4QueueQuery.data ?? 0;
 
-  // W11.6.1-hotfix BUG #2 — build slotState from BOTH sources.
-  //   1. Shape D `shortlisting_overrides` rows are the PRIMARY source of
-  //      truth on Shape D rounds. We resolve the live (slot_id, group_id)
-  //      pair as `human_selected_* ?? ai_proposed_*` so swaps land on the
-  //      operator's pick rather than the engine's original.
-  //   2. Legacy `shortlisting_events` (pass2_*) is the FALLBACK source for
-  //      pre-Shape-D rounds. We only fill from events when the override
-  //      reader didn't already record a winner for that slot — overrides
-  //      win when both readers see the same slot. Events also continue to
-  //      feed the `alternativesCount` chip since Shape D doesn't surface
-  //      rank-2/3 picks on shortlisting_overrides.
-  const slotState = useMemo(() => {
-    const m = new Map();
-
-    // PASS 1 — Shape D overrides (primary on modern rounds)
-    for (const ov of overrides) {
-      const slotId = ov.human_selected_slot_id ?? ov.ai_proposed_slot_id;
-      if (!slotId) continue;
-      const groupId = ov.human_selected_group_id ?? ov.ai_proposed_group_id;
-      if (!groupId) continue;
-      if (!m.has(slotId)) m.set(slotId, { winner: null, alts: [] });
-      // Most recent override wins (we ordered the query by created_at asc,
-      // so just keep overwriting). Swap → human_selected_* takes over from
-      // an earlier ai_proposed row for the same slot.
-      m.get(slotId).winner = {
-        groupId,
-        payload: {
-          source: "shortlisting_overrides",
-          human_action: ov.human_action,
-        },
+  // ── Layer 1 — Quota fulfillment ────────────────────────────────────────
+  const quotaRows = useMemo(() => {
+    if (!editorialPayload) return [];
+    const requested = editorialPayload.quotas_requested || {};
+    const filled = editorialPayload.fill_by_bucket || {};
+    return Object.entries(requested).map(([bucket, req]) => {
+      const picked = filled[bucket] ?? 0;
+      return {
+        bucket,
+        label: QUOTA_BUCKET_LABELS[bucket] || snakeToTitle(bucket),
+        requested: req,
+        picked,
+        ratio: req > 0 ? picked / req : 0,
       };
-    }
-
-    // PASS 2 — legacy events (fallback for pre-Shape-D rounds; also
-    // populates alts for any round that has them).
-    for (const ev of events) {
-      const slotId = ev.payload?.slot_id;
-      if (!slotId) continue;
-      if (!m.has(slotId)) m.set(slotId, { winner: null, alts: [] });
-      const entry = m.get(slotId);
-      if (ev.event_type === "pass2_slot_assigned") {
-        const rank = ev.payload?.rank;
-        if (rank === 1) {
-          // Only set the winner from a legacy event if the override reader
-          // didn't already supply one. Override-source-of-truth wins on
-          // hybrid rounds.
-          if (!entry.winner) {
-            entry.winner = { groupId: ev.group_id, payload: ev.payload };
-          }
-        } else {
-          entry.alts.push({ groupId: ev.group_id, payload: ev.payload });
-        }
-      } else if (ev.event_type === "pass2_phase3_recommendation") {
-        if (!entry.winner) {
-          entry.winner = { groupId: ev.group_id, payload: ev.payload };
-        }
-      }
-    }
-    return m;
-  }, [overrides, events]);
-
-  // W11.6.1-followup: derive `projectEngineRoles` from the project's
-  // package + à la carte products, mirroring `_shared/slotEligibility.ts`.
-  //
-  //   project.products[]  + project.packages[].products[]
-  //     -> { product_id }[] -> products lookup -> distinct active engine_role values
-  //
-  // Inactive products are dropped (they're catalog residue and shouldn't
-  // drive engine behaviour). Roles outside the known enum are dropped too
-  // — the slot match will simply not resolve, the Coverage tab won't crash.
-  const project = projectQuery.data || null;
-  const products = productsQuery.data || [];
-  const productsById = useMemo(() => {
-    const m = new Map();
-    for (const p of products) m.set(p.id, p);
-    return m;
-  }, [products]);
-
-  const projectEngineRoles = useMemo(() => {
-    if (!project) return [];
-    const roles = new Set();
-    const collectFromEntries = (entries) => {
-      if (!Array.isArray(entries)) return;
-      for (const entry of entries) {
-        if (!entry || typeof entry.product_id !== "string") continue;
-        const product = productsById.get(entry.product_id);
-        if (!product) continue;
-        if (product.is_active !== true) continue;
-        if (!product.engine_role) continue;
-        roles.add(product.engine_role);
-      }
-    };
-    // À la carte products live on `projects.products`.
-    collectFromEntries(project.products);
-    // Package-bundled products live on `projects.packages[].products`.
-    if (Array.isArray(project.packages)) {
-      for (const pkg of project.packages) {
-        collectFromEntries(pkg?.products);
-      }
-    }
-    return Array.from(roles);
-  }, [project, productsById]);
-
-  // Filter slots to those whose `eligible_when_engine_roles` overlap the
-  // project's resolved roles. A slot with `is_active=true` but an
-  // empty/null `eligible_when_engine_roles` is misconfigured and dropped
-  // (matches the backend resolver's defensive policy).
-  //
-  // If we couldn't resolve any project engine roles (project not loaded yet,
-  // or genuinely no products with engine_role), fall through to ALL active
-  // slots so the tab still renders the taxonomy rather than going blank.
-  const eligibleSlots = useMemo(() => {
-    if (projectEngineRoles.length === 0) {
-      // No roles resolved — show every active slot that has any engine_role
-      // declaration, so the tab still renders something useful while the
-      // project loads (or, defensively, when the project has no shortlist
-      // products configured).
-      return slots.filter((s) =>
-        Array.isArray(s.eligible_when_engine_roles) &&
-        s.eligible_when_engine_roles.length > 0,
-      );
-    }
-    const projectRoleSet = new Set(projectEngineRoles);
-    return slots.filter((s) => {
-      const engineRoles = Array.isArray(s.eligible_when_engine_roles)
-        ? s.eligible_when_engine_roles
-        : [];
-      if (engineRoles.length === 0) return false;
-      return engineRoles.some((r) => projectRoleSet.has(r));
     });
-  }, [slots, projectEngineRoles]);
+  }, [editorialPayload]);
 
-  // Coverage stats: phase 1 + 2 only (phase 3 is AI free, not gap-able).
-  const stats = useMemo(() => {
-    const phase12 = eligibleSlots.filter((s) => s.phase === 1 || s.phase === 2);
-    const filled = phase12.filter((s) => slotState.has(s.slot_id)).length;
-    const total = phase12.length;
-    const mandatory = eligibleSlots.filter((s) => s.phase === 1);
-    const mandatoryFilled = mandatory.filter((s) => slotState.has(s.slot_id)).length;
-    return {
-      filled,
-      total,
-      pct: total > 0 ? Math.round((filled / total) * 100) : 0,
-      mandatoryFilled,
-      mandatoryTotal: mandatory.length,
-    };
-  }, [eligibleSlots, slotState]);
+  const totalRequested = quotaRows.reduce((acc, r) => acc + (r.requested ?? 0), 0);
+  const totalPicked = editorialPayload?.total_picks ?? quotaRows.reduce((acc, r) => acc + r.picked, 0);
+  const totalRatioPct = totalRequested > 0
+    ? Math.min(200, Math.round((totalPicked / totalRequested) * 100))
+    : 0;
 
-  if (
-    slotsQuery.isLoading ||
-    eventsQuery.isLoading ||
+  // ── Layer 2 — Room coverage ────────────────────────────────────────────
+  const classifications = classificationsQuery.data || [];
+  const candidateRoomCounts = useMemo(() => {
+    const m = new Map();
+    for (const c of classifications) {
+      const key = c.space_type || c.room_type;
+      if (!key) continue;
+      m.set(key, (m.get(key) ?? 0) + 1);
+    }
+    return m;
+  }, [classifications]);
+
+  const pickedRoomCounts = useMemo(() => {
+    const m = new Map();
+    for (const r of pickedSpaceTypesQuery.data || []) {
+      const key = r.space_type || r.room_type;
+      if (!key) continue;
+      m.set(key, (m.get(key) ?? 0) + 1);
+    }
+    return m;
+  }, [pickedSpaceTypesQuery.data]);
+
+  const distributionRows = useMemo(() => {
+    const allKeys = new Set([
+      ...candidateRoomCounts.keys(),
+      ...pickedRoomCounts.keys(),
+    ]);
+    return Array.from(allKeys)
+      .map((k) => ({
+        room: k,
+        picked: pickedRoomCounts.get(k) ?? 0,
+        candidates: candidateRoomCounts.get(k) ?? 0,
+      }))
+      .sort((a, b) => b.picked - a.picked || b.candidates - a.candidates);
+  }, [candidateRoomCounts, pickedRoomCounts]);
+
+  const commonRoomsList = Array.isArray(policy?.common_residential_rooms)
+    ? policy.common_residential_rooms
+    : [];
+  const omittedCommonRooms = Array.isArray(postCheckPayload?.omitted_common_rooms)
+    ? postCheckPayload.omitted_common_rooms
+    : [];
+  const omittedSet = new Set(omittedCommonRooms.map((r) => r.toLowerCase()));
+
+  const commonRoomsChecklist = useMemo(() => {
+    return commonRoomsList.map((room) => {
+      const norm = room.toLowerCase();
+      const candidatesAvail = candidateRoomCounts.get(norm) ?? 0;
+      const picked = pickedRoomCounts.get(norm) ?? 0;
+      let state;
+      if (picked > 0) state = "covered";
+      else if (omittedSet.has(norm) || candidatesAvail > 0) state = "omitted";
+      else state = "no_candidate";
+      return { room, picked, candidatesAvail, state };
+    });
+  }, [commonRoomsList, candidateRoomCounts, pickedRoomCounts, omittedSet]);
+
+  // ── Layer 3 — Quality + decisions ──────────────────────────────────────
+  const editorialScores = useMemo(() => {
+    return overrides
+      .map((o) => {
+        const env = parseEditorialEnvelope(o.ai_proposed_analysis);
+        const score = env && typeof env.editorial_score === "number"
+          ? env.editorial_score
+          : (typeof o.slot_fit_score === "number" ? o.slot_fit_score : null);
+        return score;
+      })
+      .filter((n) => typeof n === "number" && Number.isFinite(n));
+  }, [overrides]);
+
+  const scoreHistogram = useMemo(() => {
+    const buckets = [
+      { label: "9–10", min: 9, max: 10.01, n: 0 },
+      { label: "7–9", min: 7, max: 9, n: 0 },
+      { label: "5–7", min: 5, max: 7, n: 0 },
+      { label: "<5", min: 0, max: 5, n: 0 },
+    ];
+    for (const s of editorialScores) {
+      const b = buckets.find((x) => s >= x.min && s < x.max);
+      if (b) b.n += 1;
+    }
+    return buckets;
+  }, [editorialScores]);
+
+  const medianScore = useMemo(() => {
+    if (editorialScores.length === 0) return null;
+    const sorted = [...editorialScores].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+      ? (sorted[mid - 1] + sorted[mid]) / 2
+      : sorted[mid];
+  }, [editorialScores]);
+
+  const actionBreakdown = useMemo(() => {
+    const m = {};
+    for (const o of overrides) {
+      const a = o.human_action || "unknown";
+      m[a] = (m[a] ?? 0) + 1;
+    }
+    return m;
+  }, [overrides]);
+
+  // ── Render gates ───────────────────────────────────────────────────────
+  const isLoading =
+    editorialQuery.isLoading ||
+    postCheckQuery.isLoading ||
+    classificationsQuery.isLoading ||
     overridesQuery.isLoading ||
-    groupsQuery.isLoading ||
-    // W11.6.1-followup: also wait for the project + products so we resolve
-    // engine roles before filtering — avoids a flicker where the tab first
-    // renders the "fall-through to all active slots" set and then narrows.
-    projectQuery.isLoading ||
-    productsQuery.isLoading
-  ) {
+    policyQuery.isLoading;
+
+  if (isLoading) {
     return (
       <div className="space-y-3 animate-pulse">
-        <div className="h-12 bg-muted rounded" />
-        <div className="h-48 bg-muted rounded" />
+        <div className="h-20 bg-muted rounded" />
+        <div className="h-32 bg-muted rounded" />
+        <div className="h-32 bg-muted rounded" />
       </div>
     );
   }
 
-  if (eligibleSlots.length === 0) {
+  // No editorial event for this round → legacy round, no slot-lattice
+  // fallback (per Joseph 2026-05-04: "i dont care for the legacy slot
+  // view, just remove it fully").  Render an explicit empty-state so
+  // operators understand why the report is blank.
+  if (!editorialPayload) {
     return (
-      <Card>
-        <CardContent className="p-6 text-sm text-muted-foreground">
-          No slot definitions configured yet. The admin slot editor (Phase 7)
-          will let you define the three-phase slot taxonomy. Until then, only
-          AI free recommendations (phase 3) drive proposals — no coverage
-          gaps to surface.
+      <Card data-testid="coverage-no-editorial-event">
+        <CardContent className="p-6 text-sm text-muted-foreground space-y-2">
+          <div className="font-medium text-foreground">
+            No editorial-engine run found for this round
+          </div>
+          <p>
+            The Coverage report draws from the editorial-engine output
+            (mig 465+).  This round was either shortlisted before the
+            editorial engine landed, OR Stage 4 hasn't run yet.
+          </p>
+          <p>
+            Re-run Stage 4 to populate this view.
+          </p>
         </CardContent>
       </Card>
     );
   }
 
-  // Group slots by phase
-  const slotsByPhase = { 1: [], 2: [], 3: [] };
-  for (const s of eligibleSlots) {
-    if (slotsByPhase[s.phase]) slotsByPhase[s.phase].push(s);
-  }
+  const quotaSource = editorialPayload.quota_source;
+  const policySource = editorialPayload.policy_source;
 
   return (
-    <div className="space-y-3">
-      {/* Coverage summary */}
+    <div className="space-y-3" data-testid="coverage-report">
+      {/* ── Card 1 — Contract fulfillment ─────────────────────────────── */}
       <Card>
-        <CardContent className="p-3 flex items-center justify-between gap-3 flex-wrap">
-          <div>
-            <div className="text-xs text-muted-foreground">Coverage</div>
-            <div className="text-sm font-medium">
-              {stats.filled} / {stats.total} slots filled ({stats.pct}%)
+        <CardContent className="p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                Contract fulfillment
+              </div>
+              <div className="text-sm font-medium">
+                {round?.package_type || "Package"} · {totalPicked} of {totalRequested} delivered
+                <span
+                  className={cn(
+                    "ml-2 font-mono tabular-nums",
+                    bucketTone(totalPicked, totalRequested),
+                  )}
+                >
+                  {totalRatioPct}%
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Badge
+                variant="outline"
+                className={cn(
+                  "gap-1",
+                  quotaSource === "package_products"
+                    ? "text-emerald-700 dark:text-emerald-300"
+                    : "text-amber-700 dark:text-amber-300",
+                )}
+              >
+                <Database className="w-3 h-3" />
+                {quotaSource === "package_products"
+                  ? "Quota: package products"
+                  : "Quota: ceiling fallback"}
+              </Badge>
+              {medianScore != null && (
+                <Badge variant="secondary" className="font-mono">
+                  Median {medianScore.toFixed(1)}
+                </Badge>
+              )}
             </div>
           </div>
-          <div className="border-l h-8" />
-          <div>
-            <div className="text-xs text-muted-foreground">Mandatory</div>
-            <div className="text-sm font-medium tabular-nums">
-              {stats.mandatoryFilled} / {stats.mandatoryTotal}
-            </div>
+
+          <div className="space-y-2">
+            {quotaRows.length === 0 ? (
+              <div className="text-xs text-muted-foreground italic">
+                No shortlistable quotas resolved.
+              </div>
+            ) : (
+              quotaRows.map((row) => {
+                const pct = row.requested > 0
+                  ? Math.min(110, Math.round((row.picked / row.requested) * 100))
+                  : 0;
+                return (
+                  <div key={row.bucket} className="space-y-1">
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <span className="font-medium">{row.label}</span>
+                      <span className={cn("font-mono tabular-nums", bucketTone(row.picked, row.requested))}>
+                        {row.picked} / {row.requested}
+                        {row.picked > row.requested ? (
+                          <span className="ml-1 text-blue-700 dark:text-blue-300">
+                            (+{row.picked - row.requested})
+                          </span>
+                        ) : row.picked < row.requested ? (
+                          <span className="ml-1 text-rose-700 dark:text-rose-300">
+                            (-{row.requested - row.picked})
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={cn("h-full transition-all", bucketBarTone(row.picked, row.requested))}
+                        style={{ width: `${Math.min(100, pct)}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })
+            )}
           </div>
-          {stats.mandatoryFilled < stats.mandatoryTotal && (
-            <Badge variant="outline" className="border-rose-400 text-rose-700 dark:text-rose-300">
-              <AlertCircle className="h-3 w-3 mr-1" />
-              {stats.mandatoryTotal - stats.mandatoryFilled} mandatory gap
-              {stats.mandatoryTotal - stats.mandatoryFilled === 1 ? "" : "s"}
-            </Badge>
-          )}
+
+          {editorialPayload.coverage_notes ? (
+            <div className="rounded-md border border-amber-200/40 bg-amber-50/40 dark:bg-amber-950/20 p-2 text-xs">
+              <div className="flex items-start gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
+                <div>
+                  <div className="font-medium text-amber-900 dark:text-amber-200 mb-0.5">
+                    Engine notes
+                  </div>
+                  <p className="text-amber-900/85 dark:text-amber-100/85 whitespace-pre-wrap leading-snug">
+                    {editorialPayload.coverage_notes}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
-      {/* Phases */}
-      {[1, 2, 3].map((phase) => {
-        const list = slotsByPhase[phase];
-        if (!list || list.length === 0) return null;
-        return (
-          <Card key={phase}>
-            <CardContent className="p-3 space-y-2">
-              <div className="flex items-center gap-2">
-                <Badge className={cn("text-[10px]", PHASE_TONE[phase])}>
-                  Phase {phase}
-                </Badge>
-                <span className="text-xs text-muted-foreground">
-                  {PHASE_LABEL[phase]}
-                </span>
+      {/* ── Card 2 — Room coverage ─────────────────────────────────────── */}
+      <Card>
+        <CardContent className="p-3 space-y-3">
+          <div className="flex items-center gap-2">
+            <div className="text-xs text-muted-foreground uppercase tracking-wide">
+              Room coverage
+            </div>
+          </div>
+
+          {/* Common-rooms checklist (hint, not gate) */}
+          {commonRoomsChecklist.length > 0 ? (
+            <div className="space-y-1">
+              <div className="text-[11px] text-muted-foreground">
+                Common AU residential rooms (from policy):
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                {list.map((slot) => {
-                  const state = slotState.get(slot.slot_id);
-                  const filled = !!state?.winner;
-                  const winnerGroup = filled
-                    ? groupById.get(state.winner.groupId)
-                    : null;
-                  const isMandatory = slot.phase === 1;
-                  const altsCount = state?.alts?.length || 0;
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                {commonRoomsChecklist.map((row) => (
+                  <li
+                    key={row.room}
+                    className="flex items-center gap-1.5 text-xs"
+                    data-testid={`common-room-${row.room}`}
+                  >
+                    {row.state === "covered" ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    ) : row.state === "omitted" ? (
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                    ) : (
+                      <span className="w-3.5 h-3.5 rounded-full bg-muted shrink-0" />
+                    )}
+                    <span className={cn(
+                      row.state === "covered" && "text-foreground",
+                      row.state === "omitted" && "text-amber-800 dark:text-amber-300",
+                      row.state === "no_candidate" && "text-muted-foreground",
+                    )}>
+                      {snakeToTitle(row.room)}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground tabular-nums">
+                      ({row.picked}/{row.candidatesAvail})
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <div className="text-[10px] text-muted-foreground">
+                <CheckCircle2 className="w-3 h-3 inline-block mr-0.5 text-emerald-600 dark:text-emerald-400" /> picked ·
+                <AlertCircle className="w-3 h-3 inline-block ml-1 mr-0.5 text-amber-600 dark:text-amber-400" /> candidate available, omitted ·
+                <span className="w-3 h-3 inline-block ml-1 mr-0.5 align-middle rounded-full bg-muted" /> no candidate
+              </div>
+            </div>
+          ) : null}
+
+          {/* Distribution: picks per space_type */}
+          {distributionRows.length > 0 ? (
+            <div className="space-y-1">
+              <div className="text-[11px] text-muted-foreground">
+                Distribution per space_type (picked / candidates):
+              </div>
+              <ul className="space-y-0.5 max-h-72 overflow-y-auto">
+                {distributionRows.map((row) => {
+                  const pct = row.candidates > 0
+                    ? Math.round((row.picked / row.candidates) * 100)
+                    : 0;
                   return (
-                    <div
-                      key={slot.slot_id}
-                      className={cn(
-                        "rounded-md border p-2 space-y-1",
-                        filled
-                          ? "border-emerald-300 bg-emerald-50/50 dark:bg-emerald-950/20 dark:border-emerald-900"
-                          : isMandatory
-                            ? "border-rose-300 bg-rose-50/50 dark:bg-rose-950/20 dark:border-rose-900"
-                            : "border-amber-200 bg-amber-50/30 dark:bg-amber-950/10 dark:border-amber-900",
-                      )}
+                    <li
+                      key={row.room}
+                      className="flex items-center justify-between gap-2 text-xs py-0.5"
                     >
-                      <div className="flex items-center justify-between gap-1">
-                        <div className="text-[11px] font-medium truncate" title={slot.display_name}>
-                          {slot.display_name}
+                      <span className="font-medium truncate">{snakeToTitle(row.room)}</span>
+                      <div className="flex items-center gap-2">
+                        <div className="w-24 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500/60"
+                            style={{ width: `${Math.min(100, pct)}%` }}
+                          />
                         </div>
-                        {filled ? (
-                          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
-                        ) : isMandatory ? (
-                          <AlertCircle className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400 flex-shrink-0" />
-                        ) : (
-                          <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-                        )}
+                        <span className="font-mono tabular-nums text-[11px] w-12 text-right">
+                          {row.picked}/{row.candidates}
+                        </span>
                       </div>
-                      <div className="text-[9px] font-mono text-muted-foreground truncate">
-                        {slot.slot_id}
-                      </div>
-                      {filled && winnerGroup ? (
-                        <DroneThumbnail
-                          dropboxPath={winnerGroup.dropbox_preview_path}
-                          mode="thumb"
-                          aspectRatio="aspect-[3/2]"
-                          alt={winnerGroup.delivery_reference_stem || slot.slot_id}
-                        />
-                      ) : (
-                        <div className="aspect-[3/2] rounded bg-muted/50 flex items-center justify-center text-[10px] text-muted-foreground">
-                          {isMandatory ? "GAP — required" : "Not filled"}
-                        </div>
-                      )}
-                      {altsCount > 0 && (
-                        <div className="text-[9px] text-muted-foreground">
-                          {altsCount} alt{altsCount === 1 ? "" : "s"}
-                        </div>
-                      )}
-                    </div>
+                    </li>
                   );
                 })}
+              </ul>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {/* ── Card 3 — Quality + decisions ───────────────────────────────── */}
+      <Card>
+        <CardContent className="p-3 space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-xs text-muted-foreground uppercase tracking-wide">
+              Quality &amp; operator decisions
+            </div>
+            {stage4QueuePending > 0 ? (
+              <Badge variant="outline" className="gap-1 text-orange-700 dark:text-orange-300">
+                <Wrench className="w-3 h-3" />
+                {stage4QueuePending} stage 4 correction{stage4QueuePending === 1 ? "" : "s"} pending
+              </Badge>
+            ) : null}
+          </div>
+
+          {/* Editorial score histogram */}
+          <div className="space-y-1">
+            <div className="text-[11px] text-muted-foreground">
+              Editorial score distribution ({editorialScores.length} picks scored)
+            </div>
+            {editorialScores.length === 0 ? (
+              <div className="text-xs text-muted-foreground italic">
+                No editorial scores recorded.
               </div>
-            </CardContent>
-          </Card>
-        );
-      })}
+            ) : (
+              <ul className="space-y-0.5">
+                {scoreHistogram.map((b) => {
+                  const pct = editorialScores.length > 0
+                    ? Math.round((b.n / editorialScores.length) * 100)
+                    : 0;
+                  return (
+                    <li
+                      key={b.label}
+                      className="flex items-center gap-2 text-xs"
+                    >
+                      <span className="w-10 font-mono tabular-nums text-muted-foreground">
+                        {b.label}
+                      </span>
+                      <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full",
+                            b.label === "9–10"
+                              ? "bg-emerald-500/70"
+                              : b.label === "7–9"
+                              ? "bg-lime-500/70"
+                              : b.label === "5–7"
+                              ? "bg-amber-500/70"
+                              : "bg-rose-500/70",
+                          )}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="w-10 text-right font-mono tabular-nums text-[11px]">
+                        {b.n}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* Operator action breakdown */}
+          <div className="space-y-1">
+            <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <Users className="w-3 h-3" /> Operator decisions
+            </div>
+            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+              {Object.entries(HUMAN_ACTION_LABELS).map(([key, label]) => {
+                const n = actionBreakdown[key] ?? 0;
+                if (n === 0 && key !== "ai_proposed" && key !== "approved_as_proposed") {
+                  // suppress always-zero rows for clarity, but keep the
+                  // primary two visible so operators see the scale
+                  return null;
+                }
+                return (
+                  <li
+                    key={key}
+                    className="flex items-center justify-between gap-2 text-xs"
+                  >
+                    <span className="text-muted-foreground">{label}</span>
+                    <span className={cn(
+                      "font-mono tabular-nums",
+                      n > 0 ? "text-foreground" : "text-muted-foreground",
+                    )}>
+                      {n}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Card 4 — Recipe transparency ───────────────────────────────── */}
+      <Card>
+        <CardContent className="p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-xs text-muted-foreground uppercase tracking-wide">
+              Recipe &amp; policy in use
+            </div>
+            <Link
+              to="/SettingsShortlistingCommandCenter?tab=recipes"
+              className="text-xs text-blue-600 dark:text-blue-300 hover:underline flex items-center gap-0.5"
+            >
+              Edit policy
+              <ChevronRight className="w-3 h-3" />
+            </Link>
+          </div>
+          <ul className="text-xs space-y-1">
+            <li className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">Quota source</span>
+              <span className="font-mono">
+                {quotaSource === "package_products" ? (
+                  <span className="text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1">
+                    <Database className="w-3 h-3" /> Package products ({round?.package_type || "—"})
+                  </span>
+                ) : (
+                  <span className="text-amber-700 dark:text-amber-300 inline-flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> Fallback to package_ceiling
+                  </span>
+                )}
+              </span>
+            </li>
+            <li className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">Editorial policy</span>
+              <span className="font-mono">
+                {policySource === "db" ? (
+                  <span className="text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1">
+                    <Database className="w-3 h-3" /> DB-saved
+                  </span>
+                ) : (
+                  <span className="text-amber-700 dark:text-amber-300 inline-flex items-center gap-1">
+                    <Wand2 className="w-3 h-3" /> In-code default
+                  </span>
+                )}
+              </span>
+            </li>
+            {policy?.quality_floor != null ? (
+              <li className="flex items-center justify-between gap-2">
+                <span className="text-muted-foreground">Quality floor</span>
+                <span className="font-mono">{policy.quality_floor.toFixed(1)}</span>
+              </li>
+            ) : null}
+            {Array.isArray(policy?.common_residential_rooms) && policy.common_residential_rooms.length > 0 ? (
+              <li className="text-xs">
+                <div className="text-muted-foreground mb-0.5">Common rooms</div>
+                <div className="flex flex-wrap gap-1">
+                  {policy.common_residential_rooms.map((r) => (
+                    <span
+                      key={r}
+                      className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono"
+                    >
+                      {r}
+                    </span>
+                  ))}
+                </div>
+              </li>
+            ) : null}
+            {Array.isArray(policy?.dusk_subjects) && policy.dusk_subjects.length > 0 ? (
+              <li className="text-xs">
+                <div className="text-muted-foreground mb-0.5">Dusk subjects</div>
+                <div className="flex flex-wrap gap-1">
+                  {policy.dusk_subjects.map((r) => (
+                    <span
+                      key={r}
+                      className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-mono"
+                    >
+                      {r}
+                    </span>
+                  ))}
+                </div>
+              </li>
+            ) : null}
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   );
 }
