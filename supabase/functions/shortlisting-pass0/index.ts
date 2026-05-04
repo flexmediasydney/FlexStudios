@@ -895,7 +895,9 @@ async function classifyOne(row: InsertedGroupRow): Promise<ClassificationResult>
 
   let imageUrl: string;
   try {
-    imageUrl = await getDropboxTempLink(row.dropboxPreviewPath);
+    // Engine app — Pass 0 is part of the shortlisting engine, mints
+    // temp_links from the fresh-reputation `flexmedia-engine` app.
+    imageUrl = await getDropboxTempLink(row.dropboxPreviewPath, { app: 'engine' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     result.error = `temp link failed: ${msg}`;

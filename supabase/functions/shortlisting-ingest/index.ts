@@ -433,7 +433,10 @@ async function ingest(
   for (let i = 0; i < filePaths.length; i++) {
     const fp = filePaths[i];
     try {
-      const link = await getDropboxTempLink(fp);
+      // Engine app for the Wave 3 link-bake — fresh reputation, won't
+      // contend with UI throttle.  See _shared/dropbox.ts for the
+      // split-app architecture (added 2026-05-04).
+      const link = await getDropboxTempLink(fp, { app: 'engine' });
       prebakedLinkMap[fp] = link;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

@@ -372,7 +372,13 @@ async function extract(input: ExtractInput, modalUrl: string): Promise<ExtractRe
   //    backwards-compat during the deploy window). Wave 7 P0-3.
   let dropboxAccessToken = '';
   try {
-    dropboxAccessToken = await getDropboxAccessToken({ forceRefresh: false });
+    // 2026-05-04 — split-app architecture: engine paths use the new
+    // `flexmedia-engine` Dropbox app (fresh adaptive-throttle reputation).
+    // The old `flexmedia` UI app is still in heavy throttle from yesterday's
+    // burst, but engine traffic now flows through a separate app entirely.
+    // Modal receives this token in the request body and uses it for every
+    // Dropbox call it makes (CR3 download via temp_link → CDN).
+    dropboxAccessToken = await getDropboxAccessToken({ forceRefresh: false, app: 'engine' });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(

@@ -595,7 +595,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       from_path: s.from_path,
       to_path: s.to_path,
     }));
-    submitResult = await moveBatch(entries);
+    // Engine app — shortlist-lock is part of the engine pipeline.
+    submitResult = await moveBatch(entries, { app: 'engine' });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await admin.from('shortlisting_lock_progress')
@@ -1031,7 +1032,7 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
 
     let check;
     try {
-      check = await checkMoveBatch(args.asyncJobId);
+      check = await checkMoveBatch(args.asyncJobId, { app: 'engine' });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // Transient: log + retry the loop. We've seen Dropbox 5xx briefly during
@@ -1634,7 +1635,7 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
       from_path: e.from_path,
       to_path: e.to_path,
     }));
-    submitResult = await moveBatch(dropboxEntries);
+    submitResult = await moveBatch(dropboxEntries, { app: 'engine' });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await admin.from('shortlisting_lock_progress')

@@ -35,16 +35,50 @@ const MAX_ATTEMPTS = 3;
 // Module-scoped — assumes single-tenant Dropbox (FlexStudios is single-tenant).
 // If FlexStudios ever multi-tenants, key by tenant_id (Map<tenantId, token>).
 // (#56 audit — kept as-is intentionally.)
-let cachedAccessToken: string | null = null;
-let refreshPromise: Promise<string> | null = null;
+// 2026-05-04 — split-app architecture.  We now run TWO Dropbox OAuth apps:
+//
+//   'ui'      → the original `flexmedia` app (legacy, default).  Powers all
+//               UI surfaces: Project Media tab, Live Media Feed, drone
+//               browse, lightboxes, etc.  Currently in adaptive-throttle
+//               watch mode after yesterday's investigation burst — recovery
+//               will take time.
+//
+//   'engine'  → the new `flexmedia-engine` app.  Powers shortlisting engine
+//               traffic: ingest link-bake, Modal CR3 fetch, Pass 0 vision,
+//               shortlist-lock moveBatch.  Fresh reputation, can run rounds
+//               without fighting the UI's throttle.
+//
+// Tokens are cached per-app so a UI 401 doesn't refresh the engine token
+// (and vice versa).  Same `refreshPromise` dedup pattern is applied per
+// app to avoid burst refresh storms when many concurrent callers request
+// the same token type.
+type DropboxApp = 'engine' | 'ui';
+
+const cachedAccessTokens: Record<DropboxApp, string | null> = {
+  engine: null,
+  ui: null,
+};
+const refreshPromises: Record<DropboxApp, Promise<string> | null> = {
+  engine: null,
+  ui: null,
+};
+
+export interface DropboxTokenOpts {
+  forceRefresh?: boolean;
+  /** Which Dropbox OAuth app's token to mint.  Defaults to 'ui' (original
+   *  app — backward-compat with all existing UI / drone / webhook callers). */
+  app?: DropboxApp;
+}
 
 /**
- * Returns a valid Dropbox access token, refreshing if needed.
- * Concurrent callers share the same in-flight refresh.
+ * Returns a valid Dropbox access token for the requested app, refreshing
+ * if needed.  Concurrent callers for the same app share the same in-flight
+ * refresh.  Different apps have independent token caches.
  */
-export async function getDropboxAccessToken(opts?: { forceRefresh?: boolean }): Promise<string> {
-  if (cachedAccessToken && !opts?.forceRefresh) return cachedAccessToken;
-  return refreshDropboxAccessToken();
+export async function getDropboxAccessToken(opts?: DropboxTokenOpts): Promise<string> {
+  const app = opts?.app ?? 'ui';
+  if (cachedAccessTokens[app] && !opts?.forceRefresh) return cachedAccessTokens[app]!;
+  return refreshDropboxAccessToken(app);
 }
 
 /**
@@ -57,17 +91,37 @@ export async function getDropboxAccessToken(opts?: { forceRefresh?: boolean }): 
  */
 const REFRESH_PROMISE_TTL_MS = 1000;
 
-async function refreshDropboxAccessToken(): Promise<string> {
-  if (refreshPromise) return refreshPromise;
+async function refreshDropboxAccessToken(app: DropboxApp): Promise<string> {
+  const inflight = refreshPromises[app];
+  if (inflight) return inflight;
+
+  // Pick the env var triplet for the requested app.  Engine app uses the
+  // DROPBOX_ENGINE_* prefix; UI uses the original (unprefixed) names.  We
+  // allow the engine app vars to fall back to the UI vars when missing
+  // (single-app deploys / dev environments where only one app is set up).
+  const envKeys = app === 'engine'
+    ? {
+        refreshToken: 'DROPBOX_ENGINE_REFRESH_TOKEN',
+        appKey: 'DROPBOX_ENGINE_APP_KEY',
+        appSecret: 'DROPBOX_ENGINE_APP_SECRET',
+      }
+    : {
+        refreshToken: 'DROPBOX_REFRESH_TOKEN',
+        appKey: 'DROPBOX_APP_KEY',
+        appSecret: 'DROPBOX_APP_SECRET',
+      };
 
   // Kick off the refresh and assign immediately so concurrent callers see it.
   const local = (async () => {
-    const refreshToken = Deno.env.get('DROPBOX_REFRESH_TOKEN');
-    const appKey = Deno.env.get('DROPBOX_APP_KEY');
-    const appSecret = Deno.env.get('DROPBOX_APP_SECRET');
+    const refreshToken = Deno.env.get(envKeys.refreshToken);
+    const appKey = Deno.env.get(envKeys.appKey);
+    const appSecret = Deno.env.get(envKeys.appSecret);
 
     if (!refreshToken || !appKey || !appSecret) {
-      throw new Error('Missing DROPBOX_REFRESH_TOKEN, DROPBOX_APP_KEY, or DROPBOX_APP_SECRET');
+      throw new Error(
+        `Missing ${envKeys.refreshToken}, ${envKeys.appKey}, or ${envKeys.appSecret} ` +
+          `(needed for app='${app}').`,
+      );
     }
 
     const res = await fetch(DROPBOX_OAUTH, {
@@ -81,16 +135,16 @@ async function refreshDropboxAccessToken(): Promise<string> {
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
-      throw new Error(`Dropbox token refresh failed: ${res.status} ${txt.slice(0, 200)}`);
+      throw new Error(`Dropbox token refresh failed (app=${app}): ${res.status} ${txt.slice(0, 200)}`);
     }
 
     const data = await res.json();
-    cachedAccessToken = data.access_token as string;
-    console.log(`[dropbox] token refreshed, expires in ${data.expires_in}s`);
-    return cachedAccessToken!;
+    cachedAccessTokens[app] = data.access_token as string;
+    console.log(`[dropbox] token refreshed (app=${app}), expires in ${data.expires_in}s`);
+    return cachedAccessTokens[app]!;
   })();
 
-  refreshPromise = local;
+  refreshPromises[app] = local;
 
   // Schedule cleanup AFTER a short window so a second-but-quickly-arrived
   // caller still finds and shares this in-flight promise. (#57 audit fix.)
@@ -106,7 +160,7 @@ async function refreshDropboxAccessToken(): Promise<string> {
       setTimeout(() => {
         // Only null if we're still pointing at THIS promise. A subsequent
         // refresh (e.g. another forceRefresh) would have already reassigned.
-        if (refreshPromise === local) refreshPromise = null;
+        if (refreshPromises[app] === local) refreshPromises[app] = null;
       }, REFRESH_PROMISE_TTL_MS);
     });
 
@@ -131,6 +185,14 @@ interface DropboxApiOpts {
   timeoutMs?: number;
   /** Skip retries (useful for idempotency-checking calls). */
   noRetry?: boolean;
+  /**
+   * Which Dropbox OAuth app to authenticate as.  Defaults to 'ui' (the
+   * original app, used by all UI surfaces and webhooks).  Engine paths
+   * (shortlisting-extract, shortlisting-ingest, shortlisting-pass0,
+   * shortlist-lock) pass 'engine' so they hit the fresh-reputation
+   * `flexmedia-engine` app and bypass the UI app's adaptive throttle.
+   */
+  app?: DropboxApp;
 }
 
 /**
@@ -163,8 +225,9 @@ export async function dropboxApi<T = unknown>(
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
   const maxAttempts = opts?.noRetry ? 1 : MAX_ATTEMPTS;
+  const app = opts?.app ?? 'ui';
 
-  let token = await getDropboxAccessToken();
+  let token = await getDropboxAccessToken({ app });
   let lastErr = '';
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -185,7 +248,7 @@ export async function dropboxApi<T = unknown>(
 
     if (isExpiredTokenError(res.status, txt)) {
       try {
-        token = await getDropboxAccessToken({ forceRefresh: true });
+        token = await getDropboxAccessToken({ forceRefresh: true, app });
         continue;
       } catch (refreshErr) {
         const m = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
@@ -221,6 +284,8 @@ export async function dropboxApi<T = unknown>(
 
 interface DropboxContentOpts {
   timeoutMs?: number;
+  /** See DropboxApiOpts.app — same semantics for content endpoints. */
+  app?: DropboxApp;
 }
 
 /**
@@ -240,8 +305,9 @@ export async function dropboxContent(
 ): Promise<Response> {
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const timeoutMs = opts?.timeoutMs ?? DEFAULT_CONTENT_TIMEOUT_MS;
+  const app = opts?.app ?? 'ui';
 
-  let token = await getDropboxAccessToken();
+  let token = await getDropboxAccessToken({ app });
   let refreshed = false;
   let lastErr = '';
 
@@ -271,7 +337,7 @@ export async function dropboxContent(
     lastErr = `${res.status}: ${txt.slice(0, 300)}`;
 
     if (!refreshed && isExpiredTokenError(res.status, txt)) {
-      token = await getDropboxAccessToken({ forceRefresh: true });
+      token = await getDropboxAccessToken({ forceRefresh: true, app });
       refreshed = true;
       // Don't count this as one of the retry attempts — back off the loop
       // counter so we still get MAX_ATTEMPTS retries on the new token.
@@ -580,6 +646,7 @@ export interface DropboxMoveBatchCheckResult {
  */
 export async function moveBatch(
   entries: DropboxMoveEntry[],
+  opts?: { app?: DropboxApp },
 ): Promise<DropboxMoveBatchSubmitResult> {
   if (entries.length === 0) {
     return { '.tag': 'complete', entries: [] };
@@ -589,11 +656,15 @@ export async function moveBatch(
       `moveBatch: got ${entries.length} entries, Dropbox cap is 10,000 per call — caller must chunk`,
     );
   }
-  return dropboxApi<DropboxMoveBatchSubmitResult>('/files/move_batch_v2', {
-    entries,
-    autorename: false,
-    allow_ownership_transfer: false,
-  });
+  return dropboxApi<DropboxMoveBatchSubmitResult>(
+    '/files/move_batch_v2',
+    {
+      entries,
+      autorename: false,
+      allow_ownership_transfer: false,
+    },
+    { app: opts?.app },
+  );
 }
 
 /**
@@ -606,10 +677,13 @@ export async function moveBatch(
  */
 export async function checkMoveBatch(
   jobId: string,
+  opts?: { app?: DropboxApp },
 ): Promise<DropboxMoveBatchCheckResult> {
-  return dropboxApi<DropboxMoveBatchCheckResult>('/files/move_batch/check_v2', {
-    async_job_id: jobId,
-  });
+  return dropboxApi<DropboxMoveBatchCheckResult>(
+    '/files/move_batch/check_v2',
+    { async_job_id: jobId },
+    { app: opts?.app },
+  );
 }
 
 /**

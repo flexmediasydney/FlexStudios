@@ -93,10 +93,14 @@ export async function getShortlistingFolders(
  * Callers running many in parallel should chunk to ≤5 concurrent (mirror
  * drone-shot-urls' pattern).
  */
-export async function getDropboxTempLink(dropboxPath: string): Promise<string> {
+export async function getDropboxTempLink(
+  dropboxPath: string,
+  opts?: { app?: 'engine' | 'ui' },
+): Promise<string> {
   const resp = await dropboxApi<{ link: string; metadata: unknown }>(
     '/files/get_temporary_link',
     { path: dropboxPath },
+    { app: opts?.app },
   );
   return resp.link;
 }
