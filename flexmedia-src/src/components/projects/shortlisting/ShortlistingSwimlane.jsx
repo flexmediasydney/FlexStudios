@@ -62,7 +62,11 @@ import {
   ChevronDown,
   ChevronRight,
   X,
+  Unlock,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -1748,6 +1752,55 @@ export default function ShortlistingSwimlane({
     }
   }, [roundId, projectId, queryClient]);
 
+  // 2026-05-04 — Unlock flow (mig 468 + shortlist-unlock).  master_admin
+  // only.  Reverses the Dropbox file moves, supersedes the round's
+  // committed_decisions (so training pipelines ignore them), and flips
+  // status='locked' → 'proposed' so the operator can keep editing.
+  // Confirmation requires typing "UNLOCK" — this is destructive enough
+  // that an accidental click shouldn't trigger it.
+  const isMasterAdmin = user?.role === "master_admin";
+  const [confirmUnlockOpen, setConfirmUnlockOpen] = useState(false);
+  const [unlockReason, setUnlockReason] = useState("");
+  const [unlockTypedConfirm, setUnlockTypedConfirm] = useState("");
+  const [isUnlocking, setIsUnlocking] = useState(false);
+  const unlockShortlist = useCallback(async () => {
+    if (!roundId) return;
+    if (unlockTypedConfirm !== "UNLOCK") return;
+    setIsUnlocking(true);
+    try {
+      const resp = await api.functions.invoke("shortlist-unlock", {
+        round_id: roundId,
+        reason: unlockReason.trim() || null,
+      });
+      const result = resp?.data ?? resp ?? {};
+      if (result?.ok === false) {
+        throw new Error(result?.error || "Unlock failed");
+      }
+      const moved = result?.moved || {};
+      const supersededN = result?.decisions_superseded ?? 0;
+      toast.success(
+        `Shortlist unlocked — moved ${moved.total ?? 0} file(s) back to Proposed, superseded ${supersededN} training row(s).`,
+      );
+      // Refetch swimlane state — the round is now status='proposed'
+      // and the operator should see the lock button + decision lanes
+      // re-enabled immediately.
+      queryClient.invalidateQueries({
+        queryKey: ["shortlisting_rounds", projectId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["shortlisting_overrides", roundId],
+      });
+      setConfirmUnlockOpen(false);
+      setUnlockReason("");
+      setUnlockTypedConfirm("");
+    } catch (err) {
+      console.error("[ShortlistingSwimlane] unlockShortlist failed:", err);
+      toast.error(err?.message || "Unlock failed");
+    } finally {
+      setIsUnlocking(false);
+    }
+  }, [roundId, projectId, queryClient, unlockReason, unlockTypedConfirm]);
+
   // ── Loading / error states ──────────────────────────────────────────────
   if (isLoading) {
     return (
@@ -2059,6 +2112,28 @@ export default function ShortlistingSwimlane({
             )}
             {isLocked ? "Locked" : "Lock & Reorganize"}
           </Button>
+          {/* Mig 468 unlock — master_admin only.  Visible only when the
+              round is currently locked.  Reverses Dropbox moves and
+              flips status back to 'proposed'.  Stricter auth than lock
+              because mistakes here cost more (training data
+              superseded). */}
+          {isLocked && isMasterAdmin && round?.status === "locked" ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setConfirmUnlockOpen(true)}
+              disabled={isUnlocking}
+              className="border-amber-300 text-amber-900 hover:bg-amber-50"
+              title="Unlock the shortlist — moves files back to Shortlist Proposed and supersedes training feedback (master_admin only)"
+            >
+              {isUnlocking ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Unlock className="h-4 w-4 mr-2" />
+              )}
+              Unlock
+            </Button>
+          ) : null}
           </div>
         </CardContent>
         {/* Mig 467 — operator hint about commit semantics.  Every drag
@@ -2284,6 +2359,113 @@ export default function ShortlistingSwimlane({
             <Button onClick={lockShortlist} disabled={isLocking}>
               {isLocking && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Lock & Reorganize
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm Unlock dialog (mig 468) — master_admin only, requires
+          typing "UNLOCK" to confirm because the side-effects are
+          significant: files move back, training rows are superseded,
+          and the round goes back to 'proposed'. */}
+      <Dialog open={confirmUnlockOpen} onOpenChange={(open) => {
+        if (!open && !isUnlocking) {
+          setConfirmUnlockOpen(false);
+          setUnlockTypedConfirm("");
+          setUnlockReason("");
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Unlock className="h-5 w-5 text-amber-600" />
+              Unlock shortlist & resume editing?
+            </DialogTitle>
+            <DialogDescription className="space-y-2">
+              <span className="block">
+                This will:
+              </span>
+              <ul className="list-disc list-inside text-sm space-y-1">
+                <li>
+                  Move <strong>{approvedCount}</strong> approved file
+                  {approvedCount === 1 ? "" : "s"} from{" "}
+                  <code className="text-[11px]">Final Shortlist/</code> back to{" "}
+                  <code className="text-[11px]">Shortlist Proposed/</code>
+                </li>
+                <li>
+                  Move <strong>{rejectedCount}</strong> rejected file
+                  {rejectedCount === 1 ? "" : "s"} from{" "}
+                  <code className="text-[11px]">Rejected/</code> back to{" "}
+                  <code className="text-[11px]">Shortlist Proposed/</code>
+                </li>
+                <li>
+                  Mark all of this round's AI training feedback rows{" "}
+                  <code className="text-[11px]">superseded=true</code> so the
+                  AI doesn't learn from your prior decisions
+                </li>
+                <li>
+                  Flip the round back to <strong>proposed</strong> — your drag
+                  history (overrides) stays intact, so you'll resume the
+                  swimlane in the state you left it
+                </li>
+              </ul>
+              <span className="block text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 text-xs mt-2">
+                When you re-lock, fresh committed_decisions are written. The
+                superseded rows stay in the audit table for diagnostics.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label htmlFor="unlock-reason" className="text-xs">
+                Reason (optional, for audit trail)
+              </Label>
+              <Textarea
+                id="unlock-reason"
+                placeholder="e.g. operator missed dusk shot 3, swapping in IMG_5681"
+                value={unlockReason}
+                onChange={(e) => setUnlockReason(e.target.value.slice(0, 500))}
+                rows={2}
+                className="text-sm"
+                disabled={isUnlocking}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="unlock-confirm" className="text-xs">
+                Type <code className="text-[11px] font-bold">UNLOCK</code> to
+                confirm
+              </Label>
+              <Input
+                id="unlock-confirm"
+                value={unlockTypedConfirm}
+                onChange={(e) => setUnlockTypedConfirm(e.target.value)}
+                placeholder="UNLOCK"
+                className="font-mono"
+                disabled={isUnlocking}
+                autoComplete="off"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setConfirmUnlockOpen(false);
+                setUnlockTypedConfirm("");
+                setUnlockReason("");
+              }}
+              disabled={isUnlocking}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={unlockShortlist}
+              disabled={isUnlocking || unlockTypedConfirm !== "UNLOCK"}
+            >
+              {isUnlocking && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              <Unlock className="h-4 w-4 mr-2" />
+              Unlock & Resume
             </Button>
           </DialogFooter>
         </DialogContent>

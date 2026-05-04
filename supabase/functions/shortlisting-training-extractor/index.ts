@@ -237,12 +237,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     // pre-mig-467 OR rounds where shortlist-lock didn't run).  The
     // fallback path is identical to the pre-467 behaviour to preserve
     // historical training data.
+    //
+    // Mig 468: filter superseded=false so unlocked-then-relocked rounds
+    // only contribute the LATEST commit's signal to training.  The
+    // historical (now-superseded) rows stay in the table for audit but
+    // never reach the AI.  See shortlist-unlock for the writer side.
     admin
       .from('shortlisting_committed_decisions')
       .select(
         'group_id, feedback_signal, ai_proposed_score, combined_score, primary_signal_overridden, override_reason, movement_count',
       )
-      .eq('round_id', roundId),
+      .eq('round_id', roundId)
+      .eq('superseded', false),
     admin
       .from('shortlisting_overrides')
       .select('ai_proposed_group_id, human_selected_group_id, ai_proposed_score, human_action')
