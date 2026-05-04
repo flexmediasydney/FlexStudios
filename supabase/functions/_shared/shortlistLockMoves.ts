@@ -170,6 +170,11 @@ export interface OverrideForLock {
   ai_proposed_group_id: string | null;
   human_selected_group_id: string | null;
   human_action: string;
+  // 2026-05-04 — used by computeApprovedRejectedSets to sort override
+  // application chronologically so seed rows (NULL client_sequence)
+  // apply before operator actions, not after.  Optional for backwards
+  // compat with callers that haven't been updated to fetch this column.
+  created_at?: string;
 }
 
 export interface ClassificationForLock {
@@ -196,7 +201,21 @@ export function computeApprovedRejectedSets(
   const approvedSet = new Set(aiShortlistSet);
   const explicitlyRemoved = new Set<string>();
 
-  for (const ov of overrides) {
+  // 2026-05-04 BUG FIX — sort overrides chronologically so the fold
+  // applies them in operator-action order.  Without this, seed rows
+  // (Stage 4 'ai_proposed' with NULL client_sequence) were applied LAST
+  // by the postgres natural order, re-asserting "card is in approved"
+  // and clobbering any 'removed' the operator did afterwards.  Sorting
+  // by created_at ASC ensures Stage 4 seed (oldest) applies first, then
+  // operator actions stack on top in the order they happened.  Same
+  // class of bug we fixed on the frontend in computedColumns.
+  const sortedOverrides = [...overrides].sort((a, b) => {
+    const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return ta - tb;
+  });
+
+  for (const ov of sortedOverrides) {
     const aiId = ov.ai_proposed_group_id;
     const humanId = ov.human_selected_group_id;
     switch (ov.human_action) {

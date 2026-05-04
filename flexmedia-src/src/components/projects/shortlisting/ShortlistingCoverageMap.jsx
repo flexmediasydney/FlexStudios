@@ -182,6 +182,23 @@ function usePolicy() {
   });
 }
 
+function useCommittedDecisions(roundId) {
+  return useQuery({
+    queryKey: ["shortlisting_committed_decisions", roundId],
+    enabled: !!roundId,
+    staleTime: 0,
+    refetchOnMount: "always",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shortlisting_committed_decisions")
+        .select("group_id, feedback_signal, movement_count, committed_at")
+        .eq("round_id", roundId);
+      if (error) throw error;
+      return Array.isArray(data) ? data : [];
+    },
+  });
+}
+
 function useStage4Queue(roundId) {
   return useQuery({
     queryKey: ["coverage_stage4_queue", roundId],
@@ -245,6 +262,7 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
   const overridesQuery = useRoundOverrides(roundId);
   const policyQuery = usePolicy();
   const stage4QueueQuery = useStage4Queue(roundId);
+  const committedDecisionsQuery = useCommittedDecisions(roundId);
 
   const overrides = overridesQuery.data || [];
   const pickedGroupIds = useMemo(
@@ -260,6 +278,26 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
   const postCheckPayload = postCheckQuery.data?.payload || null;
   const policy = policyQuery.data || null;
   const stage4QueuePending = stage4QueueQuery.data ?? 0;
+  const committedDecisions = committedDecisionsQuery.data || [];
+
+  // Mig 467 — committed AI training feedback summary.  Empty for rounds
+  // not yet locked; counts by feedback_signal once the operator hits
+  // Lock.  The 4-bucket breakdown is the canonical "what did the
+  // operator teach the engine this round" view.
+  const committedBreakdown = useMemo(() => {
+    const m = {
+      agreed_with_ai_pick: 0,
+      agreed_with_ai_reject: 0,
+      overrode_to_approve: 0,
+      overrode_to_reject: 0,
+    };
+    let movementSum = 0;
+    for (const c of committedDecisions) {
+      if (c.feedback_signal in m) m[c.feedback_signal] += 1;
+      if (typeof c.movement_count === "number") movementSum += c.movement_count;
+    }
+    return { ...m, total: committedDecisions.length, movementSum };
+  }, [committedDecisions]);
 
   // ── Layer 1 — Quota fulfillment ────────────────────────────────────────
   const quotaRows = useMemo(() => {
@@ -716,7 +754,77 @@ export default function ShortlistingCoverageMap({ roundId, round }) {
         </CardContent>
       </Card>
 
-      {/* ── Card 4 — Recipe transparency ───────────────────────────────── */}
+      {/* ── Card 4 — Committed AI training feedback (mig 467) ───────────
+          Renders a per-signal breakdown of what the operator actually
+          taught the engine this round (lock-time, de-noised view of
+          canonical training data).  Empty card when the round isn't
+          locked yet — operator's WIP doesn't count until they Lock. */}
+      {committedDecisions.length > 0 ? (
+        <Card>
+          <CardContent className="p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <div className="text-xs text-muted-foreground uppercase tracking-wide">
+                  AI training feedback (committed)
+                </div>
+                <div className="text-sm font-medium">
+                  {committedBreakdown.total} decisions committed
+                  {committedBreakdown.movementSum > 0 ? (
+                    <span className="ml-2 text-xs text-muted-foreground font-normal">
+                      across {committedBreakdown.movementSum} movements
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <Badge variant="secondary" className="gap-1">
+                <CheckCircle2 className="w-3 h-3" />
+                Locked
+              </Badge>
+            </div>
+            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-xs">
+              <li className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/30">
+                <span className="text-emerald-800 dark:text-emerald-300">
+                  Agreed with AI pick
+                </span>
+                <span className="font-mono tabular-nums text-emerald-900 dark:text-emerald-200">
+                  {committedBreakdown.agreed_with_ai_pick}
+                </span>
+              </li>
+              <li className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-emerald-50 dark:bg-emerald-950/30">
+                <span className="text-emerald-800 dark:text-emerald-300">
+                  Agreed with AI reject
+                </span>
+                <span className="font-mono tabular-nums text-emerald-900 dark:text-emerald-200">
+                  {committedBreakdown.agreed_with_ai_reject}
+                </span>
+              </li>
+              <li className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-amber-50 dark:bg-amber-950/30">
+                <span className="text-amber-800 dark:text-amber-300">
+                  Overrode → approve (AI missed)
+                </span>
+                <span className="font-mono tabular-nums text-amber-900 dark:text-amber-200">
+                  {committedBreakdown.overrode_to_approve}
+                </span>
+              </li>
+              <li className="flex items-center justify-between gap-2 px-2 py-1 rounded bg-amber-50 dark:bg-amber-950/30">
+                <span className="text-amber-800 dark:text-amber-300">
+                  Overrode → reject (AI wrong)
+                </span>
+                <span className="font-mono tabular-nums text-amber-900 dark:text-amber-200">
+                  {committedBreakdown.overrode_to_reject}
+                </span>
+              </li>
+            </ul>
+            <div className="text-[10px] text-muted-foreground pt-1">
+              Mig 467 — these are the canonical training signals. The
+              per-drag history in <code>shortlisting_overrides</code> is
+              kept for audit but no longer feeds AI learning.
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* ── Card 5 — Recipe transparency ───────────────────────────────── */}
       <Card>
         <CardContent className="p-3 space-y-2">
           <div className="flex items-center justify-between gap-2 flex-wrap">

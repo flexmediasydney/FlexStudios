@@ -2598,6 +2598,28 @@ export async function persistSlotDecisions(args: PersistSlotDecisionsArgs): Prom
     return 0;
   }
 
+  // Mig 467: snapshot initial_proposed_group_ids on first emit (legacy
+  // slot_decisions path).  Same idempotent conditional update as the
+  // editorial path.
+  try {
+    const proposedGroupIds = rowsToInsert
+      .map((r) => r.ai_proposed_group_id as string | null)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    const { error: snapErr } = await args.admin
+      .from('shortlisting_rounds')
+      .update({ initial_proposed_group_ids: proposedGroupIds })
+      .eq('id', args.roundId)
+      .is('initial_proposed_group_ids', null);
+    if (snapErr) {
+      console.warn(
+        `[${GENERATOR}] mig 467 snapshot (slot_decisions path) failed (non-fatal): ${snapErr.message}`,
+      );
+    }
+  } catch (snapErrAny) {
+    const m = snapErrAny instanceof Error ? snapErrAny.message : String(snapErrAny);
+    console.warn(`[${GENERATOR}] mig 467 snapshot threw (slot_decisions path, non-fatal): ${m}`);
+  }
+
   console.log(
     `[${GENERATOR}] persistSlotDecisions round=${args.roundId} ` +
     `slot_decisions=${args.slotDecisions.length} persisted=${rowsToInsert.length}`,
@@ -2929,6 +2951,31 @@ async function persistEditorialPicks(
   } catch (eErr) {
     const m = eErr instanceof Error ? eErr.message : String(eErr);
     console.warn(`[${GENERATOR}] editorial_picks_persisted event insert failed (non-fatal): ${m}`);
+  }
+
+  // Mig 467: snapshot the AI's initial proposed set onto
+  // shortlisting_rounds.initial_proposed_group_ids ONCE per round.
+  // The conditional `WHERE initial_proposed_group_ids IS NULL` makes
+  // re-runs idempotent — the FIRST emit defines what "the AI initially
+  // thought" and shortlist-lock uses that frozen baseline at lock time
+  // to compute the feedback_signal delta.
+  try {
+    const proposedGroupIds = rowsToInsert
+      .map((r) => r.ai_proposed_group_id as string | null)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+    const { error: snapErr } = await args.admin
+      .from('shortlisting_rounds')
+      .update({ initial_proposed_group_ids: proposedGroupIds })
+      .eq('id', args.roundId)
+      .is('initial_proposed_group_ids', null);
+    if (snapErr) {
+      console.warn(
+        `[${GENERATOR}] mig 467 snapshot of initial_proposed_group_ids failed (non-fatal): ${snapErr.message}`,
+      );
+    }
+  } catch (snapErrAny) {
+    const m = snapErrAny instanceof Error ? snapErrAny.message : String(snapErrAny);
+    console.warn(`[${GENERATOR}] mig 467 snapshot threw (non-fatal): ${m}`);
   }
 
   console.log(

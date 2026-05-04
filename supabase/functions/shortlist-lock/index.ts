@@ -232,7 +232,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const { data: round, error: roundErr } = await admin
     .from('shortlisting_rounds')
     .select(
-      'id, project_id, status, locked_at, locked_by, round_number, package_type, engine_version, tier_config_version, engine_grade_id',
+      'id, project_id, status, locked_at, locked_by, round_number, package_type, engine_version, tier_config_version, engine_grade_id, initial_proposed_group_ids',
     )
     .eq('id', roundId)
     .maybeSingle();
@@ -539,6 +539,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       rejectedCount: rejectedSet.size,
       failedMovesCount: 0,
       auditMirror,
+      // Mig 467 — committed_decisions inputs
+      overridesForCommit: overrides,
+      approvedSet,
+      rejectedSet,
+      initialProposedGroupIds: Array.isArray(round.initial_proposed_group_ids)
+        ? (round.initial_proposed_group_ids as string[])
+        : [],
+      groupRows: groups,
     });
     if (!finalizeResult.ok) {
       return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
@@ -642,6 +650,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       rejectedCount: rejectedSet.size,
       failedMovesCount: counts.failed,
       auditMirror,
+      // Mig 467 — committed_decisions inputs
+      overridesForCommit: overrides,
+      approvedSet,
+      rejectedSet,
+      initialProposedGroupIds: Array.isArray(round.initial_proposed_group_ids)
+        ? (round.initial_proposed_group_ids as string[])
+        : [],
+      groupRows: groups,
     });
     if (!finalizeResult.ok) {
       await admin.from('shortlisting_lock_progress')
@@ -847,6 +863,16 @@ interface FinalizeArgs {
   approvedCount: number;
   rejectedCount: number;
   failedMovesCount: number;
+  // Mig 467 — committed_decisions inputs.  Passed through from the lock
+  // handler so finalizeRound can write canonical training feedback once
+  // per (round, group) at lock time.  See writeCommittedDecisions().
+  // deno-lint-ignore no-explicit-any
+  overridesForCommit: any[];
+  approvedSet: Set<string>;
+  rejectedSet: Set<string>;
+  initialProposedGroupIds: string[];
+  // deno-lint-ignore no-explicit-any
+  groupRows: any[];
   /**
    * Wave 7 P1-12 (W7.4): if present, finalizeRound writes a per-lock audit
    * JSON to `<dropbox_root_path>/Photos/_AUDIT/round_<N>_locked_<ISO>.json`
@@ -984,6 +1010,29 @@ async function finalizeRound(args: FinalizeArgs): Promise<{ ok: boolean; error?:
     console.info(`[${GENERATOR}] auditMirror context not provided — skipping audit JSON write for round ${args.roundId}`);
   }
 
+  // Mig 467 — write canonical AI training feedback (one row per group)
+  // before kicking the training extractor.  This is the SOLE source of
+  // truth for AI learning loops: the noisy per-drag shortlisting_overrides
+  // history is no longer read by training pipelines (audit only).  Best-
+  // effort: failure logs a warning but does NOT roll the lock back.
+  try {
+    const written = await writeCommittedDecisions({
+      admin: args.admin,
+      roundId: args.roundId,
+      projectId: args.projectId,
+      lockedBy: args.lockedBy,
+      overrides: args.overridesForCommit,
+      approvedSet: args.approvedSet,
+      rejectedSet: args.rejectedSet,
+      initialProposedGroupIds: args.initialProposedGroupIds,
+      groupRows: args.groupRows,
+    });
+    console.info(`[${GENERATOR}] mig 467 committed_decisions written: ${written} rows`);
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    console.warn(`[${GENERATOR}] mig 467 writeCommittedDecisions failed (non-fatal): ${m}`);
+  }
+
   // Phase 8: kick the training extractor (fire-and-forget).
   if (args.confirmedShortlistGroupIds.length > 0) {
     const extractorWork = invokeFunction(
@@ -999,6 +1048,227 @@ async function finalizeRound(args: FinalizeArgs): Promise<{ ok: boolean; error?:
   }
 
   return { ok: true };
+}
+
+// ─── Mig 467 — committed_decisions writer ─────────────────────────────────
+// Computes the canonical AI training feedback per (round, group) at lock
+// time and UPSERTs into shortlisting_committed_decisions.
+//
+// Key design rule (per Joseph 2026-05-04):
+//   "if you log instantly every instance of movements as official AI engine
+//    feedback, i think you're going to get flooded with bad review/feedback
+//    data into the ai learning loop"
+//
+// Annotations (primary_signal_overridden, override_reason, client_review_notes)
+// are pulled ONLY from overrides whose action ALIGNS with the final state —
+// intermediate "I changed my mind" reasons that contradict the final
+// outcome are discarded.  Rule:
+//
+//   final_state = approved → keep annotations from
+//     {approved_as_proposed, added_from_rejects, swapped (humanId match)}
+//   final_state = rejected → keep annotations from
+//     {removed, swapped (aiId match)}
+//
+// When multiple aligned overrides exist, the LATEST wins (operator's most
+// recent rationale supersedes earlier ones).
+//
+// Idempotent: re-locking a round UPSERTs cleanly on (round_id, group_id).
+
+interface CommittedDecisionWriterArgs {
+  // deno-lint-ignore no-explicit-any
+  admin: any;
+  roundId: string;
+  projectId: string;
+  lockedBy: string | null;
+  // deno-lint-ignore no-explicit-any
+  overrides: any[];
+  approvedSet: Set<string>;
+  rejectedSet: Set<string>;
+  initialProposedGroupIds: string[];
+  // deno-lint-ignore no-explicit-any
+  groupRows: any[];
+}
+
+interface AlignedAnnotation {
+  created_at: string;
+  primary_signal_overridden: string | null;
+  override_reason: string | null;
+  client_review_notes: string | null;
+  ai_proposed_score: number | null;
+  ai_proposed_slot_id: string | null;
+}
+
+async function writeCommittedDecisions(
+  args: CommittedDecisionWriterArgs,
+): Promise<number> {
+  const initialSet = new Set(args.initialProposedGroupIds);
+
+  // Build final_state per group from approved/rejected sets.  Groups
+  // that are in NEITHER set (Stage 4 hasn't classified them, e.g. the
+  // round's residue) get marked rejected — they're not in the
+  // deliverable so the operator effectively rejected them by inaction.
+  const allGroupIds = new Set<string>();
+  for (const g of args.groupRows) {
+    if (g?.id) allGroupIds.add(g.id as string);
+  }
+  for (const id of args.approvedSet) allGroupIds.add(id);
+  for (const id of args.rejectedSet) allGroupIds.add(id);
+  for (const id of args.initialProposedGroupIds) allGroupIds.add(id);
+
+  const finalStateByGroup = new Map<string, 'approved' | 'rejected'>();
+  for (const id of allGroupIds) {
+    finalStateByGroup.set(id, args.approvedSet.has(id) ? 'approved' : 'rejected');
+  }
+
+  // Movement count per group — every override row counts as one
+  // "movement" of operator intent.  Diagnostic only (helps weight the
+  // training signal: 1 = decisive, 5+ = exploratory).
+  const movementCountByGroup = new Map<string, number>();
+  // ai_proposed_slot_id + ai_proposed_score from the seed Stage 4 row.
+  const seedSlotByGroup = new Map<string, { slot: string | null; score: number | null }>();
+  for (const ov of args.overrides) {
+    const aiId = ov.ai_proposed_group_id as string | null;
+    const humanId = ov.human_selected_group_id as string | null;
+    if (aiId) {
+      movementCountByGroup.set(aiId, (movementCountByGroup.get(aiId) ?? 0) + 1);
+      // Seed slot/score from the ai_proposed Stage-4 emit (one per group).
+      if (ov.human_action === 'ai_proposed' && !seedSlotByGroup.has(aiId)) {
+        seedSlotByGroup.set(aiId, {
+          slot: (ov.ai_proposed_slot_id as string | null) ?? null,
+          score:
+            typeof ov.ai_proposed_score === 'number'
+              ? (ov.ai_proposed_score as number)
+              : null,
+        });
+      }
+    }
+    if (humanId && humanId !== aiId) {
+      movementCountByGroup.set(humanId, (movementCountByGroup.get(humanId) ?? 0) + 1);
+    }
+  }
+
+  // Aligned annotations — for each group, find the LATEST override
+  // whose action's semantic effect matches that group's final_state.
+  const annotationsByGroup = new Map<string, AlignedAnnotation>();
+  for (const ov of args.overrides) {
+    const aiId = ov.ai_proposed_group_id as string | null;
+    const humanId = ov.human_selected_group_id as string | null;
+    const action = ov.human_action as string;
+
+    type Candidate = { groupId: string; isAligned: boolean };
+    const candidates: Candidate[] = [];
+    if (aiId) {
+      const fs = finalStateByGroup.get(aiId);
+      if (fs === 'approved' && action === 'approved_as_proposed') {
+        candidates.push({ groupId: aiId, isAligned: true });
+      }
+      if (fs === 'rejected' && (action === 'removed' || action === 'swapped')) {
+        candidates.push({ groupId: aiId, isAligned: true });
+      }
+    }
+    if (humanId) {
+      const fs = finalStateByGroup.get(humanId);
+      if (
+        fs === 'approved' &&
+        (action === 'added_from_rejects' || action === 'swapped')
+      ) {
+        candidates.push({ groupId: humanId, isAligned: true });
+      }
+    }
+
+    for (const c of candidates) {
+      const next: AlignedAnnotation = {
+        created_at: (ov.created_at as string) || '',
+        primary_signal_overridden: (ov.primary_signal_overridden as string | null) ?? null,
+        override_reason: (ov.override_reason as string | null) ?? null,
+        client_review_notes: (ov.override_note as string | null) ?? null,
+        ai_proposed_score:
+          typeof ov.ai_proposed_score === 'number'
+            ? (ov.ai_proposed_score as number)
+            : null,
+        ai_proposed_slot_id: (ov.ai_proposed_slot_id as string | null) ?? null,
+      };
+      const prior = annotationsByGroup.get(c.groupId);
+      if (
+        !prior ||
+        (next.created_at && next.created_at > (prior.created_at || ''))
+      ) {
+        annotationsByGroup.set(c.groupId, next);
+      }
+    }
+  }
+
+  // Pull combined_score per group from composition_classifications so
+  // the committed row carries it for training context.
+  const combinedScoreByGroup = new Map<string, number | null>();
+  try {
+    const { data: classRows } = await args.admin
+      .from('composition_classifications')
+      .select('group_id, combined_score')
+      .eq('round_id', args.roundId);
+    for (const r of classRows ?? []) {
+      const gid = r.group_id as string;
+      const cs = typeof r.combined_score === 'number' ? r.combined_score : null;
+      combinedScoreByGroup.set(gid, cs);
+    }
+  } catch (e) {
+    const m = e instanceof Error ? e.message : String(e);
+    console.warn(`[${GENERATOR}] committed_decisions: classification fetch failed (non-fatal): ${m}`);
+  }
+
+  // Assemble rows + UPSERT.
+  // deno-lint-ignore no-explicit-any
+  const rowsToUpsert: any[] = [];
+  for (const groupId of allGroupIds) {
+    const initialState = initialSet.has(groupId) ? 'ai_proposed' : 'not_proposed';
+    const finalState = finalStateByGroup.get(groupId) || 'rejected';
+
+    let feedbackSignal: string;
+    if (initialState === 'ai_proposed' && finalState === 'approved') {
+      feedbackSignal = 'agreed_with_ai_pick';
+    } else if (initialState === 'not_proposed' && finalState === 'rejected') {
+      feedbackSignal = 'agreed_with_ai_reject';
+    } else if (initialState === 'not_proposed' && finalState === 'approved') {
+      feedbackSignal = 'overrode_to_approve';
+    } else {
+      feedbackSignal = 'overrode_to_reject';
+    }
+
+    const ann = annotationsByGroup.get(groupId);
+    const seed = seedSlotByGroup.get(groupId);
+
+    rowsToUpsert.push({
+      round_id: args.roundId,
+      project_id: args.projectId,
+      group_id: groupId,
+      initial_state: initialState,
+      final_state: finalState,
+      feedback_signal: feedbackSignal,
+      ai_proposed_slot_id: ann?.ai_proposed_slot_id ?? seed?.slot ?? null,
+      ai_proposed_score: ann?.ai_proposed_score ?? seed?.score ?? null,
+      combined_score: combinedScoreByGroup.get(groupId) ?? null,
+      primary_signal_overridden: ann?.primary_signal_overridden ?? null,
+      override_reason: ann?.override_reason ?? null,
+      client_review_notes: ann?.client_review_notes ?? null,
+      movement_count: movementCountByGroup.get(groupId) ?? 0,
+      committed_by: args.lockedBy,
+    });
+  }
+
+  if (rowsToUpsert.length === 0) return 0;
+
+  // Idempotent re-lock: UPSERT replaces the prior decision per (round_id,
+  // group_id).  We don't preserve prior committed_at — re-locking IS a
+  // fresh commitment.
+  const { error: upsertErr } = await args.admin
+    .from('shortlisting_committed_decisions')
+    .upsert(rowsToUpsert, { onConflict: 'round_id,group_id' });
+
+  if (upsertErr) {
+    throw new Error(`shortlisting_committed_decisions upsert failed: ${upsertErr.message}`);
+  }
+
+  return rowsToUpsert.length;
 }
 
 interface PollArgs {

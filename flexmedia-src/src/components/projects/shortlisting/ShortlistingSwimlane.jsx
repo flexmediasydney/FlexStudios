@@ -1933,6 +1933,21 @@ export default function ShortlistingSwimlane({
             {isLocked ? "Locked" : "Lock & Reorganize"}
           </Button>
         </CardContent>
+        {/* Mig 467 — operator hint about commit semantics.  Every drag
+            persists to shortlisting_overrides immediately so the WIP is
+            durable across reloads, but AI training feedback is only
+            committed once per group at Lock time (the canonical signal
+            in shortlisting_committed_decisions).  Intermediate "I
+            changed my mind" rejections are filtered out at lock so they
+            never reach training. */}
+        {!isLocked ? (
+          <CardContent className="pt-0 pb-3 px-3 text-[11px] text-muted-foreground border-t">
+            <span className="font-medium">Tip:</span>{" "}
+            AI engine feedback only commits when you click Lock — feel
+            free to explore. Intermediate rejections that you later undo
+            won't pollute training data.
+          </CardContent>
+        ) : null}
       </Card>
 
       {/* Coverage notes (if any) */}

@@ -213,8 +213,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (typeof s.phase === 'number') slotPhaseById.set(s.slot_id as string, s.phase);
   }
 
-  // ── Fetch context: classifications + groups + slot events + overrides ──
-  const [classRes, groupsRes, eventsRes, overridesRes] = await Promise.all([
+  // ── Fetch context: classifications + groups + slot events + committed
+  //    decisions + overrides (legacy fallback) ──
+  const [classRes, groupsRes, eventsRes, committedRes, overridesRes] = await Promise.all([
     admin
       .from('composition_classifications')
       .select(
@@ -230,6 +231,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .select('group_id, event_type, payload')
       .eq('round_id', roundId)
       .in('event_type', ['pass2_slot_assigned', 'pass2_phase3_recommendation']),
+    // Mig 467: read canonical lock-time feedback rather than the noisy
+    // per-drag shortlisting_overrides history.  Falls back to overrides
+    // if a round's committed_decisions wasn't written (legacy rounds
+    // pre-mig-467 OR rounds where shortlist-lock didn't run).  The
+    // fallback path is identical to the pre-467 behaviour to preserve
+    // historical training data.
+    admin
+      .from('shortlisting_committed_decisions')
+      .select(
+        'group_id, feedback_signal, ai_proposed_score, combined_score, primary_signal_overridden, override_reason, movement_count',
+      )
+      .eq('round_id', roundId),
     admin
       .from('shortlisting_overrides')
       .select('ai_proposed_group_id, human_selected_group_id, ai_proposed_score, human_action')
@@ -240,11 +253,16 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (groupsRes.error) return errorResponse(`groups query failed: ${groupsRes.error.message}`, 500, req);
   if (eventsRes.error) return errorResponse(`events query failed: ${eventsRes.error.message}`, 500, req);
   if (overridesRes.error) return errorResponse(`overrides query failed: ${overridesRes.error.message}`, 500, req);
+  // committedRes error is non-fatal — pre-mig-467 rounds won't have rows
+  // and we fall through to the legacy override-based computation.
 
   const classifications = (classRes.data || []) as ClassificationRow[];
   const groups = (groupsRes.data || []) as CompositionGroupRow[];
   const slotEvents = (eventsRes.data || []) as SlotEventRow[];
   const overrides = (overridesRes.data || []) as OverrideRow[];
+  // deno-lint-ignore no-explicit-any
+  const committedRows: any[] = (committedRes?.data || []) as any[];
+  const useCommitted = committedRows.length > 0;
 
   // ── Build lookup maps ──────────────────────────────────────────────────
   const classByGroup = new Map<string, ClassificationRow>();
@@ -279,46 +297,74 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     }
   }
 
-  // Overrides: for each confirmed group, find the override that placed it
-  // there (if any). A group is "override=true" if a human action directly
-  // moved it (added_from_rejects on this group, or swapped with this group
-  // as the human_selected_group_id). approved_as_proposed is NOT an override
-  // — it means AI proposed and human accepted as-is.
+  // Mig 467: prefer canonical lock-time committed_decisions feedback
+  // when available.  feedback_signal carries the SAME information the
+  // legacy override fold computed, but already de-noised — no
+  // contradictory in-flight rejection reasons, no thrashy intermediate
+  // moves contributing to training data.
+  //
+  //   agreed_with_ai_pick  → was_override=false (AI was right, human kept)
+  //   overrode_to_approve  → was_override=true  (AI missed, human added)
+  //   agreed_with_ai_reject / overrode_to_reject → not in confirmed set
+  //
+  // Legacy fallback below mirrors the pre-467 behaviour for rounds that
+  // never wrote committed_decisions (locked before the migration).
   const overrideByGroup = new Map<string, { ai_proposed_score: number | null; was_override: boolean }>();
-  for (const ov of overrides) {
-    const aiId = ov.ai_proposed_group_id;
-    const humanId = ov.human_selected_group_id;
-    switch (ov.human_action) {
-      case 'approved_as_proposed':
-        if (aiId) {
-          // Track ai_proposed_score even though was_override stays false.
-          const existing = overrideByGroup.get(aiId);
-          if (!existing || existing.was_override === false) {
-            overrideByGroup.set(aiId, {
+
+  if (useCommitted) {
+    for (const cd of committedRows) {
+      const groupId = cd.group_id as string;
+      if (!groupId) continue;
+      const sig = cd.feedback_signal as string;
+      if (sig === 'agreed_with_ai_pick') {
+        overrideByGroup.set(groupId, {
+          ai_proposed_score: typeof cd.ai_proposed_score === 'number' ? cd.ai_proposed_score : null,
+          was_override: false,
+        });
+      } else if (sig === 'overrode_to_approve') {
+        overrideByGroup.set(groupId, {
+          ai_proposed_score: typeof cd.ai_proposed_score === 'number' ? cd.ai_proposed_score : null,
+          was_override: true,
+        });
+      }
+      // agreed_with_ai_reject + overrode_to_reject → group is NOT in
+      // confirmed set; the training row generator skips it naturally.
+    }
+  } else {
+    // Legacy fallback (pre-mig-467 rounds).  Identical to the prior
+    // implementation so historical training extraction is unchanged.
+    for (const ov of overrides) {
+      const aiId = ov.ai_proposed_group_id;
+      const humanId = ov.human_selected_group_id;
+      switch (ov.human_action) {
+        case 'approved_as_proposed':
+          if (aiId) {
+            const existing = overrideByGroup.get(aiId);
+            if (!existing || existing.was_override === false) {
+              overrideByGroup.set(aiId, {
+                ai_proposed_score: ov.ai_proposed_score,
+                was_override: false,
+              });
+            }
+          }
+          break;
+        case 'added_from_rejects':
+          if (humanId) {
+            overrideByGroup.set(humanId, {
               ai_proposed_score: ov.ai_proposed_score,
-              was_override: false,
+              was_override: true,
             });
           }
-        }
-        break;
-      case 'added_from_rejects':
-        if (humanId) {
-          overrideByGroup.set(humanId, {
-            ai_proposed_score: ov.ai_proposed_score,
-            was_override: true,
-          });
-        }
-        break;
-      case 'swapped':
-        if (humanId) {
-          overrideByGroup.set(humanId, {
-            ai_proposed_score: ov.ai_proposed_score,
-            was_override: true,
-          });
-        }
-        break;
-      // 'removed' acts on aiId — that group is NOT in confirmed set so we
-      // don't track it as a training example here.
+          break;
+        case 'swapped':
+          if (humanId) {
+            overrideByGroup.set(humanId, {
+              ai_proposed_score: ov.ai_proposed_score,
+              was_override: true,
+            });
+          }
+          break;
+      }
     }
   }
 
