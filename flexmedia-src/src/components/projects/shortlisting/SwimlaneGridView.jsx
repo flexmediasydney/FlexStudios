@@ -100,6 +100,47 @@ function timeOfDayLabel(key) {
   return TIME_OF_DAY_LABEL[key] || key.replace(/_/g, " ");
 }
 
+// Per-time-of-day visual styling so day/golden/dusk/night rows are
+// distinct at a glance.  Each row gets a subtle background tint, a
+// matching left-border accent, and a coloured chip on the time label.
+// Tones picked to evoke their actual lighting:
+//   day          — neutral blue-grey
+//   golden_hour  — amber / warm
+//   dusk_twilight — purple / cool
+//   night        — deep slate
+//   other        — muted grey
+const TIME_OF_DAY_STYLE = {
+  day: {
+    rowBg: "bg-sky-50/30 dark:bg-sky-950/10",
+    border: "border-l-2 border-sky-300/70 dark:border-sky-700/70",
+    chip: "bg-sky-100 text-sky-800 dark:bg-sky-900/60 dark:text-sky-200",
+  },
+  golden_hour: {
+    rowBg: "bg-amber-50/40 dark:bg-amber-950/15",
+    border: "border-l-2 border-amber-400/70 dark:border-amber-600/70",
+    chip: "bg-amber-100 text-amber-900 dark:bg-amber-900/60 dark:text-amber-200",
+  },
+  dusk_twilight: {
+    rowBg: "bg-purple-50/40 dark:bg-purple-950/15",
+    border: "border-l-2 border-purple-400/70 dark:border-purple-600/70",
+    chip: "bg-purple-100 text-purple-900 dark:bg-purple-900/60 dark:text-purple-200",
+  },
+  night: {
+    rowBg: "bg-slate-100/60 dark:bg-slate-900/30",
+    border: "border-l-2 border-slate-500/70 dark:border-slate-400/60",
+    chip: "bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100",
+  },
+  other: {
+    rowBg: "bg-muted/30",
+    border: "border-l-2 border-muted-foreground/30",
+    chip: "bg-muted text-muted-foreground",
+  },
+};
+
+function timeOfDayStyle(key) {
+  return TIME_OF_DAY_STYLE[key] || TIME_OF_DAY_STYLE.other;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 function snakeToTitle(s) {
@@ -252,6 +293,7 @@ function LaneCell({
   inst,
   column,
   roomKey,
+  roomLabel,
   density,
   isLocked,
   onSwapAlternative,
@@ -339,17 +381,31 @@ function LaneCell({
                   : "—"}
             </div>
           ) : (
-            <div className="space-y-1">
-              {grouped.map((row) => (
-                <div key={row.key} className="flex items-start gap-1.5">
+            <div className="space-y-1.5">
+              {grouped.map((row) => {
+                const tStyle = showTimeLabels
+                  ? timeOfDayStyle(row.key)
+                  : null;
+                return (
+                <div
+                  key={row.key}
+                  className={cn(
+                    "flex items-start gap-1.5 rounded-md py-1",
+                    tStyle && tStyle.rowBg,
+                    tStyle && tStyle.border,
+                    tStyle && "pl-1.5",
+                  )}
+                >
                   {showTimeLabels ? (
-                    <div
-                      className="text-[8px] uppercase tracking-wide text-muted-foreground/70 font-medium pt-1 shrink-0"
-                      style={{ width: 38 }}
+                    <span
+                      className={cn(
+                        "text-[9px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5 shrink-0",
+                        tStyle.chip,
+                      )}
                       title={row.key}
                     >
                       {timeOfDayLabel(row.key)}
-                    </div>
+                    </span>
                   ) : null}
                   <div className="flex flex-wrap gap-1 flex-1 min-w-0">
                     {row.entries.map(({ item, idx }) => (
@@ -378,7 +434,13 @@ function LaneCell({
                           previewSize={density}
                           onCardImageClick={
                             onCardImageClick
-                              ? () => onCardImageClick(column.key, item)
+                              ? () =>
+                                  onCardImageClick(column.key, item, {
+                                    label: roomLabel,
+                                    rejected: inst.rejected,
+                                    proposed: inst.proposed,
+                                    approved: inst.approved,
+                                  })
                               : undefined
                           }
                         />
@@ -386,7 +448,8 @@ function LaneCell({
                     ))}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
           {provided.placeholder}
@@ -398,7 +461,7 @@ function LaneCell({
 
 // ─── Room banner + 3-lane strip ──────────────────────────────────────────
 
-function LaneStrip({ inst, roomKey, ...rest }) {
+function LaneStrip({ inst, roomKey, roomLabel, ...rest }) {
   return (
     <div style={LANE_GRID_STYLE} className="px-2 pb-2">
       {COLUMN_META.map((col) => (
@@ -407,6 +470,7 @@ function LaneStrip({ inst, roomKey, ...rest }) {
           inst={inst}
           column={col}
           roomKey={roomKey}
+          roomLabel={roomLabel}
           {...rest}
         />
       ))}
@@ -464,7 +528,12 @@ function RoomBanner({ room, ...rest }) {
 
       {open ? (
         flat ? (
-          <LaneStrip inst={flatInst} roomKey={room.roomKey} {...rest} />
+          <LaneStrip
+            inst={flatInst}
+            roomKey={room.roomKey}
+            roomLabel={roomTitle}
+            {...rest}
+          />
         ) : (
           <div className="space-y-1.5 px-2 pb-2">
             {room.instancesOrdered.map((inst) => (
@@ -472,6 +541,7 @@ function RoomBanner({ room, ...rest }) {
                 key={inst.instKey}
                 inst={inst}
                 roomKey={room.roomKey}
+                parentRoomLabel={roomTitle}
                 {...rest}
               />
             ))}
@@ -482,8 +552,10 @@ function RoomBanner({ room, ...rest }) {
   );
 }
 
-function InstanceBanner({ inst, roomKey, ...rest }) {
+function InstanceBanner({ inst, roomKey, parentRoomLabel, ...rest }) {
   const [open, setOpen] = useState(true);
+  const instLabel = instanceLabel(inst.instanceRow);
+  const roomLabel = parentRoomLabel ? `${parentRoomLabel} · ${instLabel}` : instLabel;
   return (
     <div
       className="rounded-md border bg-muted/20"
@@ -521,7 +593,14 @@ function InstanceBanner({ inst, roomKey, ...rest }) {
           </span>
         </div>
       </button>
-      {open ? <LaneStrip inst={inst} roomKey={roomKey} {...rest} /> : null}
+      {open ? (
+        <LaneStrip
+          inst={inst}
+          roomKey={roomKey}
+          roomLabel={roomLabel}
+          {...rest}
+        />
+      ) : null}
     </div>
   );
 }

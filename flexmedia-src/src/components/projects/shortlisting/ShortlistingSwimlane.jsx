@@ -519,12 +519,38 @@ export default function ShortlistingSwimlane({
   const [lightboxState, setLightboxState] = useState({
     bucket: null,
     index: 0,
+    // 2026-05-04: grid-view lightbox cycles within a single room across
+    // all three buckets (rejected → proposed → approved order).  The
+    // grid passes an ordered list of group_ids; lightboxItemsMemo
+    // enriches them using the same pipeline as the bucket path.
+    orderedGroupIds: null,
+    bucketLabel: null,
   });
   const closeLightbox = useCallback(() => {
-    setLightboxState((prev) => ({ ...prev, bucket: null }));
+    setLightboxState((prev) => ({
+      ...prev,
+      bucket: null,
+      orderedGroupIds: null,
+    }));
   }, []);
   const openLightbox = useCallback((bucket, index) => {
-    setLightboxState({ bucket, index });
+    setLightboxState({
+      bucket,
+      index,
+      orderedGroupIds: null,
+      bucketLabel: null,
+    });
+  }, []);
+  // Grid-mode entrypoint: opens the lightbox over a custom ordered
+  // list of group_ids (typically a room's cards in [rejected, proposed,
+  // approved] order so prev/next compares alternatives WITHIN the room).
+  const openLightboxOrdered = useCallback((orderedGroupIds, index, bucketLabel) => {
+    setLightboxState({
+      bucket: null,
+      index,
+      orderedGroupIds,
+      bucketLabel: bucketLabel || null,
+    });
   }, []);
 
   // QC-iter2-W7 F-C-011: lightboxItemsMemo originally lived here but
@@ -1271,6 +1297,62 @@ export default function ShortlistingSwimlane({
   }, [spaceInstancesQuery.data]);
 
   const lightboxItemsMemo = useMemo(() => {
+    // Helper: enrich a column-items row into the lightbox shape.
+    // Hoisted so both the bucket path AND the ordered-list path
+    // (grid-view room cycling) emit the same enriched shape.
+    const enrich = (it) => ({
+      id: it.id,
+      dropbox_path: it.dropbox_preview_path,
+      filename:
+        it.delivery_reference_stem ||
+        it.best_bracket_stem ||
+        it.rep_filename ||
+        it.id,
+      observed_objects: Array.isArray(it.classification?.observed_objects)
+        ? it.classification.observed_objects
+        : [],
+      signal_scores: it.classification?.signal_scores || null,
+      slot_decision: it.slot || null,
+      voice_tier: it.classification?.voice_tier || null,
+      master_listing: it.classification?.master_listing || null,
+      classification: it.classification || null,
+      editorial_envelope: it.slot?.editorial || null,
+      group_metadata: {
+        group_index: it.group_index ?? null,
+        file_count: it.file_count ?? null,
+        files_in_group: it.files_in_group ?? null,
+        best_bracket_stem: it.best_bracket_stem ?? null,
+        delivery_reference_stem: it.delivery_reference_stem ?? null,
+        selected_bracket_luminance: it.selected_bracket_luminance ?? null,
+        all_bracket_luminances: it.all_bracket_luminances ?? null,
+        is_micro_adjustment_split: it.is_micro_adjustment_split ?? null,
+        camera_source: it.camera_source ?? null,
+        is_secondary_camera: it.is_secondary_camera ?? null,
+        synthetic_finals_match_stem: it.synthetic_finals_match_stem ?? null,
+        space_instance_id: it.space_instance_id ?? null,
+        space_instance_confidence: it.space_instance_confidence ?? null,
+      },
+      space_instances_by_id: spaceInstancesById,
+    });
+
+    // 2026-05-04 — grid-view ordered-list path.  The grid passes the
+    // room's cards in [rejected, proposed, approved] order so prev/next
+    // navigates WITHIN the room (compare alternatives for one position)
+    // instead of bouncing across rooms.  The ids are looked up against
+    // a flat index built from columnItems below.
+    if (Array.isArray(lightboxState.orderedGroupIds) && lightboxState.orderedGroupIds.length > 0) {
+      const flat = [
+        ...(columnItems.rejected || []),
+        ...(columnItems.proposed || []),
+        ...(columnItems.approved || []),
+      ];
+      const byId = new Map(flat.map((it) => [it.id, it]));
+      return lightboxState.orderedGroupIds
+        .map((id) => byId.get(id))
+        .filter(Boolean)
+        .map(enrich);
+    }
+
     const bucket = lightboxState.bucket;
     if (!bucket) return null;
     const bucketItems = columnItems[bucket] || [];
@@ -1317,7 +1399,12 @@ export default function ShortlistingSwimlane({
       // instance_index, distinctive_features) instead of bare UUIDs.
       space_instances_by_id: spaceInstancesById,
     }));
-  }, [lightboxState.bucket, columnItems, spaceInstancesById]);
+  }, [
+    lightboxState.bucket,
+    lightboxState.orderedGroupIds,
+    columnItems,
+    spaceInstancesById,
+  ]);
 
   // W11.6.1 — group-by-slot grouping for the AI PROPOSED column. Keyed by
   // slot_id; a card with no slot lands under a synthetic "no slot" bucket
@@ -1955,10 +2042,35 @@ export default function ShortlistingSwimlane({
             classByGroupId={classByGroupId}
             registerCardObserver={registerCardObserver}
             onAltsDrawerOpen={handleAltsDrawerOpen}
-            onCardImageClick={(bucketKey, item) => {
-              // Grid view passes the item itself; the global lightbox
-              // index needs to be the item's position within the
-              // bucket's columnItems array.
+            onCardImageClick={(bucketKey, item, roomContext) => {
+              // 2026-05-04: in grid mode the lightbox cycles WITHIN
+              // the current room across all 3 buckets, in lane order
+              // (rejected → proposed → approved).  SwimlaneGridView
+              // passes the room's instance as `roomContext` so we can
+              // assemble the ordered list here.
+              if (
+                roomContext &&
+                Array.isArray(roomContext.rejected) &&
+                Array.isArray(roomContext.proposed) &&
+                Array.isArray(roomContext.approved)
+              ) {
+                const ordered = [
+                  ...roomContext.rejected,
+                  ...roomContext.proposed,
+                  ...roomContext.approved,
+                ];
+                const orderedIds = ordered.map((it) => it.id);
+                const idx = orderedIds.indexOf(item.id);
+                if (idx >= 0) {
+                  openLightboxOrdered(
+                    orderedIds,
+                    idx,
+                    roomContext.label || null,
+                  );
+                  return;
+                }
+              }
+              // Fallback: bucket-scoped (same behaviour as lane view).
               const arr = columnItems[bucketKey] || [];
               const idx = arr.findIndex((x) => x.id === item.id);
               if (idx >= 0) openLightbox(bucketKey, idx);
@@ -2065,18 +2177,24 @@ export default function ShortlistingSwimlane({
           + slot_decision + classification). The lightbox handles its own
           ←/→ keyboard nav, prev/next buttons, swipe — no plumbing needed
           from here. */}
-      {lightboxState.bucket && lightboxItemsMemo && (() => {
+      {(lightboxState.bucket || (lightboxState.orderedGroupIds && lightboxState.orderedGroupIds.length > 0)) && lightboxItemsMemo && (() => {
         const COLUMN_LABEL = {
           rejected: "REJECTED",
           proposed: "AI PROPOSED",
           approved: "HUMAN APPROVED",
         };
         const bucket = lightboxState.bucket;
+        // 2026-05-04: in grid mode the lightbox cycles through a
+        // room-scoped ordered list, so the header label is the room
+        // name instead of a single bucket name.
+        const label = lightboxState.bucketLabel
+          ? lightboxState.bucketLabel
+          : COLUMN_LABEL[bucket] || bucket;
         return (
           <ShortlistingLightbox
             items={lightboxItemsMemo}
             initialIndex={lightboxState.index}
-            bucketLabel={COLUMN_LABEL[bucket] || bucket}
+            bucketLabel={label}
             allClassificationsInRound={classifications}
             onClose={closeLightbox}
           />
