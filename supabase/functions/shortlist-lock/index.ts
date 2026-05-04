@@ -1308,6 +1308,12 @@ interface AlignedAnnotation {
   client_review_notes: string | null;
   ai_proposed_score: number | null;
   ai_proposed_slot_id: string | null;
+  // Mig 470 — when the latest aligned override is a system cap-trim
+  // (auto_trim_source='delivery_cap'), the committed_decision row gets
+  // excluded_from_learning=true so this rejection doesn't pollute training
+  // signal. The operator only trimmed the image because the client wanted
+  // fewer total images, not because it was a bad shot.
+  auto_trim_source: string | null;
 }
 
 async function writeCommittedDecisions(
@@ -1399,6 +1405,8 @@ async function writeCommittedDecisions(
             ? (ov.ai_proposed_score as number)
             : null,
         ai_proposed_slot_id: (ov.ai_proposed_slot_id as string | null) ?? null,
+        // Mig 470: propagate cap-trim source from the establishing override.
+        auto_trim_source: (ov.auto_trim_source as string | null) ?? null,
       };
       const prior = annotationsByGroup.get(c.groupId);
       if (
@@ -1449,6 +1457,14 @@ async function writeCommittedDecisions(
     const ann = annotationsByGroup.get(groupId);
     const seed = seedSlotByGroup.get(groupId);
 
+    // Mig 470: a rejection whose establishing override was a system cap-trim
+    // (auto_trim_source='delivery_cap') is excluded from training signal —
+    // the operator didn't reject for quality reasons, the client just wanted
+    // fewer total images. Approvals + non-cap rejections feed training as
+    // normal.
+    const excludedFromLearning =
+      finalState === 'rejected' && ann?.auto_trim_source === 'delivery_cap';
+
     rowsToUpsert.push({
       round_id: args.roundId,
       project_id: args.projectId,
@@ -1471,6 +1487,7 @@ async function writeCommittedDecisions(
       // columns that appear in the input row.  Training pipelines would
       // then ignore the relock's signal — exactly backwards.
       superseded: false,
+      excluded_from_learning: excludedFromLearning,
     });
   }
 

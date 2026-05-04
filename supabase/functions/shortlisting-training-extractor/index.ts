@@ -242,13 +242,21 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     // only contribute the LATEST commit's signal to training.  The
     // historical (now-superseded) rows stay in the table for audit but
     // never reach the AI.  See shortlist-unlock for the writer side.
+    //
+    // Mig 470: also filter excluded_from_learning=false so client-driven
+    // delivery cap trims (operator rejected the bottom N because the client
+    // wanted fewer total images, not because they were bad shots) don't
+    // pollute training signal. Cap-trimmed rows stay in the table for audit
+    // but never reach the AI.  See shortlist-lock writeCommittedDecisions
+    // for the writer side.
     admin
       .from('shortlisting_committed_decisions')
       .select(
         'group_id, feedback_signal, ai_proposed_score, combined_score, primary_signal_overridden, override_reason, movement_count',
       )
       .eq('round_id', roundId)
-      .eq('superseded', false),
+      .eq('superseded', false)
+      .eq('excluded_from_learning', false),
     admin
       .from('shortlisting_overrides')
       .select('ai_proposed_group_id, human_selected_group_id, ai_proposed_score, human_action')

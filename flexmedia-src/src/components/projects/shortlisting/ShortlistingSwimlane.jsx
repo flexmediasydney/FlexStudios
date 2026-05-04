@@ -41,7 +41,7 @@ import {
   useCallback,
   useRef,
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { api, supabase } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -63,6 +63,8 @@ import {
   ChevronRight,
   X,
   Unlock,
+  Pencil,
+  Check,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -1829,6 +1831,45 @@ export default function ShortlistingSwimlane({
     }
   }, [roundId, projectId, queryClient, unlockReason, unlockTypedConfirm]);
 
+  // Mig 470 — Delivery cap (client-driven count override).  master_admin
+  // only.  Applies a cap → calls apply-delivery-cap edge fn → server-side
+  // RPC re-balances the proposed/rejected sets via the override event log.
+  // Cap-trims are tagged auto_trim_source='delivery_cap' so shortlist-lock
+  // marks them excluded_from_learning=true (no training pollution).
+  const [capEditOpen, setCapEditOpen] = useState(false);
+  const [capInputValue, setCapInputValue] = useState("");
+  const applyCapMutation = useMutation({
+    mutationFn: async (capValue) => {
+      const resp = await api.functions.invoke("apply-delivery-cap", {
+        round_id: roundId,
+        cap: capValue,
+      });
+      const data = resp?.data ?? resp ?? {};
+      if (data?.error) {
+        throw new Error(data?.error?.message || JSON.stringify(data.error));
+      }
+      if (data?.ok === false) {
+        throw new Error(data?.error || "Apply cap failed");
+      }
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["shortlisting_rounds", projectId] });
+      queryClient.invalidateQueries({ queryKey: ["shortlisting_overrides", roundId] });
+      setCapEditOpen(false);
+      setCapInputValue("");
+      const cap = data?.cap;
+      if (cap === null) {
+        toast.success("Delivery cap cleared — prior trims reverted.");
+      } else {
+        toast.success(
+          `Delivery cap = ${cap}. Trim applied to bottom ${data?.cap_trimmed_count ?? "?"} by score.`,
+        );
+      }
+    },
+    onError: (err) => toast.error(`Apply cap failed: ${err?.message || err}`),
+  });
+
   // 2026-05-04 — lock guard hooks.  IMPORTANT: these MUST live above
   // the isLoading / queryError / no-groups early returns so the hook
   // call count is identical across the loading→loaded transition.  We
@@ -1895,6 +1936,27 @@ export default function ShortlistingSwimlane({
   }, [columnItems.approved, columnItems.proposed]);
 
   const quotaShortfalls = useMemo(() => {
+    // Mig 470: when a client delivery cap is set, the per-bucket quota gate
+    // is replaced by a single "deliver N total" check. The cap is the
+    // operator's source of truth for this round, not the package quota.
+    const cap =
+      typeof round?.delivery_cap_override === "number"
+        ? round.delivery_cap_override
+        : null;
+    if (cap !== null && cap > 0) {
+      const delivered = (columnItems.approved?.length ?? 0) + (columnItems.proposed?.length ?? 0);
+      if (delivered < cap) {
+        return [
+          {
+            bucket: "delivery_cap",
+            required: cap,
+            approved: delivered,
+            short: cap - delivered,
+          },
+        ];
+      }
+      return [];
+    }
     if (!requiredQuotas || typeof requiredQuotas !== "object") return null;
     const out = [];
     for (const [bucket, required] of Object.entries(requiredQuotas)) {
@@ -1910,7 +1972,13 @@ export default function ShortlistingSwimlane({
       }
     }
     return out;
-  }, [requiredQuotas, approvedByBucket]);
+  }, [
+    requiredQuotas,
+    approvedByBucket,
+    round?.delivery_cap_override,
+    columnItems.approved,
+    columnItems.proposed,
+  ]);
 
   const lockBlockedReason = useMemo(() => {
     if (!quotaShortfalls || quotaShortfalls.length === 0) return null;
@@ -1921,7 +1989,9 @@ export default function ShortlistingSwimlane({
           ? "Dusk"
           : b === "aerial_images"
             ? "Aerial"
-            : b;
+            : b === "delivery_cap"
+              ? "Client cap"
+              : b;
     const parts = quotaShortfalls.map(
       (s) => `${human(s.bucket)} ${s.approved}/${s.required} (need ${s.short} more)`,
     );
@@ -1973,6 +2043,13 @@ export default function ShortlistingSwimlane({
   // a ceiling. Per Joseph's architectural correction (2026-04-27), packages
   // must NEVER be hardcoded in the frontend.
   const ceiling = round?.package_ceiling ?? null;
+  // Mig 470: client-driven delivery cap — overrides per-bucket quota gate
+  // with a single "deliver N total" rule. NULL = no cap (engine quota
+  // governs).
+  const deliveryCap =
+    typeof round?.delivery_cap_override === "number"
+      ? round.delivery_cap_override
+      : null;
   const total = groups.length;
   const approvedCount = columnItems.approved.length;
   const proposedCount = columnItems.proposed.length;
@@ -2082,6 +2159,105 @@ export default function ShortlistingSwimlane({
             <div>
               <div className="text-xs text-muted-foreground">Total</div>
               <div className="text-sm font-medium tabular-nums">{total}</div>
+            </div>
+            {/* Mig 470 — Client delivery cap chip. master_admin can set/clear; */}
+            {/* others see the value when present.                              */}
+            <div className="border-l h-8" />
+            <div>
+              <div className="text-xs text-muted-foreground flex items-center gap-1">
+                Client cap
+                {!isReadOnly && isMasterAdmin && !capEditOpen && (
+                  <button
+                    type="button"
+                    title={deliveryCap ? "Edit delivery cap" : "Set delivery cap"}
+                    onClick={() => {
+                      setCapInputValue(deliveryCap != null ? String(deliveryCap) : "");
+                      setCapEditOpen(true);
+                    }}
+                    className="inline-flex items-center justify-center rounded h-4 w-4 hover:bg-muted text-muted-foreground hover:text-foreground"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+              {capEditOpen ? (
+                <div className="flex items-center gap-1 mt-0.5">
+                  <Input
+                    autoFocus
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={capInputValue}
+                    onChange={(e) => setCapInputValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const n = parseInt(capInputValue, 10);
+                        if (!Number.isNaN(n) && n > 0) {
+                          applyCapMutation.mutate(n);
+                        }
+                      } else if (e.key === "Escape") {
+                        setCapEditOpen(false);
+                        setCapInputValue("");
+                      }
+                    }}
+                    className="h-7 w-20 text-sm tabular-nums"
+                    placeholder="e.g. 15"
+                    disabled={applyCapMutation.isPending}
+                  />
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Save cap"
+                    onClick={() => {
+                      const n = parseInt(capInputValue, 10);
+                      if (!Number.isNaN(n) && n > 0) {
+                        applyCapMutation.mutate(n);
+                      }
+                    }}
+                    disabled={
+                      applyCapMutation.isPending ||
+                      Number.isNaN(parseInt(capInputValue, 10)) ||
+                      parseInt(capInputValue, 10) <= 0
+                    }
+                  >
+                    <Check className="h-3.5 w-3.5" />
+                  </Button>
+                  {deliveryCap != null && (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7 text-amber-700"
+                      title="Clear cap (revert auto-trims)"
+                      onClick={() => applyCapMutation.mutate(null)}
+                      disabled={applyCapMutation.isPending}
+                    >
+                      <Unlock className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Cancel"
+                    onClick={() => {
+                      setCapEditOpen(false);
+                      setCapInputValue("");
+                    }}
+                    disabled={applyCapMutation.isPending}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : (
+                <div className="text-sm font-medium tabular-nums">
+                  {deliveryCap != null ? (
+                    <span className="text-violet-700 dark:text-violet-300">{deliveryCap}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </div>
+              )}
             </div>
             {round?.started_at && (
               <>
