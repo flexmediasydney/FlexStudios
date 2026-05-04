@@ -1384,8 +1384,17 @@ export default function ShortlistingSwimlane({
       // and survive the split unchanged.
       const fromColumn = source.droppableId.split("__")[0];
       const toColumn = destination.droppableId.split("__")[0];
+      console.log(
+        `[swimlane] onDragEnd source=${source.droppableId} dest=${destination.droppableId} ` +
+          `→ fromColumn=${fromColumn} toColumn=${toColumn} draggable=${draggableId}`,
+      );
       const action = deriveHumanAction(fromColumn, toColumn);
-      if (!action) return;
+      if (!action) {
+        console.log(
+          `[swimlane] onDragEnd: no action for fromColumn=${fromColumn} toColumn=${toColumn} (same-bucket move)`,
+        );
+        return;
+      }
 
       const groupId = draggableId;
       const composition = groups.find((g) => g.id === groupId);
@@ -1928,7 +1937,14 @@ export default function ShortlistingSwimlane({
             classByGroupId={classByGroupId}
             registerCardObserver={registerCardObserver}
             onAltsDrawerOpen={handleAltsDrawerOpen}
-            onCardImageClick={(bucketKey, idx) => openLightbox(bucketKey, idx)}
+            onCardImageClick={(bucketKey, item) => {
+              // Grid view passes the item itself; the global lightbox
+              // index needs to be the item's position within the
+              // bucket's columnItems array.
+              const arr = columnItems[bucketKey] || [];
+              const idx = arr.findIndex((x) => x.id === item.id);
+              if (idx >= 0) openLightbox(bucketKey, idx);
+            }}
           />
         ) : (
           /* 3-column swimlane (default).

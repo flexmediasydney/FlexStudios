@@ -261,15 +261,45 @@ function LaneCell({
   onAltsDrawerOpen,
   onCardImageClick,
 }) {
-  const items = inst[column.key] || [];
-  // Group by time_of_day so we can render a sub-row label per group when
-  // the cell has >1 distinct time.
+  const rawItems = inst[column.key] || [];
+  // CRITICAL — @hello-pangea/dnd requires Draggable indices within a
+  // Droppable to be contiguous AND match render order.  We sort the
+  // bucket's items by time_of_day priority first, then assign sequential
+  // indices, then group for visual rendering.  Because items in the same
+  // time bucket are now adjacent in the sorted array, rendering
+  // group-by-group preserves the index→DOM-order invariant the library
+  // needs.  Reordering the array also doesn't change semantics (the
+  // bucket is the same regardless of internal order — sort is purely a
+  // visual concern).
+  const itemsSorted = useMemo(() => {
+    const arr = [...rawItems];
+    arr.sort((a, b) => {
+      const at = timeOfDayKey(a);
+      const bt = timeOfDayKey(b);
+      const ai = TIME_OF_DAY_ORDER.indexOf(at);
+      const bi = TIME_OF_DAY_ORDER.indexOf(bt);
+      const apri = ai === -1 ? 99 : ai;
+      const bpri = bi === -1 ? 99 : bi;
+      if (apri !== bpri) return apri - bpri;
+      // Within same time bucket, fall back to score desc (preserves the
+      // existing cellSort tie-break).
+      const sa = pickHeadlineScore(a) ?? -Infinity;
+      const sb = pickHeadlineScore(b) ?? -Infinity;
+      if (sb !== sa) return sb - sa;
+      return (a?.group_index ?? 0) - (b?.group_index ?? 0);
+    });
+    return arr;
+  }, [rawItems]);
+
+  // Visually-grouped representation built from itemsSorted so the
+  // sequential render index matches each Draggable's index.  Each entry
+  // carries the index it'll be assigned during render.
   const grouped = useMemo(() => {
     const m = new Map();
-    items.forEach((it, originalIdx) => {
+    itemsSorted.forEach((it, idx) => {
       const k = timeOfDayKey(it);
       if (!m.has(k)) m.set(k, []);
-      m.get(k).push({ item: it, originalIdx });
+      m.get(k).push({ item: it, idx });
     });
     const sortedKeys = Array.from(m.keys()).sort((a, b) => {
       const ai = TIME_OF_DAY_ORDER.indexOf(a);
@@ -280,7 +310,9 @@ function LaneCell({
       return a.localeCompare(b);
     });
     return sortedKeys.map((k) => ({ key: k, entries: m.get(k) }));
-  }, [items]);
+  }, [itemsSorted]);
+
+  const items = itemsSorted;
 
   const showTimeLabels = grouped.length > 1;
   const droppableId = makeDroppableId(column.key, roomKey, inst.instKey);
@@ -320,17 +352,10 @@ function LaneCell({
                     </div>
                   ) : null}
                   <div className="flex flex-wrap gap-1 flex-1 min-w-0">
-                    {row.entries.map(({ item, originalIdx }) => (
+                    {row.entries.map(({ item, idx }) => (
                       <div
                         key={item.id}
                         style={{
-                          // Cap each card to a roughly thumbnail-sized
-                          // width so cells stay dense; the heavy
-                          // ShortlistingCard adapts to this width.  The
-                          // actual visual size still respects previewSize
-                          // (sm/md/lg) — this cap just tightens the
-                          // grid-density math so the rejected lane fits
-                          // a meaningful row of alternatives.
                           width:
                             density === "sm"
                               ? 110
@@ -342,7 +367,7 @@ function LaneCell({
                       >
                         <SwimlaneCardRenderer
                           item={item}
-                          index={originalIdx}
+                          index={idx}
                           column={column}
                           isLocked={isLocked}
                           onSwapAlternative={onSwapAlternative}
@@ -353,7 +378,7 @@ function LaneCell({
                           previewSize={density}
                           onCardImageClick={
                             onCardImageClick
-                              ? () => onCardImageClick(column.key, originalIdx)
+                              ? () => onCardImageClick(column.key, item)
                               : undefined
                           }
                         />
