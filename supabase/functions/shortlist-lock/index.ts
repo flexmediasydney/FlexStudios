@@ -700,9 +700,18 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // UNIQUE constraint. The constraint is DEFERRABLE INITIALLY DEFERRED so the
   // delete-then-insert in the same transaction is OK; we issue them as
   // separate statements via supabase-js since it doesn't expose explicit
-  // BEGIN/COMMIT for two operations on different tables. The DELETE is safe
-  // here because we already validated stage='failed' above.
-  if (priorProgress && resume) {
+  // BEGIN/COMMIT for two operations on different tables.
+  //
+  // 2026-05-04 — also delete on stage='complete' (relock after unlock).
+  // Originally only resume=true triggered the delete, which assumed prior
+  // progress was always 'failed'.  But shortlist-unlock now exists, so
+  // there's a third state: a successful prior lock that was unlocked and
+  // is now being relocked.  Without this delete, the INSERT below errors
+  // with UNIQUE constraint violation on round_id.  The 'in flight' stages
+  // (submitting/polling/finalizing) already returned 409 in the resume
+  // guard above, so reaching here means the prior row is complete OR
+  // failed (with resume=true).  Either way, safe to clear.
+  if (priorProgress && (resume || priorProgress.stage === 'complete')) {
     await admin.from('shortlisting_lock_progress').delete().eq('id', priorProgress.id);
   }
 
@@ -2100,7 +2109,9 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
   }
 
   // ── Insert progress row ───────────────────────────────────────────────
-  if (priorProgress && resume) {
+  // Same logic as engine-mode path: also delete on stage='complete' to
+  // support relock-after-unlock without UNIQUE violation.
+  if (priorProgress && (resume || priorProgress.stage === 'complete')) {
     await admin.from('shortlisting_lock_progress').delete().eq('id', priorProgress.id);
   }
   const { data: progressRow, error: progressInsErr } = await admin
