@@ -541,15 +541,20 @@ interface ListFolderResult {
  */
 export async function listFolder(
   path: string,
-  opts?: { recursive?: boolean; maxEntries?: number },
+  opts?: { recursive?: boolean; maxEntries?: number; app?: DropboxApp },
 ): Promise<{ entries: DropboxFileMetadata[]; truncated: boolean; cursor: string }> {
   const max = opts?.maxEntries ?? 5000;
-  const first = await dropboxApi<ListFolderResult>('/files/list_folder', {
-    path,
-    recursive: opts?.recursive ?? false,
-    include_deleted: false,
-    limit: 2000,
-  });
+  const app = opts?.app;
+  const first = await dropboxApi<ListFolderResult>(
+    '/files/list_folder',
+    {
+      path,
+      recursive: opts?.recursive ?? false,
+      include_deleted: false,
+      limit: 2000,
+    },
+    { app },
+  );
 
   let entries = first.entries;
   let cursor = first.cursor;
@@ -557,7 +562,11 @@ export async function listFolder(
   let truncated = false;
 
   while (hasMore && entries.length < max) {
-    const next = await dropboxApi<ListFolderResult>('/files/list_folder/continue', { cursor });
+    const next = await dropboxApi<ListFolderResult>(
+      '/files/list_folder/continue',
+      { cursor },
+      { app },
+    );
     entries = entries.concat(next.entries);
     cursor = next.cursor;
     hasMore = next.has_more;

@@ -282,7 +282,14 @@ async function ingest(
     throw new Error(`Photos shortlist folder not provisioned for project: ${msg}`);
   }
 
-  const { entries } = await listFolder(folderPath, { recursive: false, maxEntries: 5000 });
+  // 2026-05-04 — engine app for the folder listing too.  This was the
+  // bug behind the "Run Shortlist Now → 150s IDLE_TIMEOUT" report:
+  // listFolder defaulted to the UI app which is in adaptive throttle,
+  // so the very first Dropbox call ingest made hung in the retry loop
+  // for 150s before the Edge gateway killed it.  With { app: 'engine' }
+  // the call goes to the fresh-reputation flexmedia-engine app and
+  // returns in ~200 ms.
+  const { entries } = await listFolder(folderPath, { recursive: false, maxEntries: 5000, app: 'engine' });
   const filePaths = entries
     .filter((e) => e['.tag'] === 'file' && typeof e.name === 'string')
     .filter((e) => {
