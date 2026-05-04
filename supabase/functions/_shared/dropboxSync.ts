@@ -217,15 +217,45 @@ export async function processDropboxDelta(
     };
   }
 
-  // ── Delta branch — streaming page-by-page ─────────────────────────
+  // ── Delta branch — streaming page-by-page with wall-time cap ─────
   // Read a page → process it → persist its cursor.  Repeat until
-  // has_more=false.  If a list_folder/continue call throws (network/
-  // 5xx/429), we exit the loop with the LAST successfully-persisted
-  // cursor — next webhook tick picks up from there.
+  // has_more=false OR we hit a safety bailout.
+  //
+  // Why a wall-time cap (2026-05-05 second pass):
+  //   Streaming alone is insufficient when the backlog is huge.  After
+  //   33h of stale cursor, list_folder/continue may return hundreds of
+  //   pages — at ~500ms per page that's minutes of work, exceeding
+  //   Supabase's edge-function execution budget (~150s wall time,
+  //   regardless of memory).  Hitting that ceiling kills the function
+  //   mid-page → no cursor advance → next call replays everything →
+  //   same crash.  Same outcome as the old OOM, different mechanism.
+  //
+  //   With this cap: we process up to MAX_PAGES_PER_CALL pages OR
+  //   MAX_WALL_MS milliseconds, whichever comes first.  Persist the
+  //   last good cursor.  Return cleanly.  The next invocation
+  //   (webhook/reconcile/cron) picks up where we left off.  Eventual
+  //   convergence under steady-state Dropbox traffic; for a large
+  //   backlog it just takes a few invocations to drain.
+  //
+  // No Dropbox API impact — same endpoints, just fewer per call.
+  const MAX_PAGES_PER_CALL = 50;       // Dropbox returns up to 2000 entries/page → up to 100k entries per call
+  const MAX_WALL_MS = 90_000;          // 90s soft cap; edge runtime hard-kills around 150s
+  const startTime = Date.now();
+
   let currentCursor: string = initialCursor;
   let hasMore = true;
+  let bailoutReason: string | null = null;
 
   while (hasMore) {
+    if (pagesProcessed >= MAX_PAGES_PER_CALL) {
+      bailoutReason = `reached MAX_PAGES_PER_CALL=${MAX_PAGES_PER_CALL}`;
+      break;
+    }
+    if (Date.now() - startTime > MAX_WALL_MS) {
+      bailoutReason = `reached MAX_WALL_MS=${MAX_WALL_MS}ms after ${pagesProcessed} page(s)`;
+      break;
+    }
+
     let next;
     try {
       next = await listFolderContinue(currentCursor);
@@ -255,13 +285,18 @@ export async function processDropboxDelta(
     await persistCursor(currentCursor, emitted);
   }
 
-  if (errors.length > 0) {
+  const elapsedMs = Date.now() - startTime;
+  if (bailoutReason) {
+    console.log(
+      `[dropboxSync] delta partial for ${watchPath}: ${pagesProcessed} page(s), ${totalEntries} entries, ${emitted} emitted, has_more=${hasMore} (${bailoutReason}, ${elapsedMs}ms)`,
+    );
+  } else if (errors.length > 0) {
     console.warn(
-      `[dropboxSync] ${errors.length} error(s) across ${pagesProcessed} page(s); cursor advanced for successfully-fetched pages`,
+      `[dropboxSync] ${errors.length} error(s) across ${pagesProcessed} page(s); cursor advanced for successfully-fetched pages (${elapsedMs}ms)`,
     );
   } else {
     console.log(
-      `[dropboxSync] delta complete for ${watchPath}: ${pagesProcessed} page(s), ${totalEntries} entries, ${emitted} emitted`,
+      `[dropboxSync] delta complete for ${watchPath}: ${pagesProcessed} page(s), ${totalEntries} entries, ${emitted} emitted (${elapsedMs}ms)`,
     );
   }
 
