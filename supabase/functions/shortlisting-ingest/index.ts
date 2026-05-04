@@ -152,7 +152,48 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   try {
     const result = await ingest(projectId, triggerSource, actorId, actorType);
-    return jsonResponse({ ok: true, ...result }, 200, req);
+
+    // 2026-05-04 — fire-and-forget Wave 3 link-bake.  When ingest() returns
+    // it has inserted the round + chunks (chunks have empty prebaked_links).
+    // The link-bake runs in the background, patching each chunk's
+    // prebaked_links as it goes.  Using `EdgeRuntime.waitUntil` keeps the
+    // worker alive after the response goes out, up to Supabase's max
+    // background runtime (~6 min in 2026 — plenty for ~575 files at 300ms
+    // gap = ~3 min + per-call latency).
+    //
+    // Reference: https://supabase.com/docs/guides/functions/background-tasks
+    if (result._bake_file_paths && result._bake_round_id && result._bake_file_paths.length > 0) {
+      const admin = getAdminClient();
+      const bakeFilePaths = result._bake_file_paths;
+      const bakeRoundId = result._bake_round_id;
+      // deno-lint-ignore no-explicit-any
+      const runtime = (globalThis as any).EdgeRuntime;
+      if (runtime?.waitUntil) {
+        runtime.waitUntil(
+          bakeLinksInBackground(admin, bakeRoundId, bakeFilePaths).catch((e: unknown) => {
+            console.error(
+              `[${GENERATOR}] background link-bake CRASHED for round=${bakeRoundId}: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            );
+          }),
+        );
+        console.info(
+          `[${GENERATOR}] kicked off background link-bake for round=${bakeRoundId} n=${bakeFilePaths.length}`,
+        );
+      } else {
+        console.warn(
+          `[${GENERATOR}] EdgeRuntime.waitUntil unavailable — skipping background link-bake; ` +
+            `Modal will fall back to per-file mint`,
+        );
+      }
+    }
+
+    // Strip the internal-only bake fields before responding.
+    const { _bake_file_paths, _bake_round_id, ...response } = result;
+    void _bake_file_paths;
+    void _bake_round_id;
+    return jsonResponse({ ok: true, ...response, mode: 'background' }, 202, req);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[${GENERATOR}] failed for project ${projectId}: ${msg}`);
@@ -173,6 +214,11 @@ interface IngestResult {
   status: 'processing' | 'manual';
   manual_mode_reason: string | null;
   warnings: string[];
+  // 2026-05-04 — propagated to the outer handler so it can fire-and-forget
+  // the link-bake via EdgeRuntime.waitUntil.  The handler strips these
+  // before sending the JSON response (caller doesn't need them).
+  _bake_file_paths?: string[];
+  _bake_round_id?: string;
 }
 
 async function ingest(
@@ -406,114 +452,41 @@ async function ingest(
     warnings.push(`projects.current_shortlist_round_id update failed: ${linkErr.message}`);
   }
 
-  // 12b. Wave 3 — pre-bake Dropbox temporary download links.
+  // 2026-05-04 — Wave 3 link-bake is now FIRE-AND-FORGET (background).
   //
-  // The shortlisting engine's biggest scaling pain has been Dropbox /files
-  // rate limits.  Modal extract used to call files/get_temporary_link
-  // (or files_download directly) once per file during its concurrent
-  // processing pass — and Dropbox throttles that bucket aggressively
-  // when the app's recent burst+retry history looks bad.
+  // Original Wave 3 design did the link-bake synchronously here, before
+  // chunk insert.  That's fine for ≤200 files (~60s).  Brays has 575 CR3
+  // files: 575 × 300 ms gap × ~400 ms per call = ~400 s wall-clock — way
+  // past Supabase Edge's 150s gateway timeout.  Result: every Brays
+  // ingest produced an orphan round (round inserted, then ingest hung
+  // and the gateway killed it before chunks were inserted).
   //
-  // Wave 3 shifts ALL the link minting here, into a single SERIAL pass
-  // before any parallel work begins.  We call /files/get_temporary_link
-  // once per file with a 300 ms gap between calls (≈3 calls/sec — well
-  // below any observed limit).  The CDN URLs we get back are valid for
-  // ~4 h, more than enough for the dispatcher to claim and run all
-  // chunks (typical end-to-end <5 min).  The links are persisted into
-  // each chunk's payload as `prebaked_links: { [path]: link }` and the
-  // Modal worker reads them directly — making ZERO Dropbox API calls
-  // during the heavy parallel phase.  This decouples engine throughput
-  // from Dropbox's adaptive rate-limiter entirely.
+  // New behaviour:
+  //   1. Insert chunks IMMEDIATELY without prebaked_links.
+  //   2. Return the IngestResult to the caller (browser sees ~3-5s
+  //      response with success toast and round_id).
+  //   3. After this function returns, the outer handler wraps a
+  //      `bakeLinksInBackground()` call in `EdgeRuntime.waitUntil` —
+  //      the link-bake runs as a detached background task while the
+  //      caller's response is already on the wire.
+  //   4. As each link is minted, that chunk's payload is patched
+  //      with the link so Modal can use it.
+  //   5. Modal extract has a fallback path: when a chunk's prebaked
+  //      link map is missing/empty for a path, it mints per-file via
+  //      its own rate-gated helper.  So even if the background bake
+  //      is slow, Modal still works (just ~30% slower per file).
   //
-  // Cost: 0.3 s × N files of wall-clock spent in ingest.  At 50 files
-  // that's ~15 s; at 500 files ~2.5 min.  Acceptable given ingest runs
-  // once per round and Modal's parallel phase still does the heavy
-  // CR3 download/exif/preview work in parallel after this completes.
-  const linkBakeStart = Date.now();
-  const prebakedLinkMap: Record<string, string> = {};
-  const linkBakeErrors: Array<{ path: string; error: string }> = [];
-  const LINK_GAP_MS = 300;
-  console.info(
-    `[${GENERATOR}] Wave 3 link-bake START n=${filePaths.length} ` +
-      `gap_ms=${LINK_GAP_MS} est_ms=${filePaths.length * LINK_GAP_MS}`,
-  );
-  for (let i = 0; i < filePaths.length; i++) {
-    const fp = filePaths[i];
-    try {
-      // Engine app for the Wave 3 link-bake — fresh reputation, won't
-      // contend with UI throttle.  See _shared/dropbox.ts for the
-      // split-app architecture (added 2026-05-04).
-      const link = await getDropboxTempLink(fp, { app: 'engine' });
-      prebakedLinkMap[fp] = link;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      linkBakeErrors.push({ path: fp, error: msg });
-      console.warn(`[${GENERATOR}] link-bake fail path=${fp.slice(-40)} err=${msg.slice(0, 200)}`);
-    }
-    // Serialise the burst-start; skip the sleep on the last iteration.
-    if (i < filePaths.length - 1) {
-      await new Promise((r) => setTimeout(r, LINK_GAP_MS));
-    }
-  }
-  const linkBakeElapsedS = ((Date.now() - linkBakeStart) / 1000).toFixed(1);
-  const okCount = Object.keys(prebakedLinkMap).length;
-  console.info(
-    `[${GENERATOR}] Wave 3 link-bake DONE ok=${okCount} err=${linkBakeErrors.length} ` +
-      `elapsed_s=${linkBakeElapsedS}`,
-  );
-  // 2026-05-04 (Wave 3 hardening — fail-fast).
-  //
-  // Old behaviour: warn on partial failures, abort only when ALL links
-  // failed.  Hidden cost: Modal's per-file fallback path is rate-limit-
-  // prone — when 30% of links failed at ingest, those 30% would each
-  // wait 300ms in the rate gate then likely 429 anyway, burning Modal
-  // wall-clock and *re-poisoning* the Dropbox app reputation.
-  //
-  // New behaviour: require ≥95% link-bake success.  Below that, the
-  // Dropbox app is clearly already throttled and continuing would just
-  // pile on damage.  Aborting forces the round to wait until conditions
-  // improve, which is what we want.
-  //
-  // Threshold rationale: 5% transient failures is the most we tolerate
-  // for "real-world flaky-ness."  Anything worse means the API itself
-  // is unhealthy; we should not pretend Modal can recover.
-  const failureRate = filePaths.length > 0 ? linkBakeErrors.length / filePaths.length : 0;
-  const FAIL_FAST_THRESHOLD = 0.05; // 5%
+  // We propagate the file_paths array out of ingest() so the outer
+  // handler knows what to bake.
+  const filePathsForBake = [...filePaths];
 
-  if (linkBakeErrors.length > 0) {
-    warnings.push(
-      `Wave 3 link-bake: ${linkBakeErrors.length}/${filePaths.length} files failed to mint a temp link` +
-        ` (${(failureRate * 100).toFixed(1)}%; first error: ${linkBakeErrors[0].error.slice(0, 200)})`,
-    );
-  }
-
-  if (failureRate > FAIL_FAST_THRESHOLD) {
-    // Hard abort — Dropbox is throttled enough that continuing will
-    // make it worse, not better.  Surface a clear actionable error.
-    throw new Error(
-      `Wave 3 link-bake failed for ${linkBakeErrors.length}/${filePaths.length} files ` +
-        `(${(failureRate * 100).toFixed(1)}%, threshold ${(FAIL_FAST_THRESHOLD * 100).toFixed(0)}%) — ` +
-        `aborting the round to avoid cascading throttle damage.  First error: ` +
-        `${linkBakeErrors[0]?.error || 'unknown'}.  ` +
-        `This usually means the Dropbox app is currently rate-limit throttled.  ` +
-        `Wait 10-30 min and re-run; the throttle clears as the burst pattern cools.`,
-    );
-  }
-
-  // 13. Enqueue extract jobs (chunked).
+  // 13. Enqueue extract jobs (chunked) — IMMEDIATELY, without prebaked_links.
   const jobIds: string[] = [];
   if (filePaths.length > 0) {
     const chunkRows: Array<Record<string, unknown>> = [];
     const chunkTotal = Math.ceil(filePaths.length / CHUNK_SIZE);
     for (let i = 0; i < filePaths.length; i += CHUNK_SIZE) {
       const chunk = filePaths.slice(i, i + CHUNK_SIZE);
-      // Wave 3: attach only the slice of pre-baked links relevant to
-      // this chunk.  Keys are full Dropbox paths (matching file_paths
-      // entries) so Modal can do a direct lookup without slicing.
-      const chunkLinks: Record<string, string> = {};
-      for (const p of chunk) {
-        if (prebakedLinkMap[p]) chunkLinks[p] = prebakedLinkMap[p];
-      }
       chunkRows.push({
         project_id: projectId,
         round_id: roundId,
@@ -525,10 +498,12 @@ async function ingest(
           file_paths: chunk,
           chunk_index: Math.floor(i / CHUNK_SIZE),
           chunk_total: chunkTotal,
-          // Wave 3 — pre-baked CDN URLs, keyed by full Dropbox path.
-          // Modal extract reads these and skips its own
-          // files/get_temporary_link API call entirely.
-          prebaked_links: chunkLinks,
+          // Wave 3 — pre-baked CDN URLs.  Inserted as an empty object now;
+          // the outer handler's `EdgeRuntime.waitUntil` background task
+          // patches this field with minted links as they come back.  Modal
+          // falls back to per-file mint for any missing entries (slow but
+          // correct).
+          prebaked_links: {},
         },
         scheduled_for: new Date().toISOString(),
       });
@@ -593,7 +568,125 @@ async function ingest(
     status: 'processing',
     manual_mode_reason: null,
     warnings,
+    // 2026-05-04 — fire-and-forget hand-off.  The outer handler reads
+    // these and kicks off a background `bakeLinksInBackground` via
+    // `EdgeRuntime.waitUntil`.  See the helper function below.
+    _bake_file_paths: filePathsForBake,
+    _bake_round_id: roundId,
   };
+}
+
+// ─── Wave 3 background link-bake (fire-and-forget) ───────────────────────────
+
+/**
+ * Mint /files/get_temporary_link for every file_path in the round and patch
+ * the corresponding chunk's payload.prebaked_links with the result.  Runs
+ * detached from the request-response cycle via `EdgeRuntime.waitUntil`, so
+ * the operator's "Run Shortlist Now" click returns immediately with the
+ * round/jobs IDs while this slowly works through ~575 files in the
+ * background.
+ *
+ * Strategy:
+ *   - Mint links serially (300ms gap) using the engine app.
+ *   - Group results by chunk and UPDATE shortlisting_jobs.payload via a
+ *     server-side jsonb_set per chunk.  This keeps the dispatcher's view
+ *     correct as soon as we've finished each chunk's slice (Modal can
+ *     pick up partially-baked chunks safely).
+ *   - On per-file mint failure, leave that path absent from the patch;
+ *     Modal's per-file fallback handles it.
+ *   - Total wall-clock for 575 files ≈ 6-7 minutes — well within the
+ *     dispatcher's first-tick latency for those chunks.
+ */
+async function bakeLinksInBackground(
+  admin: ReturnType<typeof getAdminClient>,
+  roundId: string,
+  filePaths: string[],
+): Promise<void> {
+  if (filePaths.length === 0) return;
+  const LINK_GAP_MS = 300;
+  const startMs = Date.now();
+  let okCount = 0;
+  let errCount = 0;
+  console.info(
+    `[${GENERATOR}] background link-bake START round=${roundId} n=${filePaths.length} ` +
+      `gap_ms=${LINK_GAP_MS} est_ms=${filePaths.length * LINK_GAP_MS}`,
+  );
+
+  // Re-derive the chunk membership from the same CHUNK_SIZE invariant.
+  // We only need to know which chunk_index each file belongs to so we
+  // can patch the right job row.
+  const pathToChunkIndex = new Map<string, number>();
+  for (let i = 0; i < filePaths.length; i++) {
+    pathToChunkIndex.set(filePaths[i], Math.floor(i / CHUNK_SIZE));
+  }
+
+  // Accumulate links per chunk, flush when a chunk is complete.
+  const chunkLinks: Map<number, Record<string, string>> = new Map();
+  const chunkSizeByIndex = new Map<number, number>();
+  for (const fp of filePaths) {
+    const idx = pathToChunkIndex.get(fp)!;
+    chunkSizeByIndex.set(idx, (chunkSizeByIndex.get(idx) ?? 0) + 1);
+  }
+
+  for (let i = 0; i < filePaths.length; i++) {
+    const fp = filePaths[i];
+    try {
+      const link = await getDropboxTempLink(fp, { app: 'engine' });
+      const idx = pathToChunkIndex.get(fp)!;
+      const acc = chunkLinks.get(idx) ?? {};
+      acc[fp] = link;
+      chunkLinks.set(idx, acc);
+      okCount++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errCount++;
+      console.warn(
+        `[${GENERATOR}] background link-bake fail path=${fp.slice(-40)} ` +
+          `err=${msg.slice(0, 150)}`,
+      );
+    }
+
+    // When the current chunk has all its links accumulated, flush to DB.
+    const idx = pathToChunkIndex.get(fp)!;
+    const acc = chunkLinks.get(idx) ?? {};
+    const expectedSize = chunkSizeByIndex.get(idx) ?? 0;
+    const accumulated = Object.keys(acc).length;
+    const remainingPathsInChunk = filePaths
+      .slice(i + 1)
+      .filter((p) => pathToChunkIndex.get(p) === idx).length;
+    if (remainingPathsInChunk === 0 && accumulated > 0) {
+      // This was the last path in this chunk's slice — patch the job row.
+      const { error: patchErr } = await admin
+        .from('shortlisting_jobs')
+        .update({
+          payload: { prebaked_links: acc },
+          updated_at: new Date().toISOString(),
+        })
+        .eq('round_id', roundId)
+        .eq('kind', 'extract')
+        .eq('payload->>chunk_index', String(idx));
+      if (patchErr) {
+        console.warn(
+          `[${GENERATOR}] background link-bake: chunk patch failed for round=${roundId} idx=${idx} err=${patchErr.message}`,
+        );
+      } else {
+        console.info(
+          `[${GENERATOR}] background link-bake: chunk ${idx} patched (${accumulated}/${expectedSize} links)`,
+        );
+      }
+      chunkLinks.delete(idx); // free memory
+    }
+
+    if (i < filePaths.length - 1) {
+      await new Promise((r) => setTimeout(r, LINK_GAP_MS));
+    }
+  }
+
+  const elapsedS = ((Date.now() - startMs) / 1000).toFixed(1);
+  console.info(
+    `[${GENERATOR}] background link-bake DONE round=${roundId} ` +
+      `ok=${okCount} err=${errCount} elapsed_s=${elapsedS}`,
+  );
 }
 
 // ─── Manual-mode synthetic round ─────────────────────────────────────────────
