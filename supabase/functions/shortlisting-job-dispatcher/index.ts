@@ -323,6 +323,110 @@ async function runDispatcherTick(
     }
   }
 
+  // ── Chain-completer for fire-and-forget extracts ──────────────────────────
+  // shortlisting-extract returns mode='background' (Modal handles the heavy
+  // CR3→preview work and self-updates the shortlisting_jobs row). The
+  // dispatcher's normal post-success chainNextKind() is skipped for
+  // background-mode jobs because shape_d_stage1's bgWork is responsible for
+  // its own chain enqueue. But Modal photos-extract has no such chain code —
+  // when the LAST extract chunk finishes, no one inserts pass0. Without a
+  // safety net the round sits forever with all extracts succeeded and no
+  // downstream stage queued.
+  //
+  // The completer scans for rounds where:
+  //   - there is at least one extract row with status='succeeded'
+  //   - there are zero extract rows still pending/running
+  //   - there is no pass0 row in any non-failed state
+  // and inserts pass0 for each. The unique index
+  // uniq_shortlisting_jobs_active_pass_per_round (mig 326) makes this
+  // idempotent across racing ticks.
+  try {
+    const { data: orphanRounds, error: orphanErr } = await admin
+      .from("shortlisting_jobs")
+      .select("round_id, project_id, status")
+      .eq("kind", "extract")
+      .not("round_id", "is", null);
+    if (orphanErr) {
+      console.warn(
+        `[${GENERATOR}] chain-completer: extract scan failed: ${orphanErr.message}`,
+      );
+    } else if (orphanRounds && orphanRounds.length > 0) {
+      // Aggregate per round: succeeded count + still-pending count.
+      const perRound = new Map<
+        string,
+        { project_id: string | null; succeeded: number; in_flight: number }
+      >();
+      for (const row of orphanRounds) {
+        const rid = row.round_id as string;
+        const cur = perRound.get(rid) || {
+          project_id: (row.project_id as string | null) ?? null,
+          succeeded: 0,
+          in_flight: 0,
+        };
+        if (!cur.project_id && row.project_id) {
+          cur.project_id = row.project_id as string;
+        }
+        if (row.status === "succeeded") cur.succeeded++;
+        else if (row.status === "pending" || row.status === "running") cur.in_flight++;
+        perRound.set(rid, cur);
+      }
+      const candidateRounds = Array.from(perRound.entries()).filter(
+        ([, v]) => v.succeeded > 0 && v.in_flight === 0,
+      );
+      for (const [roundId, v] of candidateRounds) {
+        // Skip rounds that already have a pass0 row in any non-failed state.
+        const { count: existingPass0 } = await admin
+          .from("shortlisting_jobs")
+          .select("id", { count: "exact", head: true })
+          .eq("round_id", roundId)
+          .eq("kind", "pass0")
+          .in("status", ["pending", "running", "succeeded"]);
+        if ((existingPass0 ?? 0) > 0) continue;
+        if (!v.project_id) {
+          console.warn(
+            `[${GENERATOR}] chain-completer: round ${roundId} has no project_id on extract rows — cannot enqueue pass0`,
+          );
+          continue;
+        }
+        const { error: insErr } = await admin.from("shortlisting_jobs").insert({
+          project_id: v.project_id,
+          round_id: roundId,
+          group_id: null,
+          kind: "pass0",
+          status: "pending",
+          payload: {
+            project_id: v.project_id,
+            round_id: roundId,
+            chained_from: "chain_completer",
+          },
+          scheduled_for: new Date().toISOString(),
+        });
+        if (insErr) {
+          const isRace =
+            /uniq_shortlisting_jobs_active_pass_per_round/.test(insErr.message) ||
+            /duplicate key value/i.test(insErr.message);
+          if (isRace) {
+            console.log(
+              `[${GENERATOR}] chain-completer: pass0 for round ${roundId} skipped — sibling tick won the race`,
+            );
+          } else {
+            console.warn(
+              `[${GENERATOR}] chain-completer: pass0 insert failed for round ${roundId}: ${insErr.message}`,
+            );
+          }
+        } else {
+          console.warn(
+            `[${GENERATOR}] chain-completer: enqueued stranded pass0 for round ${roundId} (succeeded=${v.succeeded}, project=${v.project_id})`,
+          );
+        }
+      }
+    }
+  } catch (completerErr) {
+    const msg =
+      completerErr instanceof Error ? completerErr.message : String(completerErr);
+    console.warn(`[${GENERATOR}] chain-completer threw: ${msg}`);
+  }
+
   // ── Claim-one-at-a-time, budget-bounded loop ──────────────────────────────
   // Each iteration atomically claims a single pending job (FOR UPDATE SKIP
   // LOCKED via mig 288), dispatches it, marks succeeded/failed, then loops.
