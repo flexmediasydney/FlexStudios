@@ -352,16 +352,14 @@ function LayoutContent({ currentPageName, children }) {
           can("SettingsTeamsUsers") && { name: "Teams & Users", href: "SettingsTeamsUsers" },
           can("SettingsAI") && { name: "AI Settings", href: "SettingsAI", icon: Sparkles },
           can("AIAuditLog") && { name: "AI Audit", href: "AIAuditLog", icon: Activity },
-          // W11.6.21 + W11.6.21b hard-cut: 18 scattered shortlisting nav
-          // entries replaced by one umbrella entry. The umbrella now
-          // hosts: tiers, mappings, slots, registry, suggestions,
-          // rejection, calibration, overrides, discovery (W11.6.21) +
-          // roomtypes, standards, signals, calibration-ops, training,
-          // overrides-admin, prompts, engine-settings, vendor (W11.6.21b)
-          // plus the Overview KPI tab.
-          can("SettingsShortlistingCommandCenter") && {
-            name: "Shortlist · Command Center", href: "SettingsShortlistingCommandCenter", icon: Sparkles,
-          },
+          // 2026-05-05 — Shortlisting Settings nav entry removed.  The
+          // /SettingsShortlistingCommandCenter route still exists (with
+          // its 5 groups × 20 tabs of engine config) BUT it's now also
+          // mounted as the "Settings" sub-tab inside the unified
+          // Shortlisting Command Center (top-level nav: "Shortlisting").
+          // Operators reach engine settings via the top sidebar entry
+          // → Settings tab.  Per Joseph 5 May ("merge the settings of
+          // shortlisting, into the actual command center").
         ].filter(Boolean)
       },
     ].filter(Boolean);

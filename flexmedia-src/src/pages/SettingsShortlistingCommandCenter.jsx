@@ -361,7 +361,13 @@ export function resolveActiveGroup(activeTab) {
   return TAB_TO_GROUP[activeTab] || GROUPS[0].key;
 }
 
-export default function SettingsShortlistingCommandCenter() {
+/**
+ * @param {object} props
+ * @param {boolean} [props.embedded] — when true, render without the
+ *   page-level wrapper/title.  Used when this is mounted as the
+ *   "Settings" subtab inside the unified ShortlistingCommandCenter.
+ */
+export default function SettingsShortlistingCommandCenter({ embedded = false } = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get("tab");
   const activeTab = resolveActiveTab(rawTab);
@@ -393,20 +399,29 @@ export default function SettingsShortlistingCommandCenter() {
   return (
     <PermissionGuard require={["master_admin"]}>
       <div
-        className="p-6 space-y-4 max-w-7xl mx-auto"
+        className={
+          embedded
+            ? "space-y-4"
+            : "p-6 space-y-4 max-w-7xl mx-auto"
+        }
         data-testid="settings-shortlisting-command-center"
       >
-        <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-blue-600" />
-            Shortlisting Command Center
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            All shortlisting-engine controls, organised into five functional
-            groups: Engine, Recipes, Vocabulary, Operations, and Calibration.
-            Pick a group above, then drill into the tab you need.
-          </p>
-        </div>
+        {/* 2026-05-05 — when embedded inside the unified ShortlistingCommandCenter
+            (as the Settings tab), the parent renders the page-level title.
+            Skip the duplicate header. */}
+        {!embedded ? (
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-blue-600" />
+              Shortlisting Command Center
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+              All shortlisting-engine controls, organised into five functional
+              groups: Engine, Recipes, Vocabulary, Operations, and Calibration.
+              Pick a group above, then drill into the tab you need.
+            </p>
+          </div>
+        ) : null}
 
         {/* ── Group strip (top-level IA) ─────────────────────────────── */}
         <div

@@ -24,7 +24,7 @@
  * route guard in routeAccess.jsx.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@/api/supabaseClient";
@@ -72,17 +72,53 @@ import { format, formatDistanceToNow } from "date-fns";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { createPageUrl } from "@/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useSearchParams } from "react-router-dom";
+
+// 2026-05-05 — unified Command Center: Settings page + new widgets are
+// embedded as subtabs.  Lazy-load the Settings tree so the dashboard
+// view stays light.
+import PendingIngestsWidget from "@/components/settings/shortlisting/PendingIngestsWidget";
+import StuckProjectsWidget from "@/components/settings/shortlisting/StuckProjectsWidget";
+import ActiveEngineRunsWidget from "@/components/settings/shortlisting/ActiveEngineRunsWidget";
+const SettingsShortlistingCommandCenter = lazy(() =>
+  import("./SettingsShortlistingCommandCenter"),
+);
+import { supabase } from "@/api/supabaseClient";
 
 // ── Pipeline kanban columns ─────────────────────────────────────────────────
 //
 // Each column groups one (or more) shortlisting_rounds.status values.
 // The terminal "delivered" column lets operators see what shipped today
 // without having to dig into the project pages.
+//
+// 2026-05-05 — added "pending" lane on the LEFT for projects past the
+// "scheduled" pipeline stage that haven't kicked off shortlisting yet.
+// Per Joseph: "filter out any project that is in the scheduled or
+// earlier stages of a project so we dont see all the noise."  This
+// lane reads PROJECT rows (not rounds) since by definition no round
+// exists yet — it's the queue of projects with files that the engine
+// hasn't ingested.
 const PIPELINE_COLUMNS = [
+  { key: "pending",    label: "Pending",     statuses: [],                       isPendingLane: true },
   { key: "processing", label: "Processing",  statuses: ["pending", "processing"] },
   { key: "proposed",   label: "Proposed",    statuses: ["proposed"] },
   { key: "locked",     label: "Locked",      statuses: ["locked"] },
   { key: "delivered",  label: "Delivered",   statuses: ["delivered"] },
+];
+
+// Project pipeline statuses past "scheduled" — what counts as "Pending"
+// shortlisting work.  Excludes 'pending_review', 'to_be_scheduled',
+// 'scheduled' (still pre-shoot) and terminal states (cancelled, lost,
+// delivered).  Mirrors StuckProjectsWidget's eligibility filter.
+const PENDING_LANE_PROJECT_STATUSES = [
+  'onsite',
+  'uploaded',
+  'submitted',
+  'in_progress',
+  'in_production',
+  'partially_delivered',
+  'in_revision',
 ];
 
 const STATUS_TONE = {
@@ -189,16 +225,23 @@ function StatCard({ icon: Icon, label, value, suffix, hint, tone }) {
 }
 
 // ── Pipeline kanban ─────────────────────────────────────────────────────────
-function PipelineKanban({ rounds, projectsById }) {
+function PipelineKanban({ rounds, projectsById, pendingProjects }) {
   const navigate = useNavigate();
 
   const grouped = useMemo(() => {
     const byCol = new Map(PIPELINE_COLUMNS.map((c) => [c.key, []]));
+    // Pending lane (project rows, not rounds — see PENDING_LANE_PROJECT_STATUSES).
+    if (pendingProjects && pendingProjects.length > 0) {
+      byCol.set("pending", pendingProjects.slice(0, PER_COLUMN_LIMIT));
+    }
     for (const r of rounds || []) {
-      const col = PIPELINE_COLUMNS.find((c) => c.statuses.includes(r.status));
+      const col = PIPELINE_COLUMNS.find(
+        (c) => !c.isPendingLane && c.statuses.includes(r.status),
+      );
       if (col) byCol.get(col.key).push(r);
     }
     for (const col of PIPELINE_COLUMNS) {
+      if (col.isPendingLane) continue; // already populated above
       const arr = byCol.get(col.key);
       arr.sort(
         (a, b) =>
@@ -208,17 +251,21 @@ function PipelineKanban({ rounds, projectsById }) {
       byCol.set(col.key, arr.slice(0, PER_COLUMN_LIMIT));
     }
     return byCol;
-  }, [rounds]);
+  }, [rounds, pendingProjects]);
 
   const totalsByCol = useMemo(() => {
     const totals = new Map();
     for (const col of PIPELINE_COLUMNS) {
-      const count = (rounds || []).filter((r) => col.statuses.includes(r.status))
-        .length;
-      totals.set(col.key, count);
+      if (col.isPendingLane) {
+        totals.set(col.key, (pendingProjects || []).length);
+      } else {
+        const count = (rounds || []).filter((r) => col.statuses.includes(r.status))
+          .length;
+        totals.set(col.key, count);
+      }
     }
     return totals;
-  }, [rounds]);
+  }, [rounds, pendingProjects]);
 
   const handleClick = (round) => {
     if (!round?.project_id) return;
@@ -227,13 +274,20 @@ function PipelineKanban({ rounds, projectsById }) {
         `?id=${round.project_id}&tab=shortlisting&round=${round.id}`,
     );
   };
+  const handlePendingClick = (project) => {
+    if (!project?.id) return;
+    navigate(
+      createPageUrl("ProjectDetails") +
+        `?id=${project.id}&tab=shortlisting`,
+    );
+  };
 
   const totalActive = useMemo(
     () =>
       (rounds || []).filter((r) =>
-        PIPELINE_COLUMNS.some((c) => c.statuses.includes(r.status)),
-      ).length,
-    [rounds],
+        PIPELINE_COLUMNS.some((c) => !c.isPendingLane && c.statuses.includes(r.status)),
+      ).length + (pendingProjects?.length || 0),
+    [rounds, pendingProjects],
   );
 
   return (
@@ -283,6 +337,44 @@ function PipelineKanban({ rounds, projectsById }) {
                       <div className="rounded border border-dashed border-border/60 px-2 py-3 text-[11px] text-muted-foreground italic text-center">
                         empty
                       </div>
+                    ) : col.isPendingLane ? (
+                      // Pending lane renders project rows (no round yet).
+                      items.map((p) => {
+                        const projName =
+                          p.title ||
+                          p.property_address ||
+                          `Project ${String(p.id).slice(0, 8)}`;
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => handlePendingClick(p)}
+                            className="w-full text-left rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 hover:bg-slate-100 dark:hover:bg-slate-800/60 transition-colors p-2 space-y-1"
+                            title={projName}
+                          >
+                            <div className="flex items-center gap-1">
+                              <span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-400" />
+                              <span className="text-[11px] font-medium truncate flex-1">
+                                {projName}
+                              </span>
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] px-1 py-0 capitalize"
+                              >
+                                {p.status?.replace(/_/g, " ") || "—"}
+                              </Badge>
+                            </div>
+                            <div className="text-[10px] text-muted-foreground truncate">
+                              {p.project_type_name || "no type"}
+                              {p.shoot_date
+                                ? ` · shoot ${new Date(p.shoot_date).toLocaleDateString()}`
+                                : ""}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground italic">
+                              awaiting ingest
+                            </div>
+                          </button>
+                        );
+                      })
                     ) : (
                       items.map((r) => {
                         const proj = projectsById?.get?.(r.project_id);
@@ -1059,6 +1151,64 @@ export default function ShortlistingCommandCenter() {
     enabled: adminGateOpen,
   });
 
+  // 2026-05-05 — Pending lane data: projects past "scheduled" pipeline
+  // stage that have NO active shortlisting work (no pending ingest job,
+  // no running round, no completed-round).  This is the queue of
+  // "engine could be doing something here but isn't yet".
+  const pendingProjectsQuery = useQuery({
+    queryKey: ["shortlisting_command_center_pending_projects"],
+    enabled: adminGateOpen,
+    refetchInterval: POLL_INTERVAL_MS,
+    staleTime: 15 * 1000,
+    queryFn: async () => {
+      // 1. Active projects past "scheduled" stage.
+      const { data: projects, error: pErr } = await supabase
+        .from("projects")
+        .select(
+          "id, title, property_address, shoot_date, status, shortlist_status, project_type_name",
+        )
+        .in("status", PENDING_LANE_PROJECT_STATUSES)
+        .order("shoot_date", { ascending: false, nullsFirst: false })
+        .limit(200);
+      if (pErr) throw pErr;
+      if (!projects || projects.length === 0) return [];
+      const ids = projects.map((p) => p.id);
+
+      // 2. Filter: must have folder provisioned (else ingest can't run).
+      const { data: folders } = await supabase
+        .from("project_folders")
+        .select("project_id")
+        .eq("folder_kind", "photos_raws_shortlist_proposed")
+        .in("project_id", ids);
+      const provisioned = new Set((folders || []).map((f) => f.project_id));
+
+      // 3. Exclude: has a pending ingest job (already in the engine queue).
+      const { data: pending } = await supabase
+        .from("shortlisting_jobs")
+        .select("project_id")
+        .in("project_id", ids)
+        .eq("kind", "ingest")
+        .eq("status", "pending");
+      const hasPending = new Set((pending || []).map((j) => j.project_id));
+
+      // 4. Exclude: has any shortlisting round (active or done).  If a
+      //    round exists the project is already represented in another
+      //    pipeline lane (Processing/Proposed/Locked/Delivered).
+      const { data: rounds } = await supabase
+        .from("shortlisting_rounds")
+        .select("project_id")
+        .in("project_id", ids);
+      const hasRound = new Set((rounds || []).map((r) => r.project_id));
+
+      return projects.filter(
+        (p) =>
+          provisioned.has(p.id) &&
+          !hasPending.has(p.id) &&
+          !hasRound.has(p.id),
+      );
+    },
+  });
+
   // ── Project lookup map ──────────────────────────────────────────────────
   const projectIds = useMemo(() => {
     const set = new Set();
@@ -1388,7 +1538,8 @@ export default function ShortlistingCommandCenter() {
               Shortlisting Command Center
             </h1>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Live engine ops + cost + dead-letter recovery
+              Live engine ops + cost + dead-letter recovery + engine
+              configuration
             </p>
           </div>
         </div>
@@ -1402,6 +1553,107 @@ export default function ShortlistingCommandCenter() {
           Refresh
         </Button>
       </div>
+
+      {/* 2026-05-05 — unified Command Center: top-level tabs split between
+          live ops dashboard (default) and engine configuration (was a
+          separate /SettingsShortlistingCommandCenter route).  Per Joseph
+          5 May: "merge the settings of shortlisting, into the actual
+          command center so we have a subtab for settings and then
+          everything lift and shift to there." */}
+      <ShortlistingCommandCenterTabs
+        stats={stats}
+        statsQuery={statsQuery}
+        isLoadingStats={isLoadingStats}
+        roundsQuery={roundsQuery}
+        pendingProjectsQuery={pendingProjectsQuery}
+        eventsQuery={eventsQuery}
+        unfilledSlotsQuery={unfilledSlotsQuery}
+        pass0Query={pass0Query}
+        deadLetterQuery={deadLetterQuery}
+        allProjectsById={allProjectsById}
+        queryClient={queryClient}
+        handleResurrect={handleResurrect}
+        resurrectingId={resurrectingId}
+      />
+    </div>
+  );
+}
+
+/**
+ * Top-level tab structure for the unified Command Center.
+ *
+ * Tabs:
+ *   - dashboard (default) — live ops: pipeline (incl. new Pending lane),
+ *     stat cards, ingest+stuck+active widgets, activity feed, alerts,
+ *     dead-letter
+ *   - settings — embeds the SettingsShortlistingCommandCenter content
+ *     (5 groups × 20 tabs of engine config) lazily
+ *
+ * Tab state is URL-synced via ?tab=settings so deep links into engine
+ * config still work after the merge.  Settings sub-tabs (e.g.
+ * ?tab=recipes) continue to work because the embedded settings page
+ * reads its own ?tab= param.
+ */
+function ShortlistingCommandCenterTabs(props) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const topTab = searchParams.get("view") === "settings" ? "settings" : "dashboard";
+  const handleTopTab = (next) => {
+    const sp = new URLSearchParams(searchParams);
+    if (next === "settings") sp.set("view", "settings");
+    else sp.delete("view");
+    setSearchParams(sp, { replace: true });
+  };
+
+  return (
+    <Tabs value={topTab} onValueChange={handleTopTab} className="w-full">
+      <TabsList className="grid w-fit grid-cols-2 mb-2">
+        <TabsTrigger value="dashboard" className="text-xs">
+          Dashboard
+        </TabsTrigger>
+        <TabsTrigger value="settings" className="text-xs">
+          Settings
+        </TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="dashboard" className="space-y-4 mt-2">
+        <DashboardView {...props} />
+      </TabsContent>
+
+      <TabsContent value="settings" className="mt-2">
+        <Suspense
+          fallback={
+            <Card>
+              <CardContent className="p-6 text-xs text-muted-foreground flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading engine settings…
+              </CardContent>
+            </Card>
+          }
+        >
+          <SettingsShortlistingCommandCenter embedded />
+        </Suspense>
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function DashboardView({
+  stats,
+  statsQuery,
+  isLoadingStats,
+  roundsQuery,
+  pendingProjectsQuery,
+  eventsQuery,
+  unfilledSlotsQuery,
+  pass0Query,
+  deadLetterQuery,
+  allProjectsById,
+  queryClient,
+  handleResurrect,
+  resurrectingId,
+}) {
+  return (
+    <div className="space-y-4">
 
       {/* Hero stats */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
@@ -1507,8 +1759,21 @@ export default function ShortlistingCommandCenter() {
         <PipelineKanban
           rounds={roundsQuery.data || []}
           projectsById={allProjectsById}
+          pendingProjects={pendingProjectsQuery.data || []}
         />
       )}
+
+      {/* 2026-05-05 — engine-state widgets after the pipeline.
+          PendingIngestsWidget shows pending shortlisting_jobs rows
+          (with countdown), StuckProjectsWidget surfaces projects with
+          provisioned folders + no engine activity (on-demand Dropbox
+          probe), ActiveEngineRunsWidget shows running engine_run_audit
+          rows.  All three were previously buried in
+          /SettingsShortlistingCommandCenter; per Joseph 5 May they
+          belong on the operational dashboard. */}
+      <PendingIngestsWidget />
+      <StuckProjectsWidget />
+      <ActiveEngineRunsWidget />
 
       {/* Activity + Alerts side by side on wide */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4">
