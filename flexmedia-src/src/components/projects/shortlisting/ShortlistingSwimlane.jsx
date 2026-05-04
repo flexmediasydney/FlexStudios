@@ -1776,20 +1776,48 @@ export default function ShortlistingSwimlane({
       if (result?.ok === false) {
         throw new Error(result?.error || "Unlock failed");
       }
-      const moved = result?.moved || {};
-      const supersededN = result?.decisions_superseded ?? 0;
-      toast.success(
-        `Shortlist unlocked — moved ${moved.total ?? 0} file(s) back to Proposed, superseded ${supersededN} training row(s).`,
-      );
-      // Refetch swimlane state — the round is now status='proposed'
-      // and the operator should see the lock button + decision lanes
-      // re-enabled immediately.
-      queryClient.invalidateQueries({
-        queryKey: ["shortlisting_rounds", projectId],
-      });
-      queryClient.invalidateQueries({
-        queryKey: ["shortlisting_overrides", roundId],
-      });
+
+      // 2026-05-04: edge fn now returns two shapes:
+      //   - status='proposed' (HTTP 200): sync complete, files moved + DB
+      //     state already flipped.
+      //   - status='in_progress' (HTTP 202): Dropbox running async, the
+      //     server will flip status + supersede decisions in the
+      //     background via EdgeRuntime.waitUntil().  We close the dialog,
+      //     toast, and start polling round.status — when the bg work
+      //     finishes the round flips to 'proposed' and React Query
+      //     refetches re-render the swimlane in editable mode.
+      const isAsync = result?.status === "in_progress";
+      if (isAsync) {
+        toast.success(
+          `Unlock submitted — Dropbox is moving ${result?.total_moves ?? 0} file(s) back. The swimlane will re-enable in 1–3 min.`,
+          { duration: 8000 },
+        );
+        // Aggressive refetch loop until status flips. 20 polls × 5s = 100s.
+        const startedAt = Date.now();
+        const pollInterval = setInterval(() => {
+          queryClient.invalidateQueries({
+            queryKey: ["shortlisting_rounds", projectId],
+          });
+          queryClient.invalidateQueries({
+            queryKey: ["shortlisting_overrides", roundId],
+          });
+          if (Date.now() - startedAt > 200_000) {
+            clearInterval(pollInterval);
+          }
+        }, 5_000);
+      } else {
+        const moved = result?.moved || {};
+        const supersededN = result?.decisions_superseded ?? 0;
+        toast.success(
+          `Shortlist unlocked — moved ${moved.total ?? 0} file(s) back to Proposed, superseded ${supersededN} training row(s).`,
+        );
+        queryClient.invalidateQueries({
+          queryKey: ["shortlisting_rounds", projectId],
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["shortlisting_overrides", roundId],
+        });
+      }
       setConfirmUnlockOpen(false);
       setUnlockReason("");
       setUnlockTypedConfirm("");
@@ -2337,22 +2365,59 @@ export default function ShortlistingSwimlane({
           available via the link in the lane header. */}
       <Stage4CorrectionsLane roundId={roundId} />
 
-      {/* Confirm Lock dialog */}
+      {/* Confirm Lock dialog — 2026-05-04: rewritten to accurately reflect
+          server behaviour.  The OLD copy claimed "X rejected files move to
+          Rejected/" which was a lie — the lock function only moves files
+          explicitly flagged for rejection (near-duplicate classifications +
+          operator 'removed'/'swapped' actions).  Most cards in the UI's
+          REJECTED column stay in Shortlist Proposed/ because the editorial
+          engine doesn't aggressively mark near-duplicates.  Per Joseph
+          2026-05-04: "no real value in moving from proposed to rejected" —
+          the current behaviour is intentional, the message needed to match. */}
       <Dialog open={confirmLockOpen} onOpenChange={setConfirmLockOpen}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Lock & reorganize shortlist?</DialogTitle>
-            <DialogDescription>
-              This moves <strong>{approvedCount}</strong> approved composition
-              {approvedCount === 1 ? "" : "s"} into{" "}
-              <code className="text-[11px]">Photos/Raws/Final Shortlist/</code>{" "}
-              and <strong>{rejectedCount}</strong> rejected
-              {rejectedCount === 1 ? "" : "s"} into{" "}
-              <code className="text-[11px]">Photos/Raws/Rejected/</code>. The
-              round status becomes <strong>locked</strong>. This cannot be
-              undone (but you can manually move files back in Dropbox).
-            </DialogDescription>
           </DialogHeader>
+          <div className="space-y-3 text-sm text-muted-foreground py-2">
+            <p>
+              Moves{" "}
+              <strong className="text-foreground">
+                {approvedCount + proposedCount}
+              </strong>{" "}
+              composition
+              {approvedCount + proposedCount === 1 ? "" : "s"} (
+              <strong className="text-foreground">{approvedCount}</strong> human-
+              approved +{" "}
+              <strong className="text-foreground">{proposedCount}</strong>{" "}
+              AI-proposed) into{" "}
+              <code className="text-[11px] text-foreground">
+                Photos/Raws/Final Shortlist/
+              </code>
+              .
+            </p>
+            <p>
+              The{" "}
+              <strong className="text-foreground">{rejectedCount}</strong>{" "}
+              card{rejectedCount === 1 ? "" : "s"} in the REJECTED lane stay
+              in{" "}
+              <code className="text-[11px] text-foreground">
+                Photos/Raws/Shortlist Proposed/
+              </code>{" "}
+              — only files the AI flagged as near-duplicates, or cards you
+              explicitly removed by drag, physically move to{" "}
+              <code className="text-[11px] text-foreground">Rejected/</code>{" "}
+              (typically 0 for editorial-engine rounds).
+            </p>
+            <p>
+              Round status becomes{" "}
+              <strong className="text-foreground">locked</strong> and AI
+              training feedback gets committed.{" "}
+              {isMasterAdmin
+                ? "You can Unlock from this UI to revert if needed."
+                : "A master_admin can Unlock to revert if needed."}
+            </p>
+          </div>
           <DialogFooter>
             <Button
               variant="ghost"
@@ -2386,40 +2451,60 @@ export default function ShortlistingSwimlane({
               <Unlock className="h-5 w-5 text-amber-600" />
               Unlock shortlist & resume editing?
             </DialogTitle>
-            <DialogDescription className="space-y-2">
-              <span className="block">
-                This will:
-              </span>
-              <ul className="list-disc list-inside text-sm space-y-1">
-                <li>
-                  Move <strong>{approvedCount}</strong> approved file
-                  {approvedCount === 1 ? "" : "s"} from{" "}
-                  <code className="text-[11px]">Final Shortlist/</code> back to{" "}
-                  <code className="text-[11px]">Shortlist Proposed/</code>
-                </li>
-                <li>
-                  Move <strong>{rejectedCount}</strong> rejected file
-                  {rejectedCount === 1 ? "" : "s"} from{" "}
-                  <code className="text-[11px]">Rejected/</code> back to{" "}
-                  <code className="text-[11px]">Shortlist Proposed/</code>
-                </li>
-                <li>
-                  Mark all of this round's AI training feedback rows{" "}
-                  <code className="text-[11px]">superseded=true</code> so the
-                  AI doesn't learn from your prior decisions
-                </li>
-                <li>
-                  Flip the round back to <strong>proposed</strong> — your drag
-                  history (overrides) stays intact, so you'll resume the
-                  swimlane in the state you left it
-                </li>
-              </ul>
-              <span className="block text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 text-xs mt-2">
-                When you re-lock, fresh committed_decisions are written. The
-                superseded rows stay in the audit table for diagnostics.
-              </span>
-            </DialogDescription>
           </DialogHeader>
+          <div className="space-y-2 text-sm text-muted-foreground py-1">
+            <p>This will:</p>
+            <ul className="list-disc list-inside space-y-1">
+              <li>
+                Move{" "}
+                <strong className="text-foreground">
+                  {approvedCount + proposedCount}
+                </strong>{" "}
+                file{approvedCount + proposedCount === 1 ? "" : "s"} from{" "}
+                <code className="text-[11px] text-foreground">
+                  Final Shortlist/
+                </code>{" "}
+                back to{" "}
+                <code className="text-[11px] text-foreground">
+                  Shortlist Proposed/
+                </code>{" "}
+                (the previously locked-in shortlist)
+              </li>
+              <li>
+                Move any explicitly-rejected file (near-dup or operator-removed)
+                from{" "}
+                <code className="text-[11px] text-foreground">Rejected/</code>{" "}
+                back to{" "}
+                <code className="text-[11px] text-foreground">
+                  Shortlist Proposed/
+                </code>{" "}
+                — usually 0 for editorial-engine rounds
+              </li>
+              <li>
+                Mark this round's AI training feedback rows{" "}
+                <code className="text-[11px] text-foreground">
+                  superseded=true
+                </code>{" "}
+                so the AI doesn't learn from prior decisions
+              </li>
+              <li>
+                Flip the round back to{" "}
+                <strong className="text-foreground">proposed</strong> — your
+                drag history stays intact so you resume in the state you left
+                it
+              </li>
+            </ul>
+            <p className="text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 text-xs">
+              For batches &gt; ~50 files, Dropbox runs the moves async — the
+              dialog closes immediately and the round transitions to{" "}
+              <strong>proposed</strong> within 1–3 min once Dropbox finishes.
+              Refresh the swimlane to see live state.
+            </p>
+            <p className="text-muted-foreground/80 text-xs">
+              When you re-lock, fresh committed_decisions are written. The
+              superseded rows stay in the audit table for diagnostics.
+            </p>
+          </div>
           <div className="space-y-3 py-2">
             <div className="space-y-1">
               <Label htmlFor="unlock-reason" className="text-xs">

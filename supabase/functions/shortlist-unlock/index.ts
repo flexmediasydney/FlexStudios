@@ -11,26 +11,34 @@
  * invisible to the next round.  So unlock is the SOLE supported way to
  * change a decision after lock.
  *
- * What it does:
+ * What it does (logically):
  *   1. Read approved/rejected sets from the SAME logic shortlist-lock
  *      uses (slot events + chronologically-folded overrides + classifications).
  *   2. Build reverse move specs: every file currently in
  *      `Photos/Raws/Final Shortlist/<filename>` or `Rejected/<filename>`
- *      goes back to `Shortlist Proposed/<filename>`.  Idempotent — files
- *      already at the source destination are skipped without an API call.
- *   3. Submit ONE Dropbox `/files/move_batch_v2` and poll synchronously.
- *      Most rounds are <100 files (resolves in <30s); we keep a 90s cap
- *      under the 150s edge gateway window.  If the cap is hit we return
- *      504 — the operator retries with the same call (idempotent).
- *   4. Mark every shortlisting_committed_decisions row for this round
+ *      goes back to `Shortlist Proposed/<filename>`.
+ *   3. Submit ONE Dropbox `/files/move_batch_v2`.
+ *   4. Auto-retry transient `too_many_write_operations` failures
+ *      (operator feedback 2026-05-04: "shouldn't we be aiming for no
+ *      failures and auto-retries on the failed ones?").
+ *   5. Mark every shortlisting_committed_decisions row for this round
  *      `superseded=true` so training pipelines (mig 467) ignore the
  *      stale signal.  A subsequent relock UPSERTs new rows on top of
  *      the same (round_id, group_id) primary key with superseded=false.
- *   5. Update the round: status='locked' → 'proposed', clear locked_at
+ *   6. Update the round: status='locked' → 'proposed', clear locked_at
  *      and locked_by.
- *   6. Write a `shortlist_unlocked` event with the operator's reason
- *      text (audit trail — pairs with `shortlist_locked` for
- *      diagnostics).
+ *   7. Write a `shortlist_unlocked` event with the operator's reason.
+ *
+ * Sync vs async path (2026-05-04 update — operator-feedback fix for
+ * 99s timeout on a 154-file batch):
+ *   - If Dropbox returns inline-complete (small batches, <50 files):
+ *     run all 7 steps synchronously and return 200.
+ *   - If Dropbox returns async_job_id (large batches): submit, kick off
+ *     EdgeRuntime.waitUntil() background polling, and return 202
+ *     immediately with `{ status: 'in_progress', async_job_id }`.  The
+ *     background path runs steps 4–7 once the Dropbox batch finishes.
+ *     Frontend polls `round.status` and re-renders when it flips back
+ *     to 'proposed'.
  *
  * What it does NOT do:
  *   - Does NOT re-run Pass 0 / extraction.  composition_groups +
@@ -39,29 +47,33 @@
  *     preserved so the operator walks back into the swimlane in the
  *     state they left it.
  *   - Does NOT update the Dropbox audit JSON written at lock time.
- *     The original lock audit remains as a historical artefact; the
- *     next lock (after edits) writes a fresh audit JSON with the
- *     updated approved/rejected sets.
  *
  * POST { round_id, reason? }
- * Auth: master_admin only OR service_role.  This is intentionally
- * stricter than shortlist-lock (which allows admin/manager too) — unlock
- * has more downside if misused.
+ * Auth: master_admin only OR service_role.  Stricter than shortlist-lock
+ * (which allows admin/manager too) — unlock has more downside if misused.
  *
- * Response:
+ * Response (sync path):
  *   {
  *     ok: true,
  *     round_id,
+ *     status: 'proposed',
  *     moved: { total, succeeded, failed },
- *     decisions_superseded: N,
- *     status: 'proposed'
+ *     decisions_superseded: N
+ *   }
+ * Response (async path, HTTP 202):
+ *   {
+ *     ok: true,
+ *     round_id,
+ *     status: 'in_progress',
+ *     async_job_id: '...',
+ *     total_moves: N,
+ *     message: 'Unlock submitted; round.status will flip to proposed once Dropbox completes (~2 min for ~150 files).'
  *   }
  *
  * Failure modes:
  *   - 403 if caller is not master_admin
- *   - 409 if round.status !== 'locked' (already proposed, or terminal)
+ *   - 409 if round.status !== 'locked'
  *   - 502 if Dropbox batch submit fails
- *   - 504 if sync poll exceeds the 90s cap (operator retries)
  */
 
 import {
@@ -76,6 +88,9 @@ import { getShortlistingFolders } from '../_shared/shortlistingFolders.ts';
 import {
   moveBatch,
   checkMoveBatch,
+  moveBatchWithRetry,
+  isTransientBatchFailure,
+  type DropboxBatchEntryResult,
   type DropboxMoveEntry,
 } from '../_shared/dropbox.ts';
 import {
@@ -89,14 +104,11 @@ import {
 
 const GENERATOR = 'shortlist-unlock';
 
-// Sync-poll cap.  Edge gateway times out at 150s; we cap at 90s so a
-// caller-side retry has headroom to complete after a partial batch.
 const POLL_INTERVAL_MS = 3_000;
-const POLL_MAX_ATTEMPTS = 30; // ~90s
+const POLL_MAX_ATTEMPTS = 60; // ~3 min — same cap as lock's background poll
 
 interface UnlockBody {
   round_id?: string;
-  /** Free-text reason persisted to shortlisting_events.payload.reason. */
   reason?: string;
   _health_check?: boolean;
 }
@@ -105,11 +117,8 @@ interface ReverseMoveSpec {
   group_id: string;
   stem: string;
   bucket: 'approved' | 'rejected';
-  /** Source: `<final_shortlist>/<filename>` or `<rejected>/<filename>`. */
   from_path: string;
-  /** Destination: `<shortlist_proposed>/<filename>`. */
   to_path: string;
-  /** Idempotency: file already lives at the destination — no API call. */
   already_at_destination: boolean;
 }
 
@@ -125,7 +134,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     if (!user) return errorResponse('Authentication required', 401, req);
     if (user.role !== 'master_admin') {
       return errorResponse(
-        'Forbidden — only master_admin can unlock a shortlist (admin/manager are excluded; this is intentionally stricter than lock)',
+        'Forbidden — only master_admin can unlock a shortlist',
         403,
         req,
       );
@@ -140,12 +149,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   if (body._health_check) {
-    return jsonResponse({ _version: 'v1.0-unlock', _fn: GENERATOR }, 200, req);
+    return jsonResponse({ _version: 'v2.0-async', _fn: GENERATOR }, 200, req);
   }
 
   const roundId = body.round_id?.trim();
   if (!roundId) return errorResponse('round_id required', 400, req);
   const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null;
+  const unlockedBy = isService ? null : (user?.id ?? null);
 
   const admin = getAdminClient();
 
@@ -158,9 +168,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   if (roundErr) return errorResponse(`round lookup failed: ${roundErr.message}`, 500, req);
   if (!round) return errorResponse(`round ${roundId} not found`, 404, req);
 
-  // Only `locked` rounds can be unlocked.  `proposed` is already unlocked
-  // (no-op).  `delivered`/`backfilled`/`manual` are terminal/special:
-  // unlocking them is out of scope and could corrupt downstream state.
   if (round.status !== 'locked') {
     return errorResponse(
       `Round status is '${round.status}' — only 'locked' rounds can be unlocked.`,
@@ -170,9 +177,6 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   }
 
   // ── Load groups + classifications + events + overrides ─────────────────
-  // Same shape as shortlist-lock so computeApprovedRejectedSets returns
-  // an identical (approvedSet, rejectedSet) — guarantees the reverse
-  // moves we submit exactly mirror the original lock's move set.
   const [groupsRes, classRes, eventsRes, overridesRes] = await Promise.all([
     admin
       .from('composition_groups')
@@ -225,22 +229,162 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const rejectedDest = folders.rawRejected;
   if (!proposedDest || !approvedDest || !rejectedDest) {
     return errorResponse(
-      'Project Photos/* folders are missing required kinds (Shortlist Proposed / Final Shortlist / Rejected)',
+      'Project Photos/* folders are missing required kinds',
       500,
       req,
     );
   }
 
   // ── Build reverse move specs ────────────────────────────────────────────
-  // For every file in the lock's approvedSet/rejectedSet, plan a move
-  // FROM the bucket dest BACK TO Shortlist Proposed.  Mirror buildMoveSpecs'
-  // stem-resolution logic (audit defect #19) so filenames match Dropbox.
+  const reverseSpecs = buildReverseMoveSpecs(
+    groups,
+    approvedSet,
+    rejectedSet,
+    proposedDest,
+    approvedDest,
+    rejectedDest,
+  );
+  const toMove = reverseSpecs.filter((s) => !s.already_at_destination);
+  const idempotentSkipped = reverseSpecs.length - toMove.length;
+
+  // ── Zero-work fast path ─────────────────────────────────────────────────
+  if (toMove.length === 0) {
+    const finalizeResult = await finalizeUnlock({
+      admin,
+      roundId,
+      projectId: round.project_id,
+      reason,
+      unlockedBy,
+      moved: { total: 0, succeeded: 0, failed: 0 },
+      idempotentSkipped,
+      errorsSample: [],
+      priorLockedAt: round.locked_at,
+      priorLockedBy: round.locked_by,
+    });
+    if (!finalizeResult.ok) {
+      return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
+    }
+    return jsonResponse(
+      {
+        ok: true,
+        round_id: roundId,
+        status: 'proposed',
+        moved: { total: 0, succeeded: 0, failed: 0 },
+        idempotent_skipped: idempotentSkipped,
+        decisions_superseded: finalizeResult.decisionsSuperseded,
+      },
+      200,
+      req,
+    );
+  }
+
+  // ── Submit Dropbox batch ────────────────────────────────────────────────
+  const entries: DropboxMoveEntry[] = toMove.map((s) => ({
+    from_path: s.from_path,
+    to_path: s.to_path,
+  }));
+
+  let submitResult;
+  try {
+    submitResult = await moveBatch(entries, { app: 'engine' });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return errorResponse(`Dropbox move_batch_v2 submit failed: ${msg}`, 502, req);
+  }
+
+  // Inline-complete fast path — small batches resolve sync in one round-trip.
+  if (submitResult['.tag'] === 'complete') {
+    const inlineEntries = submitResult.entries || [];
+    await retryUnlockTransients(toMove, inlineEntries);
+    const tally = tallyEntries(inlineEntries, toMove);
+    const finalizeResult = await finalizeUnlock({
+      admin,
+      roundId,
+      projectId: round.project_id,
+      reason,
+      unlockedBy,
+      moved: tally.moved,
+      idempotentSkipped,
+      errorsSample: tally.errorsSample,
+      priorLockedAt: round.locked_at,
+      priorLockedBy: round.locked_by,
+    });
+    if (!finalizeResult.ok) {
+      return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
+    }
+    return jsonResponse(
+      {
+        ok: true,
+        round_id: roundId,
+        status: 'proposed',
+        moved: tally.moved,
+        idempotent_skipped: idempotentSkipped,
+        decisions_superseded: finalizeResult.decisionsSuperseded,
+      },
+      200,
+      req,
+    );
+  }
+
+  // Async path — Dropbox returned an async_job_id.  Kick off background
+  // poll + finalize via EdgeRuntime.waitUntil() and return 202 immediately.
+  if (submitResult['.tag'] !== 'async_job_id' || !submitResult.async_job_id) {
+    return errorResponse(
+      `Unexpected Dropbox response tag: ${submitResult['.tag']}`,
+      502,
+      req,
+    );
+  }
+  const asyncJobId = submitResult.async_job_id;
+
+  const bgWork = pollAndFinalizeUnlock({
+    asyncJobId,
+    toMove,
+    roundId,
+    projectId: round.project_id,
+    reason,
+    unlockedBy,
+    idempotentSkipped,
+    priorLockedAt: round.locked_at,
+    priorLockedBy: round.locked_by,
+  }).catch((err) => {
+    console.error(`[${GENERATOR}] background poll failed:`, err?.message || err);
+  });
+  // deno-lint-ignore no-explicit-any
+  (globalThis as any).EdgeRuntime?.waitUntil?.(bgWork);
+
+  return jsonResponse(
+    {
+      ok: true,
+      round_id: roundId,
+      status: 'in_progress',
+      async_job_id: asyncJobId,
+      total_moves: toMove.length,
+      idempotent_skipped: idempotentSkipped,
+      message:
+        'Unlock submitted to Dropbox.  Round.status will flip to \'proposed\' once the batch completes (~1–3 min for >100 files).  Refresh the swimlane to see live state.',
+    },
+    202,
+    req,
+  );
+});
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+function buildReverseMoveSpecs(
+  groups: CompositionGroupForLock[],
+  approvedSet: Set<string>,
+  rejectedSet: Set<string>,
+  proposedDest: string,
+  approvedDest: string,
+  rejectedDest: string,
+): ReverseMoveSpec[] {
   const proposedPrefix = proposedDest.replace(/\/+$/, '') + '/';
   const approvedPrefix = approvedDest.replace(/\/+$/, '') + '/';
   const rejectedPrefix = rejectedDest.replace(/\/+$/, '') + '/';
 
   const sortedGroups = [...groups].sort((a, b) => a.id.localeCompare(b.id));
-  const reverseSpecs: ReverseMoveSpec[] = [];
+  const out: ReverseMoveSpec[] = [];
 
   for (const g of sortedGroups) {
     const files = g.files_in_group || [];
@@ -266,7 +410,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       const alreadyAtDestination = fromPath
         .toLowerCase()
         .startsWith(proposedPrefix.toLowerCase());
-      reverseSpecs.push({
+      out.push({
         group_id: g.id,
         stem,
         bucket,
@@ -276,140 +420,164 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       });
     }
   }
+  return out;
+}
 
-  const toMove = reverseSpecs.filter((s) => !s.already_at_destination);
-  const idempotentSkipped = reverseSpecs.length - toMove.length;
+/**
+ * Auto-retry transient (too_many_write_operations) failures from a Dropbox
+ * batch.  Mutates `entries[]` in place at the failing positions with the
+ * retry results.  Best-effort.
+ */
+async function retryUnlockTransients(
+  toMove: ReverseMoveSpec[],
+  entries: DropboxBatchEntryResult[],
+): Promise<void> {
+  const transientIndices: number[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    if (isTransientBatchFailure(entries[i])) transientIndices.push(i);
+  }
+  if (transientIndices.length === 0) return;
 
-  // ── Submit Dropbox batch (or skip if no work) ───────────────────────────
-  let movedSucceeded = 0;
-  let movedFailed = 0;
+  console.info(
+    `[${GENERATOR}] retrying ${transientIndices.length} transient (too_many_write_operations) failure(s)`,
+  );
+
+  const retryEntries: DropboxMoveEntry[] = transientIndices.map((i) => ({
+    from_path: toMove[i].from_path,
+    to_path: toMove[i].to_path,
+  }));
+
+  try {
+    const retryResult = await moveBatchWithRetry(retryEntries, {
+      app: 'engine',
+      maxRetries: 3,
+      backoffMs: 2000,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      pollMaxAttempts: POLL_MAX_ATTEMPTS,
+      onRetry: (round, count, msg) => {
+        console.info(`[${GENERATOR}] retry round ${round}: ${count} entries — ${msg}`);
+      },
+    });
+    for (let j = 0; j < transientIndices.length; j++) {
+      const origIdx = transientIndices[j];
+      const updated = retryResult.entries[j];
+      if (updated) entries[origIdx] = updated;
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[${GENERATOR}] retry helper threw (non-fatal): ${msg}`);
+  }
+}
+
+interface TallyResult {
+  moved: { total: number; succeeded: number; failed: number };
+  errorsSample: Array<{ from_path: string; reason: string }>;
+}
+
+function tallyEntries(
+  entries: DropboxBatchEntryResult[],
+  toMove: ReverseMoveSpec[],
+): TallyResult {
+  let succeeded = 0;
+  let failed = 0;
   const errorsSample: Array<{ from_path: string; reason: string }> = [];
-
-  if (toMove.length > 0) {
-    const entries: DropboxMoveEntry[] = toMove.map((s) => ({
-      from_path: s.from_path,
-      to_path: s.to_path,
-    }));
-
-    let submitResult;
-    try {
-      submitResult = await moveBatch(entries, { app: 'engine' });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return errorResponse(`Dropbox move_batch_v2 submit failed: ${msg}`, 502, req);
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e['.tag'] === 'success') {
+      succeeded++;
+      continue;
     }
-
-    let finalEntries = submitResult.entries || null;
-    if (submitResult['.tag'] === 'async_job_id' && submitResult.async_job_id) {
-      // Poll synchronously up to ~90s.  90s is comfortably under the 150s
-      // edge gateway cap; if the batch is genuinely larger we return 504
-      // and the operator retries (idempotent — files already moved skip).
-      const jobId = submitResult.async_job_id;
-      let attempts = 0;
-      while (attempts < POLL_MAX_ATTEMPTS) {
-        attempts++;
-        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-        let check;
-        try {
-          check = await checkMoveBatch(jobId, { app: 'engine' });
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          console.warn(`[${GENERATOR}] check_v2 transient: ${msg}`);
-          continue;
-        }
-        if (check['.tag'] === 'in_progress') continue;
-        if (check['.tag'] === 'complete') {
-          finalEntries = check.entries || [];
-          break;
-        }
-        if (check['.tag'] === 'failed') {
-          return errorResponse(
-            `Dropbox batch failed: ${JSON.stringify(check.failure || {})}`,
-            502,
-            req,
-          );
-        }
-      }
-      if (!finalEntries) {
-        return errorResponse(
-          `Dropbox batch did not complete within ${POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS / 1000}s — retry the request (idempotent; already-moved files will be skipped).`,
-          504,
-          req,
-        );
-      }
+    // Treat 'from_lookup/not_found' and 'to/conflict' as soft-success (file
+    // already where we want it, from a prior partial run).
+    const outerTag = e.failure?.['.tag'];
+    // deno-lint-ignore no-explicit-any
+    const inner = (e.failure as any)?.[outerTag || ''] as { '.tag'?: string } | undefined;
+    const innerTag = inner?.['.tag'];
+    // deno-lint-ignore no-explicit-any
+    const innerDeeper = innerTag ? ((inner as any)?.[innerTag] as { '.tag'?: string } | undefined) : undefined;
+    const innerDeeperTag = innerDeeper?.['.tag'];
+    const isAlreadyMoved = innerTag === 'from_lookup' && innerDeeperTag === 'not_found';
+    const isConflictSoft = innerTag === 'to' && innerDeeperTag === 'conflict';
+    if (isAlreadyMoved || isConflictSoft) {
+      succeeded++;
+      continue;
     }
-
-    // Tally + capture failure samples.
-    if (finalEntries) {
-      for (let i = 0; i < finalEntries.length; i++) {
-        const e = finalEntries[i];
-        if (e['.tag'] === 'success') {
-          movedSucceeded++;
-        } else {
-          movedFailed++;
-          if (errorsSample.length < 20) {
-            errorsSample.push({
-              from_path: toMove[i]?.from_path ?? '<unknown>',
-              reason: JSON.stringify(e.failure || {}).slice(0, 200),
-            });
-          }
-        }
-      }
+    failed++;
+    if (errorsSample.length < 20) {
+      errorsSample.push({
+        from_path: toMove[i]?.from_path ?? '<unknown>',
+        reason: JSON.stringify(e.failure || {}).slice(0, 200),
+      });
     }
   }
+  return {
+    moved: { total: entries.length, succeeded, failed },
+    errorsSample,
+  };
+}
 
-  // ── Mark committed_decisions superseded ─────────────────────────────────
-  // Mig 468: training pipelines filter WHERE superseded=false, so this
-  // single UPDATE invalidates the prior lock's training signal.  A
-  // subsequent relock will UPSERT new rows (superseded=false default)
-  // for the same (round_id, group_id) — see writeCommittedDecisions in
-  // shortlist-lock.
-  const { count: decisionsSuperseded, error: supersedeErr } = await admin
+interface FinalizeUnlockArgs {
+  // deno-lint-ignore no-explicit-any
+  admin: any;
+  roundId: string;
+  projectId: string;
+  reason: string | null;
+  unlockedBy: string | null;
+  moved: { total: number; succeeded: number; failed: number };
+  idempotentSkipped: number;
+  errorsSample: Array<{ from_path: string; reason: string }>;
+  priorLockedAt: string | null;
+  priorLockedBy: string | null;
+}
+
+/**
+ * Steps 5–7 of the unlock flow: supersede committed_decisions, flip round
+ * status, write audit event.  Idempotent — safe to call after Dropbox moves
+ * or after a no-op zero-work path.
+ */
+async function finalizeUnlock(
+  args: FinalizeUnlockArgs,
+): Promise<{ ok: boolean; error?: string; decisionsSuperseded: number }> {
+  const { count: decisionsSuperseded, error: supersedeErr } = await args.admin
     .from('shortlisting_committed_decisions')
     .update({ superseded: true }, { count: 'exact' })
-    .eq('round_id', roundId)
+    .eq('round_id', args.roundId)
     .eq('superseded', false);
   if (supersedeErr) {
-    console.warn(`[${GENERATOR}] mig 468 supersede failed (non-fatal): ${supersedeErr.message}`);
+    console.warn(`[${GENERATOR}] supersede failed (non-fatal): ${supersedeErr.message}`);
   }
 
-  // ── Flip round status back ──────────────────────────────────────────────
-  const { error: roundUpdateErr } = await admin
+  const { error: roundUpdateErr } = await args.admin
     .from('shortlisting_rounds')
     .update({
       status: 'proposed',
       locked_at: null,
       locked_by: null,
     })
-    .eq('id', roundId);
+    .eq('id', args.roundId);
   if (roundUpdateErr) {
-    return errorResponse(
-      `Files moved but round status flip failed: ${roundUpdateErr.message}. Re-run shortlist-unlock to retry.`,
-      500,
-      req,
-    );
+    return {
+      ok: false,
+      error: `Files moved but round status flip failed: ${roundUpdateErr.message}. Re-run shortlist-unlock to retry.`,
+      decisionsSuperseded: decisionsSuperseded ?? 0,
+    };
   }
 
-  // ── Audit event ─────────────────────────────────────────────────────────
   const eventPayload = {
-    reason: reason ?? null,
-    unlocked_by: isService ? null : (user?.id ?? null),
-    moved: {
-      total: toMove.length,
-      succeeded: movedSucceeded,
-      failed: movedFailed,
-    },
-    idempotent_skipped: idempotentSkipped,
+    reason: args.reason,
+    unlocked_by: args.unlockedBy,
+    moved: args.moved,
+    idempotent_skipped: args.idempotentSkipped,
     decisions_superseded: decisionsSuperseded ?? 0,
-    errors_sample: errorsSample,
-    prior_locked_at: round.locked_at,
-    prior_locked_by: round.locked_by,
+    errors_sample: args.errorsSample,
+    prior_locked_at: args.priorLockedAt,
+    prior_locked_by: args.priorLockedBy,
   };
-  const { error: eventErr } = await admin
+  const { error: eventErr } = await args.admin
     .from('shortlisting_events')
     .insert({
-      round_id: roundId,
-      project_id: round.project_id,
+      round_id: args.roundId,
+      project_id: args.projectId,
       event_type: 'shortlist_unlocked',
       payload: eventPayload,
     });
@@ -417,20 +585,86 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     console.warn(`[${GENERATOR}] audit event insert failed (non-fatal): ${eventErr.message}`);
   }
 
-  return jsonResponse(
-    {
-      ok: true,
-      round_id: roundId,
-      status: 'proposed',
-      moved: {
-        total: toMove.length,
-        succeeded: movedSucceeded,
-        failed: movedFailed,
-      },
-      idempotent_skipped: idempotentSkipped,
-      decisions_superseded: decisionsSuperseded ?? 0,
-    },
-    200,
-    req,
+  return { ok: true, decisionsSuperseded: decisionsSuperseded ?? 0 };
+}
+
+interface PollUnlockArgs {
+  asyncJobId: string;
+  toMove: ReverseMoveSpec[];
+  roundId: string;
+  projectId: string;
+  reason: string | null;
+  unlockedBy: string | null;
+  idempotentSkipped: number;
+  priorLockedAt: string | null;
+  priorLockedBy: string | null;
+}
+
+/**
+ * Background poll loop for the async path.  Polls Dropbox until complete,
+ * retries transient failures, then finalizes (supersede + status flip +
+ * event).  Runs in EdgeRuntime.waitUntil() — caller has already returned
+ * 202 to the operator.
+ */
+async function pollAndFinalizeUnlock(args: PollUnlockArgs): Promise<void> {
+  const admin = getAdminClient();
+  let attempts = 0;
+  let finalEntries: DropboxBatchEntryResult[] | null = null;
+
+  while (attempts < POLL_MAX_ATTEMPTS) {
+    attempts++;
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    let check;
+    try {
+      check = await checkMoveBatch(args.asyncJobId, { app: 'engine' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn(`[${GENERATOR}] check_v2 attempt ${attempts} failed: ${msg}`);
+      continue;
+    }
+    if (check['.tag'] === 'in_progress') continue;
+    if (check['.tag'] === 'complete') {
+      finalEntries = check.entries || [];
+      break;
+    }
+    if (check['.tag'] === 'failed') {
+      console.error(
+        `[${GENERATOR}] async batch failed: ${JSON.stringify(check.failure || {})}`,
+      );
+      return;
+    }
+  }
+
+  if (!finalEntries) {
+    console.error(
+      `[${GENERATOR}] poll exhausted (${POLL_MAX_ATTEMPTS} attempts × ${POLL_INTERVAL_MS}ms = ~${(POLL_MAX_ATTEMPTS * POLL_INTERVAL_MS) / 1000}s); abandoning`,
+    );
+    return;
+  }
+
+  await retryUnlockTransients(args.toMove, finalEntries);
+  const tally = tallyEntries(finalEntries, args.toMove);
+  console.info(
+    `[${GENERATOR}] background batch complete: ${tally.moved.succeeded}/${tally.moved.total} succeeded, ${tally.moved.failed} failed`,
   );
-});
+
+  const finalizeResult = await finalizeUnlock({
+    admin,
+    roundId: args.roundId,
+    projectId: args.projectId,
+    reason: args.reason,
+    unlockedBy: args.unlockedBy,
+    moved: tally.moved,
+    idempotentSkipped: args.idempotentSkipped,
+    errorsSample: tally.errorsSample,
+    priorLockedAt: args.priorLockedAt,
+    priorLockedBy: args.priorLockedBy,
+  });
+  if (!finalizeResult.ok) {
+    console.error(`[${GENERATOR}] finalize failed: ${finalizeResult.error}`);
+  } else {
+    console.info(
+      `[${GENERATOR}] unlock complete: superseded ${finalizeResult.decisionsSuperseded} decision row(s), round flipped to proposed`,
+    );
+  }
+}

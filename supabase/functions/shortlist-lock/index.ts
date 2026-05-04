@@ -88,6 +88,8 @@ import { getShortlistingFolders } from '../_shared/shortlistingFolders.ts';
 import {
   moveBatch,
   checkMoveBatch,
+  moveBatchWithRetry,
+  isTransientBatchFailure,
   uploadFile,
   type DropboxBatchEntryResult,
   type DropboxMoveEntry,
@@ -754,7 +756,9 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   // For very small batches Dropbox returns `.tag === 'complete'` synchronously.
   // We still go through the finalize stage, but don't need to poll.
   if (submitResult['.tag'] === 'complete') {
-    const counts = countBatchEntries(toMove, submitResult.entries || []);
+    const inlineEntries = submitResult.entries || [];
+    await retryTransientFailures(toMove, inlineEntries);
+    const counts = countBatchEntries(toMove, inlineEntries);
     await admin.from('shortlisting_lock_progress')
       .update({
         stage: 'finalizing',
@@ -891,6 +895,66 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
+
+/**
+ * Wave 9 (2026-05-04) — auto-retry transient `too_many_write_operations`
+ * failures from a Dropbox batch.  Operator-feedback: "shouldn't we be aiming
+ * for no failures and auto-retries on the failed ones?"  Yes.
+ *
+ * Mutates `entries[]` in place by replacing transient-failure positions with
+ * their retry results.  Non-transient failures (insufficient_space, malformed
+ * path, etc.) are left alone — they're terminal.
+ *
+ * Best-effort: if the retry helper itself throws, the original entries
+ * remain unchanged and the caller proceeds to finalize with the failures
+ * persisted to errors_sample (the existing path).
+ */
+async function retryTransientFailures(
+  toMove: MoveSpec[],
+  entries: DropboxBatchEntryResult[],
+): Promise<{ retriedCount: number; stillFailing: number }> {
+  const transientIndices: number[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    if (isTransientBatchFailure(entries[i])) transientIndices.push(i);
+  }
+  if (transientIndices.length === 0) return { retriedCount: 0, stillFailing: 0 };
+
+  console.info(
+    `[${GENERATOR}] retrying ${transientIndices.length} transient (too_many_write_operations) failure(s)`,
+  );
+
+  const retryEntries: DropboxMoveEntry[] = transientIndices.map((i) => ({
+    from_path: toMove[i].from_path,
+    to_path: toMove[i].to_path,
+  }));
+
+  try {
+    const retryResult = await moveBatchWithRetry(retryEntries, {
+      app: 'engine',
+      maxRetries: 3,
+      backoffMs: 2000,
+      pollIntervalMs: POLL_INTERVAL_MS,
+      pollMaxAttempts: POLL_MAX_ATTEMPTS,
+      onRetry: (round, count, msg) => {
+        console.info(`[${GENERATOR}] retry round ${round}: ${count} entries — ${msg}`);
+      },
+    });
+    for (let j = 0; j < transientIndices.length; j++) {
+      const origIdx = transientIndices[j];
+      const updated = retryResult.entries[j];
+      if (updated) entries[origIdx] = updated;
+    }
+    let stillFailing = 0;
+    for (let i = 0; i < entries.length; i++) {
+      if (entries[i]['.tag'] === 'failure') stillFailing++;
+    }
+    return { retriedCount: transientIndices.length, stillFailing };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(`[${GENERATOR}] retryTransientFailures threw (non-fatal): ${msg}`);
+    return { retriedCount: 0, stillFailing: transientIndices.length };
+  }
+}
 
 /**
  * Count succeeded + failed moves from a batch result. Failures are tagged
@@ -1480,7 +1544,14 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
     }
 
     if (check['.tag'] === 'complete') {
-      const counts = countBatchEntries(args.toMove, check.entries || []);
+      const polledEntries = check.entries || [];
+      const retryReport = await retryTransientFailures(args.toMove, polledEntries);
+      const counts = countBatchEntries(args.toMove, polledEntries);
+      if (retryReport.retriedCount > 0) {
+        console.info(
+          `[${GENERATOR}] retry rescued ${retryReport.retriedCount - retryReport.stillFailing}/${retryReport.retriedCount} transient failure(s)`,
+        );
+      }
       await admin.from('shortlisting_lock_progress')
         .update({
           stage: 'finalizing',
@@ -2079,7 +2150,9 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
 
   // ── Inline-complete fast path ─────────────────────────────────────────
   if (submitResult['.tag'] === 'complete') {
-    const counts = countBatchEntries(toMoveAsSpecs, submitResult.entries || []);
+    const inlineEntries = submitResult.entries || [];
+    await retryTransientFailures(toMoveAsSpecs, inlineEntries);
+    const counts = countBatchEntries(toMoveAsSpecs, inlineEntries);
     await admin.from('shortlisting_lock_progress')
       .update({
         stage: 'finalizing',

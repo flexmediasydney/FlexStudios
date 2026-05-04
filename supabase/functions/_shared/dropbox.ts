@@ -696,6 +696,175 @@ export async function checkMoveBatch(
 }
 
 /**
+ * Identify whether a per-entry batch failure is transient (worth retrying)
+ * versus terminal (give up).  Right now the only known transient class we've
+ * seen in the wild on FlexStudios is `too_many_write_operations` — Dropbox's
+ * per-namespace write rate limit kicks in around 5–15 ops/s sustained and
+ * surfaces as either an outer-tag or an inner `from_write` failure.  A simple
+ * back-off + resubmit clears it within 1–2 retries.
+ *
+ * Other transient candidates (NOT retried today; flag here if we ever see
+ * them on a real lock):
+ *   - 'internal_error'  — Dropbox-side bug; retry could mask a real issue,
+ *                         keep manual for now
+ *   - 5xx-shaped failures during /check_v2 — already handled at the poll
+ *                         layer, not at the per-entry layer
+ *
+ * Returns true ONLY for too_many_write_operations at any tagged-union level.
+ */
+export function isTransientBatchFailure(entry: DropboxBatchEntryResult): boolean {
+  if (entry['.tag'] !== 'failure') return false;
+  const outerTag = entry.failure?.['.tag'];
+  if (outerTag === 'too_many_write_operations') return true;
+  if (!outerTag) return false;
+  // deno-lint-ignore no-explicit-any
+  const inner = (entry.failure as any)?.[outerTag] as { '.tag'?: string } | undefined;
+  if (inner?.['.tag'] === 'too_many_write_operations') return true;
+  return false;
+}
+
+/**
+ * Submit a Dropbox batch move + auto-retry transient (rate-limit) failures
+ * up to `maxRetries` times.  Returns the FINAL per-entry results in the same
+ * order as the input `entries`.
+ *
+ * Why this exists (2026-05-04 — operator feedback): a 154-file lock on
+ * 46 Brays St hit 2 transient `too_many_write_operations` errors out of
+ * 154 entries.  The previous flow logged + persisted them as failures and
+ * stopped.  Operator: "shouldn't we be aiming for no failures and auto-
+ * retries on the failed ones?"  Yes.
+ *
+ * Algorithm:
+ *   1. Submit the full batch via /files/move_batch_v2.
+ *   2. If inline-complete, use those entries directly.  Else poll
+ *      /files/move_batch/check_v2 until complete or pollMaxAttempts exhausted.
+ *   3. Scan results for transient failures.  If any AND we still have retry
+ *      budget, sleep `backoffMs * (retry+1)`, build a sub-batch with JUST
+ *      those entries, and recurse from step 1.
+ *   4. Splice retry results back into the original-position results array.
+ *   5. Return the final array.
+ *
+ * The function NEVER throws on per-entry failures (those become 'failure'
+ * tags in the result array).  It DOES throw if the network call to Dropbox
+ * itself errors (caller decides whether to fail-fast or salvage).
+ */
+export async function moveBatchWithRetry(
+  entries: DropboxMoveEntry[],
+  opts: {
+    app?: DropboxApp;
+    /** How many transient-failure retry rounds to attempt. Default 3. */
+    maxRetries?: number;
+    /** Base backoff between rounds (ms).  Doubles each retry. Default 2000. */
+    backoffMs?: number;
+    /** Per-poll cadence + cap inside each round. */
+    pollIntervalMs?: number;
+    pollMaxAttempts?: number;
+    /** Optional logger — called with `(round, transientCount, msg)` on each retry attempt. */
+    onRetry?: (round: number, transientCount: number, msg: string) => void;
+  } = {},
+): Promise<{
+  /** Final per-entry results, same length + order as input `entries`. */
+  entries: DropboxBatchEntryResult[];
+  /** How many retry rounds we actually did (0 = batch succeeded first try). */
+  retriesUsed: number;
+  /** Indices that were still failing at the end (after all retries). */
+  finalFailedIndices: number[];
+}> {
+  const maxRetries = opts.maxRetries ?? 3;
+  const backoffMs = opts.backoffMs ?? 2000;
+  const pollIntervalMs = opts.pollIntervalMs ?? 3000;
+  const pollMaxAttempts = opts.pollMaxAttempts ?? 60;
+
+  // Helper — submit + poll one batch, return entries (in order of input).
+  const runOne = async (
+    sub: DropboxMoveEntry[],
+  ): Promise<DropboxBatchEntryResult[]> => {
+    if (sub.length === 0) return [];
+    const submit = await moveBatch(sub, { app: opts.app });
+    if (submit['.tag'] === 'complete') return submit.entries || [];
+    if (submit['.tag'] === 'async_job_id' && submit.async_job_id) {
+      const jobId = submit.async_job_id;
+      let attempts = 0;
+      while (attempts < pollMaxAttempts) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, pollIntervalMs));
+        let check;
+        try {
+          check = await checkMoveBatch(jobId, { app: opts.app });
+        } catch {
+          // Transient network error on /check_v2 — retry the poll itself.
+          continue;
+        }
+        if (check['.tag'] === 'in_progress') continue;
+        if (check['.tag'] === 'complete') return check.entries || [];
+        if (check['.tag'] === 'failed') {
+          // Whole-batch failure (rare; e.g. expired async_job_id).  Surface
+          // as per-entry failures so the caller's failure path runs.
+          return sub.map(() => ({
+            '.tag': 'failure' as const,
+            failure: { '.tag': 'too_many_write_operations' as const },
+          }));
+        }
+      }
+      // Poll exhausted.  Treat all as transient failure so the OUTER retry
+      // loop has another chance.  (Dropbox itself usually finishes faster
+      // than this; we get here when the batch is genuinely huge or Dropbox
+      // is degraded.)
+      return sub.map(() => ({
+        '.tag': 'failure' as const,
+        failure: { '.tag': 'too_many_write_operations' as const },
+      }));
+    }
+    // 'other' / unknown shape — surface as failures.
+    return sub.map(() => ({
+      '.tag': 'failure' as const,
+      failure: { '.tag': (submit['.tag'] as string) || 'unknown' },
+    }));
+  };
+
+  // Round 0 — full batch.
+  let results = await runOne(entries);
+  // Defensive: pad results to match input length if Dropbox returned fewer.
+  while (results.length < entries.length) {
+    results.push({
+      '.tag': 'failure' as const,
+      failure: { '.tag': 'missing_entry' },
+    });
+  }
+
+  let retriesUsed = 0;
+
+  for (let r = 0; r < maxRetries; r++) {
+    const transientIndices: number[] = [];
+    for (let i = 0; i < results.length; i++) {
+      if (isTransientBatchFailure(results[i])) transientIndices.push(i);
+    }
+    if (transientIndices.length === 0) break;
+
+    retriesUsed++;
+    const sleep = backoffMs * (r + 1);
+    opts.onRetry?.(r + 1, transientIndices.length, `${transientIndices.length} transient failure(s); sleeping ${sleep}ms then retrying`);
+    await new Promise((res) => setTimeout(res, sleep));
+
+    const sub: DropboxMoveEntry[] = transientIndices.map((i) => entries[i]);
+    const subResults = await runOne(sub);
+    // Splice back into original position.
+    for (let j = 0; j < transientIndices.length; j++) {
+      const origIdx = transientIndices[j];
+      const updated = subResults[j];
+      if (updated) results[origIdx] = updated;
+    }
+  }
+
+  const finalFailedIndices: number[] = [];
+  for (let i = 0; i < results.length; i++) {
+    if (results[i]['.tag'] === 'failure') finalFailedIndices.push(i);
+  }
+
+  return { entries: results, retriesUsed, finalFailedIndices };
+}
+
+/**
  * Delete a file or folder. Idempotent: a path/not_found error is treated as
  * success (file already gone). Used by drone-render-approve when un-approving
  * a Final render to clean up the orphaned copy in 07_FINAL_DELIVERY/drones/.
