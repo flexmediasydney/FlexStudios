@@ -69,6 +69,7 @@ import {
 } from "@/utils/signalScores";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 import CanonicalObjectPanel from "./CanonicalObjectPanel";
+import LightboxDetailPanel from "./LightboxDetailPanel";
 
 const SWIPE_THRESHOLD_PX = 50;
 
@@ -786,6 +787,12 @@ export default function ShortlistingLightbox({
               </div>
             )}
           </div>
+
+          {/* Comprehensive engine detail panel — every classification + decision
+              the engine made about this image, grouped into collapsible
+              sections.  Inserted below the 26-signal scores so the panel
+              stays scannable: signals first, full context after. */}
+          <LightboxDetailPanel item={item} />
 
           {/* Master listing snippet */}
           {masterListing && (

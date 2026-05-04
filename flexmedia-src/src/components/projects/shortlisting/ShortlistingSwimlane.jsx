@@ -728,10 +728,37 @@ export default function ShortlistingSwimlane({
       const slotId = ov.ai_proposed_slot_id;
       if (!groupId || !slotId) continue;
       if (m.has(groupId)) continue;
+
+      // Mig 465 — parse the editorial envelope stashed on
+      // ai_proposed_analysis when the round ran on the editorial engine.
+      // The string is a JSON object with shape { editorial: { ... } } or
+      // a plain prose rationale on legacy rounds.  We try JSON first and
+      // fall back to treating the value as the rationale text.
+      let editorial = null;
+      let analysisText = null;
+      const rawAnalysis = ov.ai_proposed_analysis;
+      if (typeof rawAnalysis === "string" && rawAnalysis.length > 0) {
+        try {
+          const parsed = JSON.parse(rawAnalysis);
+          if (parsed && typeof parsed === "object" && parsed.editorial) {
+            editorial = parsed.editorial;
+            analysisText = parsed.editorial.rationale || null;
+          } else {
+            analysisText = rawAnalysis;
+          }
+        } catch {
+          analysisText = rawAnalysis;
+        }
+      }
+
       m.set(groupId, {
         slot_id: slotId,
         phase: PHASE_OF_SLOT[slotId] ?? null,
         rank: 1,
+        ai_proposed_score: typeof ov.ai_proposed_score === "number" ? ov.ai_proposed_score : null,
+        slot_fit_score: typeof ov.slot_fit_score === "number" ? ov.slot_fit_score : null,
+        rationale: analysisText,
+        editorial,
         ...resolvePositionFields(
           positionCriteriaMap,
           slotId,
@@ -1190,6 +1217,27 @@ export default function ShortlistingSwimlane({
       voice_tier: it.classification?.voice_tier || null,
       master_listing: it.classification?.master_listing || null,
       classification: it.classification || null,
+      // Mig 465 — surface the editorial envelope (parsed off
+      // ai_proposed_analysis) and group metadata so the lightbox detail
+      // panel can render every engine decision (quota_bucket, role_label,
+      // editorial_score, principles_applied) + group context (file_count,
+      // bracket info, camera_source, secondary-camera flag, etc.).
+      editorial_envelope: it.slot?.editorial || null,
+      group_metadata: {
+        group_index: it.group_index ?? null,
+        file_count: it.file_count ?? null,
+        files_in_group: it.files_in_group ?? null,
+        best_bracket_stem: it.best_bracket_stem ?? null,
+        delivery_reference_stem: it.delivery_reference_stem ?? null,
+        selected_bracket_luminance: it.selected_bracket_luminance ?? null,
+        all_bracket_luminances: it.all_bracket_luminances ?? null,
+        is_micro_adjustment_split: it.is_micro_adjustment_split ?? null,
+        camera_source: it.camera_source ?? null,
+        is_secondary_camera: it.is_secondary_camera ?? null,
+        synthetic_finals_match_stem: it.synthetic_finals_match_stem ?? null,
+        space_instance_id: it.space_instance_id ?? null,
+        space_instance_confidence: it.space_instance_confidence ?? null,
+      },
     }));
   }, [lightboxState.bucket, columnItems]);
 
