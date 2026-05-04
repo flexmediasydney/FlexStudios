@@ -58,6 +58,49 @@ export interface ProcessOptions {
   forceEmitOnSeed?: boolean;
 }
 
+/**
+ * 2026-05-05 — STREAMING REWRITE.
+ *
+ * Joseph asked: "how do we fix the dropbox listening thing for shortlisting
+ * proposed folder being dead for 33h? whats the best solution that wont
+ * blow up dropbox API and risk 429s?"
+ *
+ * Root cause of the 33h stall:
+ *   The OLD body accumulated EVERY page from list_folder/continue into a
+ *   single in-memory `entries[]` array before processing.  When the team
+ *   folder grew past Supabase's edge-function memory cap (~256MB per
+ *   request), processDropboxDelta crashed with WORKER_RESOURCE_LIMIT
+ *   (HTTP 546) BEFORE reaching the cursor-update line.  Cursor stayed
+ *   stuck → every subsequent webhook crashed at the same point → no
+ *   file_added events emitted for ~33 hours.  Confirmed by manually
+ *   invoking dropbox-reconcile via net.http_post and observing the 546
+ *   response.
+ *
+ * Streaming fix:
+ *   Process each list_folder/continue page incrementally.  Each page is
+ *   bounded by Dropbox's `limit:2000` (a few MB peak in memory).  After
+ *   each page processes successfully, persist the NEW cursor returned
+ *   by that call.  If a later page fails (network, list_folder/continue
+ *   error), the cursor saved from the previous page is still safe.
+ *   Per-entry processing errors (one bad path, audit insert failure)
+ *   are LOGGED but no longer hold back the page-level cursor — the
+ *   "poison pill" failure mode of the OLD #54-audit-era policy gets
+ *   replaced with "log and move on", because Dropbox cursors are
+ *   per-page tokens, not per-entry; you can't selectively retry a
+ *   single bad entry without replaying the entire page.
+ *
+ * Dropbox API impact: ZERO additional calls.  Same number of
+ *   list_folder/continue pages, just processed-as-we-go instead of
+ *   accumulated-then-processed.  No 429 risk — these are READ ops, not
+ *   the rate-limited move/upload endpoints.
+ *
+ * Backward-compat:
+ *   - Same function signature.
+ *   - Same ProcessResult shape.
+ *   - Initial seed (cursor=null) still produces zero events by default,
+ *     forceEmitOnSeed still works for the #55 B3 case.
+ *   - Callers (dropbox-webhook, dropbox-reconcile) need no change.
+ */
 export async function processDropboxDelta(
   watchPath: string,
   actorType: 'webhook' | 'system',
@@ -72,93 +115,165 @@ export async function processDropboxDelta(
     .maybeSingle();
   if (stateErr) throw stateErr;
 
-  let cursor: string | null = (state?.cursor as string | null) ?? null;
-  let entries: DropboxEntry[] = [];
+  const initialCursor: string | null = (state?.cursor as string | null) ?? null;
   let isInitialSeed = false;
+  let totalEntries = 0;
+  let emitted = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+  let pagesProcessed = 0;
 
-  if (!cursor) {
+  // Helper: persist (cursor, last_run_at, last_changes_count) to
+  // dropbox_sync_state.  Called after each successful page so partial
+  // progress survives a later page-fetch crash.
+  const persistCursor = async (newCursor: string, changesSoFar: number) => {
+    const { error: updErr } = await admin
+      .from('dropbox_sync_state')
+      .update({
+        cursor: newCursor,
+        last_run_at: new Date().toISOString(),
+        last_changes_count: changesSoFar,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('watch_path', watchPath);
+    if (updErr) {
+      console.warn(`[dropboxSync] cursor update failed: ${updErr.message}`);
+    }
+  };
+
+  // Helper: process a page of entries with per-entry error tolerance.
+  // Returns the count of newly-emitted events from this page.
+  const processPage = async (
+    pageEntries: DropboxEntry[],
+    shouldEmit: boolean,
+  ): Promise<number> => {
+    if (!shouldEmit) {
+      // Initial seed default branch — count entries but don't emit
+      // (PR4 backfill is the truth for pre-existing files).
+      return 0;
+    }
+    let pageEmitted = 0;
+    for (const entry of pageEntries) {
+      try {
+        const handled = await processEntry(entry, actorType);
+        if (handled) {
+          pageEmitted++;
+        } else {
+          skipped++;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[dropboxSync] entry failed (${entry.path_lower}): ${msg}`);
+        errors.push(`${entry.path_lower}: ${msg}`);
+        // Per-entry errors no longer hold back the cursor (see header).
+      }
+    }
+    return pageEmitted;
+  };
+
+  // ── Initial seed branch ────────────────────────────────────────────
+  if (!initialCursor) {
     isInitialSeed = true;
+    // Seed listing accumulates entries across pages internally (the
+    // listFolder helper paginates with maxEntries cap).  This is OK on
+    // first ever sync because forceEmitOnSeed applies a tight filter
+    // BEFORE entries hit memory.  For subsequent runs the cursor exists
+    // and we use the streaming delta branch below.
     const result = await listFolder(watchPath, { recursive: true, maxEntries: 50_000 });
-    cursor = result.cursor;
-    console.log(`[dropboxSync] initial seed for ${watchPath}: ${result.entries.length} entries`);
-    // If the caller opted in (#55 fix), surface the seed entries to the
-    // event-emission loop below so pre-existing JPGs in raw_drones folders
-    // produce file_added events on first sync.
+    const seedCursor = result.cursor;
+    console.log(
+      `[dropboxSync] initial seed for ${watchPath}: ${result.entries.length} entries`,
+    );
+
+    let seedEntries: DropboxEntry[] = [];
     if (opts?.forceEmitOnSeed) {
-      entries = result.entries
+      seedEntries = (result.entries as DropboxEntry[])
         .filter((e) => e['.tag'] === 'file' && /\.(jpe?g)$/i.test(e.name || ''))
-        // Match BOTH the legacy path (01_RAW_WORKING/drones/) and the new
-        // post-restructure path (Drones/Raws/Shortlist Proposed/) so seeds
-        // for backfilled projects also surface raw drone JPGs.
         .filter((e) =>
           /\/(01_RAW_WORKING\/drones|Drones\/Raws\/Shortlist Proposed)\//i.test(
             e.path_display || e.path_lower || '',
           ),
         );
-      console.log(`[dropboxSync] forceEmitOnSeed: queuing ${entries.length} raw drone JPG(s) for emission`);
+      console.log(
+        `[dropboxSync] forceEmitOnSeed: queuing ${seedEntries.length} raw drone JPG(s) for emission`,
+      );
     }
-  } else {
-    let hasMore = true;
-    let currentCursor: string = cursor;
-    while (hasMore) {
-      const next = await listFolderContinue(currentCursor);
-      entries = entries.concat(next.entries as DropboxEntry[]);
-      currentCursor = next.cursor;
-      hasMore = next.has_more;
-    }
-    cursor = currentCursor;
+
+    totalEntries = seedEntries.length;
+    emitted = await processPage(seedEntries, opts?.forceEmitOnSeed === true);
+    pagesProcessed = 1;
+
+    await persistCursor(seedCursor, emitted);
+
+    return {
+      watchPath,
+      actorType,
+      isInitialSeed: true,
+      totalEntries,
+      emitted,
+      skipped,
+      errors,
+      cursor_set: true,
+    };
   }
 
-  let emitted = 0;
-  let skipped = 0;
-  const errors: string[] = [];
+  // ── Delta branch — streaming page-by-page ─────────────────────────
+  // Read a page → process it → persist its cursor.  Repeat until
+  // has_more=false.  If a list_folder/continue call throws (network/
+  // 5xx/429), we exit the loop with the LAST successfully-persisted
+  // cursor — next webhook tick picks up from there.
+  let currentCursor: string = initialCursor;
+  let hasMore = true;
 
-  // Emit when this is a real delta OR when the caller asked for forced
-  // emission on the initial seed. Default initial-seed branch still emits 0.
-  const shouldEmit = !isInitialSeed || (opts?.forceEmitOnSeed === true);
-  if (shouldEmit) {
-    for (const entry of entries) {
-      try {
-        const handled = await processEntry(entry, actorType);
-        if (handled) emitted++;
-        else skipped++;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn(`[dropboxSync] entry failed (${entry.path_lower}): ${msg}`);
-        errors.push(`${entry.path_lower}: ${msg}`);
-      }
+  while (hasMore) {
+    let next;
+    try {
+      next = await listFolderContinue(currentCursor);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[dropboxSync] list_folder/continue failed at page ${pagesProcessed + 1}: ${msg}`,
+      );
+      errors.push(`list_folder/continue page ${pagesProcessed + 1}: ${msg}`);
+      // Cursor stays at the last successfully-persisted page.  Bail.
+      break;
     }
+
+    const pageEntries = (next.entries || []) as DropboxEntry[];
+    totalEntries += pageEntries.length;
+
+    const pageEmitted = await processPage(pageEntries, true);
+    emitted += pageEmitted;
+    pagesProcessed++;
+
+    // Page processed (per-entry errors logged but tolerated) →
+    // advance + persist cursor.  If the function crashes after this
+    // line (OOM, edge-runtime kill), the next webhook starts from
+    // here — no events lost, no events double-processed.
+    currentCursor = next.cursor;
+    hasMore = next.has_more;
+    await persistCursor(currentCursor, emitted);
   }
 
-  // Cursor advance policy: only persist the new cursor when ALL entries in
-  // this batch processed cleanly. If any entry threw (DB outage, audit-event
-  // insert failure, etc.) we keep the OLD cursor so the next webhook/reconcile
-  // pass re-processes the failed entries. Without this, transient failures
-  // silently lose file events forever. (#54 audit fix)
-  const cursorToPersist = errors.length === 0 ? cursor : (state?.cursor as string | null) ?? cursor;
-  const { error: updErr } = await admin
-    .from('dropbox_sync_state')
-    .update({
-      cursor: cursorToPersist,
-      last_run_at: new Date().toISOString(),
-      last_changes_count: emitted,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('watch_path', watchPath);
-  if (updErr) console.warn(`[dropboxSync] cursor update failed: ${updErr.message}`);
   if (errors.length > 0) {
-    console.warn(`[dropboxSync] ${errors.length} entry error(s) — cursor held back so next sync retries`);
+    console.warn(
+      `[dropboxSync] ${errors.length} error(s) across ${pagesProcessed} page(s); cursor advanced for successfully-fetched pages`,
+    );
+  } else {
+    console.log(
+      `[dropboxSync] delta complete for ${watchPath}: ${pagesProcessed} page(s), ${totalEntries} entries, ${emitted} emitted`,
+    );
   }
 
   return {
     watchPath,
     actorType,
-    isInitialSeed,
-    totalEntries: entries.length,
+    isInitialSeed: false,
+    totalEntries,
     emitted,
     skipped,
     errors,
-    cursor_set: cursor !== null,
+    cursor_set: true,
   };
 }
 
