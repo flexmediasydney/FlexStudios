@@ -243,27 +243,96 @@ export default function ProjectShortlistingTab({ project }) {
   );
 
   const runShortlistNow = useCallback(async () => {
-    if (!projectId) return;
+    // 2026-05-04 — heavy diagnostic logging.  The previous version had a
+    // silent `if (!projectId) return;` guard that caused "button does
+    // nothing" reports when projectId was unexpectedly null (e.g. parent
+    // component deferred its render).  Every code path now logs to the
+    // browser console + emits a toast so an operator can diagnose what
+    // happened without the dev needing to reproduce.
+    const startedAt = Date.now();
+    console.info("[ShortlistingTab] runShortlistNow CLICKED", {
+      projectId,
+      isManualMode,
+      hasInflightRound,
+      timestamp: new Date().toISOString(),
+    });
+
+    if (!projectId) {
+      console.error("[ShortlistingTab] runShortlistNow: projectId is missing", { projectId, project });
+      toast.error(
+        "Cannot run shortlist — project not loaded yet.  Refresh the page and try again.",
+      );
+      setConfirmRunOpen(false);
+      return;
+    }
+
     setIsRunning(true);
     try {
+      console.info("[ShortlistingTab] invoking shortlisting-ingest...", {
+        project_id: projectId,
+        trigger_source: "manual",
+      });
       const resp = await api.functions.invoke("shortlisting-ingest", {
         project_id: projectId,
         trigger_source: "manual",
       });
+      const elapsedMs = Date.now() - startedAt;
+      console.info("[ShortlistingTab] shortlisting-ingest response", {
+        elapsedMs,
+        status: resp?.status,
+        hasData: !!resp?.data,
+        hasError: !!resp?.error,
+        rawShape: resp ? Object.keys(resp) : null,
+      });
+
+      // Supabase JS sometimes returns shape `{ data, error }` and sometimes
+      // returns the unwrapped result directly.  Cover both.  Also surface
+      // the network-level error from supabase-js if present.
+      if (resp?.error) {
+        const httpStatus = resp?.status ?? "?";
+        throw new Error(
+          `Edge function error (HTTP ${httpStatus}): ${resp.error.message || resp.error}`,
+        );
+      }
       const result = resp?.data ?? resp ?? {};
       if (result?.ok === false || result?.success === false) {
-        throw new Error(result?.error || "Run failed");
+        throw new Error(result?.error || result?.message || "Server returned ok=false with no error message");
       }
-      toast.success("Shortlist round started.");
+
+      console.info("[ShortlistingTab] round started successfully", {
+        round_id: result?.round_id,
+        round_number: result?.round_number,
+        file_count: result?.file_count,
+        job_count: Array.isArray(result?.job_ids) ? result.job_ids.length : null,
+      });
+      toast.success(
+        result?.round_number
+          ? `Shortlist Round ${result.round_number} started — ${result?.file_count ?? "?"} files queued.`
+          : "Shortlist round started.",
+      );
       queryClient.invalidateQueries({ queryKey: ["shortlisting_rounds", projectId] });
     } catch (err) {
-      console.error("[ProjectShortlistingTab] runShortlistNow failed:", err);
-      toast.error(err?.message || "Run shortlist failed");
+      // Heavily-instrumented error path so operators can self-diagnose.
+      // Log the full err object (not just .message) — supabase-js attaches
+      // .context, .name, .stack on different error subtypes that all matter
+      // for debugging.
+      console.error("[ShortlistingTab] runShortlistNow FAILED", {
+        err,
+        message: err?.message,
+        name: err?.name,
+        cause: err?.cause,
+        context: err?.context,
+        stack: err?.stack,
+      });
+      const msg = err?.message || String(err) || "Run shortlist failed (no error message)";
+      // Use a longer-duration toast for errors so the operator can read it.
+      // Default toast is ~3s; errors get 8s.
+      toast.error(`Run shortlist failed: ${msg}`, { duration: 8000 });
     } finally {
       setIsRunning(false);
       setConfirmRunOpen(false);
     }
-  }, [projectId, queryClient]);
+  }, [projectId, project, isManualMode, hasInflightRound, queryClient]);
 
   const handleRefresh = useCallback(() => {
     if (!projectId) return;
@@ -344,7 +413,19 @@ export default function ProjectShortlistingTab({ project }) {
           <Button
             variant="default"
             size="sm"
-            onClick={() => setConfirmRunOpen(true)}
+            onClick={() => {
+              // 2026-05-04 — log every click so silent failures (button
+              // visibly clicked but nothing happens) leave a paper trail
+              // in the browser console.
+              console.info("[ShortlistingTab] 'Run Shortlist Now' button clicked", {
+                projectId,
+                isManualMode,
+                hasInflightRound,
+                isRunning,
+                shouldOpenDialog: !hasInflightRound && !isRunning,
+              });
+              setConfirmRunOpen(true);
+            }}
             disabled={hasInflightRound || isRunning}
             title={
               hasInflightRound
@@ -554,15 +635,47 @@ export default function ProjectShortlistingTab({ project }) {
 
       {/* Confirm "Run Shortlist Now" / "New Manual Round" */}
       <Dialog open={confirmRunOpen} onOpenChange={setConfirmRunOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
               {isManualMode ? "Open new manual round?" : "Run shortlist now?"}
             </DialogTitle>
-            <DialogDescription>
-              {isManualMode
-                ? "Opens a new manual-mode round for this project. No AI passes run — you'll drag files into the Approved column manually and lock when ready."
-                : "This triggers a new shortlist round for this project. Pass 0 through Pass 3 will run end-to-end and may take 1-2 minutes plus vision API cost (~$0.50 per round)."}
+            <DialogDescription className="space-y-2">
+              {isManualMode ? (
+                <>
+                  <p>
+                    Opens a new <span className="font-medium">manual-mode</span>{" "}
+                    round for this project.  No AI passes run — you'll drag
+                    files into the Approved column yourself and lock when ready.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Triggers a new shortlist round for this project.  Pass 0
+                    through Pass 3 run end-to-end:
+                  </p>
+                  <ul className="text-xs ml-4 list-disc space-y-0.5 text-muted-foreground">
+                    <li><span className="font-medium">Ingest</span> &mdash; lists CR3 files in Dropbox + pre-bakes CDN links (~30s for 50 files)</li>
+                    <li><span className="font-medium">Extract</span> &mdash; Modal pulls each CR3, generates JPEG previews, uploads to Supabase Storage</li>
+                    <li><span className="font-medium">Pass 0&ndash;3</span> &mdash; vision API analyses + slot allocation (~1&ndash;2 min)</li>
+                  </ul>
+                  <p className="text-xs text-muted-foreground">
+                    Vision API cost: ~$0.50 per round.
+                  </p>
+                </>
+              )}
+              <div className="text-xs bg-muted/50 rounded-md p-2 mt-2">
+                <p className="font-medium mb-1">If nothing happens after clicking:</p>
+                <ul className="ml-3 list-disc space-y-0.5 text-muted-foreground">
+                  <li>Open browser DevTools (F12) and check the Console tab — every step logs there with the <code className="text-[10px]">[ShortlistingTab]</code> prefix</li>
+                  <li>Look for a red toast in the top-right; errors stay visible 8 seconds</li>
+                  <li>If you see <code className="text-[10px]">Cannot run shortlist — project not loaded yet</code>, hard-refresh the page (Cmd+Shift+R) and retry</li>
+                </ul>
+              </div>
+              <p className="text-xs text-muted-foreground/70">
+                Project ID: <code>{projectId || "—"}</code>
+              </p>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -573,9 +686,9 @@ export default function ProjectShortlistingTab({ project }) {
             >
               Cancel
             </Button>
-            <Button onClick={runShortlistNow} disabled={isRunning}>
+            <Button onClick={runShortlistNow} disabled={isRunning || !projectId}>
               {isRunning && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-              Run shortlist
+              {isRunning ? "Starting…" : (isManualMode ? "Open manual round" : "Run shortlist")}
             </Button>
           </DialogFooter>
         </DialogContent>
