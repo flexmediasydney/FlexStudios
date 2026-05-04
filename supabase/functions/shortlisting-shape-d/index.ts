@@ -167,7 +167,19 @@ const GENERATOR = 'shortlisting-shape-d';
 const PRIMARY_VENDOR = 'google' as const;
 const PRIMARY_MODEL = 'gemini-2.5-pro';
 const STAGE1_DEFAULT_THINKING_BUDGET = 2048;
-const STAGE1_DEFAULT_MAX_OUTPUT_TOKENS = 6000;
+// Bumped 2026-05-04 from 6000 -> 65536 (Gemini 2.5 Pro hard ceiling).
+// Round 8 (Brays) hit a 40-image failure cluster on dusk / complex-exterior
+// shots where Gemini's analysis text + per-source schema fields exceeded
+// the previous 6000-token budget, causing truncation mid-JSON ("Unexpected
+// end of JSON input").
+//
+// max_output_tokens is a CAP, not a target — Gemini bills per-token-actually-
+// used in both directions, so setting this to the model ceiling has ZERO
+// cost impact (typical Stage 1 calls produce 4-6k output tokens; the cap
+// only matters in the rare truncation case).  Setting it to the hard
+// ceiling eliminates this entire failure mode for free.  Same applies to
+// stage4_max_output_tokens (also bumped).
+const STAGE1_DEFAULT_MAX_OUTPUT_TOKENS = 65_536;
 const STAGE1_DEFAULT_TIMEOUT_MS = 90_000; // 90s per image — matches harness adapter timeout
 // Concurrency control for per-image calls. The harness uses BATCH_SIZE=4 for
 // composition-batches × per-vendor fan-out; we go a bit wider here because

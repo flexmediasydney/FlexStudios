@@ -144,7 +144,13 @@ const GENERATOR = 'shortlisting-shape-d-stage4';
 const PRIMARY_VENDOR = 'google' as const;
 const PRIMARY_MODEL = 'gemini-2.5-pro';
 const STAGE4_DEFAULT_THINKING_BUDGET = 16_384;
-const STAGE4_DEFAULT_MAX_OUTPUT_TOKENS = 16_000;
+// Bumped 2026-05-04 from 16_000 -> 65_536 (Gemini 2.5 Pro hard ceiling).
+// max_output_tokens is a CAP not a target; Gemini bills per actual token
+// used.  Stage 4 is one big call covering 100+ candidates + master_listing
+// + slot_decisions + editorial_picks etc; 16k was tight on premium / dusk-
+// heavy rounds.  Lifting to the model ceiling has zero cost impact and
+// eliminates truncation as a failure mode.
+const STAGE4_DEFAULT_MAX_OUTPUT_TOKENS = 65_536;
 const STAGE4_TIMEOUT_MS = 240_000; // 4 min — Stage 4 is ~60-90s + thinking
 const STAGE4_RETRY_COUNT = 3;
 
