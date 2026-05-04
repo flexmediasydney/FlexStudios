@@ -267,8 +267,25 @@ serveWithAudit(GENERATOR, async (req: Request) => {
 
   // Determine the field that was overridden. Pick the first non-null human_*
   // field — same priority order as projectMemoryBlock for consistency.
+  //
+  // Stage 4 emits visual corrections on a wider set of fields than the
+  // few-shot library can graduate.  The library schema (engine_fewshot_examples
+  // + composition_classification_overrides.human_*) only natively
+  // supports room_type / composition_type / vantage_point / combined_score.
+  //
+  // For other fields (clutter_severity, space_type, signal score deltas,
+  // etc.) we still want the operator's "approve" to STICK — the audit row
+  // should flip to review_status='approved' even though there's nothing
+  // for Stage 1 to learn from.  When fieldShape is null we drop into the
+  // no-graduation branch below: skip the engine_fewshot_examples insert
+  // and the composition_classification_overrides actor mark, but still
+  // flip the shortlisting_stage4_overrides row.
   const fieldShape = pickOverriddenField(override);
-  if (!fieldShape) {
+  const canGraduate = fieldShape !== null;
+  if (!canGraduate && inputShape !== 'stage4_audit') {
+    // Legacy direct-override path with an unsupported field — there's no
+    // audit row to flip and nothing to insert.  Surface as 400 so the
+    // caller sees the real reason rather than a phantom success.
     return errorResponse(
       'override row has no human_* field set — nothing to graduate',
       400,
@@ -276,137 +293,149 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     );
   }
 
-  // Auto-derive example_kind if not supplied. Mapping:
-  //   room_type → room_type_correction
-  //   composition_type → composition_correction
-  //   vantage_point → composition_correction (composition family)
-  //   combined_score → reject_pattern (low-score corrections imply rejection signal)
-  let exampleKind = body.example_kind;
-  if (!exampleKind) {
-    if (fieldShape.field === 'room_type') exampleKind = 'room_type_correction';
-    else if (fieldShape.field === 'composition_type' || fieldShape.field === 'vantage_point') {
-      exampleKind = 'composition_correction';
-    } else if (fieldShape.field === 'combined_score') {
-      exampleKind = 'reject_pattern';
-    } else {
-      exampleKind = 'room_type_correction';
-    }
-  }
-
-  // ── Fetch evidence keywords from the round's key_elements ────────────────
-  let evidence: string[] = [];
-  if (Array.isArray(body.evidence_keywords) && body.evidence_keywords.length > 0) {
-    evidence = body.evidence_keywords.map(String).filter((s) => s.length > 0);
-  } else if (override.group_id) {
-    const { data: classification } = await admin
-      .from('composition_classifications')
-      .select('key_elements')
-      .eq('group_id', override.group_id as string)
-      .maybeSingle();
-    const ke = classification?.key_elements;
-    if (Array.isArray(ke)) {
-      evidence = (ke as unknown[]).map(String).filter((s) => s.length > 0);
-    }
-  }
-
-  // ── Derive the description (auto-generated unless supplied) ──────────────
-  const description = body.description?.trim() && body.description.trim().length > 0
-    ? body.description.trim()
-    : autoDescription({
-        field: fieldShape.field,
-        ai_value: fieldShape.ai_value,
-        human_value: fieldShape.human_value,
-        reason: (override.override_reason as string | null) ?? null,
-      });
-
-  // ── Look for an existing similar example (dedup) ─────────────────────────
-  const propertyTier = body.property_tier ?? null;
-  const imageType = body.image_type ?? null;
-
-  let dedupQuery = admin
-    .from('engine_fewshot_examples')
-    .select('id, observation_count')
-    .eq('example_kind', exampleKind)
-    .eq('ai_value', fieldShape.ai_value)
-    .eq('human_value', fieldShape.human_value);
-  dedupQuery = propertyTier === null
-    ? dedupQuery.is('property_tier', null)
-    : dedupQuery.eq('property_tier', propertyTier);
-  dedupQuery = imageType === null
-    ? dedupQuery.is('image_type', null)
-    : dedupQuery.eq('image_type', imageType);
-  const { data: existingExamples, error: dedupErr } = await dedupQuery.limit(1);
-  if (dedupErr) {
-    return errorResponse(`fewshot dedup lookup failed: ${dedupErr.message}`, 500, req);
-  }
-
   const approverUid = isService ? null : user!.id;
   const approverIso = new Date().toISOString();
 
-  let action: 'inserted' | 'updated';
+  // ── Few-shot graduation (only for graduatable fields) ────────────────────
+  // Skipped entirely when fieldShape is null (e.g. clutter_severity,
+  // space_type) — the audit row still flips to 'approved' below so the
+  // operator's intent commits, just no engine_fewshot_examples row gets
+  // written.
+  let action: 'inserted' | 'updated' | 'flipped_only' = 'flipped_only';
   let resultRow: Record<string, unknown> | null = null;
+  let exampleKind: string | undefined;
+  let evidence: string[] = [];
+  const propertyTier = body.property_tier ?? null;
+  const imageType = body.image_type ?? null;
 
-  if (existingExamples && existingExamples.length > 0) {
-    const existing = existingExamples[0];
-    const newCount = (typeof existing.observation_count === 'number' ? existing.observation_count : 0) + 1;
-    const { data: updated, error: updateErr } = await admin
+  if (canGraduate && fieldShape) {
+    // Auto-derive example_kind if not supplied. Mapping:
+    //   room_type → room_type_correction
+    //   composition_type → composition_correction
+    //   vantage_point → composition_correction (composition family)
+    //   combined_score → reject_pattern (low-score corrections imply rejection signal)
+    exampleKind = body.example_kind;
+    if (!exampleKind) {
+      if (fieldShape.field === 'room_type') exampleKind = 'room_type_correction';
+      else if (fieldShape.field === 'composition_type' || fieldShape.field === 'vantage_point') {
+        exampleKind = 'composition_correction';
+      } else if (fieldShape.field === 'combined_score') {
+        exampleKind = 'reject_pattern';
+      } else {
+        exampleKind = 'room_type_correction';
+      }
+    }
+
+    // Fetch evidence keywords from the round's key_elements
+    if (Array.isArray(body.evidence_keywords) && body.evidence_keywords.length > 0) {
+      evidence = body.evidence_keywords.map(String).filter((s) => s.length > 0);
+    } else if (override.group_id) {
+      const { data: classification } = await admin
+        .from('composition_classifications')
+        .select('key_elements')
+        .eq('group_id', override.group_id as string)
+        .maybeSingle();
+      const ke = classification?.key_elements;
+      if (Array.isArray(ke)) {
+        evidence = (ke as unknown[]).map(String).filter((s) => s.length > 0);
+      }
+    }
+
+    // Derive the description (auto-generated unless supplied)
+    const description = body.description?.trim() && body.description.trim().length > 0
+      ? body.description.trim()
+      : autoDescription({
+          field: fieldShape.field,
+          ai_value: fieldShape.ai_value,
+          human_value: fieldShape.human_value,
+          reason: (override.override_reason as string | null) ?? null,
+        });
+
+    // Look for an existing similar example (dedup)
+    let dedupQuery = admin
       .from('engine_fewshot_examples')
-      .update({
-        observation_count: newCount,
+      .select('id, observation_count')
+      .eq('example_kind', exampleKind)
+      .eq('ai_value', fieldShape.ai_value)
+      .eq('human_value', fieldShape.human_value);
+    dedupQuery = propertyTier === null
+      ? dedupQuery.is('property_tier', null)
+      : dedupQuery.eq('property_tier', propertyTier);
+    dedupQuery = imageType === null
+      ? dedupQuery.is('image_type', null)
+      : dedupQuery.eq('image_type', imageType);
+    const { data: existingExamples, error: dedupErr } = await dedupQuery.limit(1);
+    if (dedupErr) {
+      return errorResponse(`fewshot dedup lookup failed: ${dedupErr.message}`, 500, req);
+    }
+
+    if (existingExamples && existingExamples.length > 0) {
+      const existing = existingExamples[0];
+      const newCount = (typeof existing.observation_count === 'number' ? existing.observation_count : 0) + 1;
+      const { data: updated, error: updateErr } = await admin
+        .from('engine_fewshot_examples')
+        .update({
+          observation_count: newCount,
+          curated_by: approverUid,
+          curated_at: approverIso,
+          ...(body.evidence_keywords ? { evidence_keywords: evidence } : {}),
+          ...(body.description ? { description } : {}),
+        })
+        .eq('id', existing.id)
+        .select('*')
+        .maybeSingle();
+      if (updateErr) {
+        return errorResponse(`fewshot update failed: ${updateErr.message}`, 500, req);
+      }
+      resultRow = updated as Record<string, unknown>;
+      action = 'updated';
+    } else {
+      const insertRow: Record<string, unknown> = {
+        example_kind: exampleKind,
+        property_tier: propertyTier,
+        image_type: imageType,
+        ai_value: fieldShape.ai_value,
+        human_value: fieldShape.human_value,
+        evidence_keywords: evidence,
+        description,
+        in_active_prompt: true,
+        observation_count: 1,
+        source_session_id: override.round_id, // useful audit trail back to the round
         curated_by: approverUid,
         curated_at: approverIso,
-        ...(body.evidence_keywords ? { evidence_keywords: evidence } : {}),
-        ...(body.description ? { description } : {}),
-      })
-      .eq('id', existing.id)
-      .select('*')
-      .maybeSingle();
-    if (updateErr) {
-      return errorResponse(`fewshot update failed: ${updateErr.message}`, 500, req);
+      };
+      const { data: inserted, error: insErr } = await admin
+        .from('engine_fewshot_examples')
+        .insert(insertRow)
+        .select('*')
+        .maybeSingle();
+      if (insErr) {
+        return errorResponse(`fewshot insert failed: ${insErr.message}`, 500, req);
+      }
+      resultRow = inserted as Record<string, unknown>;
+      action = 'inserted';
     }
-    resultRow = updated as Record<string, unknown>;
-    action = 'updated';
-  } else {
-    const insertRow: Record<string, unknown> = {
-      example_kind: exampleKind,
-      property_tier: propertyTier,
-      image_type: imageType,
-      ai_value: fieldShape.ai_value,
-      human_value: fieldShape.human_value,
-      evidence_keywords: evidence,
-      description,
-      in_active_prompt: true,
-      observation_count: 1,
-      source_session_id: override.round_id, // useful audit trail back to the round
-      curated_by: approverUid,
-      curated_at: approverIso,
-    };
-    const { data: inserted, error: insErr } = await admin
-      .from('engine_fewshot_examples')
-      .insert(insertRow)
-      .select('*')
-      .maybeSingle();
-    if (insErr) {
-      return errorResponse(`fewshot insert failed: ${insErr.message}`, 500, req);
-    }
-    resultRow = inserted as Record<string, unknown>;
-    action = 'inserted';
-  }
 
-  // ── Mark the source override row's actor_at / actor_user_id ──────────────
-  // Only when we have a real composition_classification_overrides row (shape
-  // A with mirror, or shape B). Synthesised pseudo rows have id=null.
-  if (override.id) {
-    const { error: markErr } = await admin
-      .from('composition_classification_overrides')
-      .update({
-        actor_user_id: approverUid ?? override.actor_user_id,
-        actor_at: approverIso,
-      })
-      .eq('id', override.id as string);
-    if (markErr) {
-      console.warn(`[${GENERATOR}] override actor mark failed (non-fatal): ${markErr.message}`);
+    // Mark the source override row's actor_at / actor_user_id — only when
+    // we have a real composition_classification_overrides row (shape A
+    // with mirror, or shape B). Synthesised pseudo rows have id=null.
+    if (override.id) {
+      const { error: markErr } = await admin
+        .from('composition_classification_overrides')
+        .update({
+          actor_user_id: approverUid ?? override.actor_user_id,
+          actor_at: approverIso,
+        })
+        .eq('id', override.id as string);
+      if (markErr) {
+        console.warn(`[${GENERATOR}] override actor mark failed (non-fatal): ${markErr.message}`);
+      }
     }
+  } else {
+    console.log(
+      `[${GENERATOR}] field='${stage4Audit?.field ?? 'unknown'}' is not graduatable to ` +
+        `engine_fewshot_examples — flipping audit row to 'approved' without graduation.`,
+    );
   }
 
   // W11.6.x — Shape A: flip the source shortlisting_stage4_overrides row to
@@ -465,8 +494,10 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       return errorResponse(
         `Approval write affected 0 rows for override id=${stage4AuditId}. ` +
           `The row may have been deleted by a concurrent Stage 4 re-run. ` +
-          `A fewshot example was created (id=${resultRow?.id ?? 'unknown'}) ` +
-          `but the audit row could not be flipped to approved.`,
+          (resultRow?.id
+            ? `A fewshot example was created (id=${resultRow.id}) ` +
+              `but the audit row could not be flipped to approved.`
+            : `The audit row could not be flipped to approved.`),
         500,
         req,
       );
@@ -487,7 +518,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
         .insert({
           project_id: rd.project_id,
           round_id: override.round_id,
-          event_type: 'fewshot_graduation',
+          event_type: action === 'flipped_only' ? 'stage4_override_approved' : 'fewshot_graduation',
           actor_type: isService ? 'system' : 'human',
           actor_user_id: approverUid,
           payload: {
@@ -495,12 +526,14 @@ serveWithAudit(GENERATOR, async (req: Request) => {
             input_shape: inputShape,
             stage4_audit_id: inputShape === 'stage4_audit' ? stage4AuditId : null,
             mirror_id: override.id ?? null,
-            fewshot_id: resultRow?.id,
-            example_kind: exampleKind,
-            ai_value: fieldShape.ai_value,
-            human_value: fieldShape.human_value,
+            fewshot_id: resultRow?.id ?? null,
+            example_kind: exampleKind ?? null,
+            ai_value: fieldShape?.ai_value ?? (stage4Audit?.stage_1_value ?? null),
+            human_value: fieldShape?.human_value ?? (stage4Audit?.stage_4_value ?? null),
+            field: stage4Audit?.field ?? fieldShape?.field ?? null,
             evidence_keywords: evidence,
             action,
+            graduated_to_fewshot: canGraduate,
           },
         });
     }
