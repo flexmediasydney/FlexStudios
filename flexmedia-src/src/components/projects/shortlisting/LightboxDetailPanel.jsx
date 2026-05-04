@@ -37,7 +37,14 @@
  * we want to show un-mirrored visual corrections.
  */
 
-import { useMemo, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -101,6 +108,47 @@ function renderValue(v) {
   return JSON.stringify(v);
 }
 
+// ─── Section context (expand-all / collapse-all coordination) ──────────────
+// Sections inside this provider listen for a `forceSignal` bump and snap
+// their open state to `forceState` when it ticks.  Sections OUTSIDE the
+// provider (e.g. someone using LightboxDetailPanel standalone) keep their
+// own per-section open state with no surprises.
+//
+// The shape uses a numeric `forceSignal` rather than just `forceState` so
+// repeated clicks of "Expand all" / "Collapse all" still re-sync sections
+// the user has manually toggled since the last bulk action.
+
+const SectionForceContext = createContext(null);
+
+export function SectionForceProvider({ value, children }) {
+  return (
+    <SectionForceContext.Provider value={value || null}>
+      {children}
+    </SectionForceContext.Provider>
+  );
+}
+
+/**
+ * Hook the parent uses to drive expand-all / collapse-all from a button.
+ * Returns `{ forceSignal, forceState, expandAll, collapseAll }`.  The
+ * caller threads the first two into <SectionForceProvider value={...}>.
+ */
+export function useSectionForceController() {
+  const [state, setState] = useState({ forceSignal: 0, forceState: null });
+  const expandAll = useCallback(() => {
+    setState((s) => ({ forceSignal: s.forceSignal + 1, forceState: "open" }));
+  }, []);
+  const collapseAll = useCallback(() => {
+    setState((s) => ({ forceSignal: s.forceSignal + 1, forceState: "closed" }));
+  }, []);
+  return {
+    forceSignal: state.forceSignal,
+    forceState: state.forceState,
+    expandAll,
+    collapseAll,
+  };
+}
+
 // ─── Section primitive ─────────────────────────────────────────────────────
 // Exported so the parent ShortlistingLightbox can wrap its existing
 // 26-signal-scores block (and any other non-detail panels it owns) in
@@ -108,6 +156,17 @@ function renderValue(v) {
 
 export function Section({ icon, title, count, defaultOpen = true, children, testId }) {
   const [open, setOpen] = useState(defaultOpen);
+
+  // When the parent calls expandAll/collapseAll, the context's signal
+  // ticks; sync our own state to the broadcast force value.  Subsequent
+  // user taps still toggle individually.
+  const force = useContext(SectionForceContext);
+  useEffect(() => {
+    if (!force || force.forceSignal === 0) return;
+    if (force.forceState === "open") setOpen(true);
+    else if (force.forceState === "closed") setOpen(false);
+  }, [force?.forceSignal, force?.forceState]);
+
   return (
     <div
       className="border-t border-white/10 pt-2 mt-3 first:border-t-0 first:pt-0 first:mt-0"
@@ -529,11 +588,8 @@ export default function LightboxDetailPanel({ item }) {
           ) : null}
           {observedObjects.length > 0 ? (
             <div className="mt-1.5">
-              <div className="text-[10px] text-white/45 mb-0.5 flex items-center justify-between">
-                <span>Bounding boxes ({observedObjects.length})</span>
-                <span className="text-white/30 normal-case">
-                  click chip → highlight on image
-                </span>
+              <div className="text-[10px] text-white/45 mb-0.5">
+                Bounding boxes ({observedObjects.length})
               </div>
               <ul className="space-y-1 max-h-72 overflow-y-auto pr-1">
                 {observedObjects.map((obj, i) => {

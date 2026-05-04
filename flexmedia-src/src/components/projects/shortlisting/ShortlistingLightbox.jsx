@@ -69,7 +69,11 @@ import {
 } from "@/utils/signalScores";
 import BoundingBoxOverlay from "./BoundingBoxOverlay";
 import CanonicalObjectPanel from "./CanonicalObjectPanel";
-import LightboxDetailPanel, { Section as DetailSection } from "./LightboxDetailPanel";
+import LightboxDetailPanel, {
+  Section as DetailSection,
+  SectionForceProvider,
+  useSectionForceController,
+} from "./LightboxDetailPanel";
 
 const SWIPE_THRESHOLD_PX = 50;
 
@@ -409,6 +413,13 @@ export default function ShortlistingLightbox({
   const voiceTier = item?.voice_tier || null;
   const masterListing = item?.master_listing || null;
 
+  // Coordinate expand-all / collapse-all across every <DetailSection> in
+  // both this lightbox AND the LightboxDetailPanel below.  Each section
+  // listens to a context bumped by these handlers; manual per-section
+  // toggles still work in between.
+  const { forceSignal, forceState, expandAll, collapseAll } =
+    useSectionForceController();
+
   const counter =
     total > 0
       ? `${safeIndex + 1} of ${total}${bucketLabel ? ` — ${bucketLabel}` : ""}`
@@ -538,7 +549,7 @@ export default function ShortlistingLightbox({
 
       {/* Body — image (left) + side panel (right) */}
       <div
-        className="flex-1 flex flex-col lg:flex-row items-stretch w-full px-4 sm:px-16 py-14 gap-4"
+        className="flex-1 min-h-0 flex flex-col lg:flex-row items-stretch w-full px-4 sm:px-16 py-14 gap-4"
         onClick={handleOverlayClick}
       >
         {/* Image area */}
@@ -605,21 +616,51 @@ export default function ShortlistingLightbox({
           )}
         </div>
 
-        {/* Side panel — signal scores + decision metadata + Why? */}
+        {/* Side panel — signal scores + decision metadata + Why?
+            Layout: column flex with min-h-0 + a scroll container BELOW the
+            sticky filename + expand/collapse-all toolbar.  Without min-h-0
+            the inner overflow-y-auto won't actually scroll inside a flex
+            child (the classic flex-overflow trap). */}
         <aside
           data-testid="lightbox-side-panel"
-          className="w-full lg:w-[340px] shrink-0 lg:max-h-full overflow-y-auto rounded-md bg-slate-900/85 backdrop-blur text-white border border-white/10 p-3 text-xs"
+          className="w-full lg:w-[340px] shrink-0 lg:h-full lg:max-h-full lg:min-h-0 max-h-[60vh] flex flex-col rounded-md bg-slate-900/85 backdrop-blur text-white border border-white/10 text-xs overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* Filename header */}
-          <div className="border-b border-white/10 pb-2 mb-2">
+          {/* Sticky header — filename + expand/collapse-all toolbar */}
+          <div className="shrink-0 px-3 pt-3 pb-2 border-b border-white/10">
             <div
               className="text-sm font-medium truncate"
               title={item.filename || ""}
             >
               {item.filename || "Untitled"}
             </div>
+            <div className="mt-1.5 flex items-center gap-2 text-[10px]">
+              <button
+                type="button"
+                onClick={expandAll}
+                className="px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/15 text-white/80 hover:text-white"
+                data-testid="lightbox-expand-all"
+                title="Expand every section"
+              >
+                Expand all
+              </button>
+              <button
+                type="button"
+                onClick={collapseAll}
+                className="px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/15 text-white/80 hover:text-white"
+                data-testid="lightbox-collapse-all"
+                title="Collapse every section"
+              >
+                Collapse all
+              </button>
+            </div>
           </div>
+
+          {/* Scroll container — lives inside the aside flex column with
+              min-h-0 + overflow-y-auto so it scrolls regardless of content
+              height while the sticky header stays put. */}
+          <SectionForceProvider value={{ forceSignal, forceState }}>
+          <div className="flex-1 min-h-0 overflow-y-auto px-3 py-3">
 
           {/* Slot / voice tier badges */}
           {(slot?.slot_id || voiceTier) && (
@@ -851,6 +892,8 @@ export default function ShortlistingLightbox({
           {item?.classification?.exif && (
             <ExifPanel exif={item.classification.exif} />
           )}
+          </div>
+          </SectionForceProvider>
         </aside>
       </div>
     </div>,
