@@ -78,6 +78,7 @@ import SwimlaneToolbar, {
   useSwimlaneElapsedTimer,
 } from "./SwimlaneToolbar";
 import EditorialQuotaPanel from "./EditorialQuotaPanel";
+import SwimlaneGridView from "./SwimlaneGridView";
 import { useSwimlaneSettings, PREVIEW_SIZES } from "@/hooks/useSwimlaneSettings";
 import {
   PHASE_OF_SLOT,
@@ -626,6 +627,30 @@ export default function ShortlistingSwimlane({
     enabled: Boolean(roundId),
     staleTime: 15_000,
   });
+
+  // Load the operator-editable editorial policy so the grid view can
+  // sort hero rooms first (kitchen, master_bedroom, etc).  Stale-time
+  // is generous since the policy rarely changes mid-session.
+  const policyQuery = useQuery({
+    queryKey: ["shortlisting_engine_policy_for_swimlane"],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shortlisting_engine_policy")
+        .select("policy")
+        .eq("id", 1)
+        .maybeSingle();
+      if (error) throw error;
+      return data?.policy || null;
+    },
+  });
+  const heroRoomsOrder = useMemo(
+    () =>
+      Array.isArray(policyQuery.data?.common_residential_rooms)
+        ? policyQuery.data.common_residential_rooms
+        : [],
+    [policyQuery.data],
+  );
 
   // Mig 453+454 — load shortlisting_space_instances for the round so the
   // lightbox detail panel + grid view can render human-readable instance
@@ -1877,44 +1902,53 @@ export default function ShortlistingSwimlane({
         </div>
       )}
 
-      {/* 3-column swimlane.
-          QC-iter2-W7 F-C-007: md breakpoint splits into 2 columns (proposed
-          spans full row, rejected/approved share row 2) so tablet-portrait
-          and small-laptop windows aren't stuck on the mobile single-column
-          stack. lg+ keeps the canonical 1fr_2fr_1fr layout. */}
-      <DragDropContext onDragEnd={onDragEnd}>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_2fr_1fr] gap-3">
-          {COLUMNS.map((col) => {
-            const items = columnItems[col.key] || [];
-            // W11.6.1 — group-by-slot only applies to AI PROPOSED. The other
-            // two columns retain their flat list because grouping rejected /
-            // approved by slot would break the operator's mental model:
-            //   - REJECTED is a chronological scan (group_index), not a
-            //     slot-driven view; grouping by slot would scatter the
-            //     visual flow.
-            //   - HUMAN APPROVED is small and curated; an extra header per
-            //     row adds clutter without value.
-            const grouped =
-              groupBySlot && col.key === "proposed" ? proposedGroupedBySlot : null;
-            return (
-              <SwimlaneColumn
-                key={col.key}
-                column={col}
-                items={items}
-                grouped={grouped}
-                isLocked={isReadOnly}
-                onSwapAlternative={handleSwapAlternative}
-                altsBySlotId={altsBySlotId}
-                classByGroupId={classByGroupId}
-                registerCardObserver={registerCardObserver}
-                onAltsDrawerOpen={handleAltsDrawerOpen}
-                previewSize={previewSize}
-                onCardImageClick={(idx) => openLightbox(col.key, idx)}
-              />
-            );
-          })}
-        </div>
-      </DragDropContext>
+      {/* Mig 465+grid — when the operator picks "Grid view" the legacy
+          3-column lane is replaced by a 2D grid (rows = space_type, sub-
+          rows = space_instance, cols = Rejected / AI Proposed / Human
+          Approved).  The same filtered columnItems feed both views; the
+          grid is read-only-with-click-to-lightbox (no drag/swap). */}
+      {groupBySlot ? (
+        <SwimlaneGridView
+          columnItems={columnItems}
+          spaceInstancesById={spaceInstancesById}
+          heroRoomsOrder={heroRoomsOrder}
+          density={previewSize}
+          onCardClick={(it, bucketKey) => {
+            const arr = columnItems[bucketKey] || [];
+            const idx = arr.findIndex((x) => x.id === it.id);
+            if (idx >= 0) openLightbox(bucketKey, idx);
+          }}
+        />
+      ) : (
+        /* 3-column swimlane (default).
+           QC-iter2-W7 F-C-007: md breakpoint splits into 2 columns (proposed
+           spans full row, rejected/approved share row 2) so tablet-portrait
+           and small-laptop windows aren't stuck on the mobile single-column
+           stack. lg+ keeps the canonical 1fr_2fr_1fr layout. */
+        <DragDropContext onDragEnd={onDragEnd}>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_2fr_1fr] gap-3">
+            {COLUMNS.map((col) => {
+              const items = columnItems[col.key] || [];
+              return (
+                <SwimlaneColumn
+                  key={col.key}
+                  column={col}
+                  items={items}
+                  grouped={null}
+                  isLocked={isReadOnly}
+                  onSwapAlternative={handleSwapAlternative}
+                  altsBySlotId={altsBySlotId}
+                  classByGroupId={classByGroupId}
+                  registerCardObserver={registerCardObserver}
+                  onAltsDrawerOpen={handleAltsDrawerOpen}
+                  previewSize={previewSize}
+                  onCardImageClick={(idx) => openLightbox(col.key, idx)}
+                />
+              );
+            })}
+          </div>
+        </DragDropContext>
+      )}
 
       {/* W11.6.x — Stage 4 visual corrections lane (in-context replacement
           for the buggy standalone /Stage4Overrides page). Shows ONLY this

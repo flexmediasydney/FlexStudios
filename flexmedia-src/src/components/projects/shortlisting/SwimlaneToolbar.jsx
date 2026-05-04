@@ -431,17 +431,25 @@ export default function SwimlaneToolbar({
           </div>
         </div>
 
-        {/* Group-by-slot */}
+        {/* Grid view toggle — when ON, the 3-column lane is replaced by a
+            2D grid (rows = room/space_type, sub-rows = space_instance,
+            cols = Rejected / Proposed / Approved).  Hidden below `lg`
+            because the grid needs the horizontal real estate. */}
         <Button
           variant={groupBySlot ? "secondary" : "outline"}
           size="sm"
-          className="h-8 text-xs gap-1"
+          className="h-8 text-xs gap-1 hidden lg:inline-flex"
           onClick={() => onGroupBySlotChange(!groupBySlot)}
-          data-testid="swimlane-group-toggle"
+          data-testid="swimlane-grid-toggle"
           aria-pressed={groupBySlot}
+          title={
+            groupBySlot
+              ? "Switch back to the 3-column lane view"
+              : "View as a 2D grid (rooms × buckets) — see all candidates per position"
+          }
         >
           <Layers className="h-3.5 w-3.5" />
-          Group by slot
+          {groupBySlot ? "Lane view" : "Grid view"}
         </Button>
 
         {/* Elapsed timer (right-aligned via spacer) */}
