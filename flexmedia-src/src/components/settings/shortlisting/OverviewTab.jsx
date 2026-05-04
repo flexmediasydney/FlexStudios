@@ -15,9 +15,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, AlertCircle } from "lucide-react";
 import KpiStrip from "./KpiStrip";
-import PendingIngestsWidget from "./PendingIngestsWidget";
-import ActiveEngineRunsWidget from "./ActiveEngineRunsWidget";
-import StuckProjectsWidget from "./StuckProjectsWidget";
+// 2026-05-05 — PendingIngestsWidget / ActiveEngineRunsWidget /
+// StuckProjectsWidget no longer rendered here; they live on the
+// unified Command Center's Dashboard tab now.  Imports kept off so
+// we don't bundle them twice.
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -85,15 +86,12 @@ export default function OverviewTab() {
 
       <KpiStrip data={data} loading={isLoading} />
 
-      <PendingIngestsWidget />
-
-      {/* 2026-05-04 (Joseph feedback): complement to PendingIngestsWidget —
-          surfaces projects that COULD have files in Dropbox but don't have
-          a pending ingest, so operators can spot stuck projects when the
-          webhook chain has lag/failure. */}
-      <StuckProjectsWidget />
-
-      <ActiveEngineRunsWidget />
+      {/* 2026-05-05 — PendingIngestsWidget, StuckProjectsWidget, and
+          ActiveEngineRunsWidget moved to the unified Command Center's
+          Dashboard tab (the OPERATIONAL surface).  Settings → Engine
+          → Overview now focuses on engine KPIs only (above) so the
+          settings tree stays config-focused.  See
+          ShortlistingCommandCenter.jsx <DashboardView>. */}
 
       <Card>
         <CardContent className="p-3 text-xs text-muted-foreground space-y-1.5">
