@@ -65,6 +65,7 @@ import ShortlistingAuditLog from "./shortlisting/ShortlistingAuditLog";
 import SpaceInstancesPanel from "./shortlisting/audit/SpaceInstancesPanel";
 import PendingIngestsWidget from "@/components/settings/shortlisting/PendingIngestsWidget";
 import ActiveEngineRunsWidget from "@/components/settings/shortlisting/ActiveEngineRunsWidget";
+import DropboxFolderProbeWidget from "@/components/settings/shortlisting/DropboxFolderProbeWidget";
 import { useEntityList } from "@/components/hooks/useEntityData";
 
 // Sub-tab keys
@@ -527,9 +528,16 @@ export default function ProjectShortlistingTab({ project }) {
       {/* Engine pipeline status — per-project view of pending ingests +
           chain progress. Mounted regardless of round count so operators
           can see the ingest waiting on the 2h Dropbox-debounce even
-          before any round exists for the project. */}
+          before any round exists for the project.
+          2026-05-04 (Joseph feedback): added DropboxFolderProbeWidget
+          which goes ABOVE the pending-ingests widget because it
+          surfaces Dropbox state INDEPENDENTLY of the webhook chain — if
+          files are uploaded and the webhook hasn't fired yet (stale
+          cursor, debounce, or otherwise), the operator still sees a
+          file count + "Detect now" button. */}
       {projectId && (
         <div className="space-y-2" data-testid="project-engine-status">
+          <DropboxFolderProbeWidget projectId={projectId} compact />
           <PendingIngestsWidget projectId={projectId} compact />
           <ActiveEngineRunsWidget projectId={projectId} compact />
         </div>
