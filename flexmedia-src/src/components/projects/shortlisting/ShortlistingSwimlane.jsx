@@ -2501,8 +2501,9 @@ export default function ShortlistingSwimlane({
               Refresh the swimlane to see live state.
             </p>
             <p className="text-muted-foreground/80 text-xs">
-              When you re-lock, fresh committed_decisions are written. The
-              superseded rows stay in the audit table for diagnostics.
+              When you re-lock, fresh committed_decisions overwrite the
+              prior commit (UPSERT on round_id+group_id). The lock/unlock/
+              relock timeline is preserved in shortlisting_events for audit.
             </p>
           </div>
           <div className="space-y-3 py-2">

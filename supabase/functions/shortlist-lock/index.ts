@@ -1455,6 +1455,13 @@ async function writeCommittedDecisions(
       client_review_notes: ann?.client_review_notes ?? null,
       movement_count: movementCountByGroup.get(groupId) ?? 0,
       committed_by: args.lockedBy,
+      // Mig 468 (2026-05-04): explicitly reset superseded=false on every
+      // relock.  Without this, an unlock + relock cycle would leave the
+      // post-unlock superseded=true flag in place even after the relock
+      // wrote new commitment data, because UPSERT-on-conflict only sets
+      // columns that appear in the input row.  Training pipelines would
+      // then ignore the relock's signal — exactly backwards.
+      superseded: false,
     });
   }
 
