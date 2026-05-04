@@ -1,38 +1,45 @@
 /**
- * SwimlaneGridView — compact 2D shortlisting view.
+ * SwimlaneGridView — compact 2D shortlisting view with FULL drag-drop +
+ * override capture parity with the lane view.
  *
  * Layout (top → bottom):
  *
  *   ▼ KITCHEN              8 candidates · 2 picked · 0 approved
- *   ┌─ REJECTED  (6)  4fr ───────────┬─ AI PROPOSED  (2)  1fr ─┬─ APPROVED  (0)  1fr ─┐
- *   │ Day  ◆ ◆ ◆                      │ Day  ◆                  │                      │
- *   │ Golden hour  ◆                  │ Golden hour  ◆          │                      │
- *   │ Dusk  ◆ ◆                       │                         │                      │
- *   └─────────────────────────────────┴─────────────────────────┴──────────────────────┘
+ *   ┌─ REJECTED  4fr ─────────────────┬─ AI PROPOSED  1fr ──┬─ APPROVED  1fr ─┐
+ *   │ Day  ◆ ◆ ◆                       │ Day  ◆              │                 │
+ *   │ Golden hour  ◆                   │ Golden hour  ◆      │                 │
+ *   │ Dusk  ◆ ◆                        │                     │                 │
+ *   └──────────────────────────────────┴─────────────────────┴─────────────────┘
  *
- *   ▶ BEDROOM SECONDARY    9 cand · 3 picked · 0 approved · 3 instances
- *      ↳ collapsed, click chevron to expand sub-banners per instance
+ * Per Joseph 2026-05-04: same codebase as the lane view for movements +
+ * override capture.  This component:
  *
- * Design choices (per Joseph 2026-05-04):
- *   - No 4th "room" column — rooms are full-width collapsible banners.
- *   - Lane ratio 4fr : 1fr : 1fr  (rejected dominant — focal point for
- *     reviewing alternatives).
- *   - Time-of-day sub-rows INSIDE each cell, only when >1 distinct
- *     time present (smart — saves vertical space on simple rooms).
- *   - CompactCard (purpose-built for grid mode), not the heavy
- *     ShortlistingCard.  Click → lightbox.
- *   - Smart collapse defaults: hero rooms expanded, multi-instance
- *     rooms + Unclassified collapsed.
+ *   - Reuses SwimlaneCardRenderer (the existing draggable wrapper around
+ *     ShortlistingCard) so swap, why?, reclassify, alts drawer, and the
+ *     IntersectionObserver-driven review-duration capture all work the
+ *     same as in lane mode.
+ *   - Wraps each (room × instance × bucket) cell in @hello-pangea/dnd
+ *     Droppable with a compound id `${bucketKey}__${roomKey}__${instKey}`.
+ *     The parent's onDragEnd extracts the bucket prefix so the existing
+ *     human_action / training-data logic stays unchanged.
+ *   - Sits INSIDE the parent's <DragDropContext>; the parent toggles
+ *     between this and the lane view inside the same context.
  *
- * No drag-and-drop, no swap UI, no inline approve/reject — the grid
- * is read-only-with-click-to-lightbox per Joseph's direction; the
- * lane view stays as the primary action surface.
+ * Visual decisions (all kept):
+ *   - Lane chrome red / amber / emerald, lane spacers between buckets.
+ *   - Lane width ratio 4fr : 1fr : 1fr (Rejected dominant).
+ *   - Time-of-day sub-rows inside each cell, ONLY when >1 distinct time.
+ *   - Smart collapse defaults: hero rooms with ≥1 candidate expanded;
+ *     multi-instance rooms + Unclassified collapsed.
+ *   - Density inherits previewSize; recommend operators bump to "sm"
+ *     for the densest scan.
  */
 
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { Droppable } from "@hello-pangea/dnd";
 import { cn } from "@/lib/utils";
-import CompactCard from "./CompactCard";
+import { SwimlaneCardRenderer } from "./ShortlistingSwimlane";
 
 // ─── Lane chrome (mirrors COLUMNS in ShortlistingSwimlane.jsx) ────────────
 
@@ -45,6 +52,7 @@ const COLUMN_META = [
       "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300",
     cellTone:
       "bg-red-50/40 dark:bg-red-950/15 border-red-200/60 dark:border-red-900/50",
+    droppingHighlight: "ring-2 ring-red-400/60",
   },
   {
     key: "proposed",
@@ -54,6 +62,7 @@ const COLUMN_META = [
       "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
     cellTone:
       "bg-amber-50/40 dark:bg-amber-950/15 border-amber-200/60 dark:border-amber-900/50",
+    droppingHighlight: "ring-2 ring-amber-400/60",
   },
   {
     key: "approved",
@@ -63,6 +72,7 @@ const COLUMN_META = [
       "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
     cellTone:
       "bg-emerald-50/40 dark:bg-emerald-950/15 border-emerald-200/60 dark:border-emerald-900/50",
+    droppingHighlight: "ring-2 ring-emerald-400/60",
   },
 ];
 
@@ -72,7 +82,7 @@ const LANE_GRID_STYLE = {
   columnGap: "0.5rem",
 };
 
-// ─── Time-of-day grouping ─────────────────────────────────────────────────
+// ─── Time-of-day sub-grouping ────────────────────────────────────────────
 
 const TIME_OF_DAY_ORDER = ["day", "golden_hour", "dusk_twilight", "night"];
 const TIME_OF_DAY_LABEL = {
@@ -115,6 +125,16 @@ function instanceLabel(instance) {
     return `Instance ${instance.instance_index}`;
   }
   return "Instance —";
+}
+
+// Compound droppable id: `${bucketKey}__${roomKey}__${instKey}`.  Parent's
+// onDragEnd splits on `__` to recover the bucket; the room/instance
+// suffix is opaque to the action logic.  Encoding non-alpha chars so a
+// space_type with weird chars (e.g. "kitchen/dining") still produces a
+// valid droppableId.
+function makeDroppableId(bucketKey, roomKey, instKey) {
+  const safe = (s) => String(s ?? "").replace(/[^a-zA-Z0-9_-]/g, "-");
+  return `${bucketKey}__${safe(roomKey)}__${safe(instKey)}`;
 }
 
 // ─── Row builder ──────────────────────────────────────────────────────────
@@ -205,7 +225,6 @@ function buildGridRows({ columnItems, spaceInstancesById, heroRoomsOrder }) {
       if (typeof bi === "number") return 1;
       return 0;
     });
-    // Total counts per bucket for the banner subtitle.
     room.totals = room.instancesOrdered.reduce(
       (acc, inst) => {
         acc.rejected += inst.rejected.length;
@@ -220,31 +239,38 @@ function buildGridRows({ columnItems, spaceInstancesById, heroRoomsOrder }) {
   return rows;
 }
 
-// Decide default-open state per room (smart collapse).
 function shouldRoomDefaultOpen(room) {
   if (room.isUnclassified) return false;
-  // Multi-instance rooms collapsed by default — opening them stacks 3+
-  // strips and would overwhelm the scan view.
   if ((room.instancesOrdered?.length || 0) > 1) return false;
-  // Hero rooms with at least 1 pick → expanded.  Hero rooms with 0
-  // picks but >1 candidate → still expanded (operator likely needs to
-  // act).  Non-hero rooms → collapsed.
   if (room.isHero) return room.totalCount >= 1;
   return false;
 }
 
-// ─── Lane cell — time-of-day grouped ─────────────────────────────────────
+// ─── Lane cell — Droppable + time-of-day sub-rows ────────────────────────
 
-function LaneCell({ items, column, density, onCardClick, columnItems }) {
-  // Group cards by time_of_day so we can render a sub-row per bucket.
+function LaneCell({
+  inst,
+  column,
+  roomKey,
+  density,
+  isLocked,
+  onSwapAlternative,
+  altsBySlotId,
+  classByGroupId,
+  registerCardObserver,
+  onAltsDrawerOpen,
+  onCardImageClick,
+}) {
+  const items = inst[column.key] || [];
+  // Group by time_of_day so we can render a sub-row label per group when
+  // the cell has >1 distinct time.
   const grouped = useMemo(() => {
     const m = new Map();
-    for (const it of items) {
+    items.forEach((it, originalIdx) => {
       const k = timeOfDayKey(it);
       if (!m.has(k)) m.set(k, []);
-      m.get(k).push(it);
-    }
-    // Sorted keys: known order first, then alphabetical for unknowns.
+      m.get(k).push({ item: it, originalIdx });
+    });
     const sortedKeys = Array.from(m.keys()).sort((a, b) => {
       const ai = TIME_OF_DAY_ORDER.indexOf(a);
       const bi = TIME_OF_DAY_ORDER.indexOf(b);
@@ -253,86 +279,117 @@ function LaneCell({ items, column, density, onCardClick, columnItems }) {
       if (bi !== -1) return 1;
       return a.localeCompare(b);
     });
-    return sortedKeys.map((k) => ({ key: k, items: m.get(k) }));
+    return sortedKeys.map((k) => ({ key: k, entries: m.get(k) }));
   }, [items]);
 
   const showTimeLabels = grouped.length > 1;
-
-  if (items.length === 0) {
-    return (
-      <div
-        className={cn(
-          "rounded-md border min-h-[40px] flex items-center justify-center",
-          column.cellTone,
-        )}
-        data-testid={`grid-cell-empty-${column.key}`}
-      >
-        <span className="text-[10px] text-muted-foreground/50 italic">—</span>
-      </div>
-    );
-  }
+  const droppableId = makeDroppableId(column.key, roomKey, inst.instKey);
 
   return (
-    <div
-      className={cn("rounded-md border p-1.5 space-y-1", column.cellTone)}
-      data-testid={`grid-cell-${column.key}`}
-    >
-      {grouped.map((row) => (
-        <div key={row.key} className="flex items-start gap-1.5">
-          {showTimeLabels ? (
-            <div
-              className="text-[8px] uppercase tracking-wide text-muted-foreground/70 font-medium pt-1 shrink-0"
-              style={{ width: 38 }}
-              title={row.key}
-            >
-              {timeOfDayLabel(row.key)}
+    <Droppable droppableId={droppableId} isDropDisabled={isLocked}>
+      {(provided, snapshot) => (
+        <div
+          ref={provided.innerRef}
+          {...provided.droppableProps}
+          className={cn(
+            "rounded-md border p-1.5 min-h-[40px] transition",
+            column.cellTone,
+            snapshot.isDraggingOver && column.droppingHighlight,
+          )}
+          data-testid={`grid-cell-${column.key}-${roomKey}-${inst.instKey}`}
+        >
+          {items.length === 0 ? (
+            <div className="text-center py-1 text-[10px] text-muted-foreground/60 italic">
+              {snapshot.isDraggingOver
+                ? "Drop here"
+                : column.key === "approved"
+                  ? "Drag here to approve"
+                  : "—"}
             </div>
-          ) : null}
-          <div className="flex flex-wrap gap-1 flex-1 min-w-0">
-            {row.items.map((it) => {
-              const masterListBucket = columnItems?.[column.key] || [];
-              const indexInBucket = masterListBucket.findIndex((x) => x.id === it.id);
-              return (
-                <CompactCard
-                  key={it.id}
-                  item={it}
-                  density={density}
-                  onClick={() => onCardClick?.(it, column.key, indexInBucket)}
-                />
-              );
-            })}
-          </div>
+          ) : (
+            <div className="space-y-1">
+              {grouped.map((row) => (
+                <div key={row.key} className="flex items-start gap-1.5">
+                  {showTimeLabels ? (
+                    <div
+                      className="text-[8px] uppercase tracking-wide text-muted-foreground/70 font-medium pt-1 shrink-0"
+                      style={{ width: 38 }}
+                      title={row.key}
+                    >
+                      {timeOfDayLabel(row.key)}
+                    </div>
+                  ) : null}
+                  <div className="flex flex-wrap gap-1 flex-1 min-w-0">
+                    {row.entries.map(({ item, originalIdx }) => (
+                      <div
+                        key={item.id}
+                        style={{
+                          // Cap each card to a roughly thumbnail-sized
+                          // width so cells stay dense; the heavy
+                          // ShortlistingCard adapts to this width.  The
+                          // actual visual size still respects previewSize
+                          // (sm/md/lg) — this cap just tightens the
+                          // grid-density math so the rejected lane fits
+                          // a meaningful row of alternatives.
+                          width:
+                            density === "sm"
+                              ? 110
+                              : density === "lg"
+                                ? 200
+                                : 150,
+                        }}
+                        data-testid={`grid-card-wrap-${item.id}`}
+                      >
+                        <SwimlaneCardRenderer
+                          item={item}
+                          index={originalIdx}
+                          column={column}
+                          isLocked={isLocked}
+                          onSwapAlternative={onSwapAlternative}
+                          altsBySlotId={altsBySlotId}
+                          classByGroupId={classByGroupId}
+                          registerCardObserver={registerCardObserver}
+                          onAltsDrawerOpen={onAltsDrawerOpen}
+                          previewSize={density}
+                          onCardImageClick={
+                            onCardImageClick
+                              ? () => onCardImageClick(column.key, originalIdx)
+                              : undefined
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {provided.placeholder}
         </div>
-      ))}
-    </div>
+      )}
+    </Droppable>
   );
 }
 
 // ─── Room banner + 3-lane strip ──────────────────────────────────────────
 
-function LaneStrip({ inst, density, onCardClick, columnItems }) {
+function LaneStrip({ inst, roomKey, ...rest }) {
   return (
     <div style={LANE_GRID_STYLE} className="px-2 pb-2">
       {COLUMN_META.map((col) => (
         <LaneCell
           key={col.key}
-          items={inst[col.key]}
+          inst={inst}
           column={col}
-          density={density}
-          onCardClick={onCardClick}
-          columnItems={columnItems}
+          roomKey={roomKey}
+          {...rest}
         />
       ))}
     </div>
   );
 }
 
-function RoomBanner({
-  room,
-  density,
-  onCardClick,
-  columnItems,
-}) {
+function RoomBanner({ room, ...rest }) {
   const [open, setOpen] = useState(() => shouldRoomDefaultOpen(room));
   const hasMultipleInstances = (room.instancesOrdered?.length || 0) > 1;
   const flat = !hasMultipleInstances;
@@ -367,7 +424,7 @@ function RoomBanner({
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-1.5 text-[10px] font-mono tabular-nums text-muted-foreground shrink-0">
+        <div className="flex items-center gap-1.5 text-[10px] font-mono tabular-nums shrink-0">
           <span className="px-1.5 py-0.5 rounded-full bg-red-100/60 dark:bg-red-950/40 text-red-700 dark:text-red-300">
             {room.totals.rejected}
           </span>
@@ -382,21 +439,15 @@ function RoomBanner({
 
       {open ? (
         flat ? (
-          <LaneStrip
-            inst={flatInst}
-            density={density}
-            onCardClick={onCardClick}
-            columnItems={columnItems}
-          />
+          <LaneStrip inst={flatInst} roomKey={room.roomKey} {...rest} />
         ) : (
           <div className="space-y-1.5 px-2 pb-2">
             {room.instancesOrdered.map((inst) => (
               <InstanceBanner
                 key={inst.instKey}
                 inst={inst}
-                density={density}
-                onCardClick={onCardClick}
-                columnItems={columnItems}
+                roomKey={room.roomKey}
+                {...rest}
               />
             ))}
           </div>
@@ -406,10 +457,13 @@ function RoomBanner({
   );
 }
 
-function InstanceBanner({ inst, density, onCardClick, columnItems }) {
+function InstanceBanner({ inst, roomKey, ...rest }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="rounded-md border bg-muted/20" data-testid={`grid-instance-${inst.instKey}`}>
+    <div
+      className="rounded-md border bg-muted/20"
+      data-testid={`grid-instance-${inst.instKey}`}
+    >
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -442,14 +496,7 @@ function InstanceBanner({ inst, density, onCardClick, columnItems }) {
           </span>
         </div>
       </button>
-      {open ? (
-        <LaneStrip
-          inst={inst}
-          density={density}
-          onCardClick={onCardClick}
-          columnItems={columnItems}
-        />
-      ) : null}
+      {open ? <LaneStrip inst={inst} roomKey={roomKey} {...rest} /> : null}
     </div>
   );
 }
@@ -461,7 +508,16 @@ export default function SwimlaneGridView({
   spaceInstancesById,
   heroRoomsOrder = [],
   density = "md",
-  onCardClick,
+  // SwimlaneCardRenderer passthrough props — same as the lane view's
+  // SwimlaneColumn invocation so the card behaviours (drag, swap, why?,
+  // alts drawer, IntersectionObserver) are byte-identical here.
+  isLocked = false,
+  onSwapAlternative,
+  altsBySlotId,
+  classByGroupId,
+  registerCardObserver,
+  onAltsDrawerOpen,
+  onCardImageClick,
 }) {
   const rows = useMemo(
     () => buildGridRows({ columnItems, spaceInstancesById, heroRoomsOrder }),
@@ -479,9 +535,6 @@ export default function SwimlaneGridView({
     );
   }
 
-  // Top-level summary: lane headers floating above the rooms with the
-  // total count badge, so operators always know which lane is which
-  // without having to peek inside a banner.
   const totals = rows.reduce(
     (acc, room) => {
       acc.rejected += room.totals.rejected;
@@ -492,11 +545,22 @@ export default function SwimlaneGridView({
     { rejected: 0, proposed: 0, approved: 0 },
   );
 
+  // Common props bag forwarded into every cell.
+  const cellProps = {
+    density,
+    isLocked,
+    onSwapAlternative,
+    altsBySlotId,
+    classByGroupId,
+    registerCardObserver,
+    onAltsDrawerOpen,
+    onCardImageClick,
+  };
+
   return (
     <div className="space-y-2" data-testid="swimlane-grid-view">
-      {/* Sticky lane-header rail — sits above the rooms.  Same red /
-          amber / emerald tones as the legacy lane headers; the column
-          ratios match the cell strips below (4fr : 1fr : 1fr). */}
+      {/* Sticky lane-header rail — same red/amber/emerald tones as the
+          legacy lane headers. */}
       <div
         style={LANE_GRID_STYLE}
         className="sticky top-0 z-10 bg-background/95 backdrop-blur px-2 py-1.5 rounded-md"
@@ -515,15 +579,8 @@ export default function SwimlaneGridView({
         ))}
       </div>
 
-      {/* Per-room banners */}
       {rows.map((room) => (
-        <RoomBanner
-          key={room.roomKey}
-          room={room}
-          density={density}
-          onCardClick={onCardClick}
-          columnItems={columnItems}
-        />
+        <RoomBanner key={room.roomKey} room={room} {...cellProps} />
       ))}
     </div>
   );

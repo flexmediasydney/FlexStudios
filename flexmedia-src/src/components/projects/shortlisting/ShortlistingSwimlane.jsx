@@ -1377,8 +1377,13 @@ export default function ShortlistingSwimlane({
       )
         return;
 
-      const fromColumn = source.droppableId;
-      const toColumn = destination.droppableId;
+      // Mig 2026-05-04 grid view — droppableIds in the grid mode are
+      // compound: `${bucketKey}__${roomKey}__${instKey}`.  Strip the
+      // suffix so the bucket-keyed action logic below stays unchanged.
+      // Lane view droppableIds are plain bucket keys ("rejected", etc.)
+      // and survive the split unchanged.
+      const fromColumn = source.droppableId.split("__")[0];
+      const toColumn = destination.droppableId.split("__")[0];
       const action = deriveHumanAction(fromColumn, toColumn);
       if (!action) return;
 
@@ -1905,27 +1910,33 @@ export default function ShortlistingSwimlane({
       {/* Mig 465+grid — when the operator picks "Grid view" the legacy
           3-column lane is replaced by a 2D grid (rows = space_type, sub-
           rows = space_instance, cols = Rejected / AI Proposed / Human
-          Approved).  The same filtered columnItems feed both views; the
-          grid is read-only-with-click-to-lightbox (no drag/swap). */}
-      {groupBySlot ? (
-        <SwimlaneGridView
-          columnItems={columnItems}
-          spaceInstancesById={spaceInstancesById}
-          heroRoomsOrder={heroRoomsOrder}
-          density={previewSize}
-          onCardClick={(it, bucketKey) => {
-            const arr = columnItems[bucketKey] || [];
-            const idx = arr.findIndex((x) => x.id === it.id);
-            if (idx >= 0) openLightbox(bucketKey, idx);
-          }}
-        />
-      ) : (
-        /* 3-column swimlane (default).
-           QC-iter2-W7 F-C-007: md breakpoint splits into 2 columns (proposed
-           spans full row, rejected/approved share row 2) so tablet-portrait
-           and small-laptop windows aren't stuck on the mobile single-column
-           stack. lg+ keeps the canonical 1fr_2fr_1fr layout. */
-        <DragDropContext onDragEnd={onDragEnd}>
+          Approved).  Both views share the SAME DragDropContext +
+          onDragEnd handler so drag/drop, override capture, alts drawer,
+          and AI training-data emissions are identical between modes —
+          the grid is just a different visual layout over the same
+          interaction surface. */}
+      <DragDropContext onDragEnd={onDragEnd}>
+        {groupBySlot ? (
+          <SwimlaneGridView
+            columnItems={columnItems}
+            spaceInstancesById={spaceInstancesById}
+            heroRoomsOrder={heroRoomsOrder}
+            density={previewSize}
+            isLocked={isReadOnly}
+            onSwapAlternative={handleSwapAlternative}
+            altsBySlotId={altsBySlotId}
+            classByGroupId={classByGroupId}
+            registerCardObserver={registerCardObserver}
+            onAltsDrawerOpen={handleAltsDrawerOpen}
+            onCardImageClick={(bucketKey, idx) => openLightbox(bucketKey, idx)}
+          />
+        ) : (
+          /* 3-column swimlane (default).
+             QC-iter2-W7 F-C-007: md breakpoint splits into 2 columns
+             (proposed spans full row, rejected/approved share row 2) so
+             tablet-portrait and small-laptop windows aren't stuck on the
+             mobile single-column stack.  lg+ keeps the canonical
+             1fr_2fr_1fr layout. */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-[1fr_2fr_1fr] gap-3">
             {COLUMNS.map((col) => {
               const items = columnItems[col.key] || [];
@@ -1947,8 +1958,8 @@ export default function ShortlistingSwimlane({
               );
             })}
           </div>
-        </DragDropContext>
-      )}
+        )}
+      </DragDropContext>
 
       {/* W11.6.x — Stage 4 visual corrections lane (in-context replacement
           for the buggy standalone /Stage4Overrides page). Shows ONLY this
@@ -2306,7 +2317,7 @@ function SwimlaneGroupedList({
  * to teach `ShortlistingCard` about the toolbar — that file is owned by
  * W11.6.2 and we don't touch it here.
  */
-function SwimlaneCardRenderer({
+export function SwimlaneCardRenderer({
   item,
   index,
   column,
