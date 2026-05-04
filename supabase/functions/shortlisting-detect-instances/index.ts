@@ -67,7 +67,6 @@ import {
   VendorCallError,
   type VisionRequest,
 } from '../_shared/visionAdapter/index.ts';
-import { getDropboxAccessToken } from '../_shared/dropbox.ts';
 import { tryAcquireMutex, releaseMutex } from '../_shared/dispatcherMutex.ts';
 
 const GENERATOR = 'shortlisting-detect-instances';
@@ -585,18 +584,24 @@ function stemFromPath(path: string | null | undefined): string | null {
   return tail.replace(/\.[^.]+$/, '');
 }
 
-// ─── Preview fetcher (Dropbox) ──────────────────────────────────────────────
+// ─── Preview fetcher (Supabase Storage — Wave 2) ─────────────────────────────
+// Previews are written to the public `shortlisting-previews` bucket by the
+// Modal photos-extract worker, keyed by `${project_id}/${round_id}/${stem}.jpg`.
+// We fetch from there rather than going back to Dropbox so we don't hammer the
+// rate-limited /files/download endpoint (and so we don't depend on which
+// Dropbox app token has fresh reputation today).
 
 async function fetchAllPreviewsByPath(
   stemToPath: Map<string, string>,
+  ctx: RoundContext,
 ): Promise<Map<string, { data: string; media_type: string }>> {
   const out = new Map<string, { data: string; media_type: string }>();
   const entries = Array.from(stemToPath.entries());
   for (let i = 0; i < entries.length; i += PREVIEW_CONCURRENCY) {
     const slice = entries.slice(i, i + PREVIEW_CONCURRENCY);
-    const fetched = await Promise.all(slice.map(async ([stem, path]) => {
+    const fetched = await Promise.all(slice.map(async ([stem, _path]) => {
       try {
-        const p = await fetchPreviewBase64(path);
+        const p = await fetchPreviewFromStorage(stem, ctx);
         return { stem, data: p.data, media_type: p.media_type };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -611,26 +616,19 @@ async function fetchAllPreviewsByPath(
   return out;
 }
 
-async function fetchPreviewBase64(
-  dropboxPath: string,
+async function fetchPreviewFromStorage(
+  stem: string,
+  ctx: RoundContext,
 ): Promise<{ data: string; media_type: string }> {
-  const token = await getDropboxAccessToken();
-  const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
-  const pathRootHeader: Record<string, string> = ns
-    ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) }
-    : {};
-  const res = await fetch('https://content.dropboxapi.com/2/files/download', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Dropbox-API-Arg': JSON.stringify({ path: dropboxPath }),
-      ...pathRootHeader,
-    },
-    signal: AbortSignal.timeout(60_000),
-  });
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  if (!supabaseUrl) throw new Error('SUPABASE_URL env not set');
+  const url =
+    `${supabaseUrl}/storage/v1/object/public/shortlisting-previews/` +
+    `${ctx.project_id}/${ctx.round_id}/${stem}.jpg`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
-    throw new Error(`dropbox download ${res.status}: ${txt.slice(0, 200)}`);
+    throw new Error(`storage ${res.status}: ${txt.slice(0, 200)}`);
   }
   const buf = new Uint8Array(await res.arrayBuffer());
   let bin = '';
@@ -670,7 +668,7 @@ async function runLlmClustering(
   for (const g of allGroups) {
     if (g.dropbox_preview_path) stemToPath.set(g.stem, g.dropbox_preview_path);
   }
-  const previews = await fetchAllPreviewsByPath(stemToPath);
+  const previews = await fetchAllPreviewsByPath(stemToPath, args.ctx);
   if (previews.size === 0) {
     throw new Error(
       `detect_instances fetched zero previews for round ${args.ctx.round_id}`,

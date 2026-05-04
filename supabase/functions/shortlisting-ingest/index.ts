@@ -655,23 +655,47 @@ async function bakeLinksInBackground(
       .slice(i + 1)
       .filter((p) => pathToChunkIndex.get(p) === idx).length;
     if (remainingPathsInChunk === 0 && accumulated > 0) {
-      // This was the last path in this chunk's slice — patch the job row.
+      // 🚨 CRITICAL — must MERGE prebaked_links into the existing payload,
+      // NOT overwrite the whole payload object.  An earlier version of this
+      // code did `payload: { prebaked_links: acc }` which wiped file_paths,
+      // chunk_index, project_id, round_id, and chunk_total from every
+      // baked chunk.  Result: dispatcher claimed those chunks and got back
+      // "payload has no file_paths" 400s on every retry until exhaustion.
+      //
+      // Read-modify-write is safe here because no one else writes the
+      // payload column on extract chunks during bake.  claim_shortlisting_jobs
+      // updates status / started_at / attempt_count on different columns,
+      // not payload.
+      const { data: existingRow, error: fetchErr } = await admin
+        .from('shortlisting_jobs')
+        .select('id, payload')
+        .eq('round_id', roundId)
+        .eq('kind', 'extract')
+        .eq('payload->>chunk_index', String(idx))
+        .maybeSingle();
+      if (fetchErr || !existingRow) {
+        console.warn(
+          `[${GENERATOR}] background link-bake: chunk ${idx} fetch-for-merge failed for round=${roundId}: ${fetchErr?.message || 'no row'}`,
+        );
+        chunkLinks.delete(idx);
+        continue;
+      }
+      const existingPayload = (existingRow.payload || {}) as Record<string, unknown>;
+      const mergedPayload = { ...existingPayload, prebaked_links: acc };
       const { error: patchErr } = await admin
         .from('shortlisting_jobs')
         .update({
-          payload: { prebaked_links: acc },
+          payload: mergedPayload,
           updated_at: new Date().toISOString(),
         })
-        .eq('round_id', roundId)
-        .eq('kind', 'extract')
-        .eq('payload->>chunk_index', String(idx));
+        .eq('id', existingRow.id);
       if (patchErr) {
         console.warn(
           `[${GENERATOR}] background link-bake: chunk patch failed for round=${roundId} idx=${idx} err=${patchErr.message}`,
         );
       } else {
         console.info(
-          `[${GENERATOR}] background link-bake: chunk ${idx} patched (${accumulated}/${expectedSize} links)`,
+          `[${GENERATOR}] background link-bake: chunk ${idx} patched (${accumulated}/${expectedSize} links, file_paths preserved)`,
         );
       }
       chunkLinks.delete(idx); // free memory
