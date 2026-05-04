@@ -1016,17 +1016,15 @@ export default function ShortlistingSwimlane({
       const humanId = ov.human_selected_group_id;
       switch (ov.human_action) {
         case "ai_proposed":
-          // W11.7.1 (2026-05-01): Stage 4 writes shortlisting_overrides rows
-          // with human_action='ai_proposed' so the swimlane has a
-          // first-class data source for the AI's slot picks. The card
-          // belongs in the PROPOSED column — same as if no override row
-          // existed at all. Idempotent: ensure it's in proposed and not
-          // already in approved/rejected from a stale state.
-          if (aiId) {
-            rejected.delete(aiId);
-            approved.delete(aiId);
-            proposed.add(aiId);
-          }
+          // 2026-05-04 BUG FIX — these rows are seed data (Stage 4
+          // writes one per slot pick) and are ALREADY accounted for by
+          // initialColumns above.  Re-applying them here was the bug
+          // that made operator drags appear to revert: ai_proposed rows
+          // have client_sequence=null (NULLS LAST in the sort), so they
+          // got applied AFTER all operator overrides and re-asserted
+          // "card belongs in proposed", clobbering approved/rejected
+          // moves the operator just made.  Skip them — they're seed
+          // state, not operator actions.
           break;
         case "approved_as_proposed":
           if (aiId) {
