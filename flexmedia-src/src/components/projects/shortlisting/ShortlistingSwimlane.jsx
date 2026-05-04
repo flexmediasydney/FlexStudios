@@ -348,14 +348,18 @@ function deriveHumanAction(fromColumn, toColumn) {
   if (fromColumn === "rejected" && toColumn === "approved")
     return "added_from_rejects";
   if (fromColumn === "approved" && toColumn === "rejected") return "removed";
-  // Burst 4 J6/J7 fix: returning to PROPOSED column means "I haven't decided
-  // yet" — not an affirmative approve/reject. Recording these as
-  // approved_as_proposed / added_from_rejects (the prior behaviour) inverts
-  // user intent and biases training data toward the wrong direction.
-  // We emit no event — the optimistic UI move stands but no override row is
-  // persisted, so on refetch the card returns to its server-derived column.
-  if (fromColumn === "approved" && toColumn === "proposed") return null;
-  if (fromColumn === "rejected" && toColumn === "proposed") return null;
+  // 2026-05-04: returning to PROPOSED is now an affirmative undo of the
+  // operator's prior approve/reject — emits 'reverted_to_ai_proposed'
+  // which the fold treats as "card sits in proposed" AND the AI training
+  // pipeline treats as a NEUTRAL signal (operator agreed with the AI
+  // after exploring alternatives — distinct from 'removed' which IS a
+  // negative signal).  Without this action, dragging back to PROPOSED
+  // appeared to do nothing because the prior approve_as_proposed row
+  // was still in the DB and re-asserted "card is approved" on refetch.
+  if (fromColumn === "approved" && toColumn === "proposed")
+    return "reverted_to_ai_proposed";
+  if (fromColumn === "rejected" && toColumn === "proposed")
+    return "reverted_to_ai_proposed";
   return null;
 }
 
@@ -1025,6 +1029,22 @@ export default function ShortlistingSwimlane({
           // "card belongs in proposed", clobbering approved/rejected
           // moves the operator just made.  Skip them — they're seed
           // state, not operator actions.
+          break;
+        case "reverted_to_ai_proposed":
+          // 2026-05-04: operator dragged a card BACK to PROPOSED after
+          // a prior approve/reject — explicitly undoing their decision.
+          // The card returns to its seed state; AI training treats this
+          // as neutral (distinct from 'removed' which IS negative).
+          // We re-assert "card is in proposed" by removing it from
+          // approved/rejected and adding it to proposed.  The aiId is
+          // the original Stage 4 group_id for this card; humanId is
+          // null because the operator isn't picking a different image
+          // — they're just undoing.
+          if (aiId) {
+            rejected.delete(aiId);
+            approved.delete(aiId);
+            proposed.add(aiId);
+          }
           break;
         case "approved_as_proposed":
           if (aiId) {

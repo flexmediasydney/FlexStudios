@@ -200,6 +200,13 @@ export function computeApprovedRejectedSets(
     const aiId = ov.ai_proposed_group_id;
     const humanId = ov.human_selected_group_id;
     switch (ov.human_action) {
+      case 'ai_proposed':
+        // Shape D / editorial-engine seed row written by Stage 4 — treat
+        // the AI pick as default-approved so Shape D rounds don't end up
+        // with an empty approvedSet when the operator hasn't touched
+        // every card. Idempotent with approved_as_proposed below.
+        if (aiId) approvedSet.add(aiId);
+        break;
       case 'approved_as_proposed':
         if (aiId) approvedSet.add(aiId);
         break;
@@ -223,6 +230,18 @@ export function computeApprovedRejectedSets(
         if (humanId) {
           approvedSet.add(humanId);
           explicitlyRemoved.delete(humanId);
+        }
+        break;
+      case 'reverted_to_ai_proposed':
+        // 2026-05-04: operator dragged the card back to PROPOSED after a
+        // prior approve/reject. Restores the AI's choice and clears any
+        // earlier "explicitly removed" flag so the rejection-reasons
+        // pipeline doesn't pick this group up as a negative training
+        // signal. Net effect at lock time: same as a fresh ai_proposed
+        // row.
+        if (aiId) {
+          approvedSet.add(aiId);
+          explicitlyRemoved.delete(aiId);
         }
         break;
     }

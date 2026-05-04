@@ -97,6 +97,11 @@ const VALID_ACTIONS = new Set([
   'removed',
   'swapped',
   'added_from_rejects',
+  // 2026-05-04: operator drags a card back to AI Proposed after a prior
+  // approve/reject — explicit undo.  Treated as a NEUTRAL training signal
+  // (distinct from 'removed' which IS negative).  DB constraint extended
+  // in a paired migration on shortlisting_overrides_human_action_check.
+  'reverted_to_ai_proposed',
 ]);
 const VALID_REASONS = new Set([
   'quality_preference',
