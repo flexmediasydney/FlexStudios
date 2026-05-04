@@ -369,7 +369,13 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       .eq('round_id', roundId),
     admin
       .from('composition_classifications')
-      .select('group_id, is_near_duplicate_candidate, combined_score')
+      // Mig 467 lock guard — also pull space_type/time_of_day/is_drone/
+      // is_exterior so the server-side quota guard can classify operator-
+      // added cards (which have no editorial envelope) into a quota_bucket
+      // via the same heuristic the swimlane uses.
+      .select(
+        'group_id, is_near_duplicate_candidate, combined_score, space_type, time_of_day, is_drone, is_exterior',
+      )
       .eq('round_id', roundId),
     admin
       .from('shortlisting_events')
@@ -405,6 +411,128 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const overrideAuditRows = (overridesRes.data || []) as AuditOverrideRow[];
 
   const { approvedSet, rejectedSet } = computeApprovedRejectedSets(slotEvents, overrides, classifications);
+
+  // ── Mig 467 quota guard ─────────────────────────────────────────────────
+  // Defence-in-depth against locking with under-quota approvals. The
+  // frontend disables the Lock button when `quotas_requested - approved
+  // > 0` for any bucket, but a service-role caller, a stale tab, or a
+  // direct curl could still invoke this fn.  Re-check here using the
+  // same logic as the UI.
+  //
+  // Algorithm:
+  //   1. Read the latest editorial_picks_persisted event payload to get
+  //      `quotas_requested` (e.g. {sales_images: 24, dusk_images: 6,
+  //      aerial_images: 4}).  No event → no guard (Round 1 of legacy
+  //      projects, manual rounds).
+  //   2. For each group in approvedSet, find its quota_bucket:
+  //      a. Prefer `ai_proposed_analysis.editorial.quota_bucket` from the
+  //         override row (Stage 4 stamps this on every editorial pick).
+  //      b. Fall back to a heuristic on classification: drone → aerial,
+  //         dusk + exterior → dusk, else → sales/day.
+  //   3. Compare per-bucket totals.  Any bucket short → 409.
+  //
+  // Only fires on fresh locks; resume + manual + already-locked paths
+  // skip this block (the resume path returns earlier; manual mode runs
+  // its own lockManualMode handler with no editorial concept).
+  if (mode === 'engine' && !resume) {
+    type EditorialPicksPayload = { quotas_requested?: Record<string, number> } | null;
+    const { data: epRows } = await admin
+      .from('shortlisting_events')
+      .select('payload')
+      .eq('round_id', roundId)
+      .eq('event_type', 'editorial_picks_persisted')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    const epPayload = (Array.isArray(epRows) && epRows.length > 0
+      ? epRows[0].payload
+      : null) as EditorialPicksPayload;
+    const requiredQuotas = epPayload?.quotas_requested && typeof epPayload.quotas_requested === 'object'
+      ? epPayload.quotas_requested
+      : null;
+
+    if (requiredQuotas) {
+      // Build group_id → bucket map from ai_proposed_analysis envelope.
+      const bucketByGroup = new Map<string, string>();
+      for (const ov of overrides) {
+        const gid = (ov as { ai_proposed_group_id?: string | null }).ai_proposed_group_id;
+        if (!gid) continue;
+        const analysisRaw = (ov as { ai_proposed_analysis?: string | null }).ai_proposed_analysis;
+        if (!analysisRaw) continue;
+        try {
+          const parsed = typeof analysisRaw === 'string' ? JSON.parse(analysisRaw) : analysisRaw;
+          const bucket = parsed?.editorial?.quota_bucket;
+          if (typeof bucket === 'string' && bucket.length > 0) {
+            bucketByGroup.set(gid, bucket);
+          }
+        } catch {
+          // Tolerate non-JSON envelopes from legacy rows.
+        }
+      }
+
+      // Heuristic fallback by classification — for operator-added cards
+      // (added_from_rejects / swapped) that have no editorial envelope.
+      type ClassRow = {
+        group_id: string;
+        is_drone?: boolean | null;
+        is_exterior?: boolean | null;
+        time_of_day?: string | null;
+        space_type?: string | null;
+      };
+      const classByGroup = new Map<string, ClassRow>();
+      for (const c of classifications as unknown as ClassRow[]) {
+        classByGroup.set(c.group_id, c);
+      }
+
+      const counts: Record<string, number> = {
+        sales_images: 0,
+        dusk_images: 0,
+        aerial_images: 0,
+      };
+      for (const gid of approvedSet) {
+        let bucket = bucketByGroup.get(gid);
+        if (!bucket) {
+          const cls = classByGroup.get(gid);
+          if (cls?.is_drone === true) bucket = 'aerial_images';
+          else if (
+            cls?.time_of_day === 'dusk_twilight' &&
+            (cls?.is_exterior === true ||
+              (typeof cls?.space_type === 'string' &&
+                cls.space_type.toLowerCase().includes('exterior')))
+          ) {
+            bucket = 'dusk_images';
+          } else {
+            bucket = 'sales_images';
+          }
+        }
+        counts[bucket] = (counts[bucket] ?? 0) + 1;
+      }
+
+      const shortfalls: Array<{ bucket: string; required: number; approved: number; short: number }> = [];
+      for (const [bucket, required] of Object.entries(requiredQuotas)) {
+        if (typeof required !== 'number' || required <= 0) continue;
+        const approved = counts[bucket] ?? 0;
+        if (approved < required) {
+          shortfalls.push({ bucket, required, approved, short: required - approved });
+        }
+      }
+
+      if (shortfalls.length > 0) {
+        const human = (b: string) =>
+          b === 'sales_images' ? 'Sales/Day'
+            : b === 'dusk_images' ? 'Dusk'
+              : b === 'aerial_images' ? 'Aerial'
+                : b;
+        const summary = shortfalls
+          .map((s) => `${human(s.bucket)} ${s.approved}/${s.required} (need ${s.short} more)`)
+          .join(' · ');
+        return errorResponse(
+          `Lock blocked — under-quota: ${summary}. Approve more cards or adjust the editorial policy before locking.`,
+          409,
+          req,
+        );
+      }
+    }
+  }
 
   // ── Pre-fetch project dropbox_root_path for the audit JSON write ───────
   // Wave 7 P1-12 (W7.4): the audit mirror writes to <root>/Photos/_AUDIT/.
@@ -729,6 +857,17 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     approvedCount: approvedSet.size,
     rejectedCount: rejectedSet.size,
     auditMirror,
+    // Mig 467 — committed_decisions inputs forwarded to the background
+    // poll's finalizeRound call.  The lock-progress row keeps these
+    // implicitly via the round_id, but threading them through avoids a
+    // re-query inside the poll.
+    overridesForCommit: overrides,
+    approvedSet,
+    rejectedSet,
+    initialProposedGroupIds: Array.isArray(round.initial_proposed_group_ids)
+      ? (round.initial_proposed_group_ids as string[])
+      : [],
+    groupRows: groups,
   }).catch((err) => {
     console.error(`[${GENERATOR}] background poll failed:`, err?.message || err);
   });
@@ -1285,6 +1424,14 @@ interface PollArgs {
   rejectedCount: number;
   /** Wave 7 P1-12 (W7.4): forwarded to finalizeRound for the audit JSON write. */
   auditMirror: AuditMirrorContext | null;
+  /** Mig 467: forwarded to finalizeRound for committed_decisions write. */
+  // deno-lint-ignore no-explicit-any
+  overridesForCommit: any[];
+  approvedSet: Set<string>;
+  rejectedSet: Set<string>;
+  initialProposedGroupIds: string[];
+  // deno-lint-ignore no-explicit-any
+  groupRows: any[];
 }
 
 /**
@@ -1357,6 +1504,11 @@ async function pollUntilComplete(args: PollArgs): Promise<void> {
         rejectedCount: args.rejectedCount,
         failedMovesCount: counts.failed,
         auditMirror: args.auditMirror,
+        overridesForCommit: args.overridesForCommit,
+        approvedSet: args.approvedSet,
+        rejectedSet: args.rejectedSet,
+        initialProposedGroupIds: args.initialProposedGroupIds,
+        groupRows: args.groupRows,
       });
       if (!finalizeResult.ok) {
         await admin.from('shortlisting_lock_progress')
@@ -1843,6 +1995,13 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
       rejectedCount: 0,
       failedMovesCount: 0,
       auditMirror,
+      // Mig 467 — manual mode has no engine overrides / classification;
+      // committed_decisions write is effectively a no-op (no group rows).
+      overridesForCommit: [],
+      approvedSet: new Set<string>(),
+      rejectedSet: new Set<string>(),
+      initialProposedGroupIds: [],
+      groupRows: [],
     });
     if (!finalizeResult.ok) {
       return errorResponse(finalizeResult.error || 'finalize failed', 500, req);
@@ -1944,6 +2103,13 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
       rejectedCount: 0,
       failedMovesCount: counts.failed,
       auditMirror,
+      // Mig 467 — manual mode has no engine overrides / classification;
+      // committed_decisions write is effectively a no-op (no group rows).
+      overridesForCommit: [],
+      approvedSet: new Set<string>(),
+      rejectedSet: new Set<string>(),
+      initialProposedGroupIds: [],
+      groupRows: [],
     });
     if (!finalizeResult.ok) {
       await admin.from('shortlisting_lock_progress')
@@ -2004,6 +2170,12 @@ async function lockManualMode(args: LockManualModeArgs): Promise<Response> {
     approvedCount,
     rejectedCount: 0,
     auditMirror,
+    // Mig 467 — manual mode has no engine overrides / classification.
+    overridesForCommit: [],
+    approvedSet: new Set<string>(),
+    rejectedSet: new Set<string>(),
+    initialProposedGroupIds: [],
+    groupRows: [],
   }).catch((err) => {
     console.error(`[${GENERATOR}] manual-mode background poll failed:`, err?.message || err);
   });

@@ -1797,6 +1797,101 @@ export default function ShortlistingSwimlane({
   const approvedCount = columnItems.approved.length;
   const proposedCount = columnItems.proposed.length;
   const rejectedCount = columnItems.rejected.length;
+
+  // 2026-05-04 — lock guard.  Reads the package's per-bucket quotas from
+  // the latest `editorial_picks_persisted` event (which captured the
+  // Stage 4 contract).  Per Joseph: "you can't lock until you hit
+  // minimum position approved quota".  Gates the Lock button at the
+  // CLIENT level; shortlist-lock enforces the same check server-side.
+  //
+  // Bucket classification for an approved card:
+  //   1. If the card has an editorial envelope (mig 465 path) →
+  //      use envelope.quota_bucket directly (the engine assigned it).
+  //   2. Else fall back to a heuristic on the classification:
+  //        time_of_day=dusk_twilight + is_exterior → dusk_images
+  //        is_drone=true                            → aerial_images
+  //        otherwise                                → sales_images
+  //   The fallback is for human-added cards (added_from_rejects /
+  //   swapped) which won't have an editorial envelope.
+  const editorialQuotasQuery = useQuery({
+    queryKey: ["editorial_picks_persisted_for_lock_guard", roundId],
+    enabled: Boolean(roundId),
+    staleTime: 30_000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("shortlisting_events")
+        .select("payload")
+        .eq("round_id", roundId)
+        .eq("event_type", "editorial_picks_persisted")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      return Array.isArray(data) && data.length > 0 ? data[0].payload : null;
+    },
+  });
+  const requiredQuotas = useMemo(() => {
+    const q = editorialQuotasQuery.data?.quotas_requested;
+    if (!q || typeof q !== "object") return null;
+    return q;
+  }, [editorialQuotasQuery.data]);
+
+  const approvedByBucket = useMemo(() => {
+    const counts = { sales_images: 0, dusk_images: 0, aerial_images: 0 };
+    for (const item of columnItems.approved || []) {
+      const slot = item?.slot || null;
+      const cls = item?.classification || null;
+      let bucket = slot?.editorial?.quota_bucket;
+      if (!bucket) {
+        if (cls?.is_drone === true) bucket = "aerial_images";
+        else if (
+          cls?.time_of_day === "dusk_twilight" &&
+          (cls?.is_exterior === true ||
+            (typeof cls?.space_type === "string" &&
+              cls.space_type.toLowerCase().includes("exterior")))
+        )
+          bucket = "dusk_images";
+        else bucket = "sales_images";
+      }
+      counts[bucket] = (counts[bucket] ?? 0) + 1;
+    }
+    return counts;
+  }, [columnItems.approved]);
+
+  // Per-bucket shortfalls — null when no quota is set, else array of
+  // {bucket, required, approved, short} entries (only buckets where the
+  // operator is short; satisfied buckets are filtered out).
+  const quotaShortfalls = useMemo(() => {
+    if (!requiredQuotas || typeof requiredQuotas !== "object") return null;
+    const out = [];
+    for (const [bucket, required] of Object.entries(requiredQuotas)) {
+      if (typeof required !== "number" || required <= 0) continue;
+      const approved = approvedByBucket[bucket] ?? 0;
+      if (approved < required) {
+        out.push({
+          bucket,
+          required,
+          approved,
+          short: required - approved,
+        });
+      }
+    }
+    return out;
+  }, [requiredQuotas, approvedByBucket]);
+
+  const lockBlockedReason = useMemo(() => {
+    if (!quotaShortfalls || quotaShortfalls.length === 0) return null;
+    const human = (b) =>
+      b === "sales_images"
+        ? "Sales/Day"
+        : b === "dusk_images"
+          ? "Dusk"
+          : b === "aerial_images"
+            ? "Aerial"
+            : b;
+    const parts = quotaShortfalls.map(
+      (s) => `${human(s.bucket)} ${s.approved}/${s.required} (need ${s.short} more)`,
+    );
+    return `Approve more before locking: ${parts.join(" · ")}`;
+  }, [quotaShortfalls]);
   const isLocked = round?.status === "locked" || round?.status === "delivered";
   // Burst 16 AA1/AA2: lock the UI while the engine is still mid-pipeline.
   // status='processing' means Pass 0/1/2 are still running. During that
@@ -1908,11 +2003,41 @@ export default function ShortlistingSwimlane({
               </>
             )}
           </div>
+          <div className="flex items-center gap-2">
+            {/* Mig-467 quota guard — show the exact shortfall inline so the
+                operator doesn't need to hover the disabled Lock button to
+                see why it won't fire. */}
+            {!isLocked && quotaShortfalls && quotaShortfalls.length > 0 ? (
+              <div
+                className="text-[11px] font-medium tabular-nums px-2 py-1 rounded-md border border-amber-300 bg-amber-50 text-amber-900"
+                title={lockBlockedReason || ""}
+              >
+                {quotaShortfalls
+                  .map((s) => {
+                    const human =
+                      s.bucket === "sales_images"
+                        ? "Sales/Day"
+                        : s.bucket === "dusk_images"
+                          ? "Dusk"
+                          : s.bucket === "aerial_images"
+                            ? "Aerial"
+                            : s.bucket;
+                    return `${human} ${s.approved}/${s.required}`;
+                  })
+                  .join(" · ")}
+              </div>
+            ) : null}
           <Button
             variant={isLocked ? "outline" : "default"}
             size="sm"
             onClick={() => setConfirmLockOpen(true)}
-            disabled={isLocking || isLocked || isProcessing || approvedCount === 0}
+            disabled={
+              isLocking ||
+              isLocked ||
+              isProcessing ||
+              approvedCount === 0 ||
+              !!lockBlockedReason
+            }
             title={
               isLocked
                 ? "Round already locked"
@@ -1920,7 +2045,9 @@ export default function ShortlistingSwimlane({
                   ? "Engine is still running — wait for status='proposed' before locking"
                   : approvedCount === 0
                     ? "Add at least one composition to Approved before locking"
-                    : "Lock the shortlist and move RAWs in Dropbox"
+                    : lockBlockedReason
+                      ? lockBlockedReason
+                      : "Lock the shortlist and move RAWs in Dropbox"
             }
           >
             {isLocking ? (
@@ -1932,6 +2059,7 @@ export default function ShortlistingSwimlane({
             )}
             {isLocked ? "Locked" : "Lock & Reorganize"}
           </Button>
+          </div>
         </CardContent>
         {/* Mig 467 — operator hint about commit semantics.  Every drag
             persists to shortlisting_overrides immediately so the WIP is
