@@ -1,113 +1,96 @@
 /**
  * SwimlaneGridView — 2D shortlisting swimlane.
  *
- * Replaces the legacy "group by slot" toggle that grouped cards within
- * a single bucket.  Operators wanted the OPPOSITE axis — grouping
- * across all three buckets so they can see all candidates for a single
- * position (rejected + proposed + approved) side-by-side.
+ * Visual chrome inherited from the legacy 3-lane layout:
+ *   - Same red / amber / emerald lane header tones (COLUMN_META)
+ *   - Same ShortlistingCard render (full card, not a stripped-down tile)
+ *   - Same previewSize density (sm/md/lg)
+ *   - Spacer columns between the 3 bucket lanes (gap-3 on the wrapper)
  *
- * Layout:
+ * What's new vs the legacy lanes:
+ *   - Rows = composition_classifications.space_type (room_type fallback,
+ *     "Unclassified" bucket for missing).
+ *   - Sub-rows = composition_groups.space_instance_id (only when >1
+ *     instance for the same space_type — single-instance rooms render
+ *     flat).
+ *   - Sticky row label on the left, sticky lane headers on top.
+ *   - Per-row rollup count "X candidates · Y picked · Z approved".
  *
- *                              REJECTED              PROPOSED            APPROVED
- *   Kitchen (8 / 2 / 0)        ◆◆◆◆◆◆                ◆◆
- *   Master bedroom (3 / 1 / 0) ◆◆                    ◆
- *   Bedroom secondary
- *     ▸ Instance 1 (5 / 1 / 0) ◆◆                    ◆
- *     ▸ Instance 2 (3 / 1 / 0) ◆                     ◆
- *     ▸ Instance 3 (1 / 1 / 0)                       ◆
- *   …
- *   Unclassified (4 / 0 / 0)   ◆◆◆◆
- *
- * Rows = composition_classifications.space_type (or room_type fallback,
- *        or "Unclassified" bucket).
- * Sub-rows = composition_groups.space_instance_id (only when >1 instance
- *            for that space_type — single-instance rooms render flat).
- * Cols = the 3 swimlane buckets.
- *
- * Sort:
- *   - Rows: hero rooms first (policy.common_residential_rooms order),
- *           then by total candidate count desc, "Unclassified" last.
- *   - Sub-rows: by instance_index asc (1, 2, 3…).
- *   - Cells: by editorial_score desc (parsed from
- *            shortlisting_overrides.ai_proposed_analysis), then by
- *            classification.combined_score desc.
- *
- * Density:
- *   Inherits the swimlane previewSize (sm/md/lg) — sm fits ~4 cards
- *   per cell row, md fits ~3, lg fits ~2.
- *
- * Filters:
- *   Apply BEFORE the row grouping; the parent feeds the already-
- *   filtered columnItems in.
- *
- * Mobile:
- *   Below `lg` the parent should not render this — the toolbar toggle
- *   is disabled with a tooltip.  This component assumes lg+ width.
- *
- * Out of scope (v1):
- *   - Drag-and-drop across cells (would require swap mutation routing).
- *   - Inline approve/reject controls (per Joseph: "just how it currently
- *     works is fine" — operators use the lane view for those interactions).
- *   - Cell-level virtualisation (a kitchen with 30 candidates renders
- *     all 30; horizontal scroll inside the cell handles overflow).
+ * Out of scope (per Joseph): drag-and-drop, inline approve/reject.  The
+ * grid is read-only-with-click-to-lightbox; operators use the lane view
+ * for action interactions.
  */
 
 import { useMemo, useState } from "react";
-import { ChevronRight, ChevronDown, ImageIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import DroneThumbnail from "@/components/drone/DroneThumbnail";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ShortlistingCard from "./ShortlistingCard";
+import { PREVIEW_SIZES } from "@/hooks/useSwimlaneSettings";
 
-const BUCKET_META = [
-  { key: "rejected", label: "Rejected", tone: "text-rose-700 dark:text-rose-300" },
-  { key: "proposed", label: "AI Proposed", tone: "text-amber-700 dark:text-amber-300" },
-  { key: "approved", label: "Human Approved", tone: "text-emerald-700 dark:text-emerald-300" },
+// Inlined to avoid a circular import with ShortlistingSwimlane (which
+// itself imports SwimlaneGridView).  Mirrors `previewGridStyle` exactly
+// so the cell density matches the legacy lane density 1:1.
+function previewGridStyle(previewSize) {
+  const minPx = PREVIEW_SIZES[previewSize]?.gridMinPx ?? PREVIEW_SIZES.md.gridMinPx;
+  return {
+    display: "grid",
+    gridTemplateColumns: `repeat(auto-fill, minmax(${minPx}px, 1fr))`,
+  };
+}
+
+// ─── Lane chrome (mirrors COLUMNS in ShortlistingSwimlane.jsx) ────────────
+
+const COLUMN_META = [
+  {
+    key: "rejected",
+    label: "REJECTED",
+    headerTone:
+      "bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300",
+    cellTone:
+      "bg-red-50/40 dark:bg-red-950/15",
+    border:
+      "border-red-200/60 dark:border-red-900/50",
+  },
+  {
+    key: "proposed",
+    label: "AI PROPOSED",
+    headerTone:
+      "bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300",
+    cellTone:
+      "bg-amber-50/40 dark:bg-amber-950/15",
+    border:
+      "border-amber-200/60 dark:border-amber-900/50",
+  },
+  {
+    key: "approved",
+    label: "HUMAN APPROVED",
+    headerTone:
+      "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
+    cellTone:
+      "bg-emerald-50/40 dark:bg-emerald-950/15",
+    border:
+      "border-emerald-200/60 dark:border-emerald-900/50",
+  },
 ];
 
-const PREVIEW_SIZE_TO_CARD_PX = {
-  sm: { thumb: 96, card: 120 },
-  md: { thumb: 144, card: 180 },
-  lg: { thumb: 200, card: 240 },
-};
-
-// Helpers ────────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────
 
 function snakeToTitle(s) {
   if (!s || typeof s !== "string") return s;
   return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function parseEditorialScore(rawAnalysis) {
-  if (typeof rawAnalysis !== "string" || !rawAnalysis) return null;
-  try {
-    const parsed = JSON.parse(rawAnalysis);
-    const ed = parsed?.editorial || parsed;
-    if (ed && typeof ed.editorial_score === "number") return ed.editorial_score;
-  } catch {
-    // not a JSON envelope (legacy rounds) — no editorial score
-  }
-  return null;
-}
-
-function pickDisplayScore(item) {
-  // 1. Editorial score from the JSON envelope (when round used mig 465).
+function pickEditorialScore(item) {
   const slot = item?.slot || null;
-  const editorial = slot?.editorial?.editorial_score;
-  if (typeof editorial === "number") return { value: editorial, label: "ed", tone: "text-amber-300" };
-  if (typeof slot?.slot_fit_score === "number") {
-    return { value: slot.slot_fit_score, label: "ed", tone: "text-amber-300" };
+  if (slot?.editorial && typeof slot.editorial.editorial_score === "number") {
+    return slot.editorial.editorial_score;
   }
-  const combined = item?.classification?.combined_score;
-  if (typeof combined === "number") {
-    return { value: combined, label: "Σ", tone: "text-blue-300" };
-  }
+  if (typeof slot?.slot_fit_score === "number") return slot.slot_fit_score;
   return null;
 }
 
-function instanceLabel(instance, fallbackIndex) {
-  if (!instance) {
-    return fallbackIndex != null ? `Instance ${fallbackIndex}` : "Instance —";
-  }
+function instanceLabel(instance) {
+  if (!instance) return "Instance —";
   if (instance.display_label && instance.display_label.trim()) {
     return instance.display_label.trim();
   }
@@ -117,25 +100,16 @@ function instanceLabel(instance, fallbackIndex) {
   return "Instance —";
 }
 
-// Build the row list ─────────────────────────────────────────────────────────
-//
-// Group every card across the 3 buckets by space_type → space_instance_id.
-// Returns an ordered array of row objects ready for rendering, with per-
-// (row, bucket) card lists already sorted.
+// ─── Row builder ──────────────────────────────────────────────────────────
 
-function buildGridRows({
-  columnItems,
-  spaceInstancesById,
-  heroRoomsOrder,
-}) {
-  // Map: space_type -> { instances: Map<instId|'__none__', { row meta + buckets }> , totals }
+function buildGridRows({ columnItems, spaceInstancesById, heroRoomsOrder }) {
   const byRoom = new Map();
   const heroIndex = new Map();
   heroRoomsOrder.forEach((r, i) => heroIndex.set(r.toLowerCase(), i));
 
-  const sortCellByScore = (a, b) => {
-    const sa = pickDisplayScore(a)?.value ?? -Infinity;
-    const sb = pickDisplayScore(b)?.value ?? -Infinity;
+  const cellSort = (a, b) => {
+    const sa = pickEditorialScore(a) ?? a?.classification?.combined_score ?? -Infinity;
+    const sb = pickEditorialScore(b) ?? b?.classification?.combined_score ?? -Infinity;
     if (sb !== sa) return sb - sa;
     return (a?.group_index ?? 0) - (b?.group_index ?? 0);
   };
@@ -161,7 +135,9 @@ function buildGridRows({
       const instKey = instanceId || "__none__";
       let inst = roomBucket.instances.get(instKey);
       if (!inst) {
-        const instRow = instanceId ? spaceInstancesById?.[instanceId] || null : null;
+        const instRow = instanceId
+          ? spaceInstancesById?.[instanceId] || null
+          : null;
         inst = {
           instKey,
           instanceId,
@@ -179,19 +155,17 @@ function buildGridRows({
     }
   }
 
-  // Sort each instance's cells.
+  // Sort cells.
   for (const room of byRoom.values()) {
     for (const inst of room.instances.values()) {
-      inst.rejected.sort(sortCellByScore);
-      inst.proposed.sort(sortCellByScore);
-      inst.approved.sort(sortCellByScore);
+      inst.rejected.sort(cellSort);
+      inst.proposed.sort(cellSort);
+      inst.approved.sort(cellSort);
     }
   }
 
-  // Stable row ordering:
-  //   1. Hero rooms first (in policy.common_residential_rooms order)
-  //   2. Then by totalCount desc
-  //   3. Unclassified last
+  // Stable row ordering: hero rooms (in policy order) → totalCount desc →
+  // alphabetical → "Unclassified" pinned last.
   const rows = Array.from(byRoom.values()).sort((a, b) => {
     if (a.isUnclassified && !b.isUnclassified) return 1;
     if (b.isUnclassified && !a.isUnclassified) return -1;
@@ -206,10 +180,9 @@ function buildGridRows({
     return a.roomKey.localeCompare(b.roomKey);
   });
 
-  // Sort each room's instances by instance_index asc; instances WITHOUT an
-  // index sink to the bottom of the room.
+  // Sub-rows: sort instances by instance_index asc.
   for (const room of rows) {
-    const arr = Array.from(room.instances.values()).sort((a, b) => {
+    room.instancesOrdered = Array.from(room.instances.values()).sort((a, b) => {
       const ai = a.instanceRow?.instance_index;
       const bi = b.instanceRow?.instance_index;
       if (typeof ai === "number" && typeof bi === "number") return ai - bi;
@@ -217,113 +190,93 @@ function buildGridRows({
       if (typeof bi === "number") return 1;
       return 0;
     });
-    room.instancesOrdered = arr;
   }
 
   return rows;
 }
 
-// Cell — bucket × instance ──────────────────────────────────────────────────
+// ─── Cell ─────────────────────────────────────────────────────────────────
 
-function GridCell({ items, bucketKey, density, onCardClick }) {
+function GridCell({ items, column, previewSize, onCardClick, columnItems }) {
   if (!items || items.length === 0) {
     return (
       <div
-        className="h-full min-h-[60px] border border-dashed border-white/5 dark:border-white/10 rounded-md flex items-center justify-center"
-        data-testid={`grid-cell-empty-${bucketKey}`}
+        className={cn(
+          "rounded-md border min-h-[120px] flex items-center justify-center",
+          column.cellTone,
+          column.border,
+        )}
+        data-testid={`grid-cell-empty-${column.key}`}
       >
-        <span className="text-[10px] text-muted-foreground/50">—</span>
+        <span className="text-[11px] text-muted-foreground/60 italic">
+          —
+        </span>
       </div>
     );
   }
+  // Use the same density-grid style as the legacy lane bucket so card
+  // sizing + spacing matches exactly.
+  const gridStyle = { ...previewGridStyle(previewSize), gap: "0.5rem" };
   return (
     <div
-      className="flex flex-wrap gap-1.5 p-1.5"
-      data-testid={`grid-cell-${bucketKey}`}
+      className={cn(
+        "rounded-md border p-2",
+        column.cellTone,
+        column.border,
+      )}
+      style={gridStyle}
+      data-testid={`grid-cell-${column.key}`}
+      data-preview-size={previewSize}
     >
-      {items.map((it) => (
-        <GridCard
-          key={it.id}
-          item={it}
-          density={density}
-          onClick={() => onCardClick?.(it, bucketKey)}
-        />
-      ))}
+      {items.map((item) => {
+        // The grid view doesn't carry the alts tray (no per-slot
+        // alternatives sidebar in this layout), so we pass an empty
+        // alternatives array and skip onSwapAlternative.  Drag is also
+        // disabled — operators use the Lane view for those interactions.
+        const masterListBucket = columnItems?.[column.key] || [];
+        const indexInBucket = masterListBucket.findIndex(
+          (x) => x.id === item.id,
+        );
+        return (
+          <ShortlistingCard
+            key={item.id}
+            composition={item}
+            column={column.key}
+            alternatives={[]}
+            isDragging={false}
+            previewSize={previewSize}
+            onImageClick={() => onCardClick?.(item, column.key, indexInBucket)}
+          />
+        );
+      })}
     </div>
   );
 }
 
-function GridCard({ item, density, onClick }) {
-  const sizeMeta = PREVIEW_SIZE_TO_CARD_PX[density] || PREVIEW_SIZE_TO_CARD_PX.md;
-  const stem = item?.delivery_reference_stem || item?.best_bracket_stem || item?.id;
-  const score = pickDisplayScore(item);
-  const slotLabel = item?.slot?.slot_id || null;
-  const dropboxPath = item?.dropbox_preview_path || null;
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{ width: sizeMeta.card }}
-      className={cn(
-        "relative group rounded-md overflow-hidden bg-muted/40 border border-border/40 hover:border-primary/60 transition",
-        "text-left flex flex-col",
-      )}
-      data-testid={`grid-card-${item.id}`}
-      title={stem || "image"}
-    >
-      <div
-        className="relative bg-muted overflow-hidden"
-        style={{ height: Math.round(sizeMeta.thumb * 0.66) }}
-      >
-        {dropboxPath ? (
-          <DroneThumbnail dropboxPath={dropboxPath} alt={stem || "image"} />
-        ) : (
-          <div className="h-full w-full flex items-center justify-center">
-            <ImageIcon className="h-5 w-5 text-muted-foreground/40" />
-          </div>
-        )}
-        {score ? (
-          <span
-            className={cn(
-              "absolute top-1 right-1 px-1 py-0.5 rounded bg-black/70 text-[9px] font-mono tabular-nums",
-              score.tone,
-            )}
-          >
-            {score.label} {score.value.toFixed(1)}
-          </span>
-        ) : null}
-      </div>
-      <div className="px-1.5 py-1 space-y-0.5">
-        <div className="text-[10px] font-mono text-foreground truncate">
-          {stem}
-        </div>
-        {slotLabel ? (
-          <div className="text-[9px] text-muted-foreground truncate" title={slotLabel}>
-            {slotLabel}
-          </div>
-        ) : null}
-      </div>
-    </button>
-  );
-}
+// ─── Row label (sticky left) ─────────────────────────────────────────────
 
-// Row & sub-row renderers ────────────────────────────────────────────────────
-
-function RowHeader({ title, subtitle, counts, indented, topBorder }) {
+function RowHeaderLabel({ title, subtitle, counts, indented, topBorder }) {
   return (
     <div
       className={cn(
-        "sticky left-0 z-10 bg-background/95 backdrop-blur-sm border-r border-border/40 px-2 py-1.5 text-xs",
-        indented && "pl-6",
-        topBorder && "border-t",
+        "sticky left-0 z-10 bg-background/95 backdrop-blur-sm px-3 py-2 text-xs flex flex-col justify-center",
+        indented && "pl-7",
+        topBorder && "border-t border-border/40",
       )}
-      style={{ minHeight: 60 }}
+      style={{ minHeight: 80 }}
     >
-      <div className={cn("font-medium truncate", indented && "text-muted-foreground font-normal")}>
+      <div
+        className={cn(
+          "font-medium",
+          indented && "text-muted-foreground font-normal",
+        )}
+      >
         {title}
       </div>
       {subtitle ? (
-        <div className="text-[10px] text-muted-foreground truncate">{subtitle}</div>
+        <div className="text-[10px] text-muted-foreground truncate">
+          {subtitle}
+        </div>
       ) : null}
       {counts ? (
         <div className="text-[9px] font-mono tabular-nums text-muted-foreground mt-0.5">
@@ -334,7 +287,15 @@ function RowHeader({ title, subtitle, counts, indented, topBorder }) {
   );
 }
 
-function GridRow({ room, density, onCardClick, isFirst }) {
+// ─── Row + sub-row renderers ─────────────────────────────────────────────
+
+function GridRow({
+  room,
+  previewSize,
+  onCardClick,
+  columnItems,
+  isFirst,
+}) {
   const [expanded, setExpanded] = useState(true);
   const hasMultipleInstances = (room.instancesOrdered?.length || 0) > 1;
   const totals = room.instancesOrdered.reduce(
@@ -352,11 +313,11 @@ function GridRow({ room, density, onCardClick, isFirst }) {
   const roomTitle = room.isUnclassified
     ? "Unclassified"
     : snakeToTitle(room.roomKey);
-  const roomCounts = `${totals.rejected} R · ${totals.proposed} P · ${totals.approved} A`;
+  const counts = `${totals.rejected} R · ${totals.proposed} P · ${totals.approved} A`;
 
   return (
     <>
-      <RowHeader
+      <RowHeaderLabel
         title={
           <span className="flex items-center gap-1">
             {hasMultipleInstances ? (
@@ -381,33 +342,33 @@ function GridRow({ room, density, onCardClick, isFirst }) {
             ? `${room.instancesOrdered.length} instances · ${room.totalCount} candidates`
             : `${room.totalCount} candidates`
         }
-        counts={roomCounts}
+        counts={counts}
         topBorder={!isFirst}
       />
       {flat
-        ? BUCKET_META.map((b) => (
+        ? COLUMN_META.map((col) => (
             <div
-              key={b.key}
-              className={cn(!isFirst && "border-t")}
-              data-testid={`grid-row-${room.roomKey}-bucket-${b.key}`}
+              key={col.key}
+              className={cn("p-1.5", !isFirst && "border-t border-border/40")}
             >
               <GridCell
-                items={flatInst?.[b.key] || []}
-                bucketKey={b.key}
-                density={density}
+                items={flatInst?.[col.key] || []}
+                column={col}
+                previewSize={previewSize}
                 onCardClick={onCardClick}
+                columnItems={columnItems}
               />
             </div>
           ))
-        : BUCKET_META.map((b) => (
+        : COLUMN_META.map((col) => (
             <div
-              key={b.key}
+              key={col.key}
               className={cn(
-                "flex items-center justify-center text-[10px] text-muted-foreground italic",
-                !isFirst && "border-t",
+                "p-1.5 flex items-center justify-center text-[10px] text-muted-foreground italic",
+                !isFirst && "border-t border-border/40",
               )}
             >
-              {expanded ? "↓ split by instance" : `${totals[b.key]} (collapsed)`}
+              {expanded ? "↓ split by instance" : `${totals[col.key]} (collapsed)`}
             </div>
           ))}
 
@@ -416,8 +377,9 @@ function GridRow({ room, density, onCardClick, isFirst }) {
             <SubRow
               key={inst.instKey}
               inst={inst}
-              density={density}
+              previewSize={previewSize}
               onCardClick={onCardClick}
+              columnItems={columnItems}
             />
           ))
         : null}
@@ -425,14 +387,11 @@ function GridRow({ room, density, onCardClick, isFirst }) {
   );
 }
 
-function SubRow({ inst, density, onCardClick }) {
+function SubRow({ inst, previewSize, onCardClick, columnItems }) {
   return (
     <>
-      <RowHeader
-        title={instanceLabel(
-          inst.instanceRow,
-          inst.instanceRow?.instance_index,
-        )}
+      <RowHeaderLabel
+        title={instanceLabel(inst.instanceRow)}
         subtitle={
           inst.instanceRow?.distinctive_features?.length > 0
             ? inst.instanceRow.distinctive_features.slice(0, 2).join(", ")
@@ -442,17 +401,18 @@ function SubRow({ inst, density, onCardClick }) {
         indented
         topBorder
       />
-      {BUCKET_META.map((b) => (
+      {COLUMN_META.map((col) => (
         <div
-          key={b.key}
-          className="border-t"
-          data-testid={`grid-subrow-${inst.instKey}-bucket-${b.key}`}
+          key={col.key}
+          className="p-1.5 border-t border-border/40"
+          data-testid={`grid-subrow-${inst.instKey}-bucket-${col.key}`}
         >
           <GridCell
-            items={inst[b.key]}
-            bucketKey={b.key}
-            density={density}
+            items={inst[col.key]}
+            column={col}
+            previewSize={previewSize}
             onCardClick={onCardClick}
+            columnItems={columnItems}
           />
         </div>
       ))}
@@ -460,7 +420,7 @@ function SubRow({ inst, density, onCardClick }) {
   );
 }
 
-// Main component ─────────────────────────────────────────────────────────────
+// ─── Main component ─────────────────────────────────────────────────────
 
 export default function SwimlaneGridView({
   columnItems,
@@ -485,14 +445,7 @@ export default function SwimlaneGridView({
     );
   }
 
-  // CSS Grid: column-1 = sticky room label (240px), columns 2-4 = bucket cells.
-  // Each bucket cell takes the remaining space equally.
-  const gridStyle = {
-    display: "grid",
-    gridTemplateColumns: "240px repeat(3, minmax(0, 1fr))",
-    gap: "0px",
-  };
-
+  // Roll-up totals for the column headers.
   const totals = rows.reduce(
     (acc, row) => {
       for (const inst of row.instancesOrdered) {
@@ -505,28 +458,36 @@ export default function SwimlaneGridView({
     { rejected: 0, proposed: 0, approved: 0 },
   );
 
+  // CSS Grid: 240px sticky room label + 3 lane columns, separated by
+  // gap-3 (matches the legacy lane spacing exactly).
+  const gridStyle = {
+    display: "grid",
+    gridTemplateColumns: "240px repeat(3, minmax(0, 1fr))",
+    columnGap: "0.75rem",
+    rowGap: "0",
+  };
+
   return (
     <div
-      className="rounded-md border bg-card overflow-x-auto"
+      className="rounded-md border-2 bg-card overflow-x-auto"
       data-testid="swimlane-grid-view"
     >
-      <div style={gridStyle} className="min-w-[900px]">
-        {/* Sticky column header */}
-        <div className="sticky top-0 z-20 bg-muted/80 backdrop-blur border-b border-r border-border/40 px-2 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+      <div style={gridStyle} className="min-w-[1024px] p-1.5">
+        {/* Sticky header row — same chrome as the legacy lane headers
+            (red/amber/emerald tones, uppercase label, count badge). */}
+        <div className="sticky top-0 z-20 bg-background/95 backdrop-blur px-2 py-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground border-b border-border/40">
           Room
         </div>
-        {BUCKET_META.map((b) => (
+        {COLUMN_META.map((col) => (
           <div
-            key={b.key}
+            key={col.key}
             className={cn(
-              "sticky top-0 z-20 bg-muted/80 backdrop-blur border-b border-border/40 px-2 py-1.5 text-[10px] font-medium uppercase tracking-wide flex items-center justify-between",
-              b.tone,
+              "sticky top-0 z-20 px-2 py-1.5 text-xs font-semibold flex items-center justify-between rounded-t-sm",
+              col.headerTone,
             )}
           >
-            <span>{b.label}</span>
-            <Badge variant="secondary" className="font-mono tabular-nums">
-              {totals[b.key]}
-            </Badge>
+            <span className="uppercase tracking-wide">{col.label}</span>
+            <span className="tabular-nums">{totals[col.key]}</span>
           </div>
         ))}
 
@@ -534,8 +495,9 @@ export default function SwimlaneGridView({
           <GridRow
             key={row.roomKey}
             room={row}
-            density={density}
+            previewSize={density}
             onCardClick={onCardClick}
+            columnItems={columnItems}
             isFirst={idx === 0}
           />
         ))}
