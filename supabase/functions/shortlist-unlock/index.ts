@@ -579,6 +579,12 @@ async function finalizeUnlock(
       round_id: args.roundId,
       project_id: args.projectId,
       event_type: 'shortlist_unlocked',
+      // shortlisting_events.actor_type is NOT NULL with CHECK
+      // (actor_type IN ('system','user','worker')).  Service-role calls
+      // (background poll, automated unlock) are 'system'; user-initiated
+      // unlocks via the swimlane button are 'user'.
+      actor_type: args.unlockedBy ? 'user' : 'system',
+      actor_id: args.unlockedBy,
       payload: eventPayload,
     });
   if (eventErr) {
