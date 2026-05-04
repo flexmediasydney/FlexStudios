@@ -12,7 +12,7 @@
  * Auth: master_admin or admin.
  *
  * GET / POST body:
- *   { status?: 'pending_review' | 'approved' | 'rejected' | 'deferred' | 'all',
+ *   { status?: 'pending_review' | 'approved' | 'rejected' | 'deferred' | 'override' | 'all',
  *     round_id?: string,                  // optional filter
  *     project_id?: string,                // optional filter
  *     limit?: number,                     // default 50, max 200
@@ -39,7 +39,14 @@ import {
 
 const GENERATOR = 'list-stage4-overrides';
 
-const ALLOWED_STATUSES = new Set(['pending_review', 'approved', 'rejected', 'deferred', 'all']);
+const ALLOWED_STATUSES = new Set([
+  'pending_review',
+  'approved',
+  'rejected',
+  'deferred',
+  'override',
+  'all',
+]);
 
 interface ReqBody {
   status?: string;
@@ -106,7 +113,8 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     .from('shortlisting_stage4_overrides')
     .select(
       'id, round_id, group_id, stem, field, stage_1_value, stage_4_value, ' +
-      'reason, review_status, reviewed_by, reviewed_at, review_notes, created_at',
+      'override_value, reason, review_status, reviewed_by, reviewed_at, ' +
+      'review_notes, created_at',
       { count: 'exact' },
     );
 
@@ -193,7 +201,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
   const { data: statusCountRows, error: statusErr } = await admin
     .from('shortlisting_stage4_overrides')
     .select('review_status', { count: 'exact', head: false })
-    .in('review_status', ['pending_review', 'approved', 'rejected', 'deferred']);
+    .in('review_status', ['pending_review', 'approved', 'rejected', 'deferred', 'override']);
   if (statusErr) {
     console.warn(`[${GENERATOR}] status counts query failed: ${statusErr.message}`);
   }
@@ -202,6 +210,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
     approved: 0,
     rejected: 0,
     deferred: 0,
+    override: 0,
   };
   for (const r of statusCountRows || []) {
     const s = r.review_status as string;
@@ -225,6 +234,7 @@ serveWithAudit(GENERATOR, async (req: Request) => {
       field: r.field,
       stage_1_value: r.stage_1_value,
       stage_4_value: r.stage_4_value,
+      override_value: r.override_value ?? null,
       reason: r.reason,
       review_status: r.review_status,
       reviewed_by: r.reviewed_by,

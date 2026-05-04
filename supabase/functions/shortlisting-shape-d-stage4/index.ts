@@ -116,6 +116,13 @@ import {
   canonicalRegistryBlock,
   CANONICAL_REGISTRY_BLOCK_VERSION,
 } from '../_shared/visionPrompts/blocks/canonicalRegistryBlock.ts';
+// Mig 469 — close the loop on operator overrides: Stage 4 now reads the
+// cross-project few-shot library so empirically-grown corrections surface in
+// every Stage 4 run, not just Stage 1.
+import {
+  fewShotLibraryBlock,
+  FEW_SHOT_LIBRARY_BLOCK_VERSION,
+} from '../_shared/visionPrompts/blocks/fewShotLibraryBlock.ts';
 import {
   normaliseSlotId,
   SLOT_ENUMERATION_BLOCK_VERSION,
@@ -631,10 +638,19 @@ async function runStage4Core(
       );
     }
 
-    // Build the prompt. canonicalRegistryBlock is fetched in parallel — empty
-    // string when registry has no rows yet (W12 spec §"Canonical registry":
-    // "safe to wire unconditionally").
-    const canonicalRegistryText = await canonicalRegistryBlock();
+    // Build the prompt. canonicalRegistryBlock + fewShotLibraryBlock are
+    // fetched in parallel — both return '' when their backing tables are
+    // empty (safe to wire unconditionally).
+    //
+    // Mig 469 — fewShotLibraryBlock joins Stage 4's prompt so operator
+    // overrides graduated via override-stage4-override / approve-stage4-override
+    // surface as empirical correction patterns in EVERY Stage 4 run, not just
+    // Stage 1. Tier-aware via voice.tier (premium/standard/approachable);
+    // examples with property_tier=NULL apply across all tiers.
+    const [canonicalRegistryText, fewShotLibraryText] = await Promise.all([
+      canonicalRegistryBlock(),
+      fewShotLibraryBlock({ property_tier: voice.tier }),
+    ]);
 
     // QC-iter2-W3 F-D-007: load slot definitions for this round and render
     // the slotEnumerationBlock preamble (PHASE 1 / 2 / 3 + per-position
@@ -860,7 +876,7 @@ async function runStage4Core(
     const userPromptWithSlots = slotEnumerationText.length > 0
       ? [slotEnumerationText, '', userPromptCore].join('\n')
       : userPromptCore;
-    const userText = canonicalRegistryText.length > 0
+    const userTextWithRegistry = canonicalRegistryText.length > 0
       ? [
           userPromptWithSlots,
           '',
@@ -868,6 +884,17 @@ async function runStage4Core(
           canonicalRegistryText,
         ].join('\n')
       : userPromptWithSlots;
+    // Mig 469: empirical correction examples grown from operator overrides.
+    // Sits at the END of the user prompt — last thing the model reads before
+    // emitting JSON, so cross-project correction patterns are top-of-mind
+    // when Stage 4 evaluates each per-image classification.
+    const userText = fewShotLibraryText.length > 0
+      ? [
+          userTextWithRegistry,
+          '',
+          fewShotLibraryText,
+        ].join('\n')
+      : userTextWithRegistry;
 
     // Call Gemini vision adapter with retries. W11.8.1: Anthropic failover
     // stripped — exhausted retries throw and the round flips to 'failed'.
@@ -3832,5 +3859,6 @@ function stage4PromptBlockVersions(): Record<string, string> {
     self_critique: SELF_CRITIQUE_BLOCK_VERSION,
     canonical_registry: CANONICAL_REGISTRY_BLOCK_VERSION,
     slot_enumeration: SLOT_ENUMERATION_BLOCK_VERSION,
+    few_shot_library: FEW_SHOT_LIBRARY_BLOCK_VERSION,
   };
 }

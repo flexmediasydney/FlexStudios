@@ -40,6 +40,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -57,6 +58,7 @@ import {
   Filter,
   ImageIcon,
   Inbox,
+  Pencil,
   Sparkles,
   ThumbsDown,
   Clock,
@@ -72,6 +74,8 @@ const STATUS_TONE = {
     "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300",
   rejected: "bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-300",
   deferred: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200",
+  override:
+    "bg-violet-100 text-violet-800 dark:bg-violet-950/40 dark:text-violet-300",
 };
 
 const STATUS_LABEL = {
@@ -79,6 +83,7 @@ const STATUS_LABEL = {
   approved: "Approved",
   rejected: "Rejected",
   deferred: "Deferred",
+  override: "Overridden",
   all: "All",
 };
 
@@ -94,10 +99,11 @@ function fmtTime(iso) {
 }
 
 // ── Single override card ─────────────────────────────────────────────────────
-function OverrideCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }) {
+function OverrideCard({ row, onApprove, onReject, onDefer, onOverride, busy, isMasterAdmin }) {
   const [showReason, setShowReason] = useState(false);
-  const [actionDialogOpen, setActionDialogOpen] = useState(null); // 'reject' | 'defer'
+  const [actionDialogOpen, setActionDialogOpen] = useState(null); // 'reject' | 'defer' | 'override'
   const [actionNote, setActionNote] = useState("");
+  const [overrideText, setOverrideText] = useState("");
 
   const isPending = row.review_status === "pending_review";
   const stage1Display = row.stage_1_value ?? "—";
@@ -108,6 +114,7 @@ function OverrideCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }
       className={cn(
         row.review_status === "rejected" && "opacity-70",
         row.review_status === "approved" && "border-emerald-200 dark:border-emerald-900",
+        row.review_status === "override" && "border-violet-200 dark:border-violet-900",
       )}
     >
       <CardContent className="p-3">
@@ -149,7 +156,7 @@ function OverrideCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }
               {row.created_at ? ` · ${fmtTime(row.created_at)}` : ""}
             </div>
 
-            {/* Stage 1 → Stage 4 transition */}
+            {/* Stage 1 → Stage 4 (→ Override) transition */}
             <div className="flex items-center gap-2 text-sm mb-2 flex-wrap">
               <div className="font-mono px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200">
                 {stage1Display}
@@ -158,6 +165,14 @@ function OverrideCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }
               <div className="font-mono px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300">
                 {stage4Display}
               </div>
+              {row.override_value && (
+                <>
+                  <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  <div className="font-mono px-2 py-0.5 rounded bg-violet-100 dark:bg-violet-950/40 text-violet-700 dark:text-violet-300">
+                    {row.override_value}
+                  </div>
+                </>
+              )}
             </div>
 
             {/* Reason */}
@@ -231,6 +246,22 @@ function OverrideCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }
                   <Clock className="h-3 w-3 mr-1" />
                   Defer
                 </Button>
+                {isMasterAdmin && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs border-violet-300 text-violet-700 hover:bg-violet-50 dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-950/40"
+                    onClick={() => {
+                      setActionDialogOpen("override");
+                      setActionNote("");
+                      setOverrideText("");
+                    }}
+                    disabled={busy}
+                  >
+                    <Pencil className="h-3 w-3 mr-1" />
+                    Override
+                  </Button>
+                )}
                 {row.round_id && (
                   <Link
                     to={`/MasterListingReview?round=${row.round_id}`}
@@ -244,19 +275,56 @@ function OverrideCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }
           </div>
         </div>
 
-        {/* Reject / Defer dialog */}
+        {/* Reject / Defer / Override dialog */}
         <Dialog open={actionDialogOpen != null} onOpenChange={(o) => !o && setActionDialogOpen(null)}>
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle>
-                {actionDialogOpen === "reject" ? "Reject" : "Defer"} Stage 4 override
+                {actionDialogOpen === "reject"
+                  ? "Reject Stage 4 override"
+                  : actionDialogOpen === "defer"
+                    ? "Defer Stage 4 override"
+                    : "Override — neither stage was right"}
               </DialogTitle>
               <DialogDescription>
                 {actionDialogOpen === "reject"
                   ? "Stage 4 over-corrected — Stage 1 was actually right. The override stays in the audit trail."
-                  : "Skip for now. The row stays in the queue under the deferred filter."}
+                  : actionDialogOpen === "defer"
+                    ? "Skip for now. The row stays in the queue under the deferred filter."
+                    : "Type the correct value. It will graduate into the cross-project few-shot library so Stage 1 learns from it."}
               </DialogDescription>
             </DialogHeader>
+            {actionDialogOpen === "override" && (
+              <div className="space-y-3">
+                <div className="text-xs text-muted-foreground space-y-0.5 rounded border bg-muted/30 p-2">
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wide opacity-70 mr-1">Field</span>
+                    <span className="font-mono">{row.field}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wide opacity-70 mr-1">Stage 1</span>
+                    <span className="font-mono">{stage1Display}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] uppercase tracking-wide opacity-70 mr-1">Stage 4</span>
+                    <span className="font-mono">{stage4Display}</span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">
+                    Correct value
+                  </label>
+                  <Input
+                    autoFocus
+                    value={overrideText}
+                    onChange={(e) => setOverrideText(e.target.value)}
+                    placeholder="e.g. living_secondary"
+                    maxLength={500}
+                    className="text-sm font-mono"
+                  />
+                </div>
+              </div>
+            )}
             <div className="space-y-1">
               <label className="text-xs text-muted-foreground">
                 Notes (optional)
@@ -278,12 +346,21 @@ function OverrideCard({ row, onApprove, onReject, onDefer, busy, isMasterAdmin }
                     onReject(row, actionNote.trim() || null);
                   } else if (actionDialogOpen === "defer") {
                     onDefer(row, actionNote.trim() || null);
+                  } else if (actionDialogOpen === "override") {
+                    onOverride(row, overrideText.trim(), actionNote.trim() || null);
                   }
                   setActionDialogOpen(null);
                 }}
-                disabled={busy}
+                disabled={
+                  busy ||
+                  (actionDialogOpen === "override" && overrideText.trim().length === 0)
+                }
               >
-                {actionDialogOpen === "reject" ? "Reject" : "Defer"}
+                {actionDialogOpen === "reject"
+                  ? "Reject"
+                  : actionDialogOpen === "defer"
+                    ? "Defer"
+                    : "Save override"}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -415,6 +492,30 @@ export default function Stage4Overrides() {
     onError: (err) => toast.error(`Defer failed: ${err?.message || err}`),
   });
 
+  // Override (mig 469): operator types the correct value when neither Stage 1
+  // nor Stage 4 was right. Graduates into engine_fewshot_examples with
+  // human_value = override_value.
+  const overrideMutation = useMutation({
+    mutationFn: async ({ row, overrideValue, note }) => {
+      const result = await api.functions.invoke("override-stage4-override", {
+        override_id: row.id,
+        override_value: overrideValue,
+        review_notes: note,
+      });
+      const data = result?.data ?? result;
+      if (data?.error) {
+        throw new Error(data.error.message || JSON.stringify(data.error));
+      }
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["stage4_overrides"] });
+      queryClient.invalidateQueries({ queryKey: ["stage4_override_counts"] });
+      toast.success("Override saved — graduated to few-shot library.");
+    },
+    onError: (err) => toast.error(`Override failed: ${err?.message || err}`),
+  });
+
   const rows = queueQuery.data?.rows || [];
   const total = queueQuery.data?.total || 0;
   const statusCounts = queueQuery.data?.status_counts || {};
@@ -422,7 +523,8 @@ export default function Stage4Overrides() {
   const busy =
     approveMutation.isPending ||
     rejectMutation.isPending ||
-    deferMutation.isPending;
+    deferMutation.isPending ||
+    overrideMutation.isPending;
 
   return (
     <PermissionGuard require={["master_admin", "admin"]}>
@@ -444,7 +546,7 @@ export default function Stage4Overrides() {
 
         {/* Status filter strip */}
         <div className="flex items-center gap-2 flex-wrap">
-          {["pending_review", "approved", "rejected", "deferred", "all"].map((s) => {
+          {["pending_review", "approved", "rejected", "deferred", "override", "all"].map((s) => {
             const count = s === "all" ? null : statusCounts[s] ?? null;
             return (
               <button
@@ -530,6 +632,9 @@ export default function Stage4Overrides() {
                 onApprove={(r) => approveMutation.mutate(r)}
                 onReject={(r, note) => rejectMutation.mutate({ row: r, note })}
                 onDefer={(r, note) => deferMutation.mutate({ row: r, note })}
+                onOverride={(r, overrideValue, note) =>
+                  overrideMutation.mutate({ row: r, overrideValue, note })
+                }
                 busy={busy}
                 isMasterAdmin={isMasterAdmin}
               />
