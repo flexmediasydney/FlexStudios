@@ -89,7 +89,7 @@ import {
   type VisionRequest,
   type VisionResponse,
 } from '../_shared/visionAdapter/index.ts';
-import { getDropboxAccessToken, uploadFile, createFolder } from '../_shared/dropbox.ts';
+import { uploadFile, createFolder } from '../_shared/dropbox.ts';
 import { tryAcquireMutex, releaseMutex } from '../_shared/dispatcherMutex.ts';
 import {
   sourceContextBlock,
@@ -1026,7 +1026,6 @@ async function runShapeDStage1Core(
   // × storage; remaining per-call input is just image bytes + EXIF text).
   // On failure, fall through to the inline-systemInstruction path — the
   // round still completes; only the cost saving is lost.
-  const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
   const allResults: PerImageResult[] = [];
   let runningCostUsd = 0;
   let costCapExceeded = false;
@@ -1082,7 +1081,6 @@ async function runShapeDStage1Core(
             userTextPrefix,
             userTextSuffix,
             settings,
-            previewsBase,
             sourceType,
             cachedContentName,
           });
@@ -1794,7 +1792,6 @@ interface RunStage1PerImageOpts {
   userTextPrefix: string;
   userTextSuffix: string;
   settings: EngineSettings;
-  previewsBase: string;
   // W11.7.17 hotfix-4: source_type drives the per-source Gemini responseSchema
   // variant. Stage 1 production is always 'internal_raw' but we thread the
   // value explicitly so future sources (W15a finals, W15b external) reuse the
@@ -1824,13 +1821,13 @@ interface RunStage1PerImageOpts {
  */
 async function runStage1PerImage(opts: RunStage1PerImageOpts): Promise<PerImageResult> {
   const start = Date.now();
-  const { composition, settings, previewsBase } = opts;
+  const { composition, settings, ctx, roundId } = opts;
 
-  // Fetch the single preview.
-  const path = `${previewsBase}/${composition.stem}.jpg`;
+  // Fetch the single preview from Supabase Storage (Wave 2). Previews live in
+  // the public shortlisting-previews bucket, keyed by ${project_id}/${round_id}/${stem}.jpg.
   let preview: { data: string; media_type: string };
   try {
-    preview = await fetchPreviewBase64(path);
+    preview = await fetchPreviewBase64(composition.stem, ctx.project_id, roundId);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -3103,31 +3100,26 @@ async function dispatchCanonicalRollupJob(
   return (data?.id as string) || null;
 }
 
-// ─── Dropbox preview helper ─────────────────────────────────────────────────
+// ─── Storage preview helper (Wave 2) ────────────────────────────────────────
+// Previews live in the public shortlisting-previews bucket, written by the
+// Modal photos-extract worker during extract. We fetch from there rather
+// than going back to Dropbox so we don't hammer the rate-limited
+// /files/download endpoint.
 
 async function fetchPreviewBase64(
-  dropboxPath: string,
+  stem: string,
+  projectId: string,
+  roundId: string,
 ): Promise<{ data: string; media_type: string }> {
-  const token = await getDropboxAccessToken();
-  // Team-folder namespace header — without this, paths like
-  // "/Flex Media Team Folder/..." resolve in the user's PERSONAL namespace
-  // and 404. Mirrors `_shared/dropbox.ts:pathRootHeader()`.
-  const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
-  const pathRootHeader: Record<string, string> = ns
-    ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) }
-    : {};
-  const res = await fetch('https://content.dropboxapi.com/2/files/download', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Dropbox-API-Arg': JSON.stringify({ path: dropboxPath }),
-      ...pathRootHeader,
-    },
-    signal: AbortSignal.timeout(60_000),
-  });
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  if (!supabaseUrl) throw new Error('SUPABASE_URL env not set');
+  const url =
+    `${supabaseUrl}/storage/v1/object/public/shortlisting-previews/` +
+    `${projectId}/${roundId}/${stem}.jpg`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
-    throw new Error(`dropbox download ${res.status}: ${txt.slice(0, 200)}`);
+    throw new Error(`storage ${res.status}: ${txt.slice(0, 200)}`);
   }
   const buf = new Uint8Array(await res.arrayBuffer());
   let bin = '';

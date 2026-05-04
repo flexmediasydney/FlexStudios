@@ -69,7 +69,7 @@ import {
   type VisionRequest,
   type VisionResponse,
 } from '../_shared/visionAdapter/index.ts';
-import { getDropboxAccessToken, uploadFile, createFolder } from '../_shared/dropbox.ts';
+import { uploadFile, createFolder } from '../_shared/dropbox.ts';
 import { tryAcquireMutex, releaseMutex } from '../_shared/dispatcherMutex.ts';
 import {
   sourceContextBlock,
@@ -600,11 +600,17 @@ async function runStage4Core(
       );
     }
 
-    // Fetch all preview images for the round.
-    const previewsBase = `${ctx.dropbox_root_path.replace(/\/+$/, '')}/Photos/Raws/Shortlist Proposed/Previews`;
-    const previews = await fetchAllPreviews(stage1Merged.map((e) => e.stem), previewsBase);
+    // Fetch all preview images for the round from Supabase Storage (Wave 2).
+    // Previews live in the public shortlisting-previews bucket keyed by
+    // ${project_id}/${round_id}/${stem}.jpg — written by the Modal worker
+    // during extract. We never re-fetch from Dropbox here.
+    const previews = await fetchAllPreviews(
+      stage1Merged.map((e) => e.stem),
+      ctx.project_id,
+      roundId,
+    );
     if (previews.length === 0) {
-      throw new Error(`round ${roundId} fetched zero previews from Dropbox`);
+      throw new Error(`round ${roundId} fetched zero previews from Storage`);
     }
     if (previews.length < stage1Merged.length) {
       warnings.push(
@@ -1614,20 +1620,24 @@ async function loadSpaceInstancesSummary(
   return out;
 }
 
-// ─── Preview fetcher ────────────────────────────────────────────────────────
+// ─── Preview fetcher (Supabase Storage — Wave 2) ─────────────────────────────
+// Previews are written to the public `shortlisting-previews` bucket by the
+// Modal photos-extract worker, keyed by `${project_id}/${round_id}/${stem}.jpg`.
+// We fetch from there rather than going back to Dropbox so we don't hammer the
+// rate-limited /files/download endpoint.
 
 async function fetchAllPreviews(
   stems: string[],
-  previewsBase: string,
+  projectId: string,
+  roundId: string,
 ): Promise<Array<{ stem: string; data: string; media_type: string }>> {
   const PREVIEW_CONCURRENCY = 8;
   const out: Array<{ stem: string; data: string; media_type: string } | null> = [];
   for (let i = 0; i < stems.length; i += PREVIEW_CONCURRENCY) {
     const slice = stems.slice(i, i + PREVIEW_CONCURRENCY);
     const fetched = await Promise.all(slice.map(async (stem) => {
-      const path = `${previewsBase}/${stem}.jpg`;
       try {
-        const p = await fetchPreviewBase64(path);
+        const p = await fetchPreviewBase64(stem, projectId, roundId);
         return { stem, data: p.data, media_type: p.media_type };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1641,25 +1651,19 @@ async function fetchAllPreviews(
 }
 
 async function fetchPreviewBase64(
-  dropboxPath: string,
+  stem: string,
+  projectId: string,
+  roundId: string,
 ): Promise<{ data: string; media_type: string }> {
-  const token = await getDropboxAccessToken();
-  const ns = Deno.env.get('DROPBOX_TEAM_NAMESPACE_ID');
-  const pathRootHeader: Record<string, string> = ns
-    ? { 'Dropbox-API-Path-Root': JSON.stringify({ '.tag': 'root', root: ns }) }
-    : {};
-  const res = await fetch('https://content.dropboxapi.com/2/files/download', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Dropbox-API-Arg': JSON.stringify({ path: dropboxPath }),
-      ...pathRootHeader,
-    },
-    signal: AbortSignal.timeout(60_000),
-  });
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  if (!supabaseUrl) throw new Error('SUPABASE_URL env not set');
+  const url =
+    `${supabaseUrl}/storage/v1/object/public/shortlisting-previews/` +
+    `${projectId}/${roundId}/${stem}.jpg`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
-    throw new Error(`dropbox download ${res.status}: ${txt.slice(0, 200)}`);
+    throw new Error(`storage ${res.status}: ${txt.slice(0, 200)}`);
   }
   const buf = new Uint8Array(await res.arrayBuffer());
   let bin = '';
