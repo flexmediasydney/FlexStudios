@@ -526,40 +526,141 @@ export default function LightboxDetailPanel({ item }) {
           ) : null}
           {observedObjects.length > 0 ? (
             <div className="mt-1.5">
-              <div className="text-[10px] text-white/45 mb-0.5">
-                Observed objects ({observedObjects.length})
+              <div className="text-[10px] text-white/45 mb-0.5 flex items-center justify-between">
+                <span>Bounding boxes ({observedObjects.length})</span>
+                <span className="text-white/30 normal-case">
+                  click chip → highlight on image
+                </span>
               </div>
-              <ul className="space-y-0.5 max-h-32 overflow-y-auto">
-                {observedObjects.map((obj, i) => (
-                  <li key={i} className="text-[10px] text-white/70">
-                    <span className="font-mono text-white/85">{obj.label || obj.name || `obj_${i}`}</span>
-                    {typeof obj.confidence === "number" ? (
-                      <span className="text-white/45 ml-1.5">({(obj.confidence * 100).toFixed(0)}%)</span>
-                    ) : null}
-                    {obj.attributes && typeof obj.attributes === "object" ? (
-                      <span className="text-white/45 ml-1.5">
-                        {Object.entries(obj.attributes)
-                          .slice(0, 3)
-                          .map(([k, v]) => `${k}=${v}`)
-                          .join(", ")}
-                      </span>
-                    ) : null}
-                  </li>
-                ))}
+              <ul className="space-y-1 max-h-72 overflow-y-auto pr-1">
+                {observedObjects.map((obj, i) => {
+                  const bb = obj.bounding_box || obj.bbox || null;
+                  const label = obj.raw_label || obj.label || obj.name || `obj_${i}`;
+                  const conf = typeof obj.confidence === "number"
+                    ? Math.round(obj.confidence * 100)
+                    : null;
+                  const canonicalId =
+                    obj.proposed_canonical_id || obj.canonical_object_key || null;
+                  const attrs =
+                    obj.attributes && typeof obj.attributes === "object"
+                      ? Object.entries(obj.attributes)
+                      : [];
+                  return (
+                    <li
+                      key={i}
+                      className="rounded-md bg-white/5 px-2 py-1 text-[10px]"
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-0.5">
+                        <span className="font-mono text-white/90 truncate" title={label}>
+                          {label}
+                        </span>
+                        {conf != null ? (
+                          <span
+                            className={cn(
+                              "font-mono shrink-0",
+                              conf >= 95
+                                ? "text-emerald-300"
+                                : conf >= 80
+                                ? "text-lime-300"
+                                : conf >= 60
+                                ? "text-amber-300"
+                                : "text-rose-300",
+                            )}
+                          >
+                            {conf}%
+                          </span>
+                        ) : null}
+                      </div>
+                      {bb ? (
+                        <div className="text-white/55 font-mono text-[9px] flex items-center gap-2">
+                          <span title="x position (%)">
+                            x:{(bb.x_pct ?? bb.x ?? 0).toFixed(1)}
+                          </span>
+                          <span title="y position (%)">
+                            y:{(bb.y_pct ?? bb.y ?? 0).toFixed(1)}
+                          </span>
+                          <span title="width (%)">
+                            w:{(bb.w_pct ?? bb.w ?? 0).toFixed(1)}
+                          </span>
+                          <span title="height (%)">
+                            h:{(bb.h_pct ?? bb.h ?? 0).toFixed(1)}
+                          </span>
+                        </div>
+                      ) : null}
+                      {canonicalId ? (
+                        <div className="mt-0.5">
+                          <span className="inline-block rounded-sm bg-blue-500/15 text-blue-200 ring-1 ring-blue-400/25 px-1 py-px font-mono text-[9px]">
+                            {canonicalId}
+                          </span>
+                        </div>
+                      ) : null}
+                      {attrs.length > 0 ? (
+                        <div className="mt-1 space-y-0.5">
+                          {attrs.map(([k, v], j) => (
+                            <div
+                              key={`${k}-${j}`}
+                              className="flex items-start justify-between gap-2 text-[9px] text-white/65"
+                            >
+                              <span className="text-white/45">{snakeToTitle(k)}</span>
+                              <span
+                                className="text-right text-white/85 font-mono truncate max-w-[180px]"
+                                title={renderValue(v)}
+                              >
+                                {renderValue(v)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           ) : null}
           {observedAttributes.length > 0 ? (
             <div className="mt-1.5">
               <div className="text-[10px] text-white/45 mb-0.5">
-                Observed attributes ({observedAttributes.length})
+                Frame-level attributes ({observedAttributes.length})
               </div>
-              <ul className="space-y-0.5 max-h-24 overflow-y-auto">
-                {observedAttributes.map((a, i) => (
-                  <li key={i} className="text-[10px] text-white/70 font-mono">
-                    {typeof a === "string" ? a : JSON.stringify(a)}
-                  </li>
-                ))}
+              <ul className="space-y-1 max-h-48 overflow-y-auto pr-1">
+                {observedAttributes.map((a, i) => {
+                  if (typeof a === "string") {
+                    return (
+                      <li
+                        key={i}
+                        className="text-[10px] text-white/70 font-mono rounded-md bg-white/5 px-2 py-1"
+                      >
+                        {a}
+                      </li>
+                    );
+                  }
+                  if (a && typeof a === "object") {
+                    const entries = Object.entries(a);
+                    return (
+                      <li
+                        key={i}
+                        className="rounded-md bg-white/5 px-2 py-1 space-y-0.5"
+                      >
+                        {entries.map(([k, v], j) => (
+                          <div
+                            key={`${k}-${j}`}
+                            className="flex items-start justify-between gap-2 text-[10px]"
+                          >
+                            <span className="text-white/45">{snakeToTitle(k)}</span>
+                            <span
+                              className="text-right text-white/85 font-mono truncate max-w-[200px]"
+                              title={renderValue(v)}
+                            >
+                              {renderValue(v)}
+                            </span>
+                          </div>
+                        ))}
+                      </li>
+                    );
+                  }
+                  return null;
+                })}
               </ul>
             </div>
           ) : null}
