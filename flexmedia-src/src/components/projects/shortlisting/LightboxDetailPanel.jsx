@@ -422,15 +422,62 @@ export default function LightboxDetailPanel({ item }) {
   const embeddingAnchor = cls?.embedding_anchor_text;
 
   // ── Section 13: Space instance ────────────────────────────────────────
+  // Mig 453+454: space_instance_id lives on composition_groups, NOT on
+  // composition_classifications. Earlier code read from `cls` and the
+  // section was hidden on every card. Reads from item.group_metadata
+  // (threaded through by ShortlistingSwimlane.lightboxItemsMemo) plus
+  // an optional `space_instances` index keyed by id so we can render a
+  // human-readable display_label + instance_index + cluster_confidence
+  // when the parent provides it.
   const spaceInstanceEntries = useMemo(() => {
-    if (!cls) return [];
+    const groupMeta = item?.group_metadata || {};
+    const instanceId =
+      groupMeta.space_instance_id ?? cls?.space_instance_id ?? null;
+    const instanceConf =
+      groupMeta.space_instance_confidence ??
+      cls?.space_instance_confidence ??
+      null;
+    if (!instanceId) return [];
+
     const out = [];
-    if (cls.space_instance_id) out.push(["space_instance_id", cls.space_instance_id]);
-    if (typeof cls.space_instance_confidence === "number") {
-      out.push(["space_instance_confidence", cls.space_instance_confidence]);
+    // Look up enriched row if the parent threaded the index through.
+    const instanceRow =
+      item?.space_instance_row ||
+      (item?.space_instances_by_id &&
+        item.space_instances_by_id[instanceId]) ||
+      null;
+    if (instanceRow) {
+      if (typeof instanceRow.instance_index === "number") {
+        out.push(["instance_index", instanceRow.instance_index]);
+      }
+      if (instanceRow.display_label) {
+        out.push(["display_label", instanceRow.display_label]);
+      }
+      if (instanceRow.display_label_source) {
+        out.push(["label_source", instanceRow.display_label_source]);
+      }
+      if (typeof instanceRow.member_group_count === "number") {
+        out.push(["member_group_count", instanceRow.member_group_count]);
+      }
+      if (typeof instanceRow.cluster_confidence === "number") {
+        out.push(["cluster_confidence", instanceRow.cluster_confidence]);
+      }
+      if (
+        Array.isArray(instanceRow.distinctive_features) &&
+        instanceRow.distinctive_features.length > 0
+      ) {
+        out.push([
+          "distinctive_features",
+          instanceRow.distinctive_features.join(", "),
+        ]);
+      }
+    }
+    out.push(["space_instance_id", instanceId]);
+    if (typeof instanceConf === "number") {
+      out.push(["per_group_confidence", instanceConf]);
     }
     return out;
-  }, [cls]);
+  }, [cls, item]);
 
   // ── Section 14: Group metadata (when threaded through) ────────────────
   const groupEntries = useMemo(() => {

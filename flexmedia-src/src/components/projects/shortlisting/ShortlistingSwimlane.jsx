@@ -43,7 +43,7 @@ import {
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { api } from "@/api/supabaseClient";
+import { api, supabase } from "@/api/supabaseClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -627,6 +627,27 @@ export default function ShortlistingSwimlane({
     staleTime: 15_000,
   });
 
+  // Mig 453+454 — load shortlisting_space_instances for the round so the
+  // lightbox detail panel + grid view can render human-readable instance
+  // labels (display_label, instance_index, distinctive_features) instead
+  // of bare UUIDs.  Empty for legacy rounds that haven't run
+  // detect_instances; the lightbox falls back to the raw id in that case.
+  const spaceInstancesQuery = useQuery({
+    queryKey: ["shortlisting_space_instances", roundId],
+    enabled: Boolean(roundId),
+    staleTime: 15_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("shortlisting_space_instances")
+        .select(
+          "id, space_type, instance_index, display_label, display_label_source, distinctive_features, member_group_count, cluster_confidence, representative_group_id",
+        )
+        .eq("round_id", roundId);
+      if (error) throw error;
+      return Array.isArray(data) ? data : [];
+    },
+  });
+
   // W11.6.22c — position-criteria fetch. Pulls
   // shortlisting_slot_position_preferences for every slot referenced by this
   // round's overrides (post-W11.6.22b position-aware decisions). The lightbox's
@@ -1196,6 +1217,16 @@ export default function ShortlistingSwimlane({
   // on each re-render once open). Memo eliminates the re-allocation churn.
   // MUST live AFTER `columnItems` is declared above — this hook reads it from
   // the dep array and ESM `const` is in TDZ until the declaration line runs.
+  // Build a lookup map of space_instance rows keyed by id so the lightbox
+  // can render human-readable instance labels without an extra fetch.
+  const spaceInstancesById = useMemo(() => {
+    const m = {};
+    for (const row of spaceInstancesQuery.data || []) {
+      if (row?.id) m[row.id] = row;
+    }
+    return m;
+  }, [spaceInstancesQuery.data]);
+
   const lightboxItemsMemo = useMemo(() => {
     const bucket = lightboxState.bucket;
     if (!bucket) return null;
@@ -1238,8 +1269,12 @@ export default function ShortlistingSwimlane({
         space_instance_id: it.space_instance_id ?? null,
         space_instance_confidence: it.space_instance_confidence ?? null,
       },
+      // Mig 453+454: pass the space_instances index so the lightbox can
+      // render human-readable instance labels (display_label,
+      // instance_index, distinctive_features) instead of bare UUIDs.
+      space_instances_by_id: spaceInstancesById,
     }));
-  }, [lightboxState.bucket, columnItems]);
+  }, [lightboxState.bucket, columnItems, spaceInstancesById]);
 
   // W11.6.1 — group-by-slot grouping for the AI PROPOSED column. Keyed by
   // slot_id; a card with no slot lands under a synthetic "no slot" bucket
