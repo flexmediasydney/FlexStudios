@@ -17,6 +17,7 @@ import { RefreshCw, AlertCircle } from "lucide-react";
 import KpiStrip from "./KpiStrip";
 import PendingIngestsWidget from "./PendingIngestsWidget";
 import ActiveEngineRunsWidget from "./ActiveEngineRunsWidget";
+import StuckProjectsWidget from "./StuckProjectsWidget";
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -85,6 +86,12 @@ export default function OverviewTab() {
       <KpiStrip data={data} loading={isLoading} />
 
       <PendingIngestsWidget />
+
+      {/* 2026-05-04 (Joseph feedback): complement to PendingIngestsWidget —
+          surfaces projects that COULD have files in Dropbox but don't have
+          a pending ingest, so operators can spot stuck projects when the
+          webhook chain has lag/failure. */}
+      <StuckProjectsWidget />
 
       <ActiveEngineRunsWidget />
 
