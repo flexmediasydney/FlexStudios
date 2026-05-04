@@ -135,7 +135,7 @@ export default function ActiveEngineRunsWidget({ projectId, compact = false }) {
         .from("shortlisting_jobs")
         .select(
           "id, project_id, kind, status, started_at, finished_at, " +
-            "attempt_count, error_message, " +
+            "attempt_count, error_message, payload, result, round_id, " +
             "project:projects(id, property_address, property_suburb)",
         )
         .in("kind", ENGINE_CHAIN_KINDS)
@@ -184,6 +184,75 @@ export default function ActiveEngineRunsWidget({ projectId, compact = false }) {
         new Date(b.finished_at ?? 0).getTime() -
         new Date(a.finished_at ?? 0).getTime(),
     );
+
+  /**
+   * Build a per-row subtitle that gives operators meaningful context about
+   * what each engine job is actually processing.  Extract chunks get the
+   * heaviest treatment (29+ rows for a 575-file round are otherwise
+   * indistinguishable):
+   *
+   *   "Chunk 5/29 · 20 files · 034A8375 → 034A8395"
+   *
+   * For terminal extract rows we also show the per-file outcome:
+   *
+   *   "Chunk 5/29 · 18/20 ok · 034A8375 → 034A8395"
+   *
+   * Other engine kinds (pass0, shape_d_stage1, etc.) have one row per
+   * round so their context is the round itself — we surface a short
+   * round_id chip and any size hint we can extract from payload.
+   */
+  function buildContextSubtitle(row) {
+    const payload = (row.payload || {}) ;
+    const result = (row.result || {});
+    if (row.kind === "extract") {
+      const filePaths = Array.isArray(payload.file_paths) ? payload.file_paths : [];
+      const chunkIdx = typeof payload.chunk_index === "number" ? payload.chunk_index : null;
+      const chunkTotal = typeof payload.chunk_total === "number" ? payload.chunk_total : null;
+      const stems = filePaths.map((p) => {
+        const last = String(p).split("/").pop() || "";
+        return last.replace(/\.[a-z0-9]+$/i, "");
+      });
+      const stemFirst = stems[0] || "";
+      const stemLast = stems[stems.length - 1] || "";
+      const parts = [];
+      if (chunkIdx != null && chunkTotal != null) {
+        parts.push(`Chunk ${chunkIdx + 1}/${chunkTotal}`);
+      }
+      // Per-file outcome on terminal rows
+      if (
+        ["succeeded", "failed", "dead_letter"].includes(row.status) &&
+        (typeof result?.files_succeeded === "number" || typeof result?.modal_response?.files_succeeded === "number")
+      ) {
+        const succ = typeof result?.files_succeeded === "number"
+          ? result.files_succeeded
+          : result?.modal_response?.files_succeeded ?? 0;
+        const total = typeof result?.files_processed === "number"
+          ? result.files_processed
+          : result?.modal_response?.files_total ?? filePaths.length;
+        parts.push(`${succ}/${total} ok`);
+      } else if (filePaths.length > 0) {
+        parts.push(`${filePaths.length} files`);
+      }
+      // Stem range — only show when both ends exist and they differ
+      if (stemFirst && stemLast && stemFirst !== stemLast) {
+        parts.push(`${stemFirst} → ${stemLast}`);
+      } else if (stemFirst) {
+        parts.push(stemFirst);
+      }
+      return parts.length > 0 ? parts.join(" · ") : null;
+    }
+    // Non-extract kinds (pass0, shape_d_stage1, etc.) — one row per round.
+    // Show the round id tail so operators can correlate across multi-round
+    // pipelines, and any size hint from the payload.
+    const roundTail = row.round_id ? String(row.round_id).slice(0, 8) : null;
+    const fileCount = typeof payload.file_count === "number" ? payload.file_count : null;
+    const groupCount = typeof payload.group_count === "number" ? payload.group_count : null;
+    const parts = [];
+    if (roundTail) parts.push(`Round ${roundTail}`);
+    if (groupCount != null) parts.push(`${groupCount} groups`);
+    else if (fileCount != null) parts.push(`${fileCount} files`);
+    return parts.length > 0 ? parts.join(" · ") : null;
+  }
 
   function renderRow(row) {
     const startedMs = row.started_at
@@ -281,6 +350,14 @@ export default function ActiveEngineRunsWidget({ projectId, compact = false }) {
             )}
           </div>
         </div>
+        {(() => {
+          const subtitle = buildContextSubtitle(row);
+          return subtitle ? (
+            <div className="mt-0.5 text-[10px] text-muted-foreground/80 font-mono truncate" title={subtitle}>
+              {subtitle}
+            </div>
+          ) : null;
+        })()}
         {isFailed && row.error_message && (
           <div className="mt-1 text-[10px] text-amber-800 dark:text-amber-300 truncate font-mono">
             {row.error_message}
