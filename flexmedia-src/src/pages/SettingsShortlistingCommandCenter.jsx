@@ -80,6 +80,7 @@ import {
   Cog,
   Compass,
   Database,
+  DollarSign,
   FileEdit,
   Gauge,
   GraduationCap,
@@ -176,6 +177,12 @@ const RecipeMatrixTab = lazy(() =>
 const TaxonomyExplorerTab = lazy(() =>
   import("@/components/settings/shortlisting/TaxonomyExplorerTab"),
 );
+// 2026-05-05 — Joseph: spend tracker subtab.  Period selector + chart
+// + breakdowns + top rounds.  Source: shortlisting_spend_breakdown
+// RPC over engine_run_audit.
+const SpendTrackerTab = lazy(() =>
+  import("@/components/settings/shortlisting/SpendTrackerTab"),
+);
 
 // ── Tab metadata ──────────────────────────────────────────────────────────
 //
@@ -217,6 +224,8 @@ export const VALID_TABS = [
   "recipes",
   // — W11.6.27 (added 1) —————————————————————————————————————————————————
   "taxonomy_explorer",
+  // — 2026-05-05 (added 1) ————————————————————————————————————————————————
+  "spend",
 ];
 
 // W11.6.28: tab keys that the URL still accepts but redirect to a
@@ -247,6 +256,7 @@ const TAB_LABELS = {
   architecture: "Architecture",
   recipes: "Recipes",
   taxonomy_explorer: "Taxonomy Explorer",
+  spend: "Spend",
 };
 
 const TAB_ICONS = {
@@ -270,6 +280,7 @@ const TAB_ICONS = {
   architecture: Network,
   recipes: ListChecks,
   taxonomy_explorer: Compass,
+  spend: DollarSign,
 };
 
 // ── Group definitions (W11.6.27) ──────────────────────────────────────────
@@ -281,8 +292,8 @@ export const GROUPS = [
     key: "engine",
     label: "Engine",
     icon: Cog,
-    blurb: "Run-the-engine settings — KPIs, weights, packages, prompts.",
-    tabs: ["overview", "engine-settings", "tiers", "mappings", "prompts"],
+    blurb: "Run-the-engine settings — KPIs, spend, weights, packages, prompts.",
+    tabs: ["overview", "spend", "engine-settings", "tiers", "mappings", "prompts"],
   },
   {
     key: "slots",
@@ -515,6 +526,16 @@ export default function SettingsShortlistingCommandCenter({ embedded = false } =
           {/* ── Tab content — Overview eager, all others lazy ─────────── */}
           <TabsContent value="overview" className="mt-0">
             <OverviewTab />
+          </TabsContent>
+
+          {/* 2026-05-05 — Spend tracker (Joseph): time-windowed engine
+              spend with daily/hourly chart + by-stage/model/package
+              breakdown + top-rounds table.  Source: engine_run_audit
+              via shortlisting_spend_breakdown RPC. */}
+          <TabsContent value="spend" className="mt-0">
+            <Suspense fallback={<TabFallback />}>
+              <SpendTrackerTab />
+            </Suspense>
           </TabsContent>
 
           {/* Each consolidated page is mounted directly. They each carry */}
