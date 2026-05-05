@@ -964,7 +964,7 @@ function NotLinkedState() {
 
 // ─── Main component ─────────────────────────────────────────────────
 
-export default function ProjectMediaGallery({ project }) {
+function ProjectMediaGallery({ project }) {
   const deliverableLink = project?.tonomo_deliverable_link;
   const tonomoBasePath = project?.tonomo_deliverable_path;
   const [gridSize, setGridSize] = useState('md');
@@ -1157,3 +1157,5 @@ export default function ProjectMediaGallery({ project }) {
     </div>
   );
 }
+
+export default memo(ProjectMediaGallery);

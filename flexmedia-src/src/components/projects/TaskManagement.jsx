@@ -51,7 +51,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   back_office: "Task performed remotely or in office",
 };
 
-export default function TaskManagement({ projectId, project, canEdit }) {
+function TaskManagement({ projectId, project, canEdit }) {
    const queryClient = useQueryClient();
    const [showAddDialog, setShowAddDialog] = useState(false);
    const [editingTask, setEditingTask] = useState(null);
@@ -1046,6 +1046,8 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     </div>
   );
 }
+
+export default React.memo(TaskManagement);
 
 function AssigneeSelector({ value, users, teams, onChange }) {
   return (

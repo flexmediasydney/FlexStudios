@@ -109,7 +109,7 @@ function smartTimestamp(ts) {
   });
 }
 
-export default function ProjectActivityHub({ projectId, project }) {
+function ProjectActivityHub({ projectId, project }) {
   const { data: currentUser } = useCurrentUser();
   const queryClient = useQueryClient();
 
@@ -622,3 +622,5 @@ export default function ProjectActivityHub({ projectId, project }) {
     </div>
   );
 }
+
+export default React.memo(ProjectActivityHub);
