@@ -103,7 +103,6 @@ const PersonDetails = React.lazy(() => import('./pages/PersonDetails'));
 const PriceMatrix = React.lazy(() => import('./pages/PriceMatrix'));
 const Products = React.lazy(() => import('./pages/Products'));
 const ProjectDetails = React.lazy(() => import('./pages/ProjectDetails'));
-const ProjectDetailsV2 = React.lazy(() => import('./pages/ProjectDetailsV2'));
 const Properties = React.lazy(() => import('./pages/Properties'));
 const PropertyDetails = React.lazy(() => import('./pages/PropertyDetails'));
 const PropertyProspects = React.lazy(() => import('./pages/PropertyProspects'));
@@ -210,7 +209,6 @@ export const PAGES = {
     "PriceMatrix": PriceMatrix,
     "Products": Products,
     "ProjectDetails": ProjectDetails,
-    "ProjectDetailsV2": ProjectDetailsV2,
     "ProjectLocation": ProjectLocationPage,
     "Projects": Projects,
     "Properties": Properties,
