@@ -174,21 +174,34 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
 
   // Inline images (cid: refs) — fetch matching image attachments and swap to data URIs.
   // Browsers can't fetch cid: URLs, so without this <img src="cid:..."> renders broken.
-  // Caches by cid so navigating between expanded/collapsed states doesn't refetch.
+  //
+  // Two important constraints in this effect:
+  // (1) Trigger key is liveMessages.length, not the array reference. Realtime
+  //     EmailMessage updates (read receipt flips, label changes) push a fresh
+  //     liveMessages reference on every event but don't add messages. If we
+  //     depended on the reference, the effect would re-fire, the previous run's
+  //     terminal setState would be cancelled, and state would never settle —
+  //     leaving every cid: img broken. Length only changes when a new message
+  //     joins the thread, which is when we actually want to refetch.
+  // (2) Set state per successful fetch instead of batching at the end, so a
+  //     partial run still applies. inFlightCidsRef de-dupes across re-runs.
   const [inlineDataUris, setInlineDataUris] = useState({});
+  const inFlightCidsRef = useRef(new Set());
+  useEffect(() => {
+    // Reset state + de-dup set when thread switches (J/K nav reuses this component)
+    setInlineDataUris({});
+    inFlightCidsRef.current = new Set();
+  }, [thread.threadId]);
   useEffect(() => {
     if (!user || !account) return;
-    let cancelled = false;
-    const fetchInline = async () => {
-      const newUris = {};
+    (async () => {
       for (const m of liveMessages) {
         if (!m?.body || !Array.isArray(m.attachments) || m.attachments.length === 0) continue;
         const matches = [...m.body.matchAll(/src=["']cid:([^"'>]+)["']/gi)];
-        if (matches.length === 0) continue;
         for (const match of matches) {
           const cid = match[1];
-          if (inlineDataUris[cid] || newUris[cid]) continue;
-          // cid is typically "<filename>@<host-uid>" — match by filename prefix
+          if (inFlightCidsRef.current.has(cid)) continue;
+          inFlightCidsRef.current.add(cid);
           const filenameGuess = cid.split('@')[0].toLowerCase();
           const att = m.attachments.find((a) =>
             a.attachment_id &&
@@ -213,21 +226,16 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
             if (!res.ok) continue;
             const result = await res.json();
             if (result?.data) {
-              newUris[cid] = `data:${att.mime_type};base64,${result.data}`;
+              setInlineDataUris((prev) => ({ ...prev, [cid]: `data:${att.mime_type};base64,${result.data}` }));
             }
           } catch (err) {
             console.error('inline image fetch failed', err);
           }
         }
       }
-      if (!cancelled && Object.keys(newUris).length > 0) {
-        setInlineDataUris((prev) => ({ ...prev, ...newUris }));
-      }
-    };
-    fetchInline();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- inlineDataUris read for cache check, not a dep
-  }, [liveMessages, user?.id, account?.id]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above; liveMessages reference thrashes on realtime updates
+  }, [liveMessages.length, thread.threadId, user?.id, account?.id]);
 
   // Apply cid: → data URI swap AFTER sanitization (sanitizer strips data: in src,
   // so doing this before would lose the images).
