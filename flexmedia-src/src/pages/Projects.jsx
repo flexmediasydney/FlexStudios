@@ -30,7 +30,28 @@ import EntityDataTable from "@/components/common/EntityDataTable";
 
 import KeyboardShortcutsModal from "@/components/common/KeyboardShortcutsModal";
 
-
+// When rebuilding a project-keyed group map (tasksByProject, timeLogsByProject),
+// preserve the prior sub-array reference for any project whose contents haven't
+// changed. Without this, every Realtime event for any task creates fresh array
+// references for ALL projects' tasks, which busts ProjectCardFields memo on
+// every card. With it, only the affected project's array changes reference, so
+// unrelated cards skip re-render entirely.
+function preserveStableSubArrays(next, prevRef) {
+  const prev = prevRef.current || {};
+  for (const k of Object.keys(next)) {
+    const a = next[k];
+    const b = prev[k];
+    if (b && b.length === a.length) {
+      let same = true;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) { same = false; break; }
+      }
+      if (same) next[k] = b;
+    }
+  }
+  prevRef.current = next;
+  return next;
+}
 
 export default function Projects() {
   const navigate = useNavigate();
@@ -167,35 +188,43 @@ export default function Projects() {
     return ids;
   }, [myTeamIds, allEmployeeRoles]);
 
-  // Bug fix: pre-compute task map BEFORE filteredProjects so sort can use it (avoids O(n*m) inside comparator)
-  const tasksByProject = useMemo(() => {
-    const map = {};
-    allTasks.forEach(t => {
+  // Bug fix: pre-compute task map BEFORE filteredProjects so sort can use it
+  // (avoids O(n*m) inside comparator). Single pass builds both:
+  //   tasksByProject     — non-subtask only (used by card progress / sort)
+  //   allTasksByProject  — every task incl. subtasks (used by filter checks)
+  // preserveStableSubArrays keeps unchanged projects' arrays at their prior
+  // reference so unrelated cards skip re-render on Realtime events.
+  const tasksByProjectRef = useRef({});
+  const allTasksByProjectRef = useRef({});
+  const { tasksByProject, allTasksByProject } = useMemo(() => {
+    const tbp = {};
+    const allTbp = {};
+    for (const t of allTasks) {
+      const pid = t.project_id;
+      if (!pid) continue;
+      if (!allTbp[pid]) allTbp[pid] = [];
+      allTbp[pid].push(t);
       if (!t.parent_task_id) {
-        if (!map[t.project_id]) map[t.project_id] = [];
-        map[t.project_id].push(t);
+        if (!tbp[pid]) tbp[pid] = [];
+        tbp[pid].push(t);
       }
-    });
-    return map;
+    }
+    return {
+      tasksByProject: preserveStableSubArrays(tbp, tasksByProjectRef),
+      allTasksByProject: preserveStableSubArrays(allTbp, allTasksByProjectRef),
+    };
   }, [allTasks]);
 
-  // Pre-compute ALL tasks (including subtasks) by project for filter assignment checks
-  const allTasksByProject = useMemo(() => {
-    const map = {};
-    allTasks.forEach(t => {
-      if (!map[t.project_id]) map[t.project_id] = [];
-      map[t.project_id].push(t);
-    });
-    return map;
-  }, [allTasks]);
-
+  const timeLogsByProjectRef = useRef({});
   const timeLogsByProject = useMemo(() => {
     const map = {};
-    allTimeLogs.forEach(l => {
-      if (!map[l.project_id]) map[l.project_id] = [];
-      map[l.project_id].push(l);
-    });
-    return map;
+    for (const l of allTimeLogs) {
+      const pid = l.project_id;
+      if (!pid) continue;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(l);
+    }
+    return preserveStableSubArrays(map, timeLogsByProjectRef);
   }, [allTimeLogs]);
 
   // Memoize filtered projects to prevent excessive recalculation (Fix #10)

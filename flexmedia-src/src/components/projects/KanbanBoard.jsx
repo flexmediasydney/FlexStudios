@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { retryWithBackoff } from "@/lib/networkResilience";
@@ -28,6 +28,31 @@ import { usePriceGate } from '@/components/auth/RoleGate';
 import { usePermissions } from '@/components/auth/PermissionGuard';
 
 const statusColumns = PROJECT_STAGES.map(s => ({ id: s.value, label: s.label, color: s.color }));
+
+// Stable empty-array reference used as a fallback for projects with no tasks /
+// time logs / emails. Without this, every renderCard call would create a fresh
+// `[]` for unmatched projects, busting React.memo on ProjectCardFields and
+// causing every card to re-render whenever the parent re-renders.
+const EMPTY_ARRAY = Object.freeze([]);
+
+// See preserveStableSubArrays in Projects.jsx — same purpose for the kanban
+// fallback path (when no parentTasks/parentTimeLogs are passed in).
+function preserveStableSubArrays(next, prevRef) {
+  const prev = prevRef.current || {};
+  for (const k of Object.keys(next)) {
+    const a = next[k];
+    const b = prev[k];
+    if (b && b.length === a.length) {
+      let same = true;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) { same = false; break; }
+      }
+      if (same) next[k] = b;
+    }
+  }
+  prevRef.current = next;
+  return next;
+}
 
 /* ─────────────────────────── CSS-in-JS animation styles ─────────────────────────── */
 const animationStyles = `
@@ -508,35 +533,44 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   );
 
   // Bug fix: pre-compute email map to avoid O(projects * emails) filtering per card render
+  const emailsByProjectRef = useRef({});
   const emailsByProject = useMemo(() => {
     const map = {};
-    allProjectEmails.forEach(e => {
-      if (!map[e.project_id]) map[e.project_id] = [];
-      map[e.project_id].push(e);
-    });
-    return map;
+    for (const e of allProjectEmails) {
+      const pid = e.project_id;
+      if (!pid) continue;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(e);
+    }
+    return preserveStableSubArrays(map, emailsByProjectRef);
   }, [allProjectEmails]);
 
-  // Bug fix: pre-compute task map to avoid O(projects * tasks) filtering per card render
+  // Bug fix: pre-compute task map to avoid O(projects * tasks) filtering per
+  // card render. preserveStableSubArrays keeps unchanged projects' arrays at
+  // their prior reference so cards memo-skip on Realtime events for unrelated
+  // projects.
+  const tasksByProjectRef = useRef({});
   const tasksByProject = useMemo(() => {
     const map = {};
-    allTasks.forEach(t => {
-      if (!t.parent_task_id) {
-        if (!map[t.project_id]) map[t.project_id] = [];
-        map[t.project_id].push(t);
-      }
-    });
-    return map;
+    for (const t of allTasks) {
+      const pid = t.project_id;
+      if (!pid || t.parent_task_id) continue;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(t);
+    }
+    return preserveStableSubArrays(map, tasksByProjectRef);
   }, [allTasks]);
 
-  // Bug fix: pre-compute time logs map
+  const timeLogsByProjectRef = useRef({});
   const timeLogsByProject = useMemo(() => {
     const map = {};
-    allTimeLogs.forEach(l => {
-      if (!map[l.project_id]) map[l.project_id] = [];
-      map[l.project_id].push(l);
-    });
-    return map;
+    for (const l of allTimeLogs) {
+      const pid = l.project_id;
+      if (!pid) continue;
+      if (!map[pid]) map[pid] = [];
+      map[pid].push(l);
+    }
+    return preserveStableSubArrays(map, timeLogsByProjectRef);
   }, [allTimeLogs]);
 
   const updateStatusMutation = useMutation({
@@ -1056,8 +1090,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                         {(() => {
                           const renderCard = (project, index) => {
                           // Bug fix: use pre-computed maps instead of O(n) filter per card
-                          const projectTasks = tasksByProject[project.id] || [];
-                          const projectTimeLogs = timeLogsByProject[project.id] || [];
+                          const projectTasks = tasksByProject[project.id] || EMPTY_ARRAY;
+                          const projectTimeLogs = timeLogsByProject[project.id] || EMPTY_ARRAY;
 
                           // Urgency classification
                           const urgency = getProjectUrgency(project, projectTasks);
@@ -1197,7 +1231,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                     {/* Email indicator */}
                                     <div className="flex items-center justify-end mt-1.5">
                                       <ProjectEmailIndicator
-                                        emails={emailsByProject[project.id] || []}
+                                        emails={emailsByProject[project.id] || EMPTY_ARRAY}
                                       />
                                     </div>
                                   </div>
