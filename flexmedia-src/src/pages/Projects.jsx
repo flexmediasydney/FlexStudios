@@ -409,7 +409,7 @@ export default function Projects() {
   // Column definitions for EntityDataTable (list view)
   const tableColumns = useMemo(() => {
     const fieldLabels = {
-      agency_agent: "Agency / Agent",
+      agency_agent: "Person and Organisation",
       shoot: "Shoot",
       price: "Price",
       invoiced_amount: "Invoiced",
@@ -497,7 +497,7 @@ export default function Projects() {
         },
         sortValue: (r) => {
           if (fieldId === "shoot") return r.shoot_date ?? "";
-          if (fieldId === "agency_agent") return r.client_name ?? r.agency_name ?? "";
+          if (fieldId === "agency_agent") return r.agent_name ?? r.client_name ?? r.agency_name ?? "";
           if (fieldId === "price") return r.calculated_price ?? r.price ?? 0;
           if (fieldId === "invoiced_amount") return r.invoiced_amount ?? null;
           return r[fieldId] ?? "";

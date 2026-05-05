@@ -208,23 +208,23 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
   const { visible: showPricing } = usePriceGate();
   switch (fieldId) {
     case "agency_agent": {
-      // The "agency" / organisation tied to the project lives in
-      // project.agency_name (denormalised from Agency.name when the agent is
-      // chosen). project.client_name is *agent name* — using it as the agency
-      // produced "No agency" everywhere because the fallback masked the real
-      // value. project.agent_name is the canonical agent display.
-      const agencyName = project.agency_name;
-      const agentName = project.agent_name || project.client_name;
-      if (!agencyName && !agentName) return null;
+      // Renders the field labelled "Person and Organisation" (ID is the
+      // legacy `agency_agent`). Person = agent, Organisation = agency.
+      // project.agency_name is the denormalised Agency.name; project.client_name
+      // confusingly stores the *agent name*, not the agency, so we use it only
+      // as a fallback for project.agent_name.
+      const personName = project.agent_name || project.client_name;
+      const organisationName = project.agency_name;
+      if (!personName && !organisationName) return null;
       return (
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
           <Building className="h-3.5 w-3.5 flex-shrink-0" />
-          <span className="truncate min-w-0" title={[agencyName, agentName].filter(Boolean).join(" · ")}>
-            {agencyName && <span>{agencyName}</span>}
-            {agencyName && agentName && (
+          <span className="truncate min-w-0" title={[personName, organisationName].filter(Boolean).join(" · ")}>
+            {personName && <span>{personName}</span>}
+            {personName && organisationName && (
               <span className="mx-1.5 text-muted-foreground/50">·</span>
             )}
-            {agentName && <span>{agentName}</span>}
+            {organisationName && <span>{organisationName}</span>}
           </span>
         </div>
       );

@@ -215,7 +215,7 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
                   {enabledFields.map(fieldId => {
                     if (fieldId === "status_timer" || fieldId === "tasks") return null;
                     if (fieldId === "price" && !canSeePricing) return null;
-                    const labels = { agency_agent: "Agency / Agent", shoot: "Shoot", price: "Price", priority: "Priority", property_type: "Type", products_packages: "Products & Packages", payment_status: "Payment", effort: "Effort" };
+                    const labels = { agency_agent: "Person and Organisation", shoot: "Shoot", price: "Price", priority: "Priority", property_type: "Type", products_packages: "Products & Packages", payment_status: "Payment", effort: "Effort" };
                     if (!labels[fieldId]) return null;
                     return <th key={fieldId} className="text-left p-4 font-medium text-sm">{labels[fieldId]}</th>;
                   })}

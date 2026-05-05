@@ -1,7 +1,9 @@
 import { useSyncExternalStore, useCallback } from "react";
 
 export const ALL_CARD_FIELDS = [
-  { id: "agency_agent",   label: "Agency / Agent",       group: "Client" },
+  // ID stays `agency_agent` so users' existing v4 storage keeps this field
+  // enabled — the rename is purely the user-facing label.
+  { id: "agency_agent",   label: "Person and Organisation", group: "Client" },
   { id: "products_packages", label: "Products & Packages", group: "Details" },
   { id: "price",          label: "Price",                group: "Finance", requiresPricing: true },
   { id: "product_category_tasks", label: "Task Progress", group: "Details" },
