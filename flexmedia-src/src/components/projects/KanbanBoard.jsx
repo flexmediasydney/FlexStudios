@@ -51,58 +51,70 @@ const animationStyles = `
     transform: rotate(2deg) scale(1.04);
   }
   .urgency-border-overdue  { border-left: 4px solid #ef4444; }
-  .urgency-border-today    { border-left: 4px solid #f97316; }
+  .urgency-border-urgent   { border-left: 4px solid #f97316; animation: urgency-flash-orange 1s ease-in-out infinite; }
+  .urgency-border-soon     { border-left: 4px solid #f97316; }
   .urgency-border-ontrack  { border-left: 4px solid #22c55e; }
   .urgency-border-none     { border-left: 4px solid transparent; }
+  @keyframes urgency-flash-orange {
+    0%, 100% { border-left-color: #f97316; }
+    50%      { border-left-color: #fed7aa; }
+  }
 `;
 
 /* ─────────────────────────── Urgency helpers ─────────────────────────── */
+// Card urgency is purely task-deadline driven:
+//   overdue → any active task past its due date           (red)
+//   urgent  → any active task due within 1h               (flashing orange)
+//   soon    → any active task due within 4h (>1h)         (orange)
+//   ontrack → otherwise                                   (green)
+// Project-level fields (shoot_date / delivery_date) are NOT considered —
+// they were producing false-positives for projects that had moved past
+// the shoot stage.
+const HOUR_MS = 60 * 60 * 1000;
+
+function parseTaskDeadline(raw) {
+  if (!raw) return null;
+  // Date-only strings ("YYYY-MM-DD") — treat the deadline as end-of-day
+  // local time so a task due "today" isn't flagged overdue at 12:01 AM.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const t = new Date(`${raw}T23:59:59`).getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+  const t = new Date(raw).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
 function getProjectUrgency(project, projectTasks) {
-  // Bug fix: use date-string comparison (YYYY-MM-DD) to avoid UTC-vs-local
-  // timezone mismatch when parsing date-only strings like "2026-03-25"
-  const todayStr = new Date().toLocaleDateString('en-CA'); // "YYYY-MM-DD"
+  const now = Date.now();
+  let hasOverdue = false;
+  let hasUrgent = false;
+  let hasSoon = false;
 
-  // Check project-level dates (slice to handle full ISO timestamps too)
-  const shootStr = project.shoot_date ? project.shoot_date.slice(0, 10) : null;
-  const deliveryStr = project.delivery_date ? project.delivery_date.slice(0, 10) : null;
-
-  // Bug fix: exclude deleted tasks — the caller passes all tasks from the
-  // pre-computed map which does not filter is_deleted
-  const hasOverdueTask = projectTasks.some(t => {
-    if (t.is_completed || t.is_deleted || !t.due_date) return false;
-    return t.due_date.slice(0, 10) < todayStr;
-  });
-
-  // Check if project shoot date is past and project not delivered
-  const shootOverdue = shootStr && shootStr < todayStr &&
-    !['delivered', 'in_revision', 'cancelled'].includes(project.status);
-
-  // Check delivery date overdue
-  const deliveryOverdue = deliveryStr && deliveryStr < todayStr &&
-    !['delivered', 'cancelled'].includes(project.status);
-
-  if (hasOverdueTask || shootOverdue || deliveryOverdue) {
-    return 'overdue';
+  for (const t of projectTasks) {
+    if (t.is_completed || t.is_deleted || t.is_archived) continue;
+    const due = parseTaskDeadline(t.due_date);
+    if (due === null) continue;
+    const delta = due - now;
+    if (delta < 0) {
+      hasOverdue = true;
+      break; // overdue dominates — short-circuit
+    } else if (delta <= HOUR_MS) {
+      hasUrgent = true;
+    } else if (delta <= 4 * HOUR_MS) {
+      hasSoon = true;
+    }
   }
 
-  // Check for due-today
-  const hasTodayTask = projectTasks.some(t => {
-    if (t.is_completed || t.is_deleted || !t.due_date) return false;
-    return t.due_date.slice(0, 10) === todayStr;
-  });
-  const shootToday = shootStr === todayStr;
-  const deliveryToday = deliveryStr === todayStr;
-
-  if (hasTodayTask || shootToday || deliveryToday) {
-    return 'today';
-  }
-
+  if (hasOverdue) return 'overdue';
+  if (hasUrgent) return 'urgent';
+  if (hasSoon) return 'soon';
   return 'ontrack';
 }
 
 const urgencyBorderClass = {
   overdue: 'urgency-border-overdue',
-  today: 'urgency-border-today',
+  urgent: 'urgency-border-urgent',
+  soon: 'urgency-border-soon',
   ontrack: 'urgency-border-ontrack',
 };
 
@@ -1174,11 +1186,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                           Premium
                                         </span>
                                       )}
-                                      {project.shoot_date && (() => {
-                                        // Bug fix: use string comparison to avoid UTC-vs-local mismatch
-                                        return project.shoot_date.slice(0, 10) < new Date().toLocaleDateString('en-CA');
-                                      })() &&
-                                       !['delivered', 'in_revision', 'cancelled'].includes(project.status) && (
+                                      {urgency === 'overdue' && (
                                         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40
                                                          text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 font-medium animate-pulse">
                                           Overdue
