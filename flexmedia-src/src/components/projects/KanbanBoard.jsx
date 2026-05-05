@@ -157,7 +157,7 @@ const TaskProgressBar = React.memo(function TaskProgressBar({ tasks }) {
   const barColor = pct === 100 ? 'bg-green-500' : pct >= 50 ? 'bg-blue-500' : pct > 0 ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-600';
 
   return (
-    <div className="flex items-center gap-1.5 mt-1.5">
+    <div className="flex items-center gap-1.5 mt-1">
       <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
         <div
           className={`h-full ${barColor} rounded-full transition-all duration-500 ease-out`}
@@ -1146,7 +1146,7 @@ export default function KanbanBoard({ projects = [], products, packages, agencie
                                   onClick={onCardClick}
                                 >
                                   {/* Card Header */}
-                                  <div className="px-3 py-2 border-b border-border/50 flex items-start gap-1.5">
+                                  <div className="px-3 py-1.5 border-b border-border/50 flex items-start gap-1.5">
                                     {/* Drag handle indicator */}
                                     <div className="flex-shrink-0 mt-0.5 opacity-0 group-hover/card:opacity-40 transition-opacity text-muted-foreground" aria-hidden="true" title="Drag to move">
                                       <svg width="6" height="14" viewBox="0 0 6 14" fill="currentColor">
@@ -1162,7 +1162,7 @@ export default function KanbanBoard({ projects = [], products, packages, agencie
                                   </div>
 
                                   {/* Card Content */}
-                                  <div className="px-3 pb-2">
+                                  <div className="px-3 pb-1.5">
                                     <div className="scale-90 origin-top-left">
                                       <ProjectCardFields
                                         project={project}
@@ -1190,12 +1190,17 @@ export default function KanbanBoard({ projects = [], products, packages, agencie
                                       </div>
                                     )}
 
-                                    {/* Email indicator */}
-                                    <div className="flex items-center justify-end mt-1.5">
-                                      <ProjectEmailIndicator
-                                        emails={emailsByProject[project.id] || EMPTY_ARRAY}
-                                      />
-                                    </div>
+                                    {/* Email indicator — only mount the
+                                         flex wrapper when there are emails,
+                                         otherwise mt-1 reserves dead space
+                                         on every emailless card. */}
+                                    {(emailsByProject[project.id]?.length || 0) > 0 && (
+                                      <div className="flex items-center justify-end mt-1">
+                                        <ProjectEmailIndicator
+                                          emails={emailsByProject[project.id] || EMPTY_ARRAY}
+                                        />
+                                      </div>
+                                    )}
                                   </div>
                                 </Card>
                                 );

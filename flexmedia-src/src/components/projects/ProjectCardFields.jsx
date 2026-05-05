@@ -578,7 +578,7 @@ export const ProjectCardFields = memo(function ProjectCardFields({ project, enab
     && taskBuckets.completedAll < taskBuckets.totalAll;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       {enabledFields.map(fieldId => {
         if (TASK_BASED_FIELDS.has(fieldId) && !tasksInFlight) return null;
         return (
