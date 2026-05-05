@@ -1,11 +1,10 @@
 import { memo, useMemo, useDeferredValue } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, User, Building, DollarSign, Flag, CheckSquare, ExternalLink, FileText, CreditCard, CheckCircle2, Package } from "lucide-react";
+import { Calendar, Clock, Building, Flag, CheckSquare, CreditCard, CheckCircle2, Package } from "lucide-react";
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { fmtDate, fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { CountdownTimer } from "./TaskManagement";
 import ProjectStatusTimer from "./ProjectStatusTimer";
-import { stageConfig } from "./projectStatuses";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import ProjectCardEffort from "./ProjectCardEffort";
 
@@ -16,16 +15,25 @@ const priorityColors = {
   urgent: "bg-red-100 text-red-600"
 };
 
-const outcomeColors = {
-  open: "bg-blue-100 text-blue-700",
-  won: "bg-green-100 text-green-700",
-  lost: "bg-red-100 text-red-700"
-};
-
 const paymentColors = {
   unpaid: "bg-amber-100 text-amber-700",
   paid: "bg-green-100 text-green-700"
 };
+
+// Format an "HH:MM" or "HH:MM:SS" time string as a 12h "9:30 AM" label.
+// Handles ISO datetimes too (slices the time portion off). Returns null
+// for unparseable input so the shoot field can degrade gracefully.
+function formatShootTime(raw) {
+  if (!raw) return null;
+  const m = String(raw).match(/(\d{1,2}):(\d{2})/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (Number.isNaN(h) || Number.isNaN(min)) return null;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(min).padStart(2, '0')} ${period}`;
+}
 
 // Mirrors src/components/settings/RoleTaskMatrix.jsx — kept inline so the
 // card field stays self-contained.
@@ -155,51 +163,62 @@ function computeTaskBuckets(tasks, productById) {
 export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, project, products = [], packages = [], tasks = [], timeLogs = [], taskBuckets = null }) {
   const { visible: showPricing } = usePriceGate();
   switch (fieldId) {
-    case "agency_name": {
-      const name = project.client_name || project.agency_name;
-      if (!name) return null;
+    case "agency_agent": {
+      const agencyName = project.client_name || project.agency_name;
+      const agentName = project.agent_name;
+      if (!agencyName && !agentName) return null;
       return (
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
           <Building className="h-3.5 w-3.5 flex-shrink-0" />
-          <span className="truncate max-w-[160px]" title={name}>{name}</span>
+          <span className="truncate min-w-0" title={[agencyName, agentName].filter(Boolean).join(" · ")}>
+            {agencyName || <span className="italic text-muted-foreground/70">No agency</span>}
+            {agentName && (
+              <>
+                <span className="mx-1.5 text-muted-foreground/50">·</span>
+                <span>{agentName}</span>
+              </>
+            )}
+          </span>
         </div>
       );
     }
-    case "agent_name": {
-      if (!project.agent_id && !project.agent_name) return null;
-      const agentName = project.agent_name;
-      if (!agentName) return null;
-      return (
-        <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
-          <User className="h-3.5 w-3.5 flex-shrink-0" />
-          <span className="truncate max-w-[140px]" title={agentName}>{agentName}</span>
-        </div>
-      );
-    }
-    case "shoot_date": {
+    case "shoot": {
       if (!project.shoot_date) return null;
+      // Date-string comparison avoids UTC drift — matches the kanban
+      // bottom-of-card logic that this field replaced.
+      const shootStr = project.shoot_date.slice(0, 10);
+      const todayStr = new Date().toLocaleDateString('en-CA');
+      const tmrStr = new Date(Date.now() + 86400000).toLocaleDateString('en-CA');
+      const diffDays = Math.round((new Date(shootStr) - new Date(todayStr)) / 86400000);
+      let dayLabel;
+      if (diffDays === 0) dayLabel = 'Today';
+      else if (diffDays === 1) dayLabel = 'Tomorrow';
+      else if (diffDays === -1) dayLabel = 'Yesterday';
+      else if (diffDays < 0) dayLabel = `${Math.abs(diffDays)}d ago`;
+      else if (diffDays < 7) dayLabel = new Date(project.shoot_date).toLocaleDateString('en-AU', { weekday: 'short' });
+      else dayLabel = new Date(project.shoot_date).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+
+      let toneClass = 'text-muted-foreground';
+      if (shootStr < todayStr) toneClass = 'text-red-500 font-semibold';
+      else if (shootStr === todayStr) toneClass = 'text-amber-600 font-semibold';
+      else if (shootStr === tmrStr) toneClass = 'text-blue-600';
+
+      const timeLabel = formatShootTime(project.shoot_time);
+
       return (
-        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+        <div className={`flex items-center gap-1.5 text-xs ${toneClass}`}>
           <Calendar className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>{fmtDate(project.shoot_date, 'MMM d, yyyy')}</span>
-        </div>
-      );
-    }
-    case "shoot_time": {
-      if (!project.shoot_time) return null;
-      return (
-        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <Clock className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>{project.shoot_time}</span>
-        </div>
-      );
-    }
-    case "delivery_date": {
-      if (!project.delivery_date) return null;
-      return (
-        <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
-          <Calendar className="h-3.5 w-3.5 flex-shrink-0" />
-          <span>Delivery: {fmtDate(project.delivery_date, 'MMM d, yyyy')}</span>
+          <span>{dayLabel}</span>
+          {timeLabel && (
+            <>
+              <span className="opacity-50">·</span>
+              <Clock className="h-3 w-3 flex-shrink-0 opacity-70" />
+              <span>{timeLabel}</span>
+            </>
+          )}
+          {project.tonomo_is_twilight && (
+            <span className="text-purple-500" title="Twilight">🌅</span>
+          )}
         </div>
       );
     }
@@ -231,31 +250,32 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
         </Badge>
       );
     }
-    case "products": {
-      const items = (project.products || [])
+    case "products_packages": {
+      const productItems = (project.products || [])
         .map(item => products.find(p => p.id === (item.product_id || item))?.name)
         .filter(Boolean);
-      if (!items.length) return null;
-      return (
-        <div className="flex flex-wrap gap-1">
-          {items.slice(0, 3).map((name, i) => (
-            <Badge key={i} variant="outline" className="text-xs">{name}</Badge>
-          ))}
-          {items.length > 3 && <Badge variant="outline" className="text-xs">+{items.length - 3}</Badge>}
-        </div>
-      );
-    }
-    case "packages": {
-      const items = (project.packages || [])
+      const packageItems = (project.packages || [])
         .map(item => packages.find(p => p.id === (item.package_id || item))?.name)
         .filter(Boolean);
-      if (!items.length) return null;
+      if (!productItems.length && !packageItems.length) return null;
+      // Packages first (more concrete deliverable), then products. Cap each
+      // group separately so neither steals the other's badge slots.
+      const PKG_LIMIT = 2;
+      const PROD_LIMIT = 3;
       return (
         <div className="flex flex-wrap gap-1">
-          {items.slice(0, 2).map((name, i) => (
-            <Badge key={i} variant="secondary" className="text-xs">📦 {name}</Badge>
+          {packageItems.slice(0, PKG_LIMIT).map((name, i) => (
+            <Badge key={`pkg-${i}`} variant="secondary" className="text-xs">📦 {name}</Badge>
           ))}
-          {items.length > 2 && <Badge variant="secondary" className="text-xs">+{items.length - 2}</Badge>}
+          {packageItems.length > PKG_LIMIT && (
+            <Badge variant="secondary" className="text-xs">+{packageItems.length - PKG_LIMIT}</Badge>
+          )}
+          {productItems.slice(0, PROD_LIMIT).map((name, i) => (
+            <Badge key={`prod-${i}`} variant="outline" className="text-xs">{name}</Badge>
+          ))}
+          {productItems.length > PROD_LIMIT && (
+            <Badge variant="outline" className="text-xs">+{productItems.length - PROD_LIMIT}</Badge>
+          )}
         </div>
       );
     }
@@ -631,14 +651,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
          </div>
        );
      }
-    case "outcome": {
-      if (!project.outcome || project.outcome === "open") return null;
-      return (
-        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${outcomeColors[project.outcome]}`}>
-          {project.outcome === "won" ? "✓ Won" : "✗ Lost"}
-        </span>
-      );
-    }
     case "payment_status": {
       const status = project.payment_status || "unpaid";
       return (
@@ -668,30 +680,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
           <Package className="h-3 w-3" aria-hidden="true" />
           Partially Delivered
         </span>
-      );
-    }
-    case "notes": {
-      if (!project.notes) return null;
-      return (
-        <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-          <FileText className="h-3 w-3 mt-0.5 flex-shrink-0" />
-          <span className="line-clamp-2">{project.notes}</span>
-        </div>
-      );
-    }
-    case "delivery_link": {
-      if (!project.delivery_link) return null;
-      return (
-        <a
-          href={project.delivery_link}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-          onClick={e => e.stopPropagation()}
-        >
-          <ExternalLink className="h-3 w-3" />
-          View Deliverables
-        </a>
       );
     }
     case "effort": {

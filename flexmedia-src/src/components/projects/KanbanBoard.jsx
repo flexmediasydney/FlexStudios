@@ -17,8 +17,8 @@ import { PROJECT_STAGES } from "./projectStatuses";
 import { ProjectCardFields } from "./ProjectCardFields";
 import { useCardFields } from "./useCardFields";
 import {
-  DollarSign, CheckCircle2, Clock, AlertCircle, Mail, Calendar,
-  Filter, X, ChevronDown, ChevronRight, Columns3, LayoutList, Camera, Building, CalendarRange
+  DollarSign, CheckCircle2, Clock, AlertCircle, Mail,
+  Filter, X, Columns3, LayoutList, Camera, Building, CalendarRange
 } from "lucide-react";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
@@ -1140,7 +1140,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                   }}
                                   tabIndex={0}
                                   role="button"
-                                  aria-label={`${project.title}${project.property_address ? ', ' + project.property_address : ''}`}
+                                  aria-label={project.title}
                                   onMouseEnter={() => prefetchProject(project.id)}
                                   onKeyDown={onCardKeyDown}
                                   onClick={onCardClick}
@@ -1157,8 +1157,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                       </svg>
                                     </div>
                                     <div className="min-w-0 flex-1">
-                                    <h4 className="font-semibold truncate text-xs leading-tight group-hover/card:text-primary transition-colors" title={project.title}>{project.title}</h4>
-                                    <p className="text-xs text-muted-foreground truncate mt-0.5" title={project.property_address}>{project.property_address}</p>
+                                      <h4 className="font-semibold truncate text-xs leading-tight group-hover/card:text-primary transition-colors" title={project.title}>{project.title}</h4>
                                     </div>
                                   </div>
 
@@ -1177,40 +1176,6 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
 
                                     {/* ── Mini task progress bar (requirement #5) ── */}
                                     <TaskProgressBar tasks={projectTasks} />
-
-                                    {/* Shoot date with color coding */}
-                                    {project.shoot_date && (
-                                      <div className={`flex items-center gap-1 text-[10px] mt-1 flex-wrap ${
-                                        (() => {
-                                          // Bug fix: use string comparison to avoid UTC-vs-local timezone mismatch
-                                          const shootStr = project.shoot_date.slice(0, 10);
-                                          const todayStr = new Date().toLocaleDateString('en-CA');
-                                          const tmrStr = new Date(Date.now() + 86400000).toLocaleDateString('en-CA');
-                                          if (shootStr < todayStr) return 'text-red-500 font-semibold';
-                                          if (shootStr === todayStr) return 'text-amber-600 font-semibold';
-                                          if (shootStr === tmrStr) return 'text-blue-600';
-                                          return 'text-muted-foreground';
-                                        })()
-                                      }`}>
-                                        <Calendar className="h-3 w-3" />
-                                        {(() => {
-                                          // Bug fix: use date-string diff to avoid timezone drift
-                                          const shootStr = project.shoot_date.slice(0, 10);
-                                          const todayStr = new Date().toLocaleDateString('en-CA');
-                                          const d = new Date(project.shoot_date);
-                                          const diff = Math.round((new Date(shootStr) - new Date(todayStr)) / 86400000);
-                                          if (diff === 0) return 'Today';
-                                          if (diff === 1) return 'Tomorrow';
-                                          if (diff === -1) return 'Yesterday';
-                                          if (diff < 0) return `${Math.abs(diff)}d ago`;
-                                          if (diff < 7) return d.toLocaleDateString('en-AU', { weekday: 'short' });
-                                          return d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
-                                        })()}
-                                        {project.tonomo_is_twilight && (
-                                          <span className="text-purple-500" title="Twilight">🌅</span>
-                                        )}
-                                      </div>
-                                    )}
 
                                     {/* Pricing tier & overdue chips */}
                                     <div className="flex items-center gap-1 flex-wrap mt-1">

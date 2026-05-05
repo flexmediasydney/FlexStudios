@@ -215,7 +215,7 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
                   {enabledFields.map(fieldId => {
                     if (fieldId === "status_timer" || fieldId === "tasks") return null;
                     if (fieldId === "price" && !canSeePricing) return null;
-                    const labels = { agency_name: "Agency", agent_name: "Agent", shoot_date: "Shoot Date", shoot_time: "Time", delivery_date: "Delivery", price: "Price", priority: "Priority", property_type: "Type", products: "Products", packages: "Packages", outcome: "Outcome", payment_status: "Payment", notes: "Notes", delivery_link: "Link", effort: "Effort" };
+                    const labels = { agency_agent: "Agency / Agent", shoot: "Shoot", price: "Price", priority: "Priority", property_type: "Type", products_packages: "Products & Packages", payment_status: "Payment", effort: "Effort" };
                     if (!labels[fieldId]) return null;
                     return <th key={fieldId} className="text-left p-4 font-medium text-sm">{labels[fieldId]}</th>;
                   })}
@@ -247,7 +247,7 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
                       {enabledFields.map(fieldId => {
                         if (fieldId === "status_timer") return null;
                         if (fieldId === "price" && !canSeePricing) return null;
-                        const validFields = { agency_name: true, agent_name: true, shoot_date: true, shoot_time: true, delivery_date: true, price: true, priority: true, property_type: true, products: true, packages: true, outcome: true, payment_status: true, notes: true, delivery_link: true, effort: true };
+                        const validFields = { agency_agent: true, shoot: true, price: true, priority: true, property_type: true, products_packages: true, payment_status: true, effort: true };
                         if (!validFields[fieldId]) return null;
                         return (
                           <td key={fieldId} className="p-4">

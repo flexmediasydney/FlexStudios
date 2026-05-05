@@ -409,21 +409,14 @@ export default function Projects() {
   // Column definitions for EntityDataTable (list view)
   const tableColumns = useMemo(() => {
     const fieldLabels = {
-      agency_name: "Agency",
-      agent_name: "Agent",
-      shoot_date: "Shoot Date",
-      shoot_time: "Time",
-      delivery_date: "Delivery",
+      agency_agent: "Agency / Agent",
+      shoot: "Shoot",
       price: "Price",
       invoiced_amount: "Invoiced",
       priority: "Priority",
       property_type: "Type",
-      products: "Products",
-      packages: "Packages",
-      outcome: "Outcome",
+      products_packages: "Products & Packages",
       payment_status: "Payment",
-      notes: "Notes",
-      delivery_link: "Link",
       effort: "Effort",
     };
 
@@ -485,7 +478,7 @@ export default function Projects() {
       cols.push({
         key: fieldId,
         label: fieldLabels[fieldId],
-        sortable: ["agency_name", "agent_name", "shoot_date", "delivery_date", "price", "invoiced_amount", "priority", "outcome", "payment_status", "property_type"].includes(fieldId),
+        sortable: ["agency_agent", "shoot", "price", "invoiced_amount", "priority", "payment_status", "property_type"].includes(fieldId),
         align: ["price", "invoiced_amount"].includes(fieldId) ? "right" : undefined,
         width: fieldId === "price" ? "110px" : (fieldId === "invoiced_amount" ? "110px" : undefined),
         render: (project) => {
@@ -503,8 +496,8 @@ export default function Projects() {
           );
         },
         sortValue: (r) => {
-          if (fieldId === "shoot_date") return r.shoot_date ?? "";
-          if (fieldId === "delivery_date") return r.delivery_date ?? "";
+          if (fieldId === "shoot") return r.shoot_date ?? "";
+          if (fieldId === "agency_agent") return r.client_name ?? r.agency_name ?? "";
           if (fieldId === "price") return r.calculated_price ?? r.price ?? 0;
           if (fieldId === "invoiced_amount") return r.invoiced_amount ?? null;
           return r[fieldId] ?? "";
