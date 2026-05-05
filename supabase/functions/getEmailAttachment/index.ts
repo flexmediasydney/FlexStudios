@@ -1,7 +1,10 @@
 import { getAdminClient, getUserFromReq, handleCors, jsonResponse, errorResponse, serveWithAudit } from '../_shared/supabase.ts';
 
-const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID')!;
-const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CLIENT_SECRET')!;
+// Same env vars every other Google function uses (getGmailOAuthUrl, syncGmailMessages, etc).
+// Earlier code referenced GOOGLE_CLIENT_ID/SECRET which don't exist in this project's
+// Supabase secrets — refresh always 500'd with invalid_client.
+const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID')!;
+const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET')!;
 
 const refreshAccessToken = async (refreshToken: string): Promise<string> => {
   const response = await fetch('https://oauth2.googleapis.com/token', {
