@@ -14,8 +14,9 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { api } from "@/api/supabaseClient";
 import { retryWithBackoff } from "@/lib/networkResilience";
-import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
-import { useQuery } from "@tanstack/react-query";
+import { useEntityList } from "@/components/hooks/useEntityData";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Loader2, Star, Zap, Package, Box, Trash2, Edit, Plus, MapPin, AlertCircle, User, DollarSign, Info, CheckCircle } from "lucide-react";
 import AddressInput from "./AddressInput";
 import AgentSearchField from "./AgentSearchField";
@@ -38,6 +39,7 @@ import { toast } from "sonner";
 export default function ProjectForm({ project, open, onClose, onSave }) {
   const { canSeePricing } = usePermissions();
   const { canEdit, canView } = useEntityAccess('projects');
+  const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
     title: "",
     agent_id: "",
@@ -60,18 +62,12 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
   useEffect(() => {
     latestAgentRef.current = { agent_id: formData.agent_id, agency_id: formData.agency_id };
   }, [formData.agent_id, formData.agency_id]);
-  const refreshTimerRef = useRef(null);
   const [titleOverride, setTitleOverride] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(null);
   const [initialFormData, setInitialFormData] = useState(project || {});
   const [saveError, setSaveError] = useState(null);
-
-  // Clean up pending timers on unmount to prevent setState-after-unmount
-  useEffect(() => () => {
-    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-  }, []);
 
   // Monitor escape key for unsaved changes warning
   useEscapeKeyWarning(unsavedChanges);
@@ -684,14 +680,11 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
         }
       }
 
-        // Force entity cache refresh for tasks after backend sync completes.
-        // Use a ref so the timer is cleaned up if the component unmounts.
-        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = setTimeout(() => {
-          refetchEntityList('ProjectTask');
-          refetchEntityList('Project');
-          refreshTimerRef.current = null;
-        }, 2500);
+        // applyProjectRoleDefaults + syncProjectTasksFromProducts have already
+        // awaited above, so server state is final by here. Invalidate scoped
+        // task cache + project cache so TaskManagement / staff bar / kanban
+        // pick up the new assignments without a manual refresh.
+        invalidateProjectCaches(queryClient, { tasks: true, project: true });
       }
 
       // Fix 7 — update the baseline so subsequent edits track changes correctly

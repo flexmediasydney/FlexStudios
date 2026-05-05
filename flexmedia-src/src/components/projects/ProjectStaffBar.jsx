@@ -15,6 +15,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useRoleMappings, projectHasCategoryFromMappings, isRoleRequiredForProject } from "@/components/hooks/useRoleMappings";
+import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 
 const ROLE_ICONS = {
   project_owner: Crown,
@@ -131,11 +132,6 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
       setOpen(false);
       toast.success("Staff assignment updated");
 
-      // Realtime patches the Project entity cache automatically (ensureSubscription).
-      // The TanStack Query keys above are stale aliases; the entity layer is the
-      // source of truth. ProjectTask invalidation only matters for legacy callers.
-      queryClient.invalidateQueries({ queryKey: ["entity-list", "ProjectTask"] });
-
       // Resync onsite tasks when photographer or videographer changes
       const onsiteRoleFields = ['photographer_id', 'onsite_staff_1_id', 'videographer_id', 'onsite_staff_2_id'];
       const isOnsiteRoleChange = onsiteRoleFields.some(f => data[f] !== undefined);
@@ -143,26 +139,54 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
         api.functions.invoke('syncOnsiteEffortTasks', { project_id: project.id }).catch(() => {});
       }
 
-      // Re-assign tasks for ALL roles (not just onsite)
+      // Re-assign tasks for ALL roles. Optimistically patch the scoped task
+      // cache so TaskManagement reflects the new assignee immediately, then
+      // run server-side updates and invalidate to reconcile.
       if (project?.id && data) {
         const allRoleFields = ['photographer_id', 'videographer_id', 'image_editor_id', 'video_editor_id', 'floorplan_editor_id', 'drone_editor_id', 'project_owner_id'];
+        const updatePromises = [];
+
         for (const field of allRoleFields) {
           if (field in data) {
             const roleName = field.replace('_id', '');
             const newId = data[field] || null;
             const newName = data[field.replace('_id', '_name')] || null;
             const newType = data[field.replace('_id', '_type')] || 'user';
-            api.entities.ProjectTask.filter({ project_id: project.id }, null, 200).then(tasks => {
+
+            // Optimistic patch: scoped task cache (the key TaskManagement reads)
+            queryClient.setQueriesData(
+              { queryKey: ['project-tasks-scoped', project.id] },
+              (prev) => {
+                if (!Array.isArray(prev)) return prev;
+                return prev.map(t => {
+                  if (t.auto_assign_role !== roleName || t.is_deleted) return t;
+                  return newType === 'team'
+                    ? { ...t, assigned_to: null, assigned_to_name: null, assigned_to_team_id: newId, assigned_to_team_name: newName }
+                    : { ...t, assigned_to: newId, assigned_to_name: newName, assigned_to_team_id: null, assigned_to_team_name: null };
+                });
+              }
+            );
+
+            const p = api.entities.ProjectTask.filter({ project_id: project.id }, null, 200).then(tasks => {
               const matching = tasks.filter(t => t.auto_assign_role === roleName && !t.is_deleted);
-              Promise.allSettled(matching.map(t => {
+              return Promise.allSettled(matching.map(t => {
                 const updates = newType === 'team'
                   ? { assigned_to: null, assigned_to_name: null, assigned_to_team_id: newId, assigned_to_team_name: newName }
                   : { assigned_to: newId, assigned_to_name: newName, assigned_to_team_id: null, assigned_to_team_name: null };
                 return api.entities.ProjectTask.update(t.id, updates);
-              })).then(() => queryClient.invalidateQueries({ queryKey: ["entity-list", "ProjectTask"] }));
+              }));
             }).catch(() => {});
+            updatePromises.push(p);
           }
         }
+
+        // After all server-side reassignments settle, reconcile both scoped
+        // and legacy task caches plus the project entity cache.
+        Promise.allSettled(updatePromises).then(() => {
+          invalidateProjectCaches(queryClient, { tasks: true, project: true });
+        });
+      } else {
+        invalidateProjectCaches(queryClient, { project: true });
       }
     },
     onError: (err) => toast.error(err?.message || "Failed to update staff assignment"),
