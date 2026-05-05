@@ -34,7 +34,20 @@ function formatTime(seconds) {
 export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = [], revisions = [] }) {
    const [tick, setTick] = useState(0);
 
-   const hasRunning = timeLogs.some(l => l.is_active && l.status === "running");
+   // Belt-and-braces: parent groups timeLogs by `l.project_id`, but a few
+   // historical logs were created without `project_id` set (only `task_id`).
+   // Those rows were getting dropped from the parent map and the card showed
+   // "0m / 5h" — actual side empty even though Timer entries existed for the
+   // project's tasks. Re-include them here by matching on task_id ∈ tasks
+   // so the actual side reflects every log linked to this project's work.
+   const projectLogs = useMemo(() => {
+     const taskIds = new Set(tasks.map(t => t.id));
+     return timeLogs.filter(l =>
+       l.project_id === projectId || (l.task_id && taskIds.has(l.task_id))
+     );
+   }, [timeLogs, tasks, projectId]);
+
+   const hasRunning = projectLogs.some(l => l.is_active && l.status === "running");
 
    const onTick = useCallback(() => setTick(t => t + 1), []);
    useVisibleInterval(onTick, 1000, { enabled: hasRunning });
@@ -43,9 +56,9 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
    const _tick = tick;
 
    const actualSeconds = useMemo(
-     () => timeLogs.reduce((sum, log) => sum + computeLogSeconds(log), 0),
+     () => projectLogs.reduce((sum, log) => sum + computeLogSeconds(log), 0),
      // eslint-disable-next-line react-hooks/exhaustive-deps
-     [timeLogs, tick]
+     [projectLogs, tick]
    );
 
    const estimatedSeconds = useMemo(() => {
@@ -74,11 +87,11 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
          !t.is_deleted && !t.is_archived && matchesRevision(t, rev)
        );
        return sum + revisionTasks.reduce((taskSum, task) => {
-         const revisionLogs = timeLogs.filter(l => l.task_id === task.id);
+         const revisionLogs = projectLogs.filter(l => l.task_id === task.id);
          return taskSum + revisionLogs.reduce((logSum, log) => logSum + computeLogSeconds(log), 0);
        }, 0);
      }, 0);
-   }, [revisions, tasks, timeLogs]);
+   }, [revisions, tasks, projectLogs]);
 
    const revisionEstimatedSeconds = useMemo(() => {
      return revisions.reduce((sum, rev) => {

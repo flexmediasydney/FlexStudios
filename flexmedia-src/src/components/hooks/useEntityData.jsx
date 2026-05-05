@@ -73,7 +73,12 @@ const ENTITY_LIST_LIMITS = {
   PulseTimeline: 50000,
   // ProjectTask can grow fast: ~17 tasks per project × hundreds of projects + revisions
   ProjectTask: 5000,
-  TaskTimeLog: 5000,
+  // TaskTimeLog grows ~1 row per Timer start/stop, plus auto-onsite logs from
+  // logOnsiteEffortOnUpload. Bumped 5000 → 15000 (2026-05-05) because busy
+  // accounts crossed 5k and were silently truncating older logs out of the
+  // shared cache, which made the kanban "actual / estimated" effort badge
+  // show "0m / 5h" on projects that had real Timer history.
+  TaskTimeLog: 15000,
   // EmailMessage rows include full HTML bodies (often 10-50KB each). The 10000
   // default was paginating through the whole table on every page load via
   // Layout.jsx + GlobalSearch.jsx and tipped Postgres into statement_timeout

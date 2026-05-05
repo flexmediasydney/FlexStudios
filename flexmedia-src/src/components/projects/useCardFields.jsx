@@ -5,12 +5,7 @@ export const ALL_CARD_FIELDS = [
   { id: "agency_agent",   label: "Agency / Agent",       group: "Client" },
   { id: "products_packages", label: "Products & Packages", group: "Details" },
   { id: "price",          label: "Price",                group: "Finance", requiresPricing: true },
-  { id: "priority",       label: "Priority",             group: "Details" },
-  { id: "property_type",  label: "Property Type",        group: "Details" },
-  { id: "status_timer",   label: "Status Timer",         group: "Details" },
-  { id: "tasks",          label: "Active Tasks",         group: "Details" },
   { id: "product_category_tasks", label: "Task Progress", group: "Details" },
-  { id: "requests",       label: "Requests",             group: "Details" },
   { id: "payment_status", label: "Payment",              group: "Finance" },
   { id: "partially_delivered", label: "Partially Delivered", group: "Details" },
   { id: "effort",         label: "Effort (Actual / Est.)", group: "Details" },
@@ -20,13 +15,13 @@ export const ALL_CARD_FIELDS = [
 // Default: enabled field IDs in display order. `shoot` is intentionally last
 // so the combined date+time row sits at the bottom of the card.
 const DEFAULT_ENABLED = [
-  "agency_agent", "products_packages", "price", "priority", "status_timer", "tasks", "requests", "shoot"
+  "agency_agent", "products_packages", "price", "product_category_tasks", "payment_status", "effort", "shoot"
 ];
 
-// v3: dropped Delivery Link / Notes / Delivery Date / Outcome and merged
-// Agency+Agent, Products+Packages, Shoot Date+Time. Bumped so users get the
-// new defaults instead of stale field IDs that no longer render anything.
-const STORAGE_KEY = "project_card_fields_v3";
+// v4: dropped Priority / Requests / Active Tasks / Property Type / Status
+// Timer from card field options. Bumped so users get the new defaults
+// instead of stale field IDs that no longer render anything.
+const STORAGE_KEY = "project_card_fields_v4";
 
 export function useCardFields() {
   // Store ONLY the ordered list of enabled IDs.

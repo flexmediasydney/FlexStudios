@@ -1,19 +1,11 @@
 import { memo, useMemo, useDeferredValue } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, Building, Flag, CheckSquare, CreditCard, CheckCircle2, Package } from "lucide-react";
+import { Calendar, Clock, Building, CheckSquare, CreditCard, CheckCircle2, Package } from "lucide-react";
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { fmtDate, fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { CountdownTimer } from "./TaskManagement";
-import ProjectStatusTimer from "./ProjectStatusTimer";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import ProjectCardEffort from "./ProjectCardEffort";
-
-const priorityColors = {
-  low: "bg-slate-100 text-slate-600",
-  normal: "bg-blue-100 text-blue-600",
-  high: "bg-amber-100 text-amber-700",
-  urgent: "bg-red-100 text-red-600"
-};
 
 const paymentColors = {
   unpaid: "bg-amber-100 text-amber-700",
@@ -49,25 +41,78 @@ const CATEGORY_LABELS = {
 
 const CATEGORY_ORDER = ["photography", "video", "drone", "floorplan", "virtual_staging", "editing", "other"];
 
-const CATEGORY_BAR_COLORS = {
-  photography: "bg-blue-500",
-  video: "bg-rose-500",
-  drone: "bg-indigo-500",
-  floorplan: "bg-cyan-500",
-  virtual_staging: "bg-purple-500",
-  editing: "bg-emerald-500",
-  other: "bg-slate-400",
-};
-
 // Card fields whose only meaningful state is "the project's tasks are
 // actively being worked on". Hidden when nothing has started yet AND when
 // everything's done — see the tasksInFlight gate in the ProjectCardFields
 // wrapper below.
 const TASK_BASED_FIELDS = new Set([
-  'tasks',
-  'requests',
   'product_category_tasks',
 ]);
+
+// Map a 0..1 completion ratio to the same red/orange/blue/green palette the
+// project-level overall progress bar uses. Pure helper — exported only so
+// future callers (other progress visuals) can stay consistent without
+// duplicating the threshold table.
+const HOUR_MS = 60 * 60 * 1000;
+function progressBarColor(completed, total) {
+  if (total <= 0) return 'bg-gray-300 dark:bg-gray-600';
+  const pct = (completed / total) * 100;
+  if (pct === 100) return 'bg-green-500';
+  if (pct >= 50) return 'bg-blue-500';
+  if (pct > 0) return 'bg-amber-500';
+  return 'bg-red-500'; // 0% — flag scopes that haven't started
+}
+
+// Mirrors getProjectUrgency in KanbanBoard.jsx, but scoped to a list of tasks
+// so each Task Progress row can flag its own area as overdue/urgent/soon/
+// ontrack/none. Returns:
+//   overdue → any active task past its due date           (red)
+//   urgent  → any active task due within 1h               (flashing orange)
+//   soon    → any active task due within 4h (>1h)         (orange)
+//   ontrack → has tasks with due dates, none of the above (green)
+//   none    → no active tasks left, or none have due dates
+// Completed/deleted/archived tasks are ignored — finished work doesn't
+// pull a row's urgency colour anymore.
+function getTasksUrgency(taskList) {
+  if (!Array.isArray(taskList) || taskList.length === 0) return 'none';
+  const now = Date.now();
+  let hasActiveWithDate = false;
+  let hasOverdue = false;
+  let hasUrgent = false;
+  let hasSoon = false;
+  for (const t of taskList) {
+    if (t.is_completed || t.is_deleted || t.is_archived) continue;
+    if (!t.due_date) continue;
+    const raw = t.due_date;
+    let due;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      due = new Date(`${raw}T23:59:59`).getTime();
+    } else {
+      due = new Date(raw).getTime();
+    }
+    if (Number.isNaN(due)) continue;
+    hasActiveWithDate = true;
+    const delta = due - now;
+    if (delta < 0) { hasOverdue = true; break; }
+    if (delta <= HOUR_MS) hasUrgent = true;
+    else if (delta <= 4 * HOUR_MS) hasSoon = true;
+  }
+  if (hasOverdue) return 'overdue';
+  if (hasUrgent) return 'urgent';
+  if (hasSoon) return 'soon';
+  if (hasActiveWithDate) return 'ontrack';
+  return 'none';
+}
+
+// Tailwind classes for each urgency tier. Matches the project-card chip
+// palette so the visual language across the card stays consistent.
+const URGENCY_TEXT_CLASS = {
+  overdue: 'text-red-600 font-semibold',
+  urgent: 'text-orange-600 font-semibold animate-pulse',
+  soon: 'text-orange-600 font-medium',
+  ontrack: 'text-green-700 dark:text-green-400',
+  none: '', // fallback to inherited text color
+};
 
 // Bucket a project's tasks into the scope groups the Task Progress field
 // shows. Hoisted out of the field render and computed once per card per
@@ -121,7 +166,6 @@ function computeTaskBuckets(tasks, productById) {
         tasks: list,
         total: list.length,
         completed,
-        barColor: CATEGORY_BAR_COLORS[cat] || CATEGORY_BAR_COLORS.other,
       };
     })
     .sort((a, b) => {
@@ -164,20 +208,23 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
   const { visible: showPricing } = usePriceGate();
   switch (fieldId) {
     case "agency_agent": {
-      const agencyName = project.client_name || project.agency_name;
-      const agentName = project.agent_name;
+      // The "agency" / organisation tied to the project lives in
+      // project.agency_name (denormalised from Agency.name when the agent is
+      // chosen). project.client_name is *agent name* — using it as the agency
+      // produced "No agency" everywhere because the fallback masked the real
+      // value. project.agent_name is the canonical agent display.
+      const agencyName = project.agency_name;
+      const agentName = project.agent_name || project.client_name;
       if (!agencyName && !agentName) return null;
       return (
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
           <Building className="h-3.5 w-3.5 flex-shrink-0" />
           <span className="truncate min-w-0" title={[agencyName, agentName].filter(Boolean).join(" · ")}>
-            {agencyName || <span className="italic text-muted-foreground/70">No agency</span>}
-            {agentName && (
-              <>
-                <span className="mx-1.5 text-muted-foreground/50">·</span>
-                <span>{agentName}</span>
-              </>
+            {agencyName && <span>{agencyName}</span>}
+            {agencyName && agentName && (
+              <span className="mx-1.5 text-muted-foreground/50">·</span>
             )}
+            {agentName && <span>{agentName}</span>}
           </span>
         </div>
       );
@@ -233,23 +280,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
         </div>
       );
     }
-    case "priority": {
-      if (!project.priority || project.priority === "normal") return null;
-      return (
-        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium capitalize ${priorityColors[project.priority] || priorityColors.normal}`}>
-          <Flag className="h-3 w-3" aria-hidden="true" />
-          {project.priority}
-        </span>
-      );
-    }
-    case "property_type": {
-      if (!project.property_type) return null;
-      return (
-        <Badge variant="outline" className="text-xs capitalize">
-          {project.property_type.replaceAll("_", " ")}
-        </Badge>
-      );
-    }
     case "products_packages": {
       const productItems = (project.products || [])
         .map(item => products.find(p => p.id === (item.product_id || item))?.name)
@@ -279,109 +309,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
         </div>
       );
     }
-    case "status_timer": {
-      if (!project.last_status_change) return null;
-      return <ProjectStatusTimer lastStatusChange={project.last_status_change} />;
-    }
-    case "tasks": {
-       const allRegularTasks = tasks.filter(t => !t.is_deleted && !t.is_archived && !t.revision_id && !/^\[Revision #\d+\]/.test(t.title || ""));
-       const activeTasks = allRegularTasks.filter(t => !t.is_completed);
-       const completedTasks = allRegularTasks.filter(t => t.is_completed);
-       const total = allRegularTasks.length;
-       if (total === 0) return null;
-
-       return (
-         <div className="space-y-1.5">
-           {/* Progress summary row */}
-           <div className="flex items-center gap-2">
-             <div className="flex items-center gap-1 text-xs text-muted-foreground">
-               <CheckSquare className="h-3 w-3" />
-               <span className="font-medium">{completedTasks.length}/{total}</span>
-               <span>tasks done</span>
-             </div>
-             {total > 0 && (
-               <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                 <div
-                   className="h-full bg-green-500 rounded-full transition-all"
-                   style={{ width: `${(completedTasks.length / total) * 100}%` }}
-                 />
-               </div>
-             )}
-           </div>
-
-           {/* Active tasks with timers */}
-           {activeTasks.length > 0 && (
-             <div className="space-y-1">
-               {activeTasks.slice(0, 3).map(task => (
-                 <div key={task.id} className="bg-muted/50 rounded px-2 py-1 text-xs flex items-center justify-between gap-2">
-                   <span className="truncate flex-1">{task.title}</span>
-                   {task.due_date
-                     ? <CountdownTimer dueDate={task.due_date} compact />
-                     : <span className="text-muted-foreground italic flex-shrink-0">no due date</span>
-                   }
-                 </div>
-               ))}
-               {activeTasks.length > 3 && (
-                 <Popover>
-                   <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
-                     <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground px-2 cursor-pointer hover:text-blue-600 transition-colors group/at">
-                       <Clock className="h-3 w-3 text-blue-500 group-hover/at:text-blue-600" />
-                       <span className="underline decoration-dotted underline-offset-2">
-                         +{activeTasks.length - 3} more active
-                       </span>
-                     </div>
-                   </PopoverTrigger>
-                   <PopoverContent className="w-72 p-3" side="right" align="start" onClick={e => e.stopPropagation()}>
-                     <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Active Tasks</p>
-                     <div className="space-y-1 max-h-48 overflow-y-auto">
-                       {activeTasks.slice(3).map(task => (
-                         <div key={task.id} className="flex items-center gap-2 text-xs py-1 border-b border-muted last:border-0">
-                           <span className="flex-1 text-foreground">{task.title}</span>
-                           {task.due_date
-                             ? <CountdownTimer dueDate={task.due_date} compact />
-                             : <span className="text-muted-foreground italic flex-shrink-0">no due date</span>
-                           }
-                         </div>
-                         ))}
-                         </div>
-                         </PopoverContent>
-                         </Popover>
-                         )}
-                         </div>
-                         )}
-
-                         {/* Completed tasks */}
-           {completedTasks.length > 0 && (
-             <Popover>
-               <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
-                 <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer hover:text-green-600 transition-colors group/ct">
-                   <CheckCircle2 className="h-3 w-3 text-green-500 group-hover/ct:text-green-600" />
-                   <span className="underline decoration-dotted underline-offset-2">
-                     {completedTasks.length} completed
-                   </span>
-                 </div>
-               </PopoverTrigger>
-               <PopoverContent className="w-72 p-3" side="right" align="start" onClick={e => e.stopPropagation()}>
-                 <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">Completed Tasks</p>
-                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                   {completedTasks.map(task => (
-                     <div key={task.id} className="flex items-center gap-2 text-xs py-1 border-b border-muted last:border-0">
-                       <CheckCircle2 className="h-3 w-3 text-green-500 flex-shrink-0" />
-                       <span className="flex-1 text-foreground">{task.title}</span>
-                       {task.due_date && (
-                         <span className="text-muted-foreground text-xs flex-shrink-0">
-                           {fmtDate(task.due_date, 'MMM d')}
-                         </span>
-                       )}
-                     </div>
-                   ))}
-                 </div>
-               </PopoverContent>
-             </Popover>
-           )}
-         </div>
-       );
-     }
     case "product_category_tasks": {
       // Scope-first task progress. Bucketing is done once at the wrapper level
       // (computeTaskBuckets in ProjectCardFields) and passed in via prop, so
@@ -395,18 +322,34 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
         totalAll, completedAll,
       } = taskBuckets;
       const overallPct = totalAll > 0 ? (completedAll / totalAll) * 100 : 0;
+      // Overall row mirrors the kanban's "ontrack/soon/urgent/overdue"
+      // urgency colours so the top progress bar text matches the chip
+      // shown at the bottom of the card. Bucket urgencies are computed
+      // per-row below so each scope can flag itself independently.
+      const overallUrgency = getTasksUrgency([
+        ...productAll, ...projectScopeTasks, ...revisionTasks, ...changeRequestTasks,
+      ]);
 
-      const renderRow = ({ key, label, tasksList, completed, total, barColor, indent, popoverTitle, stripRevisionPrefix }) => {
+      const renderRow = ({ key, label, tasksList, completed, total, indent, popoverTitle, stripRevisionPrefix }) => {
         if (total === 0) return null;
         const pct = total > 0 ? (completed / total) * 100 : 0;
+        const barColor = progressBarColor(completed, total);
+        const urgency = getTasksUrgency(tasksList);
+        const urgencyTextClass = URGENCY_TEXT_CLASS[urgency] || '';
+        // Indent rows (per-category sub-rows) keep the muted baseline so
+        // the parent scope label still reads as the heading. Top-level
+        // labels pick up the urgency tone directly.
+        const labelToneClass = indent
+          ? (urgencyTextClass || 'text-muted-foreground')
+          : (urgencyTextClass || 'font-semibold text-foreground');
         return (
           <Popover key={key}>
             <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
               <div className={`flex items-center gap-2 cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5 transition-colors ${indent ? 'pl-4' : ''}`}>
-                <span className={`text-xs ${indent ? 'text-muted-foreground' : 'font-semibold text-foreground'} truncate min-w-[64px] max-w-[110px]`} title={label}>
+                <span className={`text-xs ${labelToneClass} truncate min-w-[64px] max-w-[110px]`} title={label}>
                   {label}
                 </span>
-                <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">
+                <span className={`text-xs tabular-nums flex-shrink-0 ${urgencyTextClass || 'text-muted-foreground'}`}>
                   {completed}/{total}
                 </span>
                 <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden min-w-[32px]">
@@ -442,17 +385,22 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
         );
       };
 
+      const overallToneClass = URGENCY_TEXT_CLASS[overallUrgency] || 'text-muted-foreground';
+
       return (
         <div className="space-y-1.5">
           {/* Overall — all active tasks (matches ProjectProgressBar on the project detail page) */}
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <div className={`flex items-center gap-1 text-xs ${overallToneClass}`}>
               <CheckSquare className="h-3 w-3" />
               <span className="font-medium tabular-nums">{completedAll}/{totalAll}</span>
               <span>tasks done</span>
             </div>
             <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-              <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${overallPct}%` }} />
+              <div
+                className={`h-full ${progressBarColor(completedAll, totalAll)} rounded-full transition-all`}
+                style={{ width: `${overallPct}%` }}
+              />
             </div>
           </div>
 
@@ -465,7 +413,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
                 tasksList: productAll,
                 completed: productCompleted,
                 total: productTotal,
-                barColor: 'bg-blue-500',
               })}
               {productGroups.map(grp => renderRow({
                 key: `product:${grp.cat}`,
@@ -473,7 +420,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
                 tasksList: grp.tasks,
                 completed: grp.completed,
                 total: grp.total,
-                barColor: grp.barColor,
                 indent: true,
                 popoverTitle: `Product · ${grp.label}`,
               }))}
@@ -487,7 +433,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
             tasksList: projectScopeTasks,
             completed: projectScopeCompleted,
             total: projectScopeTasks.length,
-            barColor: 'bg-slate-500',
           })}
 
           {/* Revisions */}
@@ -497,7 +442,6 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
             tasksList: revisionTasks,
             completed: revisionCompleted,
             total: revisionTasks.length,
-            barColor: 'bg-red-500',
             stripRevisionPrefix: true,
           })}
 
@@ -508,149 +452,11 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
             tasksList: changeRequestTasks,
             completed: changeRequestCompleted,
             total: changeRequestTasks.length,
-            barColor: 'bg-purple-500',
             stripRevisionPrefix: true,
           })}
         </div>
       );
     }
-    case "requests": {
-       const allRevisionTasks = tasks.filter(t => !t.is_deleted && !t.is_archived && (t.revision_id || /^\[Revision #\d+\]/.test(t.title || "")));
-       const activeTasks = allRevisionTasks.filter(t => !t.is_completed);
-       const completedTasks = allRevisionTasks.filter(t => t.is_completed);
-       const total = allRevisionTasks.length;
-       if (total === 0) return null;
-
-       // Separate by request_kind (revision vs change_request)
-       const revisions = activeTasks.filter(t => t.request_kind === 'revision' || !t.request_kind);
-       const changeRequests = activeTasks.filter(t => t.request_kind === 'change_request');
-       const completedRevisions = completedTasks.filter(t => t.request_kind === 'revision' || !t.request_kind);
-       const completedChangeRequests = completedTasks.filter(t => t.request_kind === 'change_request');
-
-       const revisionColor = "border-l-3 border-l-red-500 bg-red-50/40";
-       const changeRequestColor = "border-l-3 border-l-purple-500 bg-purple-50/40";
-
-       return (
-         <div className="space-y-1.5">
-           {/* Progress summary row */}
-           <div className="flex items-center gap-2">
-             <div className="flex items-center gap-1 text-xs text-muted-foreground">
-               <CheckSquare className="h-3 w-3" />
-               <span className="font-medium">{completedTasks.length}/{total}</span>
-               <span>requests done</span>
-             </div>
-             {total > 0 && (
-               <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-                 <div
-                   className="h-full bg-indigo-500 rounded-full transition-all"
-                   style={{ width: `${(completedTasks.length / total) * 100}%` }}
-                 />
-               </div>
-             )}
-           </div>
-
-           {/* Revisions */}
-           {revisions.length > 0 && (
-             <div className="space-y-1">
-               {revisions.slice(0, 2).map(task => (
-                 <div key={task.id} className={`${revisionColor} rounded px-2 py-1 text-xs flex items-center justify-between gap-2`}>
-                   <span className="truncate flex-1 text-red-900">{task.title.replace(/^\[Revision #\d+\]\s*/, "")}</span>
-                   {task.due_date
-                     ? <CountdownTimer dueDate={task.due_date} compact />
-                     : <span className="text-muted-foreground italic flex-shrink-0 text-xs">no due</span>
-                   }
-                 </div>
-               ))}
-               {revisions.length > 2 && (
-                 <Popover>
-                   <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
-                     <div className="inline-flex items-center gap-1 text-xs text-red-600 cursor-pointer hover:text-red-700 transition-colors">
-                       <span className="underline decoration-dotted underline-offset-1 text-xs">
-                         +{revisions.length - 2} revisions
-                       </span>
-                     </div>
-                   </PopoverTrigger>
-                   <PopoverContent className="w-64 p-2" side="right" align="start" onClick={e => e.stopPropagation()}>
-                     <p className="text-xs font-semibold text-red-600 mb-1 uppercase tracking-wide">Revisions</p>
-                     <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                       {revisions.slice(2).map(task => (
-                         <div key={task.id} className="flex items-center gap-1.5 text-xs py-0.5 border-b border-red-100 last:border-0">
-                           <span className="flex-1 text-foreground text-xs">{task.title.replace(/^\[Revision #\d+\]\s*/, "")}</span>
-                           {task.due_date && <span className="text-muted-foreground text-xs flex-shrink-0">{fmtDate(task.due_date, 'MMM d')}</span>}
-                             </div>
-                           ))}
-                           </div>
-                           </PopoverContent>
-                           </Popover>
-                           )}
-                           </div>
-                           )}
-
-                           {/* Change Requests */}
-           {changeRequests.length > 0 && (
-             <div className="space-y-1">
-               {changeRequests.slice(0, 2).map(task => (
-                 <div key={task.id} className={`${changeRequestColor} rounded px-2 py-1 text-xs flex items-center justify-between gap-2`}>
-                   <span className="truncate flex-1 text-purple-900">{task.title.replace(/^\[Revision #\d+\]\s*/, "")}</span>
-                   {task.due_date
-                     ? <CountdownTimer dueDate={task.due_date} compact />
-                     : <span className="text-muted-foreground italic flex-shrink-0 text-xs">no due</span>
-                   }
-                 </div>
-               ))}
-               {changeRequests.length > 2 && (
-                 <Popover>
-                   <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
-                     <div className="inline-flex items-center gap-1 text-xs text-purple-600 cursor-pointer hover:text-purple-700 transition-colors">
-                       <span className="underline decoration-dotted underline-offset-1 text-xs">
-                         +{changeRequests.length - 2} change requests
-                       </span>
-                     </div>
-                   </PopoverTrigger>
-                   <PopoverContent className="w-64 p-2" side="right" align="start" onClick={e => e.stopPropagation()}>
-                     <p className="text-xs font-semibold text-purple-600 mb-1 uppercase tracking-wide">Change Requests</p>
-                     <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                       {changeRequests.slice(2).map(task => (
-                         <div key={task.id} className="flex items-center gap-1.5 text-xs py-0.5 border-b border-purple-100 last:border-0">
-                           <span className="flex-1 text-foreground text-xs">{task.title.replace(/^\[Revision #\d+\]\s*/, "")}</span>
-                           {task.due_date && <span className="text-muted-foreground text-xs flex-shrink-0">{fmtDate(task.due_date, 'MMM d')}</span>}
-                             </div>
-                           ))}
-                           </div>
-                           </PopoverContent>
-                           </Popover>
-                           )}
-                           </div>
-                           )}
-
-                           {/* Completed requests - aggregate */}
-           {completedTasks.length > 0 && (
-             <Popover>
-               <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
-                 <div className="inline-flex items-center gap-1 text-xs text-indigo-600 cursor-pointer hover:text-indigo-700 transition-colors">
-                   <CheckCircle2 className="h-3 w-3 text-indigo-500" />
-                   <span className="underline decoration-dotted underline-offset-1 text-xs">
-                     {completedTasks.length} completed
-                   </span>
-                 </div>
-               </PopoverTrigger>
-               <PopoverContent className="w-64 p-2" side="right" align="start" onClick={e => e.stopPropagation()}>
-                 <p className="text-xs font-semibold text-indigo-600 mb-1 uppercase tracking-wide">Completed Requests</p>
-                 <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                   {completedTasks.map(task => (
-                     <div key={task.id} className="flex items-center gap-1.5 text-xs py-0.5 border-b border-indigo-100 last:border-0">
-                       <CheckCircle2 className="h-3 w-3 text-indigo-500 flex-shrink-0" />
-                       <span className="flex-1 text-foreground text-xs">{task.title.replace(/^\[Revision #\d+\]\s*/, "")}</span>
-                       {task.due_date && <span className="text-muted-foreground text-xs flex-shrink-0">{fmtDate(task.due_date, 'MMM d')}</span>}
-                     </div>
-                   ))}
-                 </div>
-               </PopoverContent>
-             </Popover>
-           )}
-         </div>
-       );
-     }
     case "payment_status": {
       const status = project.payment_status || "unpaid";
       return (
