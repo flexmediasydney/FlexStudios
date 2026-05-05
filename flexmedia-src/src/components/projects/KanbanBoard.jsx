@@ -1018,7 +1018,34 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
 
                           return (
                             <Draggable key={project.id} draggableId={project.id} index={index} isDragDisabled={!canEdit || !canEditProject}>
-                              {(provided, snapshot) => (
+                              {(provided, snapshot) => {
+                                // Compose library handlers with our navigation handlers.
+                                // @hello-pangea/dnd installs onClick (post-drag click prevention)
+                                // and onKeyDown (Space-to-lift, arrows-to-move) via dragHandleProps.
+                                // Spreading then overriding REPLACES those handlers and breaks drag:
+                                //   - onClick override: post-drop click navigates instead of being
+                                //     suppressed → user lands on ProjectDetails right after dropping,
+                                //     drop never completes server-side. ("drag → blue highlight → no
+                                //     movement" — the bug the user reported.)
+                                //   - onKeyDown override: Space-key drag-lift is hijacked to navigate.
+                                // Compose so the library runs first; only navigate if it didn't
+                                // preventDefault (i.e. this isn't a click-after-drag).
+                                const onCardClick = (e) => {
+                                  provided.dragHandleProps?.onClick?.(e);
+                                  if (e.defaultPrevented) return;
+                                  navigate(createPageUrl("ProjectDetails") + "?id=" + project.id);
+                                };
+                                const onCardKeyDown = (e) => {
+                                  provided.dragHandleProps?.onKeyDown?.(e);
+                                  if (e.defaultPrevented) return;
+                                  // Only Enter navigates — Space is reserved for the lib's
+                                  // keyboard sensor (lift / drop).
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    navigate(createPageUrl("ProjectDetails") + "?id=" + project.id);
+                                  }
+                                };
+                                return (
                                 <Card
                                   ref={provided.innerRef}
                                   {...provided.draggableProps}
@@ -1034,8 +1061,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                   role="button"
                                   aria-label={`${project.title}${project.property_address ? ', ' + project.property_address : ''}`}
                                   onMouseEnter={() => prefetchProject(project.id)}
-                                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(createPageUrl("ProjectDetails") + "?id=" + project.id); } }}
-                                  onClick={() => navigate(createPageUrl("ProjectDetails") + "?id=" + project.id)}
+                                  onKeyDown={onCardKeyDown}
+                                  onClick={onCardClick}
                                 >
                                   {/* Card Header */}
                                   <div className="px-3 py-2 border-b border-border/50 flex items-start gap-1.5">
@@ -1132,7 +1159,8 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                     </div>
                                   </div>
                                 </Card>
-                              )}
+                                );
+                              }}
                             </Draggable>
                           );
                           };
