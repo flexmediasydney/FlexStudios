@@ -90,8 +90,24 @@ export default function TaskDetailPane({
     mutationFn: async ({ id, data }) => {
       return await api.entities.ProjectTask.update(id, data);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['project-tasks', projectId] });
+    onSuccess: (updatedRow) => {
+      // useProjectTasks keys its query as `['project-tasks-scoped', projectId, sort]`.
+      // Prefix-invalidate so every sort variant in the cache picks up the
+      // new row. We also patch each matching cache directly with the full
+      // returned row — invalidate triggers a refetch but the patch makes
+      // the UI feel instant without waiting for the refetch round-trip.
+      const prefix = ['project-tasks-scoped', projectId];
+      if (updatedRow?.id) {
+        queryClient.setQueriesData({ queryKey: prefix }, (prev) => {
+          if (!Array.isArray(prev)) return prev;
+          const idx = prev.findIndex(t => t?.id === updatedRow.id);
+          if (idx === -1) return prev;
+          const next = prev.slice();
+          next[idx] = { ...prev[idx], ...updatedRow };
+          return next;
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: prefix });
     },
     onError: (err) => {
       console.error('TaskDetailPane update failed:', err);
