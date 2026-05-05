@@ -9,7 +9,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { updateEntityInCache } from "@/components/hooks/useEntityData";
 import { 
-  ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
+  ArrowLeft, MapPin, User, Users, Phone,
   ExternalLink, Edit, Archive, CheckCircle, Building, Search,
   Star, Zap, CreditCard, AlertCircle, Camera, AlertTriangle, CheckCircle2, Package
 } from "lucide-react";
@@ -66,7 +66,7 @@ import AIChat from "@/components/ai/AIChat";
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
 const statuses = PROJECT_STAGES;
-const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'calendar', 'media', 'files', 'shortlisting', 'drones', 'tonomo']);
+const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'media', 'files', 'shortlisting', 'drones', 'tonomo']);
 
 const serviceLabels = {
   photography: "📷 Photography",
@@ -1609,18 +1609,17 @@ export default function ProjectDetails() {
           <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             <div className="overflow-x-auto border-b bg-muted/30">
               <TabsList className={`inline-flex w-max min-w-full sm:w-full sm:grid ${(() => {
-                // 7 base tabs (tasks, revisions, effort, calendar, media, files, drones) + shortlisting (employee+) + tonomo (if source)
+                // 6 base tabs (tasks, revisions, effort, media, files, drones) + shortlisting (employee+) + tonomo (if source)
                 // Tailwind JIT needs static class names — enumerate every possibility.
                 const isTonomo = project.source === 'tonomo';
-                if (isEmployeeOrAbove && isTonomo) return 'sm:grid-cols-9';
-                if (isEmployeeOrAbove) return 'sm:grid-cols-8';
-                if (isTonomo) return 'sm:grid-cols-8';
-                return 'sm:grid-cols-7';
+                if (isEmployeeOrAbove && isTonomo) return 'sm:grid-cols-8';
+                if (isEmployeeOrAbove) return 'sm:grid-cols-7';
+                if (isTonomo) return 'sm:grid-cols-7';
+                return 'sm:grid-cols-6';
               })()} h-auto bg-transparent`}>
                 <TabsTrigger value="tasks"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Tasks</TabsTrigger>
                 <TabsTrigger value="revisions" className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Requests</TabsTrigger>
                 <TabsTrigger value="effort"    className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Effort</TabsTrigger>
-                <TabsTrigger value="calendar"  className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Calendar</TabsTrigger>
                 <TabsTrigger value="media"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Media</TabsTrigger>
                 <TabsTrigger value="files"     className="text-xs px-2 py-1.5 whitespace-nowrap data-[state=active]:font-semibold">Files</TabsTrigger>
                 {isEmployeeOrAbove && (
@@ -1677,12 +1676,6 @@ export default function ProjectDetails() {
             <TabsContent value="effort" className="mt-4">
               {mountedTabs.has("effort") ? <ErrorBoundary><EffortLoggingTab projectId={projectId} /></ErrorBoundary> : (
                 <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-40 bg-muted rounded"/></div>
-              )}
-            </TabsContent>
-
-            <TabsContent value="calendar" className="mt-4">
-              {mountedTabs.has("calendar") ? <ErrorBoundary><ProjectCalendarEvents projectId={projectId} /></ErrorBoundary> : (
-                <div className="space-y-3 animate-pulse"><div className="h-8 bg-muted rounded w-1/3"/><div className="h-48 bg-muted rounded"/></div>
               )}
             </TabsContent>
 
@@ -1800,34 +1793,21 @@ export default function ProjectDetails() {
             </div>
           )}
 
-          {/* Project Info — compact */}
+          {/* Calendar events — compact list (replaces former Project Info / Calendar tab) */}
+          <ErrorBoundary><ProjectCalendarEvents projectId={projectId} /></ErrorBoundary>
+
+          {/* Tier + age timer — single compact row */}
           <Card>
-            <CardContent className="p-3 space-y-1.5">
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                {project?.shoot_date && (
-                  <div className="flex items-center gap-1">
-                    <Calendar className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-xs">{fmtDate(project.shoot_date)}</span>
-                  </div>
-                )}
-                {project?.shoot_time && (
-                  <div className="flex items-center gap-1">
-                    <ClockIcon className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-xs">{project.shoot_time}</span>
-                    {project.tonomo_is_twilight && <span className="text-[9px] px-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">twilight</span>}
-                  </div>
-                )}
-                <div className="flex items-center gap-1">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${project?.pricing_tier === 'premium' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
-                    {project?.pricing_tier === 'premium' ? 'Premium' : 'Standard'}
-                  </span>
-                </div>
-                <div>
-                  <p className="text-xs font-mono font-bold">
-                    {project && <ErrorBoundary><ProjectDurationTimer project={project} /></ErrorBoundary>}
-                  </p>
-                </div>
-              </div>
+            <CardContent className="p-2 flex items-center justify-between gap-2">
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${project?.pricing_tier === 'premium' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'}`}>
+                {project?.pricing_tier === 'premium' ? 'Premium' : 'Standard'}
+              </span>
+              {project?.tonomo_is_twilight && (
+                <span className="text-[9px] px-1 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">twilight</span>
+              )}
+              <p className="text-xs font-mono font-bold ml-auto">
+                {project && <ErrorBoundary><ProjectDurationTimer project={project} /></ErrorBoundary>}
+              </p>
             </CardContent>
           </Card>
 

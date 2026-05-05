@@ -1,9 +1,16 @@
 import { useEntityList } from "@/components/hooks/useEntityData";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, MapPin, Link as LinkIcon } from "lucide-react";
-import { format } from "date-fns";
+import { MapPin, CalendarDays } from "lucide-react";
+import { format, isToday, isTomorrow, isYesterday } from "date-fns";
 import { fixTimestamp } from "@/components/utils/dateUtils";
+
+function relativeDayLabel(date) {
+  if (isToday(date)) return "Today";
+  if (isTomorrow(date)) return "Tomorrow";
+  if (isYesterday(date)) return "Yesterday";
+  return null;
+}
 
 export default function ProjectCalendarEvents({ projectId }) {
   const { data: events = [], loading: isLoading } = useEntityList(
@@ -16,101 +23,105 @@ export default function ProjectCalendarEvents({ projectId }) {
   if (isLoading) {
     return (
       <Card>
-        <CardContent className="p-6">
-          <div className="space-y-2">
-            <div className="h-4 bg-muted rounded animate-pulse" />
-            <div className="h-4 bg-muted rounded animate-pulse w-2/3" />
-          </div>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-1.5">
+            <CalendarDays className="h-3.5 w-3.5" /> Calendar
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0 space-y-2">
+          <div className="h-10 bg-muted rounded animate-pulse" />
+          <div className="h-10 bg-muted rounded animate-pulse w-2/3" />
         </CardContent>
       </Card>
     );
   }
 
-  if (events.length === 0) {
-    return (
-      <Card>
-        <CardContent className="p-6 text-center text-muted-foreground text-sm">
-          No calendar events linked to this project.
-        </CardContent>
-      </Card>
-    );
-  }
+  const validEvents = events
+    .map((e) => {
+      if (!e.start_time) return null;
+      const startDate = new Date(fixTimestamp(e.start_time));
+      if (isNaN(startDate.getTime())) return null;
+      const endDate = e.end_time ? new Date(fixTimestamp(e.end_time)) : null;
+      const hasValidEnd = endDate && !isNaN(endDate.getTime());
+      return { event: e, startDate, endDate: hasValidEnd ? endDate : null };
+    })
+    .filter(Boolean);
+
+  // Sort: upcoming first (soonest), then past (most recent first)
+  const now = new Date();
+  validEvents.sort((a, b) => {
+    const aUp = a.startDate >= now;
+    const bUp = b.startDate >= now;
+    if (aUp && !bUp) return -1;
+    if (!aUp && bUp) return 1;
+    if (aUp && bUp) return a.startDate - b.startDate; // soonest first
+    return b.startDate - a.startDate; // most recent past first
+  });
 
   return (
-    <div className="space-y-3">
-      {events.map(event => {
-        if (!event.start_time) return null; // skip events with no start time
-        const startDate = new Date(fixTimestamp(event.start_time));
-        if (isNaN(startDate.getTime())) return null; // skip invalid dates
-        const endDate = event.end_time
-          ? new Date(fixTimestamp(event.end_time))
-          : null;
-        const hasValidEnd = endDate && !isNaN(endDate.getTime());
-        const isUpcoming = startDate > new Date();
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-1.5">
+          <CalendarDays className="h-3.5 w-3.5" /> Calendar
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0 space-y-2">
+        {validEvents.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No events linked.</p>
+        ) : (
+          validEvents.map(({ event, startDate, endDate }) => {
+            const isUpcoming = startDate >= now;
+            const sameDay = endDate && format(startDate, "yyyy-MM-dd") === format(endDate, "yyyy-MM-dd");
+            const dayLabel = relativeDayLabel(startDate);
+            const dayNum = format(startDate, "d");
+            const monthShort = format(startDate, "MMM");
+            const weekdayShort = format(startDate, "EEE");
+            const timeStr = `${format(startDate, "h:mma").toLowerCase()}${endDate ? ` – ${format(endDate, "h:mma").toLowerCase()}` : ""}`;
 
-        return (
-          <Card key={event.id} className={isUpcoming ? "" : "opacity-60"}>
-            <CardContent className="p-4">
-              <div className="flex items-start justify-between mb-2">
-                <h3 className="font-medium text-sm leading-tight pr-2">{event.title}</h3>
-                {isUpcoming && (
-                  <Badge variant="default" className="text-xs flex-shrink-0">Upcoming</Badge>
-                )}
-              </div>
-
-              <div className="space-y-2 text-sm text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <Calendar className="h-4 w-4 flex-shrink-0" />
-                  <span>
-                    {format(startDate, "MMM d, yyyy")}
-                    {hasValidEnd && format(startDate, "yyyy-MM-dd") !== format(endDate, "yyyy-MM-dd") && (
-                      <>
-                        {" → "}
-                        {format(endDate, "MMM d, yyyy")}
-                      </>
-                    )}
-                  </span>
+            return (
+              <div
+                key={event.id}
+                className={`flex gap-2.5 rounded-md border p-2 ${isUpcoming ? "bg-card" : "opacity-60"}`}
+              >
+                {/* Date block — big, bold, easy to scan */}
+                <div className={`flex flex-col items-center justify-center rounded-md px-2 py-1 min-w-[44px] ${isUpcoming ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                  <span className="text-[9px] font-semibold uppercase tracking-wider leading-none">{monthShort}</span>
+                  <span className="text-lg font-bold leading-tight tabular-nums">{dayNum}</span>
+                  <span className="text-[9px] uppercase tracking-wider leading-none">{weekdayShort}</span>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <Clock className="h-4 w-4 flex-shrink-0" />
-                  <span>
-                    {format(startDate, "h:mm a")}{hasValidEnd ? ` - ${format(endDate, "h:mm a")}` : ''}
-                  </span>
-                </div>
-
-                {event.location && (
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-4 w-4 flex-shrink-0" />
-                    <span>{event.location}</span>
-                  </div>
-                )}
-
-                {(event.event_source || event.calendar_account) && (
-                  <div className="flex items-center gap-2 text-xs">
-                    <LinkIcon className="h-3 w-3 flex-shrink-0" />
-                    <span>
-                      {event.event_source === 'tonomo' ? 'Tonomo booking'
-                        : event.event_source === 'google' ? (event.calendar_account || 'Google Calendar')
-                        : event.event_source === 'flexmedia' ? 'FlexStudios activity'
-                        : event.calendar_account || 'Unknown source'}
-                    </span>
-                    {event.is_synced && (
-                      <Badge variant="outline" className="text-xs ml-auto">Synced</Badge>
+                {/* Right column — title, time, location */}
+                <div className="flex-1 min-w-0 flex flex-col justify-center gap-0.5">
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {dayLabel && (
+                      <Badge variant={isUpcoming ? "default" : "secondary"} className="text-[9px] px-1 py-0 h-4">
+                        {dayLabel}
+                      </Badge>
+                    )}
+                    {!sameDay && endDate && (
+                      <span className="text-[10px] text-muted-foreground">
+                        → {format(endDate, "MMM d")}
+                      </span>
                     )}
                   </div>
-                )}
+                  <p className="text-xs font-semibold tabular-nums leading-tight">{timeStr}</p>
+                  {event.title && (
+                    <p className="text-[11px] text-muted-foreground truncate leading-tight" title={event.title}>
+                      {event.title}
+                    </p>
+                  )}
+                  {event.location && (
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <MapPin className="h-2.5 w-2.5 flex-shrink-0" />
+                      <span className="truncate" title={event.location}>{event.location}</span>
+                    </div>
+                  )}
+                </div>
               </div>
-
-              {event.description && (
-                <p className="text-xs text-muted-foreground mt-3 pt-3 border-t">
-                  {event.description}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        );
-      })}
-    </div>
+            );
+          })
+        )}
+      </CardContent>
+    </Card>
   );
 }
