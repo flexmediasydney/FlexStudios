@@ -111,13 +111,15 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
   }, [thread.threadId]);
 
   useEffect(() => {
-    // Verify user owns this account (critical security check)
+    // Verify user has access to this account (must mirror EmailInboxMain filter)
     if (!user || !account) return;
-    
-    // Allow access if: own account, team account, or owner role
+
+    // Allow access if: own account, owner role, or any team inbox (visible to all internal employees)
+    const isInternalEmployee = ['master_admin', 'admin', 'manager', 'employee'].includes(user.role);
     const canAccess = account.assigned_to_user_id === user.id ||
       user.role === 'master_admin' ||
-      (account.team_id && account.team_id === user.internal_team_id);
+      (account.team_id && isInternalEmployee) ||
+      (!account.assigned_to_user_id && !account.team_id);
     if (!canAccess) {
       toast.error("Unauthorized: You do not have access to this email account");
       onBack();
