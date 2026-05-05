@@ -420,8 +420,10 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
     prefetchProject(projectId);
   }, [prefetchProject]);
 
-  // Filter out archived projects (memoized to avoid recomputing on every render)
-  const activeProjects = useMemo(() => projects.filter(p => !p.is_archived), [projects]);
+  // Archive filtering is owned by the parent Projects.jsx — exclusive view
+  // (toggle off = active only; toggle on = archived only). Don't filter again
+  // here or "Show archived" silently strips them back out.
+  const activeProjects = projects;
 
   // ── View mode: 'full' (normal kanban) or 'collapsed' (counts overview) ──
   const [viewMode, setViewMode] = useState(() => {

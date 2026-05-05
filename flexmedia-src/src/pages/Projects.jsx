@@ -67,6 +67,7 @@ export default function Projects() {
   const [shootDateFrom, setShootDateFrom] = useState('');
   const [shootDateTo, setShootDateTo] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
+  const [paymentFilter, setPaymentFilter] = useState('unpaid'); // 'all' | 'paid' | 'unpaid'
   const { canSeePricing } = usePermissions();
   const { enabledFields } = useCardFields();
   const { data: currentUser } = useCurrentUser();
@@ -198,8 +199,15 @@ export default function Projects() {
     .filter(project => {
       // Exclude goal-sourced records — they belong to the Goals page
       if (project.source === 'goal') return false;
-      // Hide archived unless toggled on
-      if (!showArchived && project.is_archived) return false;
+      // Archived view: toggle ON = show ONLY archived; OFF = hide archived (exclusive)
+      if (showArchived ? !project.is_archived : project.is_archived) return false;
+
+      // Payment status filter: 'unpaid' (default) hides paid projects, 'paid' hides
+      // unpaid, 'all' shows everything. Treat null/missing payment_status as 'unpaid'.
+      if (paymentFilter !== 'all') {
+        const ps = project.payment_status === 'paid' ? 'paid' : 'unpaid';
+        if (ps !== paymentFilter) return false;
+      }
 
       const sq = searchQuery.toLowerCase();
       const matchesSearch = !sq ||
@@ -355,7 +363,7 @@ export default function Projects() {
       }
       return new Date(fixTimestamp(b.last_status_change) || 0) - new Date(fixTimestamp(a.last_status_change) || 0);
     });
-  }, [allProjects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, allEmployeeRoles, shootDateFrom, shootDateTo, priorityFilter, showArchived]);
+  }, [allProjects, searchQuery, filters, sortBy, currentUser, myTeamMemberUserIds, myTeamIds, allTasks, tasksByProject, allTasksByProject, allEmployeeRoles, shootDateFrom, shootDateTo, priorityFilter, paymentFilter, showArchived]);
 
   // Column definitions for EntityDataTable (list view)
   const tableColumns = useMemo(() => {
@@ -504,11 +512,11 @@ export default function Projects() {
               <Skeleton className="inline-block w-16 h-3.5" />
             ) : (
               <>
-                {filteredProjects.length !== allProjects.filter(p => showArchived || !p.is_archived).length
-                  ? `${filteredProjects.length}/${allProjects.filter(p => showArchived || !p.is_archived).length}`
+                {filteredProjects.length !== allProjects.filter(p => showArchived ? p.is_archived : !p.is_archived).length
+                  ? `${filteredProjects.length}/${allProjects.filter(p => showArchived ? p.is_archived : !p.is_archived).length}`
                   : `${filteredProjects.length}`}
                 {searchQuery && ` matching "${searchQuery}"`}
-                {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all') && !searchQuery && " filtered"}
+                {(Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all' || paymentFilter !== 'unpaid') && !searchQuery && " filtered"}
               </>
             )}
           </span>
@@ -648,12 +656,24 @@ export default function Projects() {
             </SelectContent>
           </Select>
 
+          {/* Payment filter — defaults to 'unpaid' so the board hides invoiced/paid work */}
+          <Select value={paymentFilter} onValueChange={setPaymentFilter}>
+            <SelectTrigger className="h-7 w-[110px] text-xs focus:ring-2 focus:ring-primary">
+              <SelectValue placeholder="Payment" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unpaid">Unpaid only</SelectItem>
+              <SelectItem value="paid">Paid only</SelectItem>
+              <SelectItem value="all">All payments</SelectItem>
+            </SelectContent>
+          </Select>
+
           {/* Clear date filters */}
-          {(shootDateFrom || shootDateTo || priorityFilter !== 'all') && (
+          {(shootDateFrom || shootDateTo || priorityFilter !== 'all' || paymentFilter !== 'unpaid') && (
             <button
-              onClick={() => { setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); }}
+              onClick={() => { setShootDateFrom(''); setShootDateTo(''); setPriorityFilter('all'); setPaymentFilter('unpaid'); }}
               className="text-xs text-muted-foreground hover:text-foreground hover:bg-muted px-2 h-7 rounded-md border border-transparent hover:border-border transition-all"
-              title="Clear date and priority filters"
+              title="Clear date, priority and payment filters"
             >
               Clear
             </button>
@@ -728,8 +748,8 @@ export default function Projects() {
           onRowClick={handleEdit}
           pageSize={75}
           emptyMessage={
-            searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all'
-              ? `No projects match your filters — ${allProjects.filter(p => !p.is_archived || showArchived).length} total available`
+            searchQuery || Object.keys(filters).some(k => filters[k]?.length > 0) || shootDateFrom || shootDateTo || priorityFilter !== 'all' || paymentFilter !== 'unpaid'
+              ? `No projects match your filters — ${allProjects.filter(p => showArchived ? p.is_archived : !p.is_archived).length} total available`
               : "No projects yet — create your first project above"
           }
         />
@@ -769,7 +789,7 @@ export default function Projects() {
                   <p className="text-muted-foreground mb-1 text-sm">
                     {searchQuery && <>No results for "<span className="font-medium text-foreground">{searchQuery}</span>". </>}
                     {allProjects.length > 0 && (
-                      <span className="text-xs">({allProjects.filter(p => !p.is_archived || showArchived).length} total projects available)</span>
+                      <span className="text-xs">({allProjects.filter(p => showArchived ? p.is_archived : !p.is_archived).length} total projects available)</span>
                     )}
                   </p>
                   <p className="text-muted-foreground mb-4 text-xs">
