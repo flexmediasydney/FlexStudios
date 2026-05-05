@@ -396,7 +396,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks, showPricing })
 }
 
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
-export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs }) {
+export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs, calendarEvents = [] }) {
   const { canEdit, canView } = useEntityAccess('projects');
   const { canEditProject } = usePermissions();
   const { visible: showPricing, mask: maskPrice } = usePriceGate();
@@ -624,14 +624,16 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
     };
   }, [draggingId]);
 
-  const onDragEnd = async (result) => {
+  const onDragEnd = (result) => {
     setDraggingId(null);
     if (!result.destination) return;
     // Entity access guard: block drag if user cannot edit projects (entity matrix)
     // Role guard: block drag if user is below manager level (canEditProject = isManagerOrAbove)
     if (!canEdit || !canEditProject) { toast.error('Only managers and above can change project status.'); return; }
-    // Race condition fix: block drag while a status update is already in flight
-    if (updateStatusMutation.isPending) return;
+    // No `updateStatusMutation.isPending` gate: @hello-pangea/dnd's DragDropContext
+    // already prevents overlapping drags at the gesture level (a user can't grab a
+    // second card mid-drag), and a stale isPending check just silently dropped
+    // rapid sequential drags. Trust the lib + the mutation queue.
     const projectId = result.draggableId;
     const newStatus = result.destination.droppableId;
     const project = filteredProjects.find(p => p.id === projectId);
@@ -658,20 +660,22 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
       return;
     }
 
-    // Hard rule: cannot advance past onsite until at least 1 calendar event has ended
+    // Hard rule: cannot advance past onsite until at least 1 calendar event
+    // has ended. Read from the parent-prefetched calendarEvents array (already
+    // in memory via useEntityList at the Projects page) instead of doing a
+    // fresh network roundtrip — this keeps the gate but removes the 200-2000ms
+    // blocking await that made forward drags feel sluggish. The server-side
+    // check in trackProjectStageChange runs after the UPDATE and only logs on
+    // violation, so the client-side gate is the real enforcement point.
     const POST_ONSITE = ['uploaded', 'in_progress', 'in_production', 'in_revision', 'delivered'];
     if (POST_ONSITE.includes(newStatus)) {
-      try {
-        const calEvents = await api.entities.CalendarEvent.filter({ project_id: projectId });
-        const hasEndedEvent = (calEvents || []).some(ev =>
-          ev.end_time && new Date(ev.end_time).getTime() < Date.now()
-        );
-        if (!hasEndedEvent) {
-          toast.error('This project cannot advance past Onsite until at least one calendar event has ended (shoot must have occurred).', { duration: 5000 });
-          return;
-        }
-      } catch (err) {
-        console.warn('Calendar event pre-check failed, backend will enforce:', err?.message);
+      const projectCalEvents = (calendarEvents || []).filter(ev => ev.project_id === projectId);
+      const hasEndedEvent = projectCalEvents.some(ev =>
+        ev.end_time && new Date(ev.end_time).getTime() < Date.now()
+      );
+      if (!hasEndedEvent) {
+        toast.error('This project cannot advance past Onsite until at least one calendar event has ended (shoot must have occurred).', { duration: 5000 });
+        return;
       }
     }
 

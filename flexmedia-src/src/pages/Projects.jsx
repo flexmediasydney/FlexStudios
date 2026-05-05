@@ -134,6 +134,10 @@ export default function Projects() {
    // Previously 300/50 silently truncated — cards showed incomplete counts/effort.
    const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 5000);
    const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog", null, 5000);
+   // Pre-fetched once so the Kanban onDragEnd can check the "shoot must have
+   // ended" rule from cache instead of doing a 200-2000ms network roundtrip
+   // on every forward drag past Onsite.
+   const { data: allCalendarEvents = [] } = useEntityList("CalendarEvent", null, 5000);
    const { data: agents = [] } = useEntityList("Agent", null, 50);
    const { data: agencies = [] } = useEntityList("Agency", null, 50);
    const { data: teams = [] } = useEntityList("InternalTeam", null, 30);
@@ -855,6 +859,7 @@ export default function Projects() {
                 fitToScreen={fitToScreen}
                 allTasks={allTasks}
                 allTimeLogs={allTimeLogs}
+                calendarEvents={allCalendarEvents}
               />
             </ErrorBoundary>
           </div>
