@@ -526,59 +526,10 @@ function TaskManagement({ projectId, project, canEdit }) {
           : `Task completed: "${task.title}"`
       );
 
+      // Auto-log creation/cleanup on tick state changes is handled by the
+      // trg_auto_log_completed_effort Postgres trigger (migration 474), so
+      // every code path that flips is_completed gets the same behaviour.
       if (!wasCompleted) {
-        // Auto-log effort if task has estimated time but NO manual time logs.
-        // Creates a completed time log equal to the full estimated duration.
-        const estMinutes = task.estimated_minutes || 0;
-        if (estMinutes > 0) {
-          try {
-            const existingLogs = await api.entities.TaskTimeLog.filter({ task_id: task.id }, null, 1);
-            if (existingLogs.length === 0) {
-              const now = new Date().toISOString();
-              const endTime = new Date(Date.now() + estMinutes * 60 * 1000).toISOString();
-              await api.entities.TaskTimeLog.create({
-                task_id: task.id,
-                project_id: projectId,
-                user_id: task.assigned_to || user?.id,
-                user_name: task.assigned_to_name || user?.full_name || 'System',
-                user_email: user?.email || '',
-                role: task.auto_assign_role || 'none',
-                status: 'completed',
-                is_active: false,
-                is_manual: false,
-                log_source: 'auto_completion',
-                start_time: now,
-                end_time: endTime,
-                total_seconds: estMinutes * 60,
-                team_id: task.assigned_to_team_id || null,
-                team_name: task.assigned_to_team_name || null,
-              });
-            }
-          } catch (err) {
-            console.warn('Auto effort log failed (non-fatal):', err?.message);
-          }
-        }
-      } else {
-        // Un-ticking the task. Remove any auto-completion log so the
-        // recorded effort doesn't include phantom time for work that
-        // hasn't actually happened. Manual entries and auto-onsite logs
-        // (which represent real shoot time, independent of this task's
-        // tick state) are preserved. Re-ticking the task will re-create
-        // a fresh auto-log.
-        try {
-          const autoLogs = await api.entities.TaskTimeLog.filter(
-            { task_id: task.id, log_source: 'auto_completion', is_manual: false },
-            null,
-            50
-          );
-          for (const log of autoLogs) {
-            await api.entities.TaskTimeLog.delete(log.id).catch(() => {});
-          }
-        } catch (err) {
-          console.warn('Auto-effort cleanup on un-tick failed (non-fatal):', err?.message);
-        }
-
-        // task is now being marked complete (was false, now true)
         writeFeedEvent({
           eventType: 'task_completed',
           category: 'task',
@@ -742,37 +693,9 @@ function TaskManagement({ projectId, project, canEdit }) {
                     }
                   });
 
-                  // Auto-log effort for tasks with estimates but no manual time logs
+                  // Auto-log effort is handled by trg_auto_log_completed_effort
+                  // (migration 474). Per-task feed events still need to fire here.
                   for (const task of incomplete) {
-                    const estMinutes = task.estimated_minutes || 0;
-                    if (estMinutes > 0) {
-                      try {
-                        const existingLogs = await api.entities.TaskTimeLog.filter({ task_id: task.id }, null, 1);
-                        if (existingLogs.length === 0) {
-                          const endTime = new Date(Date.now() + estMinutes * 60 * 1000).toISOString();
-                          await api.entities.TaskTimeLog.create({
-                            task_id: task.id,
-                            project_id: projectId,
-                            user_id: task.assigned_to || user?.id,
-                            user_name: task.assigned_to_name || user?.full_name || 'System',
-                            user_email: user?.email || '',
-                            role: task.auto_assign_role || 'none',
-                            status: 'completed',
-                            is_active: false,
-                            is_manual: false,
-                            log_source: 'auto_completion',
-                            start_time: now,
-                            end_time: endTime,
-                            total_seconds: estMinutes * 60,
-                            team_id: task.assigned_to_team_id || null,
-                            team_name: task.assigned_to_team_name || null,
-                          });
-                        }
-                      } catch (err) {
-                        console.warn('Bulk auto effort log failed (non-fatal):', err?.message);
-                      }
-                    }
-                    // Write feed event per task
                     writeFeedEvent({
                       eventType: 'task_completed',
                       category: 'task',
