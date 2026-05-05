@@ -46,6 +46,12 @@ export default function UnifiedNotesPanel({
   relatedProjectIds,
   relatedAgentIds,
   showContextOnNotes = false,
+  // Optional: scope the panel to notes linked to a single task. The composer
+  // pre-links every new note to this task, the feed filters root notes to
+  // those whose linked_task_id matches (replies inherit through their root),
+  // and the org-context filter tabs are hidden — this is a single-task view.
+  taskId = null,
+  taskLabel = null,
 }) {
   const { data: currentUser } = useCurrentUser();
   const { isMasterAdmin } = usePermissions();
@@ -124,8 +130,11 @@ export default function UnifiedNotesPanel({
 
   const visibleNotes = useMemo(() => {
     let notes = rootNotes.filter(n => !n.is_pinned);
-    // Context type filter (org level only)
-    if (showContextOnNotes && filterType !== 'all') {
+    // Single-task scope wins over the org-level context tabs.
+    if (taskId) {
+      notes = notes.filter(n => n.link_kind === 'task' && n.linked_task_id === taskId);
+    } else if (showContextOnNotes && filterType !== 'all') {
+      // Context type filter (org level only)
       notes = notes.filter(n => {
         if (filterType === 'agency') return !n.context_type || n.context_type === 'agency';
         return n.context_type === filterType;
@@ -142,7 +151,15 @@ export default function UnifiedNotesPanel({
       );
     }
     return notes;
-  }, [rootNotes, filterType, searchQuery, showContextOnNotes]);
+  }, [rootNotes, filterType, searchQuery, showContextOnNotes, taskId]);
+
+  // Pinned notes shown above the feed should also respect the task scope —
+  // a pinned project-level note should not appear when we're scoped to one
+  // task. (Computed alongside `pinnedNotes` to avoid a second pass below.)
+  const pinnedVisible = useMemo(() => {
+    if (!taskId) return pinnedNotes;
+    return pinnedNotes.filter(n => n.link_kind === 'task' && n.linked_task_id === taskId);
+  }, [pinnedNotes, taskId]);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -159,13 +176,16 @@ export default function UnifiedNotesPanel({
             currentUser={currentUser}
             onSave={handleSaved}
             onCancel={() => {}}
+            initialLink={taskId ? { kind: 'task', id: taskId, label: taskLabel || 'Task' } : null}
           />
         </div>
       </div>
 
-      {/* Filter + Search bar — filter tabs only at org level, search always */}
+      {/* Filter + Search bar — filter tabs only at org level, search always.
+           Hidden entirely when scoped to a single task (single-task view is
+           inherently filtered, the tabs would be misleading). */}
       <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-b bg-background flex-wrap">
-        {showContextOnNotes && (
+        {showContextOnNotes && !taskId && (
           <div className="flex gap-1 flex-wrap">
             {FILTER_TABS.map(tab => {
               const count = tabCounts[tab.key];
@@ -214,7 +234,7 @@ export default function UnifiedNotesPanel({
         ) : (
           <>
             {/* Pinned strip */}
-            {pinnedNotes.length > 0 && (
+            {pinnedVisible.length > 0 && (
               <div className="mb-1">
                 <button
                   onClick={() => setPinnedExpanded(e => !e)}
@@ -222,11 +242,11 @@ export default function UnifiedNotesPanel({
                 >
                   <span className="flex items-center gap-1.5">
                     <Pin className="h-3 w-3 fill-amber-400 text-amber-500" />
-                    Pinned ({pinnedNotes.length})
+                    Pinned ({pinnedVisible.length})
                   </span>
                   {pinnedExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                 </button>
-                {pinnedExpanded && pinnedNotes.map(note => (
+                {pinnedExpanded && pinnedVisible.map(note => (
                   <UnifiedNoteCard
                     key={note.id}
                     note={note}
@@ -237,7 +257,7 @@ export default function UnifiedNotesPanel({
                     isMasterAdmin={isMasterAdmin}
                   />
                 ))}
-                {pinnedExpanded && pinnedNotes.length > 0 && (
+                {pinnedExpanded && pinnedVisible.length > 0 && (
                   <div className="mx-3 border-t border-border/40 mt-1 mb-3" />
                 )}
               </div>

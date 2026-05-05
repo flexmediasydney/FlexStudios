@@ -1,32 +1,25 @@
 /**
  * Right-pane detail view for the Tasks subtab two-pane layout.
  *
- * Replaces the inline expansion that used to push the task list around when
- * a task was opened. Sits to the right of TaskListView at wide viewports
- * and stacks below at narrow ones.
- *
- * Three sections:
- *   1. Meta strip — assignee, due, effort, role (read-only summary).
- *   2. Description.
- *   3. Checklist — task.checklist (JSONB column added in migration 477).
+ * Wraps the existing TaskDetailPanel (which still owns description, deadline
+ * editor, manual effort logging, effort history, edit/lock/delete buttons)
+ * and adds two new sections below it:
+ *   1. Checklist — task.checklist (JSONB column added in migration 477).
  *      Items: { title, checked }. User can check/uncheck, add new items,
  *      remove existing ones. Writes go straight to project_tasks.checklist.
- *   4. Linked notes — org_notes filtered by linked_task_id = task.id with
- *      link_kind = 'task'. New notes can be created via the existing
- *      UnifiedNoteComposer with initialLink pre-set to this task.
+ *   2. Linked notes — UnifiedNotesPanel scoped by `taskId`. Inherits the
+ *      full notes feature surface (rich composer with attachments, inline
+ *      edit, replies/threads, lightbox, pin) — no hand-rolled fork.
  */
 import React, { useState, useCallback, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
-import { useEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Plus, X, Trash2, FileText, MessageSquare, Loader2, CheckCircle2 } from "lucide-react";
-import { fmtTimestampCustom } from "@/components/utils/dateUtils";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import UnifiedNoteComposer from "@/components/notes/UnifiedNoteComposer";
+import { Plus, X, Trash2, FileText, MessageSquare, CheckCircle2 } from "lucide-react";
 import TaskDetailPanel from "./TaskDetailPanel";
+import UnifiedNotesPanel from "@/components/notes/UnifiedNotesPanel";
 
 export default function TaskDetailPane({
   task,
@@ -52,22 +45,11 @@ export default function TaskDetailPane({
   );
   useEffect(() => {
     setLocalChecklist(Array.isArray(task?.checklist) ? task.checklist : []);
-    // task.updated_at is the canonical version key — the row's updated_at
-    // is bumped on every server write, so this effect runs each time the
-    // server confirms a change (and once on task switch).
-  }, [task?.id, task?.updated_at]);
-
-  // ── Linked notes (org_notes where link_kind=task & linked_task_id=task.id) ──
-  // Scoped by project_id on the server-side filter for cache efficiency, then
-  // narrowed client-side to the specific task — same shape NoteLinkPicker uses.
-  const { data: allProjectNotes = [], isLoading: notesLoading } = useEntityList(
-    task?.id ? "OrgNote" : null,
-    "-created_at",
-    500,
-    (n) => n.link_kind === 'task'
-        && n.linked_task_id === task?.id
-        && !n.is_deleted
-  );
+    // updated_at is the canonical version key — the row's timestamp bumps
+    // on every server write, so this effect runs each time the server
+    // confirms a change (and once on task switch). decorateEntity may
+    // expose it as `updated_date`, so we depend on both.
+  }, [task?.id, task?.updated_at, task?.updated_date]);
 
   // ── Mutations ──
   const updateMutation = useMutation({
@@ -126,9 +108,6 @@ export default function TaskDetailPane({
     if (!canEdit) return;
     persistChecklist(checklist.filter((_, i) => i !== idx));
   }, [canEdit, checklist, persistChecklist]);
-
-  // ── Note composer modal ──
-  const [composerOpen, setComposerOpen] = useState(false);
 
   if (!task) {
     return (
@@ -272,76 +251,29 @@ export default function TaskDetailPane({
           </div>
         </div>
 
-        {/* Linked notes */}
+        {/* Linked notes — full UnifiedNotesPanel scoped to this task. The
+             panel ships with: rich composer (attachments, mentions, links),
+             inline edit, threaded replies, lightbox, pin/unpin. We just feed
+             it the project context + a `taskId` filter; the panel handles
+             everything else. */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <div className="text-xs font-semibold flex items-center gap-2 text-foreground/80">
-              <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
-              Notes
-              {allProjectNotes.length > 0 && (
-                <span className="text-[10px] font-normal text-muted-foreground tabular-nums">
-                  {allProjectNotes.length}
-                </span>
-              )}
-            </div>
-            {canEdit && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs gap-1"
-                onClick={() => setComposerOpen(true)}
-              >
-                <Plus className="h-3 w-3" /> Note
-              </Button>
-            )}
+          <div className="flex items-center gap-2 mb-2 px-1">
+            <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="text-xs font-semibold text-foreground/80">Notes</span>
           </div>
-          <div className="space-y-2">
-            {notesLoading ? (
-              <div className="bg-card rounded-lg border border-border/50 p-3 text-xs text-muted-foreground flex items-center gap-2">
-                <Loader2 className="h-3 w-3 animate-spin" /> Loading notes…
-              </div>
-            ) : allProjectNotes.length === 0 ? (
-              <div className="bg-card rounded-lg border border-border/50 p-3 text-xs italic text-muted-foreground/70">
-                No notes linked to this task yet.
-              </div>
-            ) : (
-              allProjectNotes.map(note => (
-                <div key={note.id} className="bg-card rounded-lg border border-border/50 p-3">
-                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground mb-1.5">
-                    <span className="font-medium text-foreground/80">{note.author_name || note.author_email || 'Unknown'}</span>
-                    <span>·</span>
-                    <span>{fmtTimestampCustom(note.created_at, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true })}</span>
-                  </div>
-                  {note.content_html
-                    ? <div className="text-sm text-foreground/90 prose prose-sm max-w-none [&_p]:my-1" dangerouslySetInnerHTML={{ __html: note.content_html }} />
-                    : <p className="text-sm text-foreground/90 whitespace-pre-wrap">{note.content || ''}</p>
-                  }
-                </div>
-              ))
-            )}
+          {/* The notes panel manages its own scrolling; constrain its height
+               so it doesn't blow the right-pane scroller on long threads. */}
+          <div className="rounded-lg border border-border/50 overflow-hidden bg-background" style={{ minHeight: '320px', maxHeight: '600px' }}>
+            <UnifiedNotesPanel
+              projectId={projectId}
+              contextType="project"
+              contextLabel={project?.title || project?.property_address || 'Project'}
+              taskId={task.id}
+              taskLabel={cleanTitle}
+            />
           </div>
         </div>
       </div>
-
-      {/* Compose dialog */}
-      {composerOpen && (
-        <Dialog open={composerOpen} onOpenChange={setComposerOpen}>
-          <DialogContent className="max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>New note · {cleanTitle}</DialogTitle>
-            </DialogHeader>
-            <UnifiedNoteComposer
-              projectId={projectId}
-              currentUser={currentUser}
-              contextType="project"
-              contextLabel={project?.title || project?.property_address || 'Project'}
-              initialLink={{ kind: 'task', id: task.id, label: cleanTitle }}
-              onSave={() => setComposerOpen(false)}
-              onCancel={() => setComposerOpen(false)}
-            />
-          </DialogContent>
-        </Dialog>
-      )}
     </div>
   );
 }
