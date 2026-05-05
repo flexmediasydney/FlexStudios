@@ -121,7 +121,7 @@ $$;
 
 -- 4. Remove the orphaned automation rule "P2 — Stale Submitted Alert"
 --    (seeded by seedAutomationRules; no longer matches any rows).
-DELETE FROM automation_rules
+DELETE FROM project_automation_rules
 WHERE name = 'P2 — Stale Submitted Alert';
 
 COMMIT;
