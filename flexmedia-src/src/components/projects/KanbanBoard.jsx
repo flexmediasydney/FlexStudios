@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { retryWithBackoff } from "@/lib/networkResilience";
-import { useEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
+import { useEntityList } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -528,24 +528,11 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   }, [allTimeLogs]);
 
   const updateStatusMutation = useMutation({
-    onMutate: ({ projectId, newStatus, project }) => {
-      // Optimistic: move the card now, reconcile with server (Realtime patches
-      // the cache when the UPDATE replicates). Snapshot prev values for rollback.
-      const prev = {
-        status: project.status,
-        last_status_change: project.last_status_change ?? null,
-        shooting_started_at: project.shooting_started_at ?? null,
-      };
-      const optimistic = {
-        status: newStatus,
-        last_status_change: new Date().toISOString(),
-      };
-      if (newStatus === 'onsite' && !project.shooting_started_at) {
-        optimistic.shooting_started_at = new Date().toISOString();
-      }
-      updateEntityInCache('Project', projectId, optimistic);
-      return { prev, projectId };
-    },
+    // NB: no synchronous optimistic patch here — synchronously notifying the
+    // Project list listeners during a drop confused @hello-pangea/dnd and
+    // stranded the dragged card on the cursor. Realtime carries the change
+    // back via the entity-cache subscription within ~50-200ms instead, which
+    // already feels fast since we removed the redundant 200-row refetch.
     mutationFn: async ({ projectId, newStatus, project }) => {
       const user = await api.auth.me();
       const oldStatus = project.status;
@@ -606,11 +593,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
       // No manual refetch needed — refetching here would race the realtime patch
       // and burn a 200-row roundtrip.
     },
-    onError: (err, _variables, context) => {
-      // Revert the optimistic patch so the card snaps back to its source column.
-      if (context?.prev && context?.projectId) {
-        updateEntityInCache('Project', context.projectId, context.prev);
-      }
+    onError: (err) => {
       toast.error(err?.message || "Failed to update project status. Please try again.");
     },
   });
