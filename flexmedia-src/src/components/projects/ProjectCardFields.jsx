@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Calendar, Clock, User, Building, DollarSign, Flag, CheckSquare, ExternalLink, FileText, CreditCard, CheckCircle2, Package } from "lucide-react";
 import { usePriceGate } from '@/components/auth/RoleGate';
@@ -656,6 +656,22 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
  * (vs. the whole board re-rendering whenever any one card's data shifts).
  */
 export const ProjectCardFields = memo(function ProjectCardFields({ project, enabledFields, products, packages, tasks, timeLogs = [] }) {
+  // Sort tasks by their canonical `order` field — same ordering useProjectTasks
+  // applies on the project detail page, so card popovers list tasks in the
+  // template order they were generated in (rather than the due-date sort that
+  // the source useEntityList uses for board / list views).
+  const sortedTasks = useMemo(() => {
+    if (!Array.isArray(tasks) || tasks.length === 0) return tasks;
+    return [...tasks].sort((a, b) => {
+      const ao = typeof a.order === 'number' ? a.order : Number.POSITIVE_INFINITY;
+      const bo = typeof b.order === 'number' ? b.order : Number.POSITIVE_INFINITY;
+      if (ao !== bo) return ao - bo;
+      const ac = a.created_date ? new Date(a.created_date).getTime() : 0;
+      const bc = b.created_date ? new Date(b.created_date).getTime() : 0;
+      return ac - bc;
+    });
+  }, [tasks]);
+
   return (
     <div className="space-y-2">
       {enabledFields.map(fieldId => (
@@ -665,7 +681,7 @@ export const ProjectCardFields = memo(function ProjectCardFields({ project, enab
           project={project}
           products={products}
           packages={packages}
-          tasks={tasks}
+          tasks={sortedTasks}
           timeLogs={timeLogs}
         />
       ))}
