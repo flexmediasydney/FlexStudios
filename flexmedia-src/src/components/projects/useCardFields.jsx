@@ -14,7 +14,7 @@ export const ALL_CARD_FIELDS = [
   { id: "packages",       label: "Packages",      group: "Details" },
   { id: "status_timer",   label: "Status Timer",  group: "Details" },
   { id: "tasks",          label: "Active Tasks",  group: "Details" },
-  { id: "product_category_tasks", label: "Product Category Tasks", group: "Details" },
+  { id: "product_category_tasks", label: "Task Progress", group: "Details" },
   { id: "requests",       label: "Requests",      group: "Details" },
   { id: "outcome",        label: "Outcome",       group: "Details" },
   { id: "payment_status", label: "Payment",       group: "Finance" },

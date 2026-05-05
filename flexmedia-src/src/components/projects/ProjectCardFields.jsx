@@ -269,91 +269,175 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
        );
      }
     case "product_category_tasks": {
-      // Aggregate non-revision tasks by their source product's category.
-      // task.product_id → product.category lookup; tasks not tied to a product
-      // (or whose product was removed) bucket as "other".
-      const allRegularTasks = tasks.filter(t => !t.is_deleted && !t.is_archived && !t.revision_id && !/^\[Revision #\d+\]/.test(t.title || ""));
-      if (allRegularTasks.length === 0) return null;
+      // Scope-first task progress. Buckets every active task by scope:
+      //   Product (sub-grouped by product.category)
+      //   Project (no product / package / revision linkage)
+      //   Revisions (revision_id set OR [Revision #N] title prefix; request_kind != change_request)
+      //   Change Requests (revision-tagged with request_kind === 'change_request')
+      // Overall progress matches ProjectProgressBar's calc — all active tasks.
+      const allActive = tasks.filter(t => !t.is_deleted && !t.is_archived);
+      if (allActive.length === 0) return null;
 
+      const isRevisionTask = (t) => Boolean(t.revision_id) || /^\[Revision #\d+\]/.test(t.title || "");
       const productById = new Map(products.map(p => [p.id, p]));
-      const groupsMap = new Map();
-      for (const t of allRegularTasks) {
-        const product = t.product_id ? productById.get(t.product_id) : null;
-        const cat = (product?.category || "other").toLowerCase();
-        if (!groupsMap.has(cat)) groupsMap.set(cat, []);
-        groupsMap.get(cat).push(t);
-      }
-      if (groupsMap.size === 0) return null;
 
-      const groups = [...groupsMap.entries()]
-        .map(([cat, list]) => {
-          const completed = list.filter(t => t.is_completed).length;
-          return {
-            cat,
-            label: CATEGORY_LABELS[cat] || cat,
-            tasks: list,
-            total: list.length,
-            completed,
-            barColor: CATEGORY_BAR_COLORS[cat] || CATEGORY_BAR_COLORS.other,
-          };
-        })
+      const productByCategory = new Map();
+      const projectScopeTasks = [];
+      const revisionTasks = [];
+      const changeRequestTasks = [];
+
+      for (const t of allActive) {
+        if (isRevisionTask(t)) {
+          if (t.request_kind === 'change_request') changeRequestTasks.push(t);
+          else revisionTasks.push(t);
+        } else if (t.product_id) {
+          const product = productById.get(t.product_id);
+          const cat = (product?.category || 'other').toLowerCase();
+          if (!productByCategory.has(cat)) productByCategory.set(cat, []);
+          productByCategory.get(cat).push(t);
+        } else {
+          // No product_id, no revision → project-level (or package-level) task
+          projectScopeTasks.push(t);
+        }
+      }
+
+      const productAll = [...productByCategory.values()].flat();
+      const productTotal = productAll.length;
+      const productCompleted = productAll.filter(t => t.is_completed).length;
+
+      const productGroups = [...productByCategory.entries()]
+        .map(([cat, list]) => ({
+          cat,
+          label: CATEGORY_LABELS[cat] || cat,
+          tasks: list,
+          total: list.length,
+          completed: list.filter(t => t.is_completed).length,
+          barColor: CATEGORY_BAR_COLORS[cat] || CATEGORY_BAR_COLORS.other,
+        }))
         .sort((a, b) => {
           const ai = CATEGORY_ORDER.indexOf(a.cat);
           const bi = CATEGORY_ORDER.indexOf(b.cat);
           return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
         });
 
+      const totalAll = allActive.length;
+      const completedAll = allActive.filter(t => t.is_completed).length;
+      const overallPct = totalAll > 0 ? (completedAll / totalAll) * 100 : 0;
+
+      const renderRow = ({ key, label, tasksList, completed, total, barColor, indent, popoverTitle, stripRevisionPrefix }) => {
+        if (total === 0) return null;
+        const pct = total > 0 ? (completed / total) * 100 : 0;
+        return (
+          <Popover key={key}>
+            <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
+              <div className={`flex items-center gap-2 cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5 transition-colors ${indent ? 'pl-4' : ''}`}>
+                <span className={`text-xs ${indent ? 'text-muted-foreground' : 'font-semibold text-foreground'} truncate min-w-[64px] max-w-[110px]`} title={label}>
+                  {label}
+                </span>
+                <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">
+                  {completed}/{total}
+                </span>
+                <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden min-w-[32px]">
+                  <div className={`h-full ${barColor} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-3" side="right" align="start" onClick={e => e.stopPropagation()}>
+              <p className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wide">
+                {popoverTitle || label} · {completed}/{total}
+              </p>
+              <div className="space-y-1 max-h-60 overflow-y-auto">
+                {tasksList.map(task => (
+                  <div key={task.id} className="flex items-center gap-2 text-xs py-1 border-b border-muted last:border-0">
+                    {task.is_completed
+                      ? <CheckCircle2 className="h-3 w-3 text-green-500 flex-shrink-0" />
+                      : <CheckSquare className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                    }
+                    <span className={`flex-1 ${task.is_completed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                      {stripRevisionPrefix ? (task.title || '').replace(/^\[Revision #\d+\]\s*/, '') : task.title}
+                    </span>
+                    {task.due_date && !task.is_completed
+                      ? <CountdownTimer dueDate={task.due_date} compact />
+                      : task.due_date
+                        ? <span className="text-muted-foreground text-xs flex-shrink-0">{fmtDate(task.due_date, 'MMM d')}</span>
+                        : null
+                    }
+                  </div>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        );
+      };
+
       return (
-        <div className="space-y-1">
-          {groups.map(grp => {
-            const pct = grp.total > 0 ? (grp.completed / grp.total) * 100 : 0;
-            return (
-              <Popover key={grp.cat}>
-                <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
-                  <div className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5 transition-colors">
-                    <Package className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                    <span className="text-xs font-medium text-foreground truncate min-w-[72px] max-w-[100px]" title={grp.label}>
-                      {grp.label}
-                    </span>
-                    <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">
-                      {grp.completed}/{grp.total}
-                    </span>
-                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden min-w-[32px]">
-                      <div
-                        className={`h-full ${grp.barColor} rounded-full transition-all`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                  </div>
-                </PopoverTrigger>
-                <PopoverContent className="w-72 p-3" side="right" align="start" onClick={e => e.stopPropagation()}>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      {grp.label} · {grp.completed}/{grp.total}
-                    </p>
-                  </div>
-                  <div className="space-y-1 max-h-60 overflow-y-auto">
-                    {grp.tasks.map(task => (
-                      <div key={task.id} className="flex items-center gap-2 text-xs py-1 border-b border-muted last:border-0">
-                        {task.is_completed
-                          ? <CheckCircle2 className="h-3 w-3 text-green-500 flex-shrink-0" />
-                          : <CheckSquare className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                        }
-                        <span className={`flex-1 ${task.is_completed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
-                          {task.title}
-                        </span>
-                        {task.due_date && !task.is_completed
-                          ? <CountdownTimer dueDate={task.due_date} compact />
-                          : task.due_date
-                            ? <span className="text-muted-foreground text-xs flex-shrink-0">{fmtDate(task.due_date, 'MMM d')}</span>
-                            : null
-                        }
-                      </div>
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            );
+        <div className="space-y-1.5">
+          {/* Overall — all active tasks (matches ProjectProgressBar on the project detail page) */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <CheckSquare className="h-3 w-3" />
+              <span className="font-medium tabular-nums">{completedAll}/{totalAll}</span>
+              <span>tasks done</span>
+            </div>
+            <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+              <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${overallPct}%` }} />
+            </div>
+          </div>
+
+          {/* Product scope — header + per-category sub-rows */}
+          {productTotal > 0 && (
+            <>
+              {renderRow({
+                key: 'product',
+                label: 'Product',
+                tasksList: productAll,
+                completed: productCompleted,
+                total: productTotal,
+                barColor: 'bg-blue-500',
+              })}
+              {productGroups.map(grp => renderRow({
+                key: `product:${grp.cat}`,
+                label: grp.label,
+                tasksList: grp.tasks,
+                completed: grp.completed,
+                total: grp.total,
+                barColor: grp.barColor,
+                indent: true,
+                popoverTitle: `Product · ${grp.label}`,
+              }))}
+            </>
+          )}
+
+          {/* Project scope */}
+          {renderRow({
+            key: 'project',
+            label: 'Project',
+            tasksList: projectScopeTasks,
+            completed: projectScopeTasks.filter(t => t.is_completed).length,
+            total: projectScopeTasks.length,
+            barColor: 'bg-slate-500',
+          })}
+
+          {/* Revisions */}
+          {renderRow({
+            key: 'revisions',
+            label: 'Revisions',
+            tasksList: revisionTasks,
+            completed: revisionTasks.filter(t => t.is_completed).length,
+            total: revisionTasks.length,
+            barColor: 'bg-red-500',
+            stripRevisionPrefix: true,
+          })}
+
+          {/* Change Requests */}
+          {renderRow({
+            key: 'change_requests',
+            label: 'Change Requests',
+            tasksList: changeRequestTasks,
+            completed: changeRequestTasks.filter(t => t.is_completed).length,
+            total: changeRequestTasks.length,
+            barColor: 'bg-purple-500',
+            stripRevisionPrefix: true,
           })}
         </div>
       );
