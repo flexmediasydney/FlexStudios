@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Calendar, Clock, User, Building, DollarSign, Flag, CheckSquare, ExternalLink, FileText, CreditCard, CheckCircle2, Package } from "lucide-react";
 import { usePriceGate } from '@/components/auth/RoleGate';
@@ -30,7 +31,10 @@ const paymentColors = {
  * Renders a single field row for a project card.
  * Shared across Kanban, Grid, and List views.
  */
-export function ProjectFieldValue({ fieldId, project, products = [], packages = [], tasks = [], timeLogs = [] }) {
+// Memoized so a 1Hz running-timer tick (or any single-card mutation) only
+// re-renders the affected card field row, not all 200 × N field rows on the
+// Kanban / project list. Pure render — no internal state.
+export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, project, products = [], packages = [], tasks = [], timeLogs = [] }) {
   const { visible: showPricing } = usePriceGate();
   switch (fieldId) {
     case "agency_name": {
@@ -446,12 +450,14 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
     default:
       return null;
   }
-}
+});
 
 /**
  * Renders all enabled fields for a project card in order.
+ * Memoized so card re-renders are scoped to whichever card actually changed
+ * (vs. the whole board re-rendering whenever any one card's data shifts).
  */
-export function ProjectCardFields({ project, enabledFields, products, packages, tasks, timeLogs = [] }) {
+export const ProjectCardFields = memo(function ProjectCardFields({ project, enabledFields, products, packages, tasks, timeLogs = [] }) {
   return (
     <div className="space-y-2">
       {enabledFields.map(fieldId => (
@@ -467,4 +473,4 @@ export function ProjectCardFields({ project, enabledFields, products, packages, 
       ))}
     </div>
   );
-}
+});

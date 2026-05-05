@@ -107,7 +107,9 @@ const urgencyBorderClass = {
 };
 
 /* ─────────────────────────── Mini Progress Bar ─────────────────────────── */
-function TaskProgressBar({ tasks }) {
+// Memoized so a single-card task update doesn't re-iterate the per-card filter
+// for every other card on the board.
+const TaskProgressBar = React.memo(function TaskProgressBar({ tasks }) {
   const regularTasks = tasks.filter(t => !t.parent_task_id && !t.is_deleted && !t.is_archived && !t.revision_id && !/^\[Revision #\d+\]/.test(t.title || ""));
   if (regularTasks.length === 0) return null;
 
@@ -132,10 +134,10 @@ function TaskProgressBar({ tasks }) {
       </span>
     </div>
   );
-}
+});
 
 /* ─────────────────────────── Email indicator ─────────────────────────── */
-function ProjectEmailIndicator({ emails = [] }) {
+const ProjectEmailIndicator = React.memo(function ProjectEmailIndicator({ emails = [] }) {
   if (emails.length === 0) return null;
 
   const unreadCount = emails.filter(e => e.is_unread).length;
@@ -203,7 +205,7 @@ function ProjectEmailIndicator({ emails = [] }) {
       </HoverCardContent>
     </HoverCard>
   );
-}
+});
 
 /* ─────────────────────────── Kanban Filter Bar ─────────────────────────── */
 function KanbanFilterBar({ filters, onFiltersChange, projects }) {
