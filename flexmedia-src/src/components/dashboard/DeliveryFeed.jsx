@@ -1059,7 +1059,7 @@ function FolderGallery({ folder, shareUrl, onOpenLightbox, project, getTagsForFi
 }
 
 // All stages that appear in the delivery feed
-const ALL_DELIVERY_STAGES = ['ready_for_partial', 'in_revision', 'delivered'];
+const ALL_DELIVERY_STAGES = ['in_revision', 'delivered'];
 
 /**
  * Primary delivery state (mutually exclusive):

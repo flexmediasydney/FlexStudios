@@ -83,7 +83,7 @@ function calculatePresetDeadline(preset: string, triggerDate: any, timezone = AP
 const STAGE_ORDER = [
   'pending_review', 'to_be_scheduled', 'scheduled', 'onsite',
   'uploaded', 'in_progress', 'in_production',
-  'ready_for_partial', 'in_revision', 'delivered',
+  'in_revision', 'delivered',
 ];
 const TRIGGER_TO_STAGE: Record<string, string> = {
   'project_onsite': 'onsite',

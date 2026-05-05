@@ -252,7 +252,6 @@ const STATUS_LABELS = {
   uploaded: 'Uploaded',
   in_progress: 'Stills in Progress',
   in_production: 'Video in Progress',
-  ready_for_partial: 'Partial',
   in_revision: 'In Revision',
   delivered: 'Delivered',
 };

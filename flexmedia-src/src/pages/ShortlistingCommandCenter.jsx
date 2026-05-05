@@ -116,7 +116,6 @@ const PENDING_LANE_PROJECT_STATUSES = [
   'uploaded',
   'in_progress',
   'in_production',
-  'partially_delivered',
   'in_revision',
 ];
 

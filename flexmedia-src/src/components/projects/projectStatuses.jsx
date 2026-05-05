@@ -8,7 +8,6 @@ export const PROJECT_STAGES = [
   { value: "uploaded",        label: "Uploaded",        color: "bg-orange-100 dark:bg-orange-950/30",textColor: "text-orange-700 dark:text-orange-400",borderColor: "border-orange-200 dark:border-orange-800" },
   { value: "in_progress",     label: "Stills in Progress", color: "bg-violet-100 dark:bg-violet-950/30",textColor: "text-violet-700 dark:text-violet-400",borderColor: "border-violet-200 dark:border-violet-800" },
   { value: "in_production",    label: "Video in Progress", color: "bg-cyan-100 dark:bg-cyan-950/30",  textColor: "text-cyan-700 dark:text-cyan-400",  borderColor: "border-cyan-200 dark:border-cyan-800" },
-  { value: "ready_for_partial",label: "Partially Delivered",color: "bg-indigo-100 dark:bg-indigo-950/30",textColor: "text-indigo-700 dark:text-indigo-400",borderColor: "border-indigo-200 dark:border-indigo-800" },
   { value: "in_revision",     label: "In Revision",     color: "bg-amber-100 dark:bg-amber-950/30",textColor: "text-amber-700 dark:text-amber-400",borderColor: "border-amber-200 dark:border-amber-800" },
   { value: "delivered",       label: "Delivered",       color: "bg-emerald-100 dark:bg-emerald-950/30",textColor: "text-emerald-700 dark:text-emerald-400",borderColor: "border-emerald-200 dark:border-emerald-800" }
 ];

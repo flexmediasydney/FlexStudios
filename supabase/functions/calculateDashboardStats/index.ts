@@ -182,7 +182,7 @@ function computePipeline(projects: any[], tasks: any[], now: Date): StatGroup {
     (now.getTime() - new Date(p.last_status_change || p.created_at).getTime()) / 3_600_000
   );
 
-  const activeStatuses = ['to_be_scheduled', 'scheduled', 'onsite', 'uploaded', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision'];
+  const activeStatuses = ['to_be_scheduled', 'scheduled', 'onsite', 'uploaded', 'in_progress', 'in_production', 'in_revision'];
 
   // Pricing mismatches on active (non-terminal) projects
   const pricingMismatches = projects.filter(

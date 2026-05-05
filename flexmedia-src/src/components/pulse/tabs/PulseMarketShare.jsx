@@ -1028,7 +1028,6 @@ function LegendView({ sourceMix, mixLoading, ms }) {
         <div className="flex gap-1.5 flex-wrap">
           <Badge variant="outline" className="text-[11px]">delivered</Badge>
           <Badge variant="outline" className="text-[11px]">scheduled</Badge>
-          <Badge variant="outline" className="text-[11px]">ready_for_partial</Badge>
           <Badge variant="outline" className="text-[11px]">to_be_scheduled</Badge>
         </div>
         <p className="text-[11px] text-muted-foreground mt-2">Leads (<code>goal_not_started</code>, <code>goal_active</code>) are excluded — we haven't committed to them yet.</p>

@@ -61,7 +61,6 @@ const STAGES = [
   { key: 'uploaded',        color: 'bg-yellow-400' },
   { key: 'in_progress',     color: 'bg-amber-400' },
   { key: 'in_production',   color: 'bg-cyan-400' },
-  { key: 'ready_for_partial', color: 'bg-cyan-400' },
   { key: 'in_revision',     color: 'bg-red-400' },
   { key: 'delivered',       color: 'bg-green-500' },
 ];
@@ -73,7 +72,6 @@ const STATUS_BORDER = {
   uploaded: 'border-l-yellow-400',
   in_progress: 'border-l-amber-400',
   in_production: 'border-l-cyan-400',
-  ready_for_partial: 'border-l-cyan-400',
   in_revision: 'border-l-red-500',
   delivered: 'border-l-green-500',
 };

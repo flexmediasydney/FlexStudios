@@ -38,7 +38,7 @@ const STAGE_HEX = {
   pending_review:    '#f59e0b', to_be_scheduled: '#94a3b8',
   scheduled:        '#3b82f6', onsite:           '#eab308',
   uploaded:         '#f97316', in_progress:      '#7c3aed',
-  in_production:    '#06b6d4', ready_for_partial:'#6366f1',
+  in_production:    '#06b6d4',
   in_revision:      '#d97706', delivered:        '#10b981',
 };
 

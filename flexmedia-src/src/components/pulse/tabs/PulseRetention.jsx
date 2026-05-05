@@ -7,7 +7,7 @@
  *
  * For each scope entity in the selected window we show two flows:
  *   1. Projects we've done           (projects.project_type_name = 'Residential Real Estate'
- *                                      AND status IN delivered/scheduled/ready_for_partial/to_be_scheduled)
+ *                                      AND status IN delivered/scheduled/to_be_scheduled)
  *   2. For-sale listings that arrived (pulse_listings.listing_type='for_sale')
  *      with/without a matching project at the same property_key.
  *
@@ -1101,7 +1101,6 @@ function StatusBadge({ status }) {
   const map = {
     delivered:            ["bg-emerald-100 text-emerald-800 border-emerald-200", "Delivered"],
     scheduled:            ["bg-blue-100    text-blue-800    border-blue-200",    "Scheduled"],
-    ready_for_partial:    ["bg-purple-100  text-purple-800  border-purple-200",  "Partial"],
     to_be_scheduled:      ["bg-slate-100   text-slate-700   border-slate-200",   "To schedule"],
   };
   const [cls, label] = map[status] || ["bg-slate-100 text-slate-700 border-slate-200", status || "—"];

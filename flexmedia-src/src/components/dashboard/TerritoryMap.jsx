@@ -44,7 +44,6 @@ const STAGE_COLORS = {
   uploaded:          '#f97316',
   in_progress:       '#7c3aed',
   in_production:     '#06b6d4',
-  ready_for_partial: '#6366f1',
   in_revision:       '#d97706',
   delivered:         '#10b981',
 };
@@ -81,7 +80,7 @@ function getDominantAgency(projects) {
 }
 
 // ─── Time filter definitions ──────────────────────────────────────────
-const ACTIVE_STAGES = ['onsite', 'uploaded', 'in_production', 'in_progress', 'ready_for_partial', 'in_revision'];
+const ACTIVE_STAGES = ['onsite', 'uploaded', 'in_production', 'in_progress', 'in_revision'];
 const UPCOMING_STAGES = ['scheduled', 'to_be_scheduled', 'pending_review'];
 
 function matchesTimeFilter(project, timeFilter) {

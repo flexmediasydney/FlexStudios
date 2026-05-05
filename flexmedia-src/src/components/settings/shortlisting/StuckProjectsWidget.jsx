@@ -106,7 +106,6 @@ export default function StuckProjectsWidget() {
           "uploaded",
           "in_progress",
           "in_production",
-          "partially_delivered",
           "in_revision",
         ])
         .order("shoot_date", { ascending: false, nullsFirst: false })

@@ -67,7 +67,7 @@ serveWithAudit('logOnsiteEffortOnUpload', async (req) => {
     const STAGE_ORDER = [
       'pending_review', 'to_be_scheduled', 'scheduled', 'onsite',
       'uploaded', 'in_progress', 'in_production',
-      'ready_for_partial', 'in_revision', 'delivered',
+      'in_revision', 'delivered',
     ];
     const currentIdx = STAGE_ORDER.indexOf(project.status);
     const uploadedIdx = STAGE_ORDER.indexOf('uploaded');

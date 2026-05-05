@@ -13,7 +13,7 @@ import { fixTimestamp, fmtDate } from '@/components/utils/dateUtils';
 import { stageLabel } from '@/components/projects/projectStatuses';
 import { isToday, isTomorrow, format, differenceInHours, parseISO } from 'date-fns';
 
-const STAGE_COLORS = { pending_review: '#f59e0b', scheduled: '#3b82f6', onsite: '#eab308', uploaded: '#f97316', in_progress: '#7c3aed', ready_for_partial: '#6366f1', in_revision: '#d97706', delivered: '#10b981' };
+const STAGE_COLORS = { pending_review: '#f59e0b', scheduled: '#3b82f6', onsite: '#eab308', uploaded: '#f97316', in_progress: '#7c3aed', in_production: '#06b6d4', in_revision: '#d97706', delivered: '#10b981' };
 
 function getProducts(project) {
   if (!project.products || !Array.isArray(project.products)) return [];
@@ -96,7 +96,6 @@ function DeliveryRow({ project }) {
             <span className="text-[10px] text-muted-foreground w-8 text-right">{pct}%</span>
           </div>
         )}
-        {project.status === 'ready_for_partial' && <Badge className="text-[9px] bg-green-100 text-green-700">Ready</Badge>}
       </div>
     </Link>
   );

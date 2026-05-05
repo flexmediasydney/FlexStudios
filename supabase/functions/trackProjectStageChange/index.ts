@@ -9,7 +9,6 @@ const STAGE_LABELS: Record<string, string> = {
   'uploaded': 'Uploaded',
   'in_progress': 'Stills in Progress',
   'in_production': 'Video in Progress',
-  'ready_for_partial': 'Partially Delivered',
   'in_revision': 'In Revision',
   'delivered': 'Delivered',
 };
@@ -77,7 +76,7 @@ serveWithAudit('trackProjectStageChange', async (req) => {
     // stage and a frozen UI counter. This function now only fires side-effects.
     const validStages = [
       'pending_review', 'to_be_scheduled', 'scheduled', 'onsite', 'uploaded',
-      'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered',
+      'in_progress', 'in_production', 'in_revision', 'delivered',
     ];
     if (!validStages.includes(newStatus)) {
       console.error(`Invalid stage value: ${newStatus}`);
@@ -85,7 +84,7 @@ serveWithAudit('trackProjectStageChange', async (req) => {
     }
 
     // ─── Hard rule: cannot advance past "onsite" until at least 1 calendar event has ended ───
-    const POST_ONSITE_STAGES = ['uploaded', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
+    const POST_ONSITE_STAGES = ['uploaded', 'in_progress', 'in_production', 'in_revision', 'delivered'];
     if (POST_ONSITE_STAGES.includes(newStatus)) {
       try {
         const calendarEvents = await entities.CalendarEvent.filter({ project_id: project.id }, null, 100);
@@ -320,7 +319,7 @@ serveWithAudit('trackProjectStageChange', async (req) => {
     }, 'trackProjectStageChange').catch(() => {});
 
     // Auto-complete onsite effort tasks when project reaches uploaded or beyond
-    const STAGE_ORDER_LOG = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','in_progress','in_production','ready_for_partial','in_revision','delivered'];
+    const STAGE_ORDER_LOG = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','in_progress','in_production','in_revision','delivered'];
     const newIdx = STAGE_ORDER_LOG.indexOf(newStatus);
     const uploadedIdx = STAGE_ORDER_LOG.indexOf('uploaded');
     if (newIdx >= uploadedIdx) {

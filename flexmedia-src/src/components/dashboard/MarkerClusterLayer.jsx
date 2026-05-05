@@ -15,7 +15,6 @@ const STAGE_COLORS = {
   uploaded:          '#f97316',
   in_progress:       '#7c3aed',
   in_production:     '#06b6d4',
-  ready_for_partial: '#6366f1',
   in_revision:       '#d97706',
   delivered:         '#10b981',
 };
@@ -28,7 +27,6 @@ const STAGE_LABELS = {
   uploaded:          'Uploaded',
   in_progress:       'Stills in Progress',
   in_production:     'Video in Progress',
-  ready_for_partial: 'Partial Delivery',
   in_revision:       'In Revision',
   delivered:         'Delivered',
 };

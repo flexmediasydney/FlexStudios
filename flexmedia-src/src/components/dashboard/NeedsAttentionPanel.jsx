@@ -186,10 +186,9 @@ export default function NeedsAttentionPanel({ projects, tasks, users }) {
       });
     }
 
-    // 6. Projects ready for delivery (in ready_for_partial or past delivery date)
+    // 6. Projects ready for delivery (delivery date is today and not yet delivered)
     const readyForDelivery = activeProjects.filter(p =>
-      p.status === 'ready_for_partial' ||
-      (p.delivery_date && isToday(new Date(fixTimestamp(p.delivery_date))) && !['delivered'].includes(p.status))
+      p.delivery_date && isToday(new Date(fixTimestamp(p.delivery_date))) && !['delivered'].includes(p.status)
     );
     if (readyForDelivery.length > 0) {
       attention.push({

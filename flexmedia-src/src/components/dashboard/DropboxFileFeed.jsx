@@ -21,7 +21,6 @@ import { differenceInDays, format } from 'date-fns';
 const STAGES_WITH_MEDIA = [
   { value: 'all',              label: 'All stages' },
   { value: 'delivered',        label: 'Delivered' },
-  { value: 'ready_for_partial',label: 'Partially Delivered' },
   { value: 'in_revision',      label: 'In Revision' },
   { value: 'in_production',    label: 'Video in Progress' },
   { value: 'in_progress',      label: 'Stills in Progress' },
@@ -438,7 +437,6 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
 
   const stageConfig = {
     delivered:         { color: 'bg-emerald-100 text-emerald-700', label: 'Delivered' },
-    ready_for_partial: { color: 'bg-indigo-100 text-indigo-700',  label: 'Partially Delivered' },
     in_revision:       { color: 'bg-amber-100 text-amber-700',    label: 'In Revision' },
     in_production:     { color: 'bg-cyan-100 text-cyan-700',      label: 'Video in Progress' },
     in_progress:       { color: 'bg-violet-100 text-violet-700',  label: 'Stills in Progress' },

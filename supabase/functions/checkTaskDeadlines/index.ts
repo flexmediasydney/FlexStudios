@@ -245,7 +245,7 @@ serveWithAudit('checkTaskDeadlines', async (req) => {
         }
 
         // stale_production: stuck in production/uploaded stages >48h
-        const productionStages = ['uploaded', 'in_progress', 'in_production', 'ready_for_partial'];
+        const productionStages = ['uploaded', 'in_progress', 'in_production'];
         if (
           productionStages.includes(project.status) &&
           project.last_status_change &&

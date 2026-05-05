@@ -791,7 +791,7 @@ export default function Tasks() {
     const STAGE_LABELS = {
       pending_review: "Pending Review", to_be_scheduled: "To Be Scheduled", scheduled: "Scheduled",
       onsite: "Onsite", uploaded: "Uploaded", in_progress: "Stills in Progress",
-      in_production: "Video in Progress", ready_for_partial: "Partially Delivered", in_revision: "In Revision", delivered: "Delivered",
+      in_production: "Video in Progress", in_revision: "In Revision", delivered: "Delivered",
     };
     const stageCounts = {};
     visibleTasks.forEach(t => {
