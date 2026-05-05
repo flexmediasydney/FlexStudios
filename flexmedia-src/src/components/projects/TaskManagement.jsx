@@ -15,6 +15,7 @@ import { differenceInSeconds } from "date-fns";
 import { wallClockToUTC } from "@/components/lib/deadlinePresets";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
 import { useProjectTasks } from "@/hooks/useProjectTasks";
+import { useProjectRevisions } from "@/hooks/useProjectRevisions";
 import TaskListView from "./TaskListView";
 import { toast } from "sonner";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
@@ -140,11 +141,10 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     });
   }, [allTasksRaw, optimisticCompletions]);
 
-  const { data: revisions = [] } = useEntityList(
-    projectId ? "ProjectRevision" : null,
-    null, 200,
-    projectId ? { project_id: projectId } : null
-  );
+  // Project-scoped Realtime-aware revisions fetch — replaces the global
+  // useEntityList("ProjectRevision",…) that pulled hundreds of org-wide
+  // rows and re-ran filter+sort on every revision write anywhere.
+  const { revisions } = useProjectRevisions(projectId);
 
   const { data: products = [] } = useEntityList("Product", null, 500, { is_active: true });
   const { data: packages = [] } = useEntityList("Package", null, 500, { is_active: true });

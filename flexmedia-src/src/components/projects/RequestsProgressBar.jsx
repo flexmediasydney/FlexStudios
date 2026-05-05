@@ -2,13 +2,12 @@ import React, { useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle2, Circle, MessageSquareWarning } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useProjectRevisions } from "@/hooks/useProjectRevisions";
 
-export default function RequestsProgressBar({ projectId }) {
-  const { data: revisions = [] } = useEntityList(
-    "ProjectRevision", "-created_date", 200,
-    r => r.project_id === projectId
-  );
+function RequestsProgressBar({ projectId }) {
+  // Project-scoped Realtime fetch — was a global useEntityList that
+  // re-filtered on every cross-org revision write.
+  const { revisions } = useProjectRevisions(projectId);
 
   const { total, resolved, percentage } = useMemo(() => {
     // Exclude cancelled from the count entirely
@@ -94,3 +93,5 @@ export default function RequestsProgressBar({ projectId }) {
     </Card>
   );
 }
+
+export default React.memo(RequestsProgressBar);

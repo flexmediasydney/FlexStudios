@@ -2,6 +2,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
+import { useProjectRevisions } from "@/hooks/useProjectRevisions";
+import { useProjectTasks } from "@/hooks/useProjectTasks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -894,14 +896,11 @@ export default function ProjectRevisionsTab({ projectId, project, canEdit }) {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  const { data: revisions = [], loading } = useEntityList(
-    "ProjectRevision", "-created_date", 200,
-    r => r.project_id === projectId
-  );
-  const { data: tasks = [] } = useEntityList(
-    "ProjectTask", "order", 500,
-    t => t.project_id === projectId
-  );
+  // Project-scoped Realtime-aware fetches — replace the legacy
+  // pull-global-list-and-filter pattern that re-ran on every cross-org
+  // revision/task write.
+  const { revisions, loading } = useProjectRevisions(projectId);
+  const { tasks } = useProjectTasks(projectId);
   const { data: products = [] } = useEntityList("Product", null, 500);
   const { data: packages = [] } = useEntityList("Package", null, 500);
 
