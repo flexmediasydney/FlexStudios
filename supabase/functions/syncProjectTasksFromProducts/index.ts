@@ -132,6 +132,25 @@ serveWithAudit('syncProjectTasksFromProducts', async (req) => {
     const tasksToCreate: any[] = [];
     const pendingDependencies: any[] = [];
 
+    // Translate a template.checklist (array of `{ title }` items) into the
+    // per-instance shape `{ title, checked: false }`. Tolerates malformed
+    // entries: drops items with no title, trims whitespace, hard-caps to 50.
+    // ONLY called on INSERT — updates and reactivations leave existing
+    // checklist data untouched so user-checked state survives template edits.
+    const seedChecklistFromTemplate = (template: any): { title: string; checked: boolean }[] => {
+      const raw = template?.checklist;
+      if (!Array.isArray(raw)) return [];
+      const out: { title: string; checked: boolean }[] = [];
+      for (const item of raw) {
+        if (!item || typeof item !== 'object') continue;
+        const title = typeof item.title === 'string' ? item.title.trim() : '';
+        if (!title) continue;
+        out.push({ title, checked: false });
+        if (out.length >= 50) break;
+      }
+      return out;
+    };
+
     const createTasksFromTemplates = (productId: string, templates: any[]) => {
       for (let idx = 0; idx < templates.length; idx++) {
         const template = templates[idx];
@@ -218,7 +237,8 @@ serveWithAudit('syncProjectTasksFromProducts', async (req) => {
           timer_trigger: template.timer_trigger || 'none',
           deadline_type: template.deadline_type || 'custom',
           deadline_preset: template.deadline_preset || null,
-          deadline_hours_after_trigger: template.deadline_hours_after_trigger || 0
+          deadline_hours_after_trigger: template.deadline_hours_after_trigger || 0,
+          checklist: seedChecklistFromTemplate(template)
         });
       }
     };
@@ -299,7 +319,8 @@ serveWithAudit('syncProjectTasksFromProducts', async (req) => {
           timer_trigger: template.timer_trigger || 'none',
           deadline_type: template.deadline_type || 'custom',
           deadline_preset: template.deadline_preset || null,
-          deadline_hours_after_trigger: template.deadline_hours_after_trigger || 0
+          deadline_hours_after_trigger: template.deadline_hours_after_trigger || 0,
+          checklist: seedChecklistFromTemplate(template)
         });
       }
     }
@@ -407,7 +428,8 @@ serveWithAudit('syncProjectTasksFromProducts', async (req) => {
           timer_trigger: template.timer_trigger || 'none',
           deadline_type: template.deadline_type || 'custom',
           deadline_preset: template.deadline_preset || null,
-          deadline_hours_after_trigger: template.deadline_hours_after_trigger || 0
+          deadline_hours_after_trigger: template.deadline_hours_after_trigger || 0,
+          checklist: seedChecklistFromTemplate(template)
         });
       }
     }
