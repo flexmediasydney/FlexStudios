@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { retryWithBackoff } from "@/lib/networkResilience";
-import { useEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, updateEntityInCache } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -593,7 +593,12 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
       // No manual refetch needed — refetching here would race the realtime patch
       // and burn a 200-row roundtrip.
     },
-    onError: (err) => {
+    onError: (err, variables) => {
+      // Revert optimistic patch from a backward drag if the server rejected
+      // it — without this the card visually stays in the wrong column.
+      if (variables?.prevStatus && variables?.projectId) {
+        updateEntityInCache('Project', variables.projectId, { status: variables.prevStatus });
+      }
       toast.error(err?.message || "Failed to update project status. Please try again.");
     },
   });
@@ -680,11 +685,25 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
     }
 
     if (newIdx < currentIdx) {
-      setPendingDrag({ projectId, newStatus, project });
+      // Backward drag: open confirmation dialog AND optimistically move the
+      // card to the destination so the user sees their drop landed. On
+      // Cancel we'll revert via updateEntityInCache. On Confirm the mutation
+      // persists the same state to the server.
+      //
+      // The cache patch is deferred via setTimeout so @hello-pangea/dnd's
+      // drop-completion teardown finishes first — patching synchronously
+      // strands the card mid-animation (the bug we hit in 39111f71).
+      setPendingDrag({ projectId, newStatus, prevStatus: project.status, project });
+      setTimeout(() => {
+        updateEntityInCache('Project', projectId, {
+          status: newStatus,
+          last_status_change: new Date().toISOString(),
+        });
+      }, 50);
       return;
     }
 
-    updateStatusMutation.mutate({ projectId, newStatus, project });
+    updateStatusMutation.mutate({ projectId, newStatus, project, prevStatus: project.status });
   };
 
   const onDragStart = (start) => {
@@ -693,7 +712,19 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
 
   const confirmBackwardDrag = () => {
     if (pendingDrag) {
+      // Cache is already at newStatus from the optimistic patch in onDragEnd —
+      // just persist to server. If the mutation fails, onError reverts.
       updateStatusMutation.mutate(pendingDrag);
+      setPendingDrag(null);
+    }
+  };
+
+  const cancelBackwardDrag = () => {
+    if (pendingDrag) {
+      // Revert the optimistic patch so the card snaps back to its source column.
+      updateEntityInCache('Project', pendingDrag.projectId, {
+        status: pendingDrag.prevStatus,
+      });
       setPendingDrag(null);
     }
   };
@@ -1205,12 +1236,12 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
       {pendingDrag && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-          onClick={() => setPendingDrag(null)}
+          onClick={cancelBackwardDrag}
           role="dialog"
           aria-modal="true"
           aria-labelledby="backward-drag-title"
           onKeyDown={(e) => {
-            if (e.key === 'Escape') setPendingDrag(null);
+            if (e.key === 'Escape') cancelBackwardDrag();
             // Bug fix: trap Tab focus within the confirmation dialog
             if (e.key === 'Tab') {
               const focusable = e.currentTarget.querySelectorAll('button');
@@ -1237,7 +1268,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
               <button
                 className="px-3 py-1.5 text-sm border rounded hover:bg-muted disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                 disabled={updateStatusMutation.isPending}
-                onClick={() => setPendingDrag(null)}
+                onClick={cancelBackwardDrag}
               >
                 Cancel
               </button>
