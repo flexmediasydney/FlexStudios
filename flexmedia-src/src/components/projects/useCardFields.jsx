@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-// useEffect is needed to persist card field selections to localStorage
+import { useSyncExternalStore, useCallback } from "react";
 
 export const ALL_CARD_FIELDS = [
   { id: "agency_agent",   label: "Agency / Agent",       group: "Client" },
@@ -23,43 +22,83 @@ const DEFAULT_ENABLED = [
 // instead of stale field IDs that no longer render anything.
 const STORAGE_KEY = "project_card_fields_v4";
 
-export function useCardFields() {
-  // Store ONLY the ordered list of enabled IDs.
-  // The order is exactly as the user arranged it.
-  // Bug fix: persist to localStorage so customizations survive navigation.
-  const [enabledFields, setEnabledFields] = useState(() => {
+// ─── Module-level shared store ─────────────────────────────────────────────
+// Why not plain useState: every consumer (CardFieldsCustomizer, KanbanBoard,
+// dashboard ProjectCard, AgencyProjectsTab, Projects list) used to get its
+// own useState copy. Toggling a field in the customizer only flipped the
+// customizer's state; the kanban kept its stale copy and didn't re-render
+// until a full page reload. Hoisting the state into a module-level store
+// with useSyncExternalStore lets every hook instance subscribe to a single
+// source of truth, so a toggle anywhere fans out to every card on screen.
+
+function readInitial() {
+  if (typeof window === "undefined") return DEFAULT_ENABLED;
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return DEFAULT_ENABLED;
+}
+
+let _state = readInitial();
+const _listeners = new Set();
+
+function emit() {
+  for (const l of _listeners) l();
+}
+
+function setState(next) {
+  if (next === _state) return;
+  _state = next;
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  } catch {}
+  emit();
+}
+
+// Cross-tab sync: a write in another tab fires the `storage` event with the
+// raw new value. Pull it into our in-memory store so the second tab's cards
+// re-render without waiting for a manual reload. localStorage writes from
+// THIS tab don't fire `storage` here, so there's no echo loop.
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== STORAGE_KEY || e.newValue == null) return;
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      const parsed = JSON.parse(e.newValue);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        _state = parsed;
+        emit();
       }
     } catch {}
-    return DEFAULT_ENABLED;
   });
+}
 
-  // Sync to localStorage whenever enabledFields changes
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(enabledFields));
-    } catch {}
-  }, [enabledFields]);
+function subscribe(fn) {
+  _listeners.add(fn);
+  return () => _listeners.delete(fn);
+}
 
-  const toggleField = (id) => {
-    setEnabledFields(prev => {
-      if (prev.includes(id)) {
-        return prev.filter(f => f !== id);
-      } else {
-        // Append to end when enabling
-        return [...prev, id];
-      }
-    });
-  };
+function getSnapshot() {
+  return _state;
+}
+
+export function useCardFields() {
+  const enabledFields = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+  const toggleField = useCallback((id) => {
+    const prev = _state;
+    setState(prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]);
+  }, []);
 
   // Accept a fully-reordered list of enabled IDs
-  const reorderFields = (newOrder) => setEnabledFields(newOrder);
+  const reorderFields = useCallback((newOrder) => {
+    setState(newOrder);
+  }, []);
 
-  const isEnabled = (id) => enabledFields.includes(id);
+  const isEnabled = useCallback((id) => enabledFields.includes(id), [enabledFields]);
 
   // enabledFields is already in user-defined display order — return as-is
   return { enabledFields, toggleField, reorderFields, isEnabled };
