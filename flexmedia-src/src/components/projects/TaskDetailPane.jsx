@@ -15,31 +15,18 @@
  *      link_kind = 'task'. New notes can be created via the existing
  *      UnifiedNoteComposer with initialLink pre-set to this task.
  */
-import React, { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  CheckCircle2, Clock, User as UserIcon, Plus, X, Trash2,
-  CalendarIcon, FileText, MessageSquare, Loader2,
-} from "lucide-react";
-import { ROLE_LABELS } from "./TaskManagement";
+import { Plus, X, Trash2, FileText, MessageSquare, Loader2, CheckCircle2 } from "lucide-react";
 import { fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import UnifiedNoteComposer from "@/components/notes/UnifiedNoteComposer";
-
-function formatMins(seconds) {
-  const s = Math.max(0, seconds || 0);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h === 0 && m === 0) return "0m";
-  if (h === 0) return `${m}m`;
-  if (m === 0) return `${h}h`;
-  return `${h}h ${m}m`;
-}
+import TaskDetailPanel from "./TaskDetailPanel";
 
 export default function TaskDetailPane({
   task,
@@ -48,6 +35,12 @@ export default function TaskDetailPane({
   canEdit = true,
   currentUser,
   onClose,
+  // Forwarded straight to TaskDetailPanel so the inline editor (effort
+  // logger, deadline picker, edit/delete) stays fully wired.
+  onEditTask,
+  onDeleteTask,
+  onUpdateDeadline,
+  thresholds,
 }) {
   const queryClient = useQueryClient();
   // Local mirror of task.checklist. Mutations update this state synchronously
@@ -63,15 +56,6 @@ export default function TaskDetailPane({
     // is bumped on every server write, so this effect runs each time the
     // server confirms a change (and once on task switch).
   }, [task?.id, task?.updated_at]);
-
-  // Project-scoped time logs — useEntityList shares the cache with
-  // TaskListView so this isn't an extra round-trip.
-  const { data: projectTimeLogs = [] } = useEntityList(
-    projectId ? 'TaskTimeLog' : null,
-    null,
-    500,
-    projectId ? { project_id: projectId } : null
-  );
 
   // ── Linked notes (org_notes where link_kind=task & linked_task_id=task.id) ──
   // Scoped by project_id on the server-side filter for cache efficiency, then
@@ -143,25 +127,6 @@ export default function TaskDetailPane({
     persistChecklist(checklist.filter((_, i) => i !== idx));
   }, [canEdit, checklist, persistChecklist]);
 
-  // ── Effort actuals — sum task-scoped time logs ──
-  const actualSeconds = useMemo(() => {
-    if (!task?.id) return 0;
-    let total = 0;
-    for (const l of projectTimeLogs) {
-      if (l.task_id !== task.id) continue;
-      if (l.status === 'completed' || !l.is_active) {
-        total += Math.max(0, l.total_seconds || 0);
-      } else if (l.status === 'running' && l.start_time) {
-        total += Math.max(0, Math.floor((Date.now() - new Date(l.start_time).getTime()) / 1000) - (l.paused_duration || 0));
-      } else {
-        total += Math.max(0, l.total_seconds || 0);
-      }
-    }
-    return total;
-  }, [task?.id, projectTimeLogs]);
-
-  const estimatedSeconds = (task?.estimated_minutes || 0) * 60;
-
   // ── Note composer modal ──
   const [composerOpen, setComposerOpen] = useState(false);
 
@@ -213,68 +178,23 @@ export default function TaskDetailPane({
 
       {/* Body — scrollable */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Meta strip */}
-        <div className="grid grid-cols-2 gap-3 bg-card rounded-lg border border-border/50 p-3">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
-              <UserIcon className="h-3 w-3" /> Assigned
-            </div>
-            <div className="text-sm">
-              {task.assigned_to_team_name
-                ? <span className="text-foreground">{task.assigned_to_team_name} <span className="text-muted-foreground/70 text-xs">(team)</span></span>
-                : task.assigned_to_name
-                  ? <span className="text-foreground">{task.assigned_to_name}</span>
-                  : <span className="italic text-muted-foreground/70">Unassigned</span>
-              }
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
-              <CalendarIcon className="h-3 w-3" /> Due
-            </div>
-            <div className="text-sm">
-              {task.due_date
-                ? <span className="text-foreground">{fmtTimestampCustom(task.due_date, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true })}</span>
-                : <span className="italic text-muted-foreground/70">No due date</span>
-              }
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
-              <Clock className="h-3 w-3" /> Effort
-            </div>
-            <div className="text-sm">
-              {(actualSeconds > 0 || estimatedSeconds > 0)
-                ? <>
-                    <span className="text-foreground font-medium">{formatMins(actualSeconds)}</span>
-                    {estimatedSeconds > 0 && (
-                      <span className="text-muted-foreground"> / {formatMins(estimatedSeconds)} est.</span>
-                    )}
-                  </>
-                : <span className="italic text-muted-foreground/70">Not tracked</span>
-              }
-            </div>
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Role</div>
-            <div className="text-sm text-foreground">
-              {ROLE_LABELS[task.auto_assign_role] || (task.auto_assign_role && task.auto_assign_role !== 'none' ? task.auto_assign_role : <span className="italic text-muted-foreground/70">None</span>)}
-            </div>
-          </div>
-        </div>
-
-        {/* Description */}
-        {task.description && (
-          <div>
-            <div className="text-xs font-semibold mb-2 flex items-center gap-2 text-foreground/80">
-              <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-              Description
-            </div>
-            <div className="bg-card rounded-lg border border-border/50 p-3 text-sm text-foreground/90 whitespace-pre-wrap leading-relaxed">
-              {task.description}
-            </div>
-          </div>
-        )}
+        {/* Existing TaskDetailPanel — covers meta, description, deadline
+             editor, manual effort logging table (TaskTimeLoggerRobust), and
+             edit/delete buttons. Keying by task.id forces a remount on task
+             switch so internal effort-state doesn't leak across selections. */}
+        <TaskDetailPanel
+          key={task.id}
+          task={task}
+          canEdit={canEdit}
+          onEdit={onEditTask}
+          onDelete={onDeleteTask}
+          onUpdateDeadline={onUpdateDeadline}
+          thresholds={thresholds}
+          projectId={projectId}
+          project={project}
+          user={currentUser}
+          onClose={onClose}
+        />
 
         {/* Checklist */}
         <div>

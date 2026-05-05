@@ -803,6 +803,10 @@ function TaskManagement({ projectId, project, canEdit }) {
               canEdit={canEdit}
               currentUser={user}
               onClose={() => setSelectedTaskId(null)}
+              onEditTask={setEditingTask}
+              onDeleteTask={requestDelete}
+              onUpdateDeadline={(id, data) => updateMutation.mutate({ id, data })}
+              thresholds={thresholds}
             />
           </div>
         </div>
