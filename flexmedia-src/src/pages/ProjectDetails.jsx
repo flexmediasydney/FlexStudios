@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { fmtDate, fixTimestamp } from "@/components/utils/dateUtils";
+import { fmtDate, fixTimestamp, fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ProjectForm from "@/components/projects/ProjectForm";
@@ -1188,6 +1188,18 @@ export default function ProjectDetails() {
             <Package className="h-3.5 w-3.5" />
             {project.partially_delivered ? "✓ Partially Delivered" : "○ Partially Delivered"}
           </button>
+          {project.partially_delivered && (project.partially_delivered_by || project.partially_delivered_at) && (
+            <span className="text-xs text-muted-foreground whitespace-nowrap">
+              {project.partially_delivered_by ? `by ${project.partially_delivered_by}` : ''}
+              {project.partially_delivered_by && project.partially_delivered_at ? ' · ' : ''}
+              {project.partially_delivered_at
+                ? fmtTimestampCustom(project.partially_delivered_at, {
+                    day: 'numeric', month: 'short', year: 'numeric',
+                    hour: 'numeric', minute: '2-digit', hour12: true,
+                  })
+                : ''}
+            </span>
+          )}
           {memoizedCanEdit && entityCanEdit && (
            <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-all h-9" aria-label="Edit project">
              <Edit className="h-4 w-4" />

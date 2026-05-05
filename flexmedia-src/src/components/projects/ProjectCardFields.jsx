@@ -403,18 +403,17 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
           })
         : null;
       const operator = project.partially_delivered_by;
+      const tooltip = (operator || ts)
+        ? `${operator ? `Set by ${operator}` : ''}${operator && ts ? ' · ' : ''}${ts || ''}`
+        : 'Partially delivered';
       return (
-        <div className="flex items-center gap-1.5 text-xs">
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400">
-            <Package className="h-3 w-3" aria-hidden="true" />
-            Partially Delivered
-          </span>
-          {(ts || operator) && (
-            <span className="text-[10px] text-muted-foreground truncate">
-              {operator ? `by ${operator}` : ''}{operator && ts ? ' · ' : ''}{ts || ''}
-            </span>
-          )}
-        </div>
+        <span
+          title={tooltip}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400"
+        >
+          <Package className="h-3 w-3" aria-hidden="true" />
+          Partially Delivered
+        </span>
       );
     }
     case "notes": {
