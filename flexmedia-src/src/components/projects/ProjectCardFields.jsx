@@ -27,6 +27,30 @@ const paymentColors = {
   paid: "bg-green-100 text-green-700"
 };
 
+// Mirrors src/components/settings/RoleTaskMatrix.jsx — kept inline so the
+// card field stays self-contained.
+const CATEGORY_LABELS = {
+  photography: "Photography",
+  video: "Video",
+  drone: "Drone",
+  floorplan: "Floorplan",
+  editing: "Editing",
+  virtual_staging: "Virtual Staging",
+  other: "Other",
+};
+
+const CATEGORY_ORDER = ["photography", "video", "drone", "floorplan", "virtual_staging", "editing", "other"];
+
+const CATEGORY_BAR_COLORS = {
+  photography: "bg-blue-500",
+  video: "bg-rose-500",
+  drone: "bg-indigo-500",
+  floorplan: "bg-cyan-500",
+  virtual_staging: "bg-purple-500",
+  editing: "bg-emerald-500",
+  other: "bg-slate-400",
+};
+
 /**
  * Renders a single field row for a project card.
  * Shared across Kanban, Grid, and List views.
@@ -244,6 +268,96 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
          </div>
        );
      }
+    case "product_category_tasks": {
+      // Aggregate non-revision tasks by their source product's category.
+      // task.product_id → product.category lookup; tasks not tied to a product
+      // (or whose product was removed) bucket as "other".
+      const allRegularTasks = tasks.filter(t => !t.is_deleted && !t.is_archived && !t.revision_id && !/^\[Revision #\d+\]/.test(t.title || ""));
+      if (allRegularTasks.length === 0) return null;
+
+      const productById = new Map(products.map(p => [p.id, p]));
+      const groupsMap = new Map();
+      for (const t of allRegularTasks) {
+        const product = t.product_id ? productById.get(t.product_id) : null;
+        const cat = (product?.category || "other").toLowerCase();
+        if (!groupsMap.has(cat)) groupsMap.set(cat, []);
+        groupsMap.get(cat).push(t);
+      }
+      if (groupsMap.size === 0) return null;
+
+      const groups = [...groupsMap.entries()]
+        .map(([cat, list]) => {
+          const completed = list.filter(t => t.is_completed).length;
+          return {
+            cat,
+            label: CATEGORY_LABELS[cat] || cat,
+            tasks: list,
+            total: list.length,
+            completed,
+            barColor: CATEGORY_BAR_COLORS[cat] || CATEGORY_BAR_COLORS.other,
+          };
+        })
+        .sort((a, b) => {
+          const ai = CATEGORY_ORDER.indexOf(a.cat);
+          const bi = CATEGORY_ORDER.indexOf(b.cat);
+          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+        });
+
+      return (
+        <div className="space-y-1">
+          {groups.map(grp => {
+            const pct = grp.total > 0 ? (grp.completed / grp.total) * 100 : 0;
+            return (
+              <Popover key={grp.cat}>
+                <PopoverTrigger asChild onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5 transition-colors">
+                    <Package className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                    <span className="text-xs font-medium text-foreground truncate min-w-[72px] max-w-[100px]" title={grp.label}>
+                      {grp.label}
+                    </span>
+                    <span className="text-xs text-muted-foreground tabular-nums flex-shrink-0">
+                      {grp.completed}/{grp.total}
+                    </span>
+                    <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden min-w-[32px]">
+                      <div
+                        className={`h-full ${grp.barColor} rounded-full transition-all`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-3" side="right" align="start" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                      {grp.label} · {grp.completed}/{grp.total}
+                    </p>
+                  </div>
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {grp.tasks.map(task => (
+                      <div key={task.id} className="flex items-center gap-2 text-xs py-1 border-b border-muted last:border-0">
+                        {task.is_completed
+                          ? <CheckCircle2 className="h-3 w-3 text-green-500 flex-shrink-0" />
+                          : <CheckSquare className="h-3 w-3 text-muted-foreground flex-shrink-0" />
+                        }
+                        <span className={`flex-1 ${task.is_completed ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                          {task.title}
+                        </span>
+                        {task.due_date && !task.is_completed
+                          ? <CountdownTimer dueDate={task.due_date} compact />
+                          : task.due_date
+                            ? <span className="text-muted-foreground text-xs flex-shrink-0">{fmtDate(task.due_date, 'MMM d')}</span>
+                            : null
+                        }
+                      </div>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            );
+          })}
+        </div>
+      );
+    }
     case "requests": {
        const allRevisionTasks = tasks.filter(t => !t.is_deleted && !t.is_archived && (t.revision_id || /^\[Revision #\d+\]/.test(t.title || "")));
        const activeTasks = allRevisionTasks.filter(t => !t.is_completed);
