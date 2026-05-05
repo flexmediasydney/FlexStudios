@@ -51,6 +51,16 @@ const CATEGORY_BAR_COLORS = {
   other: "bg-slate-400",
 };
 
+// Card fields whose only meaningful state is "the project's tasks are
+// actively being worked on". Hidden when nothing has started yet AND when
+// everything's done — see the tasksInFlight gate in the ProjectCardFields
+// wrapper below.
+const TASK_BASED_FIELDS = new Set([
+  'tasks',
+  'requests',
+  'product_category_tasks',
+]);
+
 // Bucket a project's tasks into the scope groups the Task Progress field
 // shows. Hoisted out of the field render and computed once per card per
 // task-set change (memoized in the ProjectCardFields wrapper) so each card
@@ -733,20 +743,34 @@ export const ProjectCardFields = memo(function ProjectCardFields({ project, enab
     [deferredTasks, productById]
   );
 
+  // "Tasks in flight" gate — task-based card fields only show on projects
+  // that are actively in progress: at least one task done AND not all done.
+  // Drives a clean kanban: pre-work projects (0 done) and finished projects
+  // (everything done) hide their task widgets, so what's visible is the
+  // actually-working set. This is task-state-driven on purpose; basing it on
+  // project.status would lock the rule to a specific stage list and break
+  // the moment a project enters "in_progress" before any work happens.
+  const tasksInFlight = !!taskBuckets
+    && taskBuckets.completedAll > 0
+    && taskBuckets.completedAll < taskBuckets.totalAll;
+
   return (
     <div className="space-y-2">
-      {enabledFields.map(fieldId => (
-        <ProjectFieldValue
-          key={fieldId}
-          fieldId={fieldId}
-          project={project}
-          products={products}
-          packages={packages}
-          tasks={sortedTasks}
-          timeLogs={timeLogs}
-          taskBuckets={taskBuckets}
-        />
-      ))}
+      {enabledFields.map(fieldId => {
+        if (TASK_BASED_FIELDS.has(fieldId) && !tasksInFlight) return null;
+        return (
+          <ProjectFieldValue
+            key={fieldId}
+            fieldId={fieldId}
+            project={project}
+            products={products}
+            packages={packages}
+            tasks={sortedTasks}
+            timeLogs={timeLogs}
+            taskBuckets={taskBuckets}
+          />
+        );
+      })}
     </div>
   );
 });
