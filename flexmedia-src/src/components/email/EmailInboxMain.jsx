@@ -53,7 +53,26 @@ export default function EmailInboxMain() {
   const [selectedThread, setSelectedThread] = useState(null);
   const [showCompose, setShowCompose] = useState(false);
   const [selectedAccount, setSelectedAccount] = useState(null);
-  const [accountFilter, setAccountFilter] = useState("all");
+  // Multi-select inbox filter — Set of account IDs. Empty = "All Inboxes".
+  // Plain click on an inbox row replaces the set with just that one (preserves the
+  // single-select habit). Cmd/Ctrl/Shift-click toggles membership for multi-select.
+  // Persisted to localStorage so the user's chosen subset survives reloads.
+  const [selectedAccountIds, setSelectedAccountIds] = useState(() => {
+    try {
+      const raw = localStorage.getItem('inbox_selected_accounts');
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch { return new Set(); }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('inbox_selected_accounts', JSON.stringify([...selectedAccountIds]));
+    } catch {}
+  }, [selectedAccountIds]);
+  // Stable scalar key for effect deps so we don't re-fire on Set identity churn.
+  const selectedAccountIdsKey = useMemo(
+    () => [...selectedAccountIds].sort().join(','),
+    [selectedAccountIds]
+  );
   const [sidebarOpen, setSidebarOpen] = useState(
     typeof window !== 'undefined' && window.innerWidth >= 1024
   );
@@ -104,7 +123,7 @@ export default function EmailInboxMain() {
     setFilterProject(null);
     setSelectedMessages(new Set());
     setSelectedThread(null);
-  }, [accountFilter]);
+  }, [selectedAccountIdsKey]);
 
   useEffect(() => {
     const key = `inbox-sidebar-scroll-${filterView}`;
@@ -277,8 +296,8 @@ export default function EmailInboxMain() {
     // otherwise the page-N slice is filled with threads the client then
     // filters out, leaving page 1 with ~9 of 50 visible threads.
     let p_account_ids = null;
-    if (accountFilter !== 'all') {
-      p_account_ids = [accountFilter];
+    if (selectedAccountIds.size > 0) {
+      p_account_ids = [...selectedAccountIds];
     } else if (emailAccounts.length > 0) {
       p_account_ids = emailAccounts.map(a => a.id);
     }
@@ -290,7 +309,7 @@ export default function EmailInboxMain() {
       p_limit: limit,
       p_offset: offset,
     };
-  }, [filterView, accountFilter, emailAccounts]);
+  }, [filterView, selectedAccountIdsKey, emailAccounts]);
 
   // Flatten an RPC response's threads into a messages array (so the existing
   // `threads` useMemo can re-group by gmail_thread_id and all downstream code
@@ -305,11 +324,11 @@ export default function EmailInboxMain() {
 
   // Reset to page 1 when filters change (prevents stale offsets when switching views).
   // This runs BEFORE the fetch effect below so the fetch picks up page=1 on the next tick.
-  // Includes accountFilter so switching from "All inboxes" → a single account
-  // doesn't leave you stranded on page 5 of a now much smaller result set.
+  // Includes the account selection so switching scope doesn't leave you stranded on
+  // page 5 of a now much smaller result set.
   useEffect(() => {
     setPage(1);
-  }, [JSON.stringify(messageFilters), accountFilter]);
+  }, [JSON.stringify(messageFilters), selectedAccountIdsKey]);
 
   // Reset to page 1 when page size changes (so offsets stay sane).
   useEffect(() => {
@@ -779,9 +798,9 @@ export default function EmailInboxMain() {
   const filteredThreads = useMemo(() => {
     let result = threads;
     
-    // Filter by account
-    if (accountFilter !== "all") {
-      result = result.filter(t => t.email_account_id === accountFilter);
+    // Filter by account (empty selectedAccountIds = show all)
+    if (selectedAccountIds.size > 0) {
+      result = result.filter(t => selectedAccountIds.has(t.email_account_id));
     }
     
     // Advanced search with operators
@@ -904,7 +923,7 @@ export default function EmailInboxMain() {
     }
 
     return result;
-  }, [threads, accountFilter, debouncedSearchQuery, filterUnread, filterFrom, filterLabel, filterProject, sortBy, showAttachmentsOnly]);
+  }, [threads, selectedAccountIdsKey, debouncedSearchQuery, filterUnread, filterFrom, filterLabel, filterProject, sortBy, showAttachmentsOnly]);
 
   // Keyboard shortcuts (must be after filteredThreads is defined)
   useEffect(() => {
@@ -1197,7 +1216,7 @@ export default function EmailInboxMain() {
               count={folderCounts.inbox?.total ?? null}
               onClick={() => applyFolderFilter('inbox', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
-                setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
+                setFilterProject, setSelectedMessages, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Inbox"
             />
@@ -1207,7 +1226,7 @@ export default function EmailInboxMain() {
               count={folderCounts.draft?.total ?? null}
               onClick={() => applyFolderFilter('draft', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
-                setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
+                setFilterProject, setSelectedMessages, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Drafts"
             />
@@ -1217,7 +1236,7 @@ export default function EmailInboxMain() {
               count={folderCounts.sent?.total ?? null}
               onClick={() => applyFolderFilter('sent', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
-                setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
+                setFilterProject, setSelectedMessages, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Sent"
             />
@@ -1227,7 +1246,7 @@ export default function EmailInboxMain() {
               count={folderCounts.archived?.total ?? null}
               onClick={() => applyFolderFilter('archived', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
-                setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
+                setFilterProject, setSelectedMessages, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Archived"
             />
@@ -1237,7 +1256,7 @@ export default function EmailInboxMain() {
               count={folderCounts.deleted?.total ?? null}
               onClick={() => applyFolderFilter('deleted', {
                 setFilterView, setFilterUnread, setFilterFrom, setFilterLabel,
-                setFilterProject, setSelectedMessages, setAccountFilter, setSortBy, setShowAttachmentsOnly
+                setFilterProject, setSelectedMessages, setSortBy, setShowAttachmentsOnly
               })}
               title="Go to Deleted"
             />
@@ -1264,18 +1283,26 @@ export default function EmailInboxMain() {
               (true per-account thread totals across the whole inbox), not from
               the current page of threads. Matches EmailListRow's ACCOUNT_COLORS
               palette so the sidebar dot + row stripe + bottom legend all share
-              the same color per account. */}
+              the same color per account.
+              Click an inbox row to filter to just that one (replaces selection).
+              Cmd/Ctrl/Shift-click to toggle multi-select. "All Inboxes" clears. */}
           <div className="space-y-2 border-t pt-4">
-            <p className="text-[10px] font-semibold text-muted-foreground/80 px-2 uppercase tracking-wide">Accounts</p>
+            <div className="flex items-center justify-between px-2">
+              <p className="text-[10px] font-semibold text-muted-foreground/80 uppercase tracking-wide">Accounts</p>
+              {emailAccounts.length > 1 && (
+                <p className="text-[9px] text-muted-foreground/60" title="Cmd/Ctrl-click to toggle inboxes">⌘-click multi</p>
+              )}
+            </div>
             {emailAccounts.length > 1 && (
               <div
-                onClick={() => setAccountFilter("all")}
+                onClick={() => setSelectedAccountIds(new Set())}
                 className={cn(
                  "p-2.5 rounded-md border cursor-pointer transition-all",
-                 accountFilter === "all"
+                 selectedAccountIds.size === 0
                    ? 'bg-primary/90 text-primary-foreground border-primary shadow-sm'
                    : 'hover:bg-muted/80 border-border/60 hover:border-border'
                 )}
+                title="Show all inboxes"
                 >
                 <p className="text-xs font-semibold">All Inboxes</p>
                 <p className="text-[10px] opacity-75 tabular-nums">
@@ -1290,16 +1317,36 @@ export default function EmailInboxMain() {
               const acctTotal = ac?.total ?? null;
               const acctUnread = ac?.unread ?? 0;
               const dotColor = ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length];
+              const isSelected = selectedAccountIds.has(account.id);
+              const handleClick = (e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey) {
+                  // Toggle membership in the multi-select set
+                  setSelectedAccountIds(prev => {
+                    const next = new Set(prev);
+                    if (next.has(account.id)) next.delete(account.id);
+                    else next.add(account.id);
+                    return next;
+                  });
+                } else {
+                  // Plain click — replace selection with just this one. If it was
+                  // already the only selected, clear (= back to All Inboxes).
+                  setSelectedAccountIds(prev => {
+                    if (prev.size === 1 && prev.has(account.id)) return new Set();
+                    return new Set([account.id]);
+                  });
+                }
+              };
               return (
                 <div
                   key={account.id}
-                  onClick={() => setAccountFilter(account.id)}
+                  onClick={handleClick}
                   className={cn(
                     "p-2.5 rounded-md border cursor-pointer transition-all",
-                    accountFilter === account.id
+                    isSelected
                       ? 'bg-primary/90 text-primary-foreground border-primary shadow-sm'
                       : 'hover:bg-muted/80 border-border/60 hover:border-border'
                   )}
+                  title={`Click to filter to ${account.email_address} only · ⌘-click to toggle`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">
@@ -1563,7 +1610,15 @@ export default function EmailInboxMain() {
                         if (sf.filterProject) setFilterProject(sf.filterProject);
                         if (sf.filterUnread !== undefined) setFilterUnread(sf.filterUnread);
                         if (sf.showAttachmentsOnly !== undefined) setShowAttachmentsOnly(sf.showAttachmentsOnly);
-                        if (sf.accountFilter) setAccountFilter(sf.accountFilter);
+                        // Restore account selection. New format: array of IDs.
+                        // Backwards-compat with old "all" / single-id string format.
+                        if (Array.isArray(sf.selectedAccountIds)) {
+                          setSelectedAccountIds(new Set(sf.selectedAccountIds));
+                        } else if (sf.accountFilter && sf.accountFilter !== 'all') {
+                          setSelectedAccountIds(new Set([sf.accountFilter]));
+                        } else if (sf.accountFilter === 'all') {
+                          setSelectedAccountIds(new Set());
+                        }
                       }}
                     >
                       {sf.name}
@@ -1591,7 +1646,8 @@ export default function EmailInboxMain() {
                         const newFilter = {
                           name: name.trim(),
                           searchQuery, filterView, filterFrom, filterLabel, filterProject,
-                          filterUnread, showAttachmentsOnly, accountFilter,
+                          filterUnread, showAttachmentsOnly,
+                          selectedAccountIds: [...selectedAccountIds],
                         };
                         const updated = [...savedFilters, newFilter];
                         setSavedFilters(updated);
@@ -1703,7 +1759,7 @@ export default function EmailInboxMain() {
                 onCompose={() => setShowCompose(true)}
                 labelData={labelData}
                 emailAccounts={emailAccounts}
-                showAccount={accountFilter === "all" && emailAccounts.length > 1}
+                showAccount={selectedAccountIds.size !== 1 && emailAccounts.length > 1}
                 onLinkProject={(thread) => setLinkProjectThread(thread)}
                 onToggleVisibility={async (thread, newVisibility) => {
                   try {

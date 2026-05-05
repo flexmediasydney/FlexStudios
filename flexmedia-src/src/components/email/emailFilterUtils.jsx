@@ -10,7 +10,6 @@ export const FOLDER_FILTERS = {
       filterLabel: null,
       filterProject: null,
       selectedMessages: new Set(),
-      accountFilter: 'all',
       sortBy: 'newest',
       showAttachmentsOnly: false,
     }
@@ -25,7 +24,6 @@ export const FOLDER_FILTERS = {
       filterLabel: null,
       filterProject: null,
       selectedMessages: new Set(),
-      accountFilter: 'all',
       sortBy: 'newest',
       showAttachmentsOnly: false,
     }
@@ -40,7 +38,6 @@ export const FOLDER_FILTERS = {
       filterLabel: null,
       filterProject: null,
       selectedMessages: new Set(),
-      accountFilter: 'all',
       sortBy: 'newest',
       showAttachmentsOnly: false,
     }
@@ -55,7 +52,6 @@ export const FOLDER_FILTERS = {
       filterLabel: null,
       filterProject: null,
       selectedMessages: new Set(),
-      accountFilter: 'all',
       sortBy: 'newest',
       showAttachmentsOnly: false,
     }
@@ -70,7 +66,6 @@ export const FOLDER_FILTERS = {
       filterLabel: null,
       filterProject: null,
       selectedMessages: new Set(),
-      accountFilter: 'all',
       sortBy: 'newest',
       showAttachmentsOnly: false,
     }
