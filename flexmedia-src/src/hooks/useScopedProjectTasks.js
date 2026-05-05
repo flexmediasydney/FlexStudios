@@ -38,13 +38,32 @@ export function useScopedProjectTasks(projectIds) {
     queryFn: async () => {
       if (ids.length === 0) return [];
       // applyFilters supports the `$in` operator → PostgREST `.in('project_id', ids)`.
-      // 5000 is a safety cap; typical org has 1-3k active tasks across visible projects.
-      const rows = await api.entities.ProjectTask.filter(
-        { project_id: { $in: ids } },
-        '-due_date',
-        5000
-      );
-      return rows || [];
+      //
+      // PostgREST / Supabase silently caps a single response at ~1000 rows
+      // regardless of the client `.limit()` — so a single .filter() call would
+      // drop ~1232 tasks for any org with 2k+ tasks across visible projects,
+      // and consumers downstream see "missing tasks" on random cards (those
+      // whose rows happened to land past row 1000 in the -due_date ordering).
+      // Paginate explicitly via filterPaginated until hasMore=false to make
+      // sure we get every row.
+      const PAGE = 1000;
+      const all = [];
+      let offset = 0;
+      // Safety cap: 20 pages = 20k rows. If we ever cross this an org has
+      // grown beyond what this hook is appropriate for and aggregation is
+      // the right next step.
+      for (let i = 0; i < 20; i++) {
+        const { data, hasMore } = await api.entities.ProjectTask.filterPaginated(
+          { project_id: { $in: ids } },
+          '-due_date',
+          PAGE,
+          offset
+        );
+        if (data && data.length) all.push(...data);
+        if (!hasMore) break;
+        offset += PAGE;
+      }
+      return all;
     },
   });
 
