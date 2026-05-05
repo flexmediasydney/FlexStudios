@@ -11,7 +11,7 @@ import { createPageUrl } from "@/utils";
 import { 
   ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
   ExternalLink, Edit, Archive, CheckCircle, Building, Search,
-  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera, AlertTriangle, CheckCircle2, Package
+  Star, Zap, CreditCard, AlertCircle, Camera, AlertTriangle, CheckCircle2, Package
 } from "lucide-react";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import StagePipeline from "@/components/projects/StagePipeline";
@@ -674,63 +674,6 @@ export default function ProjectDetails() {
    },
    });
 
-   const updateOutcomeMutation = useMutation({
-    mutationFn: async (outcome) => {
-      if (!project) throw new Error('Project not loaded');
-      if (!outcome) throw new Error('Outcome is required');
-      const oldOutcome = project.outcome;
-      const result = await api.entities.Project.update(projectId, { outcome });
-      logActivity('outcome_changed',
-        `Outcome changed from ${oldOutcome || 'none'} to ${outcome}`,
-        { changed_fields: [{ field: 'outcome', old_value: oldOutcome, new_value: outcome }] }
-      );
-
-      // Notify project owner when outcome is Won or Lost
-      if (outcome === 'won' || outcome === 'lost') {
-        try {
-          const staffIds = [project.project_owner_id].filter(Boolean);
-          const projectName = project.title || project.property_address;
-          await createNotificationsForUsers(staffIds, {
-            type: outcome === 'won' ? 'project_delivered' : 'stale_project',
-            title: outcome === 'won'
-              ? `Project marked Won: ${projectName}`
-              : `Project marked Lost: ${projectName}`,
-            message: outcome === 'won'
-              ? `${projectName} has been marked as won.`
-              : `${projectName} has been marked as lost.`,
-            projectId: projectId,
-            projectName,
-            entityType: 'project',
-            entityId: projectId,
-            ctaUrl: 'ProjectDetails',
-            ctaParams: { id: projectId },
-            sourceUserId: user?.id,
-            idempotencyKey: `outcome_${outcome}:${projectId}:${Date.now().toString().slice(0, -4)}`,
-          }, user?.id);
-        } catch { /* non-critical */ }
-      }
-
-      writeFeedEvent({
-        eventType: 'outcome_changed', category: 'project', severity: outcome === 'won' ? 'info' : 'warning',
-        actorId: user?.id, actorName: user?.full_name,
-        title: `Project ${outcome}: ${project.title || project.property_address}`,
-        projectId, projectName: project.title || project.property_address,
-        entityType: 'project', entityId: projectId,
-      }).catch(() => {});
-
-      return result;
-    },
-    onSuccess: (_, outcome) => {
-      refetchEntityList("Project");
-      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
-      toast.success(`Outcome set to ${outcome}`);
-    },
-    onError: (err) => {
-      toast.error(err?.message || "Failed to update outcome");
-      setErrorMessage(err?.message || "Failed to update outcome");
-    }
-    });
-
     const updatePaymentMutation = useMutation({
     mutationFn: async (payment_status) => {
       if (!project) throw new Error('Project not loaded');
@@ -1244,28 +1187,6 @@ export default function ProjectDetails() {
           >
             <Package className="h-3.5 w-3.5" />
             {project.partially_delivered ? "✓ Partially Delivered" : "○ Partially Delivered"}
-          </button>
-          <button
-            onClick={() => {
-              if (memoizedCanEdit && !updateOutcomeMutation.isPending) {
-                updateOutcomeMutation.mutate(project.outcome === "lost" ? "open" : "lost");
-              }
-            }}
-            disabled={!memoizedCanEdit || updateOutcomeMutation.isPending}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-all ${
-              project.outcome === "lost"
-                ? "bg-red-600 text-white border-red-700 hover:bg-red-700"
-                : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
-            title={
-              !memoizedCanEdit ? "You don't have permission to edit" :
-              project.outcome === "lost" ? "Currently Lost — click to revert to Open" :
-              "Mark this project as Lost"
-            }
-            aria-label={`Mark as lost. Current outcome: ${project.outcome}`}
-          >
-            <XCircle className="h-3.5 w-3.5" />
-            {project.outcome === "lost" ? "✓ Lost" : "◯ Lost"}
           </button>
           {memoizedCanEdit && entityCanEdit && (
            <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-all h-9" aria-label="Edit project">
