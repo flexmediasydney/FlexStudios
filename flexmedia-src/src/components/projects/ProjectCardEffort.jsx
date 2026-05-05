@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import { Zap } from "lucide-react";
+import { useVisibleInterval } from "@/components/hooks/useVisibleInterval";
 
 function computeLogSeconds(log) {
   if (!log) return 0;
@@ -35,11 +36,8 @@ export default function ProjectCardEffort({ projectId, tasks = [], timeLogs = []
 
    const hasRunning = timeLogs.some(l => l.is_active && l.status === "running");
 
-   useEffect(() => {
-     if (!hasRunning) return;
-     const id = setInterval(() => setTick(t => t + 1), 1000);
-     return () => clearInterval(id);
-   }, [hasRunning]);
+   const onTick = useCallback(() => setTick(t => t + 1), []);
+   useVisibleInterval(onTick, 1000, { enabled: hasRunning });
 
    // eslint-disable-next-line no-unused-vars
    const _tick = tick;

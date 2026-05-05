@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Zap, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { api } from '@/api/supabaseClient';
 import { fixTimestamp } from '@/components/utils/dateUtils';
+import { useVisibleInterval } from '@/components/hooks/useVisibleInterval';
 
 const ROLE_LABELS = {
   photographer: 'Photographer',
@@ -272,11 +273,8 @@ export function useProjectEffortSummary(projectId, project = null) {
 
   // Calculate running timers to trigger re-render — depend on the boolean, not the array
   const hasRunningTimer = timeLogs.some(l => l.is_active && l.status === 'running');
-  useEffect(() => {
-    if (!hasRunningTimer) return;
-    const id = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [hasRunningTimer]);
+  const onTick = useCallback(() => setTick(t => t + 1), []);
+  useVisibleInterval(onTick, 1000, { enabled: hasRunningTimer });
 
   // Include `tick` in deps so that running-timer live seconds (computed via Date.now()
   // inside computeLogSeconds) are recalculated every second instead of returning stale

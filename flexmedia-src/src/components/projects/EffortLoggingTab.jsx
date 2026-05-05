@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useVisibleInterval } from "@/components/hooks/useVisibleInterval";
 import { useProjectTasks } from "@/hooks/useProjectTasks";
 import { api } from "@/api/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,14 +52,12 @@ export default function EffortLoggingTab({ projectId, project }) {
   const deletedTaskIds = new Set(tasks.filter(t => t.is_deleted).map(t => t.id));
   const timeLogs = rawTimeLogs.filter(log => !deletedTaskIds.has(log.task_id));
 
-  // Tick every second when any timer is running to keep durations live
+  // Tick every second when any timer is running to keep durations live —
+  // paused when the tab is hidden (useVisibleInterval).
   const [tick, setTick] = useState(0);
   const hasRunning = timeLogs.some(log => log.is_active && log.status === 'running');
-  useEffect(() => {
-    if (!hasRunning) return;
-    const id = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [hasRunning]);
+  const onTick = useCallback(() => setTick(t => t + 1), []);
+  useVisibleInterval(onTick, 1000, { enabled: hasRunning });
 
   // Summary: total time and per-role breakdown (recomputes each tick for live timers)
   const summary = useMemo(() => {

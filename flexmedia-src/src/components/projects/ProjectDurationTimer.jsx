@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { useVisibleInterval } from "@/components/hooks/useVisibleInterval";
 import { fixTimestamp } from '@/components/utils/dateUtils';
 
 const APP_TZ = 'Australia/Sydney';
@@ -41,21 +42,21 @@ function formatDuration(seconds) {
 export default function ProjectDurationTimer({ project }) {
   const [elapsed, setElapsed] = useState(0);
 
+  const createdMs = parseCreatedMs(project?.created_date);
+  const isLive = !!createdMs && project?.status !== 'delivered';
+
+  // One-shot compute on mount / dep change so the static delivered case
+  // (and the initial value) is set without waiting for the first tick.
   useEffect(() => {
-    const createdMs = parseCreatedMs(project?.created_date);
     if (!createdMs) return;
+    setElapsed(Math.floor((Date.now() - createdMs) / 1000));
+  }, [createdMs, project?.status]);
 
-    const compute = () => Math.floor((Date.now() - createdMs) / 1000);
-
-    if (project.status === 'delivered') {
-      setElapsed(compute());
-      return;
-    }
-
-    setElapsed(compute());
-    const interval = setInterval(() => setElapsed(compute()), 1000);
-    return () => clearInterval(interval);
-  }, [project?.created_date, project?.status]);
+  // Live ticking, paused when the tab is hidden.
+  const onTick = useCallback(() => {
+    if (createdMs) setElapsed(Math.floor((Date.now() - createdMs) / 1000));
+  }, [createdMs]);
+  useVisibleInterval(onTick, 1000, { enabled: isLive });
 
   if (!project?.created_date) return null;
   return <span className="tabular-nums">{formatDuration(elapsed)}</span>;

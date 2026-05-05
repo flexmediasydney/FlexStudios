@@ -36,9 +36,10 @@
  *   - force-run-now    (mutate; master_admin only — UI button hidden otherwise)
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
+import { useVisibleInterval } from "@/components/hooks/useVisibleInterval";
 import { usePermissions } from "@/components/auth/PermissionGuard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -187,18 +188,13 @@ export default function DispatcherPanel({ projectId, roundId }) {
   // Local ticker state — incremented every second to force the countdown
   // header + "running for" durations to re-render. Holds nothing else.
   const [, setTick] = useState(0);
-  const intervalRef = useRef(null);
 
-  // 1Hz tick. Pure local — no network calls. Cleaned up on unmount.
-  useEffect(() => {
-    intervalRef.current = setInterval(() => {
-      setTick((t) => (t + 1) % 1_000_000);
-    }, 1000);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    };
-  }, []);
+  // 1Hz tick — paused when the tab is hidden so the dispatcher panel doesn't
+  // burn CPU on a backgrounded tab. The shortlisting subtab never unmounts
+  // once opened (mountedTabs is sticky), so visibility-pausing is the only
+  // way to stop this ticker for the remainder of the session.
+  const onTick = useCallback(() => setTick((t) => (t + 1) % 1_000_000), []);
+  useVisibleInterval(onTick, 1000);
 
   // Jobs query — auto-refetch every 5s while mounted.
   const jobsQuery = useQuery({

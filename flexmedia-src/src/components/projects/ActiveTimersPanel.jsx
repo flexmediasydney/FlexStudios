@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Timer, User, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/api/supabaseClient";
+import { useVisibleInterval } from "@/components/hooks/useVisibleInterval";
 
 function computeLiveSeconds(log) {
   if (!log?.start_time) return 0;
@@ -25,15 +26,16 @@ function formatHMS(seconds) {
 
 function LiveClock({ log }) {
   const [secs, setSecs] = useState(() => computeLiveSeconds(log));
+  const isRunning = log.status === "running";
 
+  // Static (paused/completed) — recompute on log changes only.
   useEffect(() => {
-    if (log.status !== "running") {
-      setSecs(computeLiveSeconds(log));
-      return;
-    }
-    const id = setInterval(() => setSecs(computeLiveSeconds(log)), 1000);
-    return () => clearInterval(id);
-  }, [log.id, log.status, log.start_time, log.paused_duration, log.total_seconds]);
+    if (!isRunning) setSecs(computeLiveSeconds(log));
+  }, [isRunning, log.id, log.status, log.start_time, log.paused_duration, log.total_seconds]);
+
+  // Live tick, paused when the tab is hidden.
+  const onTick = useCallback(() => setSecs(computeLiveSeconds(log)), [log.id, log.start_time, log.paused_duration, log.total_seconds]);
+  useVisibleInterval(onTick, 1000, { enabled: isRunning });
 
   return (
     <span className="font-mono text-sm font-bold tabular-nums">

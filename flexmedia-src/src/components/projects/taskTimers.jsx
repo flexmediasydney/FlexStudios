@@ -12,8 +12,9 @@
  * other (non-cyclic) consumers (ProjectCardFields, ProjectRevisionsTab,
  * pages/Tasks).
  */
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { differenceInSeconds } from "date-fns";
+import { useVisibleInterval } from "@/components/hooks/useVisibleInterval";
 
 export function getCountdownState({ dueDate, thresholds }) {
   if (!dueDate) return "normal";
@@ -48,16 +49,8 @@ export function getCountdownState({ dueDate, thresholds }) {
 
 export function CountdownTimer({ dueDate, compact = false, thresholds }) {
   const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    let mounted = true;
-    const id = setInterval(() => {
-      if (mounted) setNow(Date.now());
-    }, 1000);
-    return () => {
-      mounted = false;
-      clearInterval(id);
-    };
-  }, []);
+  const onTick = useCallback(() => setNow(Date.now()), []);
+  useVisibleInterval(onTick, 1000, { enabled: !!dueDate });
 
   if (!dueDate) return <span className="text-xs text-muted-foreground">No deadline</span>;
 
