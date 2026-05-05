@@ -1084,9 +1084,15 @@ export default function ProjectDetails() {
           {isMasterAdmin && (
             <Button variant="outline" size="sm" className="text-xs"
               onClick={async () => {
+                const prev = {
+                  is_archived: !!project?.is_archived,
+                  archived_at: project?.archived_at ?? null,
+                };
+                // Optimistic patch — Realtime is best-effort and may lag,
+                // so update the shared cache immediately for instant UI.
+                updateEntityInCache('Project', projectId, { is_archived: false, archived_at: null });
                 try {
                   await api.entities.Project.update(projectId, { is_archived: false, archived_at: null });
-                  // Realtime patches the entity cache; only the scoped query needs invalidation.
                   queryClient.invalidateQueries({ queryKey: ["project", projectId] });
                   api.entities.ProjectActivity.create({
                     project_id: projectId,
@@ -1097,6 +1103,7 @@ export default function ProjectDetails() {
                   }).catch(() => {});
                   toast.success('Project unarchived');
                 } catch (err) {
+                  updateEntityInCache('Project', projectId, prev);
                   toast.error(err?.message || 'Failed to unarchive');
                 }
               }}>
@@ -1425,10 +1432,21 @@ export default function ProjectDetails() {
                       size="sm"
                       className="h-7 text-xs border-red-300 text-red-700 hover:bg-red-100 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40"
                       onClick={async () => {
+                        const prev = {
+                          urgent_review: !!project.urgent_review,
+                          pending_review_reason: project.pending_review_reason ?? null,
+                        };
+                        const nextReason = (project.pending_review_reason || '') + ' [Flagged by admin]';
+                        // Optimistic patch — Realtime is best-effort and may lag,
+                        // so update the shared cache immediately for instant UI.
+                        updateEntityInCache('Project', project.id, {
+                          urgent_review: true,
+                          pending_review_reason: nextReason,
+                        });
                         try {
                           await api.entities.Project.update(project.id, {
                             urgent_review: true,
-                            pending_review_reason: (project.pending_review_reason || '') + ' [Flagged by admin]',
+                            pending_review_reason: nextReason,
                           });
                           const u = await api.auth.me();
                           await api.entities.ProjectActivity.create({
@@ -1436,9 +1454,11 @@ export default function ProjectDetails() {
                             description: `Booking flagged as urgent by ${u?.full_name || 'admin'}.`,
                             user_id: u?.id, user_name: u?.full_name || u?.email,
                           }).catch(() => {});
-                          // Realtime patches Project + ProjectActivity caches.
                           toast.success('Flagged as urgent');
-                        } catch { toast.error('Failed to flag'); }
+                        } catch {
+                          updateEntityInCache('Project', project.id, prev);
+                          toast.error('Failed to flag');
+                        }
                       }}
                     >
                       <AlertCircle className="h-3.5 w-3.5 mr-1" />
@@ -1449,8 +1469,27 @@ export default function ProjectDetails() {
                     size="sm"
                     className="h-7 text-xs"
                     onClick={async () => {
+                      const newStatus = isCancellation ? 'cancelled' : approveStatus;
+                      const prev = {
+                        status: project.status,
+                        pending_review_reason: project.pending_review_reason ?? null,
+                        pending_review_type: project.pending_review_type ?? null,
+                        pre_revision_stage: project.pre_revision_stage ?? null,
+                        urgent_review: !!project.urgent_review,
+                        auto_approved: !!project.auto_approved,
+                      };
+                      // Optimistic patch — Realtime is best-effort and may lag,
+                      // so update the shared cache immediately for instant UI.
+                      updateEntityInCache('Project', project.id, {
+                        status: newStatus,
+                        pending_review_reason: null,
+                        pending_review_type: null,
+                        pre_revision_stage: null,
+                        urgent_review: false,
+                        auto_approved: false,
+                        last_status_change: new Date().toISOString(),
+                      });
                       try {
-                        const newStatus = isCancellation ? 'cancelled' : approveStatus;
                         await api.entities.Project.update(project.id, {
                           status: newStatus,
                           pending_review_reason: null,
@@ -1470,9 +1509,11 @@ export default function ProjectDetails() {
                           api.functions.invoke('applyProjectRoleDefaults', { project_id: project.id }).catch(() => {});
                           api.functions.invoke('trackProjectStageChange', { projectId: project.id, old_data: { status: 'pending_review' } }).catch(() => {});
                         }
-                        // Realtime patches Project + ProjectActivity caches.
                         toast.success(isCancellation ? 'Cancellation confirmed' : 'Booking approved');
-                      } catch { toast.error('Approval failed'); }
+                      } catch {
+                        updateEntityInCache('Project', project.id, prev);
+                        toast.error('Approval failed');
+                      }
                     }}
                   >
                     <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
