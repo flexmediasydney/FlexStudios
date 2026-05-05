@@ -433,7 +433,7 @@ function CollapsedColumnView({ columns, activeProjects, allTasks, showPricing })
 }
 
 /* ═══════════════════════════ Main KanbanBoard ═══════════════════════════ */
-export default function KanbanBoard({ projects = [], products, packages, fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs, calendarEvents = [] }) {
+export default function KanbanBoard({ projects = [], products, packages, agencies = [], fitToScreen = false, allTasks: parentTasks, allTimeLogs: parentTimeLogs, calendarEvents = [] }) {
   const { canEdit, canView } = useEntityAccess('projects');
   const { canEditProject } = usePermissions();
   const { visible: showPricing, mask: maskPrice } = usePriceGate();
@@ -1169,6 +1169,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                                         enabledFields={enabledFields}
                                         products={products}
                                         packages={packages}
+                                        agencies={agencies}
                                         tasks={projectTasks}
                                         timeLogs={projectTimeLogs}
                                       />

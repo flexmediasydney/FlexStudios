@@ -490,6 +490,7 @@ export default function Projects() {
               project={project}
               products={products}
               packages={packages}
+              agencies={agencies}
               tasks={tasks}
               timeLogs={timeLogs}
             />
@@ -506,7 +507,7 @@ export default function Projects() {
     });
 
     return cols;
-  }, [enabledFields, canSeePricing, products, packages, tasksByProject, timeLogsByProject]);
+  }, [enabledFields, canSeePricing, products, packages, agencies, tasksByProject, timeLogsByProject]);
 
   const archivedCount = useMemo(() => allProjects.filter(p => p.is_archived).length, [allProjects]);
 
@@ -885,6 +886,7 @@ export default function Projects() {
                 clients={clients}
                 products={products}
                 packages={packages}
+                agencies={agencies}
                 fitToScreen={fitToScreen}
                 allTasks={allTasks}
                 allTimeLogs={allTimeLogs}
@@ -899,7 +901,7 @@ export default function Projects() {
                const projectTimeLogs = timeLogsByProject[project.id] || [];
                return (
                  <div key={project.id} className="cursor-pointer hover:shadow-lg hover:-translate-y-0.5 hover:border-primary/30 transition-all duration-200 rounded-lg border border-transparent" onClick={() => handleEdit(project)}>
-                   <ProjectCard project={project} products={products} packages={packages} tasks={projectTasks} timeLogs={projectTimeLogs} />
+                   <ProjectCard project={project} products={products} packages={packages} agencies={agencies} tasks={projectTasks} timeLogs={projectTimeLogs} />
                  </div>
                );
              })}

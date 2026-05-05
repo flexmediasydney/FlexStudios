@@ -32,6 +32,10 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
   const { data: products = [] } = useEntityList("Product", "-created_date", 200);
   const { data: packages = [] } = useEntityList("Package", "-created_date", 200);
   const { data: agents = [] } = useEntityList("Agent", null, 100);
+  // We're scoped to a single agency, but the kanban Person and Organisation
+  // field still resolves project.agency_id → name through this list, so make
+  // sure the card has the agency it actually needs.
+  const { data: agencies = [] } = useEntityList("Agency", null, 50);
   const { data: allUsers = [] } = useEntityList("User", null, 50);
   const { data: internalTeams = [] } = useEntityList("InternalTeam", null, 50);
   const { data: allEmployeeRoles = [] } = useEntityList("EmployeeRole", null, 200);
@@ -198,6 +202,7 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
                 project={project}
                 products={products}
                 packages={packages}
+                agencies={agencies}
                 tasks={projectTasks}
                 timeLogs={projectTimeLogs}
               />
@@ -256,6 +261,7 @@ export default function AgencyProjectsTab({ projects = [], agencyId }) {
                               project={project}
                               products={products}
                               packages={packages}
+                              agencies={agencies}
                               tasks={projectTasks}
                               timeLogs={projectTimeLogs}
                             />

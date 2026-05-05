@@ -204,17 +204,26 @@ function computeTaskBuckets(tasks, productById) {
 // Memoized so a 1Hz running-timer tick (or any single-card mutation) only
 // re-renders the affected card field row, not all 200 × N field rows on the
 // Kanban / project list. Pure render — no internal state.
-export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, project, products = [], packages = [], tasks = [], timeLogs = [], taskBuckets = null }) {
+export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, project, products = [], packages = [], agencies = [], tasks = [], timeLogs = [], taskBuckets = null }) {
   const { visible: showPricing } = usePriceGate();
   switch (fieldId) {
     case "agency_agent": {
       // Renders the field labelled "Person and Organisation" (ID is the
       // legacy `agency_agent`). Person = agent, Organisation = agency.
-      // project.agency_name is the denormalised Agency.name; project.client_name
-      // confusingly stores the *agent name*, not the agency, so we use it only
-      // as a fallback for project.agent_name.
+      //
+      // ProjectForm doesn't denormalise the agency name onto the project row
+      // — it only stores project.agency_id. So the canonical lookup is:
+      //   organisation = agencies.find(a => a.id === project.agency_id)?.name
+      // and we fall back to the rare denormalised project.agency_name for
+      // legacy / Tonomo-imported records.
+      //
+      // project.client_name confusingly stores the *agent name*, not the
+      // agency, so we use it as a fallback for project.agent_name only.
+      const resolvedAgency = project.agency_id
+        ? agencies.find(a => a.id === project.agency_id)
+        : null;
       const personName = project.agent_name || project.client_name;
-      const organisationName = project.agency_name;
+      const organisationName = resolvedAgency?.name || project.agency_name;
       if (!personName && !organisationName) return null;
       return (
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground min-w-0">
@@ -501,7 +510,7 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
  * Memoized so card re-renders are scoped to whichever card actually changed
  * (vs. the whole board re-rendering whenever any one card's data shifts).
  */
-export const ProjectCardFields = memo(function ProjectCardFields({ project, enabledFields, products, packages, tasks, timeLogs = [] }) {
+export const ProjectCardFields = memo(function ProjectCardFields({ project, enabledFields, products, packages, agencies = [], tasks, timeLogs = [] }) {
   // Sort tasks by their canonical `order` field — same ordering useProjectTasks
   // applies on the project detail page, so card popovers list tasks in the
   // template order they were generated in (rather than the due-date sort that
@@ -559,6 +568,7 @@ export const ProjectCardFields = memo(function ProjectCardFields({ project, enab
             project={project}
             products={products}
             packages={packages}
+            agencies={agencies}
             tasks={sortedTasks}
             timeLogs={timeLogs}
             taskBuckets={taskBuckets}

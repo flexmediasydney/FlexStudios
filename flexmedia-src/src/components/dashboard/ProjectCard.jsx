@@ -7,7 +7,7 @@ import { usePermissions } from "@/components/auth/PermissionGuard";
 import { ProjectCardFields } from "@/components/projects/ProjectCardFields";
 import { useCardFields } from "@/components/projects/useCardFields";
 
-export default function ProjectCard({ project, products = [], packages = [], tasks = [], timeLogs = [] }) {
+export default function ProjectCard({ project, products = [], packages = [], agencies = [], tasks = [], timeLogs = [] }) {
   const { canSeePricing } = usePermissions();
   const { enabledFields } = useCardFields();
 
@@ -69,6 +69,7 @@ export default function ProjectCard({ project, products = [], packages = [], tas
           enabledFields={visibleFields}
           products={products}
           packages={packages}
+          agencies={agencies}
           tasks={tasks}
           timeLogs={timeLogs}
         />
