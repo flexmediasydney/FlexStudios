@@ -15,6 +15,7 @@ import ProjectForm from "@/components/projects/ProjectForm";
 import ProjectStatusBadge from "@/components/dashboard/ProjectStatusBadge";
 import ProjectStatusTimer from "@/components/projects/ProjectStatusTimer";
 import KanbanBoard from "@/components/projects/KanbanBoard";
+import { PROJECT_STAGES } from "@/components/projects/projectStatuses";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import CardFieldsCustomizer, { CardFieldsCustomizerButton } from "@/components/projects/CardFieldsCustomizer";
 import ProjectFiltersSort from "@/components/projects/ProjectFiltersSort";
@@ -758,27 +759,55 @@ export default function Projects() {
       {/* Kanban + Grid views */}
       {viewMode !== "list" && (
         isLoading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {Array(9).fill(0).map((_, i) => (
-              <Card key={i} className="p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <Skeleton className="h-5 w-3/5" />
-                  <Skeleton className="h-5 w-16 rounded-full" />
+          viewMode === "kanban" ? (
+            // Column-shaped skeleton matches the actual layout the user is about to see,
+            // so the structural shift on first paint is minimised.
+            <div className="grid auto-rows-min gap-2"
+                 style={{ gridTemplateColumns: `repeat(${PROJECT_STAGES.filter(s => s.value !== 'pending_review').length}, minmax(220px, 1fr))` }}>
+              {PROJECT_STAGES.filter(s => s.value !== 'pending_review').map(stage => (
+                <div key={stage.value} className="rounded-md border border-border/40 bg-muted/15">
+                  <div className="px-2 py-2 border-b border-border/40 flex items-center justify-between gap-2">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-4 w-6 rounded-full" />
+                  </div>
+                  <div className="p-2 space-y-2 min-h-[400px]">
+                    {Array(3).fill(0).map((_, i) => (
+                      <Card key={i} className="p-2 space-y-1.5">
+                        <Skeleton className="h-3 w-3/4" />
+                        <Skeleton className="h-2.5 w-2/3" />
+                        <div className="flex items-center gap-1.5 pt-1">
+                          <Skeleton className="h-2.5 w-16" />
+                          <Skeleton className="h-2.5 w-2.5 rounded-full ml-auto" />
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
                 </div>
-                <Skeleton className="h-3.5 w-2/3" />
-                <div className="flex items-center gap-2">
-                  <Skeleton className="h-3 w-20" />
-                  <Skeleton className="h-3 w-3 rounded-full" />
-                  <Skeleton className="h-3 w-24" />
-                </div>
-                <div className="flex items-center gap-2 pt-2 border-t">
-                  <Skeleton className="h-6 w-6 rounded-full" />
-                  <Skeleton className="h-3 w-28" />
-                  <Skeleton className="h-5 w-14 rounded-full ml-auto" />
-                </div>
-              </Card>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {Array(9).fill(0).map((_, i) => (
+                <Card key={i} className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Skeleton className="h-5 w-3/5" />
+                    <Skeleton className="h-5 w-16 rounded-full" />
+                  </div>
+                  <Skeleton className="h-3.5 w-2/3" />
+                  <div className="flex items-center gap-2">
+                    <Skeleton className="h-3 w-20" />
+                    <Skeleton className="h-3 w-3 rounded-full" />
+                    <Skeleton className="h-3 w-24" />
+                  </div>
+                  <div className="flex items-center gap-2 pt-2 border-t">
+                    <Skeleton className="h-6 w-6 rounded-full" />
+                    <Skeleton className="h-3 w-28" />
+                    <Skeleton className="h-5 w-14 rounded-full ml-auto" />
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )
         ) : filteredProjects.length === 0 ? (
           <Card className="p-8 text-center border-2 border-dashed bg-muted/30 shadow-sm">
             <div className="max-w-md mx-auto">
