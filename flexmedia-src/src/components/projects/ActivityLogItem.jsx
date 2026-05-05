@@ -18,6 +18,7 @@ const ACTION_CONFIG = {
   task_deleted:        { label: "Task deleted",      color: "bg-red-400",     textColor: "text-red-700 dark:text-red-300",     bg: "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800",         icon: FileX,          iconBg: "bg-red-100 dark:bg-red-900/40" },
   outcome_changed:     { label: "Outcome changed",   color: "bg-pink-500",    textColor: "text-pink-700 dark:text-pink-300",    bg: "bg-pink-50 border-pink-200 dark:bg-pink-950/30 dark:border-pink-800",       icon: Trophy,         iconBg: "bg-pink-100 dark:bg-pink-900/40" },
   payment_changed:     { label: "Payment changed",   color: "bg-green-500",   textColor: "text-green-700 dark:text-green-300",   bg: "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800",     icon: CreditCard,     iconBg: "bg-green-100 dark:bg-green-900/40" },
+  partially_delivered_changed: { label: "Partially delivered", color: "bg-indigo-500", textColor: "text-indigo-700 dark:text-indigo-300", bg: "bg-indigo-50 border-indigo-200 dark:bg-indigo-950/30 dark:border-indigo-800", icon: Package,        iconBg: "bg-indigo-100 dark:bg-indigo-900/40" },
   agent_changed:       { label: "Agent changed",     color: "bg-sky-500",     textColor: "text-sky-700 dark:text-sky-300",     bg: "bg-sky-50 border-sky-200 dark:bg-sky-950/30 dark:border-sky-800",         icon: UserCheck,      iconBg: "bg-sky-100 dark:bg-sky-900/40" },
   request_created:     { label: "Request created",   color: "bg-violet-500",  textColor: "text-violet-700 dark:text-violet-300",  bg: "bg-violet-50 border-violet-200 dark:bg-violet-950/30 dark:border-violet-800",   icon: FileText,       iconBg: "bg-violet-100 dark:bg-violet-900/40" },
   request_updated:     { label: "Request updated",   color: "bg-blue-400",    textColor: "text-blue-700 dark:text-blue-300",    bg: "bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-800",       icon: RefreshCw,      iconBg: "bg-blue-100 dark:bg-blue-900/40" },
@@ -57,6 +58,7 @@ const FIELD_LABELS = {
   status: "Status",
   outcome: "Outcome",
   payment_status: "Payment",
+  partially_delivered: "Partially delivered",
   pricing_tier: "Pricing tier",
   priority: "Priority",
   title: "Title",
@@ -76,6 +78,7 @@ const FIELD_LABELS = {
 };
 
 function formatValue(field, value) {
+  if (typeof value === "boolean") return value ? "Yes" : "No";
   if (!value && value !== 0) return null;
   if (field === "price" || field === "calculated_price") {
     const num = parseFloat(value);
@@ -194,7 +197,7 @@ function renderDeltaRows(changedFields) {
     }
 
     // Skip fields whose values look like raw JSON
-    const isJson = (v) => v && (v.trim().startsWith("{") || v.trim().startsWith("["));
+    const isJson = (v) => typeof v === "string" && (v.trim().startsWith("{") || v.trim().startsWith("["));
     if (isJson(change.old_value) || isJson(change.new_value)) continue;
 
     const oldFmt = formatValue(change.field, change.old_value);
