@@ -8,6 +8,7 @@ export const ALL_CARD_FIELDS = [
   { id: "price",          label: "Price",                group: "Finance", requiresPricing: true },
   { id: "product_category_tasks", label: "Task Progress", group: "Details" },
   { id: "payment_status", label: "Payment",              group: "Finance" },
+  { id: "pricing_tier",   label: "Pricing Tier",         group: "Finance" },
   { id: "partially_delivered", label: "Partially Delivered", group: "Details" },
   { id: "effort",         label: "Effort (Actual / Est.)", group: "Details" },
   { id: "shoot",          label: "Shoot Date & Time",    group: "Schedule" },
@@ -16,13 +17,13 @@ export const ALL_CARD_FIELDS = [
 // Default: enabled field IDs in display order. `shoot` is intentionally last
 // so the combined date+time row sits at the bottom of the card.
 const DEFAULT_ENABLED = [
-  "agency_agent", "products_packages", "price", "product_category_tasks", "payment_status", "effort", "shoot"
+  "agency_agent", "products_packages", "price", "product_category_tasks", "payment_status", "pricing_tier", "effort", "shoot"
 ];
 
-// v4: dropped Priority / Requests / Active Tasks / Property Type / Status
-// Timer from card field options. Bumped so users get the new defaults
-// instead of stale field IDs that no longer render anything.
-const STORAGE_KEY = "project_card_fields_v4";
+// v5: pricing_tier became a controllable field option (was hardcoded as a
+// "Premium" chip at the bottom of every kanban card). Bumped so users
+// pick up the new default order and see the toggle in the customizer.
+const STORAGE_KEY = "project_card_fields_v5";
 
 // ─── Module-level shared store ─────────────────────────────────────────────
 // Why not plain useState: every consumer (CardFieldsCustomizer, KanbanBoard,

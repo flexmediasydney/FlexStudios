@@ -417,6 +417,7 @@ export default function Projects() {
       property_type: "Type",
       products_packages: "Products & Packages",
       payment_status: "Payment",
+      pricing_tier: "Tier",
       effort: "Effort",
     };
 
@@ -478,7 +479,7 @@ export default function Projects() {
       cols.push({
         key: fieldId,
         label: fieldLabels[fieldId],
-        sortable: ["agency_agent", "shoot", "price", "invoiced_amount", "priority", "payment_status", "property_type"].includes(fieldId),
+        sortable: ["agency_agent", "shoot", "price", "invoiced_amount", "priority", "payment_status", "pricing_tier", "property_type"].includes(fieldId),
         align: ["price", "invoiced_amount"].includes(fieldId) ? "right" : undefined,
         width: fieldId === "price" ? "110px" : (fieldId === "invoiced_amount" ? "110px" : undefined),
         render: (project) => {

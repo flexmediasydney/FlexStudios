@@ -1,6 +1,6 @@
 import { memo, useMemo, useDeferredValue } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, Building, CheckSquare, CreditCard, CheckCircle2, Package } from "lucide-react";
+import { Calendar, Clock, Building, CheckSquare, CreditCard, CheckCircle2, Package, Star, Zap } from "lucide-react";
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { fmtDate, fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { CountdownTimer } from "./TaskManagement";
@@ -472,6 +472,26 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium capitalize ${paymentColors[status]}`}>
           <CreditCard className="h-3 w-3" aria-hidden="true" />
           {status}
+        </span>
+      );
+    }
+    case "pricing_tier": {
+      // Two valid tiers per ProjectForm: "standard" (blue Zap) / "premium"
+      // (amber Star). Mirror the form's icon + color choices so the card
+      // chip reads as the same visual concept as the picker. Used to be
+      // a hardcoded chip that only rendered for premium projects at the
+      // bottom of the kanban card; now it's a toggleable field that
+      // renders the actual tier on every card when enabled.
+      const tier = project.pricing_tier || "standard";
+      const isPremium = tier === "premium";
+      const Icon = isPremium ? Star : Zap;
+      const cls = isPremium
+        ? "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400 border-amber-200 dark:border-amber-800"
+        : "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400 border-blue-200 dark:border-blue-800";
+      return (
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium capitalize border ${cls}`}>
+          <Icon className="h-3 w-3" aria-hidden="true" />
+          {tier}
         </span>
       );
     }

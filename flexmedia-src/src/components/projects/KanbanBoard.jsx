@@ -1178,21 +1178,17 @@ export default function KanbanBoard({ projects = [], products, packages, agencie
                                     {/* ── Mini task progress bar (requirement #5) ── */}
                                     <TaskProgressBar tasks={projectTasks} />
 
-                                    {/* Pricing tier & overdue chips */}
-                                    <div className="flex items-center gap-1 flex-wrap mt-1">
-                                      {project.pricing_tier === 'premium' && (
-                                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40
-                                                         text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 font-medium">
-                                          Premium
-                                        </span>
-                                      )}
-                                      {urgency === 'overdue' && (
+                                    {/* Overdue chip — pricing tier moved to a
+                                         toggleable card field (see
+                                         ProjectCardFields' "pricing_tier" case). */}
+                                    {urgency === 'overdue' && (
+                                      <div className="flex items-center gap-1 flex-wrap mt-1">
                                         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40
                                                          text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 font-medium animate-pulse">
                                           Overdue
                                         </span>
-                                      )}
-                                    </div>
+                                      </div>
+                                    )}
 
                                     {/* Email indicator */}
                                     <div className="flex items-center justify-end mt-1.5">
