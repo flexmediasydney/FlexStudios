@@ -115,12 +115,15 @@ Deno.serve(async (req) => {
     }
 
     // stateUser already validated above
+    // Team inboxes default to 'shared' visibility so synced emails are visible
+    // to internal employees on linked projects without manual flipping.
     await entities.EmailAccount.create({
       email_address: emailAddress,
       display_name: displayName || emailAddress,
       assigned_to_user_id: userId,
       assigned_to_name: stateUser.full_name,
       team_id: teamId || null,
+      default_visibility: teamId ? 'shared' : 'private',
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       is_active: true,

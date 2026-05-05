@@ -167,13 +167,14 @@ export default function EmailInboxMain() {
     'EmailAccount',
     { is_active: true }
   );
-  // Show: own accounts + team accounts (where team_id matches user's team) + all for owner
+  // Show: own accounts + any team inbox (team_id set = shared with all internal employees) + orphan/shared
   const emailAccounts = useMemo(() => {
     if (!user) return [];
     if (user.role === 'master_admin') return allEmailAccounts; // Owner sees all
+    const isInternalEmployee = ['admin', 'manager', 'employee'].includes(user.role);
     return allEmailAccounts.filter(a =>
       a.assigned_to_user_id === user.id || // Own accounts
-      (a.team_id && a.team_id === user.internal_team_id) || // Team accounts
+      (a.team_id && isInternalEmployee) || // Team inbox: visible to all internal employees
       (!a.assigned_to_user_id && !a.team_id) // Unassigned shared accounts
     );
   }, [allEmailAccounts, user]);
