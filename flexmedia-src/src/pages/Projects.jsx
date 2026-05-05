@@ -25,6 +25,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import { useCardFields } from "@/components/projects/useCardFields";
+import { useScopedProjectTasks } from "@/hooks/useScopedProjectTasks";
 import { ProjectFieldValue } from "@/components/projects/ProjectCardFields";
 import EntityDataTable from "@/components/common/EntityDataTable";
 
@@ -153,7 +154,13 @@ export default function Projects() {
    // Secondary batch: loaded but not blocking
    // IMPORTANT: limits must cover all active tasks/logs across visible projects.
    // Previously 300/50 silently truncated — cards showed incomplete counts/effort.
-   const { data: allTasks = [] } = useEntityList("ProjectTask", "-due_date", 5000);
+   //
+   // Project-scoped task fetch: was useEntityList("ProjectTask", "-due_date", 5000)
+   // which loaded every task in the org and invalidated a 5000-row cache on every
+   // Realtime event. We now batch-fetch tasks only for projects on screen, via a
+   // single `project_id IN (...)` query. Realtime patches the cache surgically.
+   const visibleProjectIds = useMemo(() => allProjects.map(p => p.id), [allProjects]);
+   const { data: allTasks = [] } = useScopedProjectTasks(visibleProjectIds);
    const { data: allTimeLogs = [] } = useEntityList("TaskTimeLog", null, 5000);
    // Pre-fetched once so the Kanban onDragEnd can check the "shoot must have
    // ended" rule from cache instead of doing a 200-2000ms network roundtrip
