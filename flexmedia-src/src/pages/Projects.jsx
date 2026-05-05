@@ -59,12 +59,12 @@ export default function Projects() {
     setViewMode(mode);
     try { localStorage.setItem('projects_view_mode', mode); } catch {}
   }, []);
-  const [fitToScreen, setFitToScreen] = useState(false);
+  const [fitToScreen, setFitToScreen] = useState(true);
   const [showFieldCustomizer, setShowFieldCustomizer] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [filters, setFilters] = useState({});
   const [showArchived, setShowArchived] = useState(false);
-  const [sortBy, setSortBy] = useState("last_status_change");
+  const [sortBy, setSortBy] = useState("shoot_date_asc");
   const [shootDateFrom, setShootDateFrom] = useState('');
   const [shootDateTo, setShootDateTo] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('all');
