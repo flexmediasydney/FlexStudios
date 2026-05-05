@@ -17,6 +17,7 @@ import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityDa
 import { useProjectTasks } from "@/hooks/useProjectTasks";
 import { useProjectRevisions } from "@/hooks/useProjectRevisions";
 import TaskListView from "./TaskListView";
+import TaskDetailPane from "./TaskDetailPane";
 import { toast } from "sonner";
 import ConfirmDialog from "@/components/common/ConfirmDialog";
 import { createNotification, writeFeedEvent } from "@/components/notifications/createNotification";
@@ -58,6 +59,10 @@ function TaskManagement({ projectId, project, canEdit }) {
    const [newTask, setNewTask] = useState({ title: "", description: "", task_type: "back_office", assigned_to: "", assigned_to_name: "", due_date: null });
    const [sortBy, setSortBy] = useState("workflow");
    const [deleteConfirm, setDeleteConfirm] = useState(null);
+   // Two-pane mode: left list highlights `selectedTaskId`, right pane renders
+   // its detail (meta + checklist + linked notes). Auto-clears when the
+   // selected task is deleted/archived. See TaskDetailPane for the right pane.
+   const [selectedTaskId, setSelectedTaskId] = useState(null);
    // Optimistic completion state: map of taskId -> { is_completed, completed_at }
    const [optimisticCompletions, setOptimisticCompletions] = useState({});
    const { data: user = null } = useQuery({
@@ -744,7 +749,11 @@ function TaskManagement({ projectId, project, canEdit }) {
         </div>
       )}
 
-      {/* Task View */}
+      {/* Task View — two-pane on lg+, stacked on smaller screens. The
+           left column keeps the original list style/spacing untouched; the
+           right column hosts TaskDetailPane (meta + checklist + linked
+           notes). Below lg the right pane renders inline below the list
+           when a task is selected. */}
       {tasks.length === 0 ? (
         <div className="text-center py-10 space-y-2">
           <CheckCheck className="h-8 w-8 text-muted-foreground/40 mx-auto" />
@@ -752,23 +761,51 @@ function TaskManagement({ projectId, project, canEdit }) {
           <p className="text-xs text-muted-foreground/70">Tasks will appear here once added to this project.</p>
         </div>
       ) : (
-        <TaskListView
-          tasks={tasks}
-          enrichedTasks={enrichedTasks}
-          canEdit={canEdit}
-          onToggle={toggleComplete}
-          onEdit={setEditingTask}
-          onDelete={requestDelete}
-          onUpdateDeadline={(id, data) => updateMutation.mutate({ id, data })}
-          thresholds={thresholds}
-          projectId={projectId}
-          project={project}
-          user={user}
-          products={products}
-          packages={packages}
-          groupBy={sortBy === "urgency" ? "urgency" : "product"}
-          revisions={revisions}
-        />
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+          <div className="lg:col-span-5 xl:col-span-5 min-w-0">
+            <TaskListView
+              tasks={tasks}
+              enrichedTasks={enrichedTasks}
+              canEdit={canEdit}
+              onToggle={toggleComplete}
+              onEdit={setEditingTask}
+              onDelete={requestDelete}
+              onUpdateDeadline={(id, data) => updateMutation.mutate({ id, data })}
+              thresholds={thresholds}
+              projectId={projectId}
+              project={project}
+              user={user}
+              products={products}
+              packages={packages}
+              groupBy={sortBy === "urgency" ? "urgency" : "product"}
+              revisions={revisions}
+              selectedTaskId={selectedTaskId}
+              onSelectTask={(t) => setSelectedTaskId(t?.id || null)}
+            />
+          </div>
+          <div
+            className={
+              // Right pane: sticks to viewport on wide screens so the list
+              // can scroll independently. On mobile/narrow tablet we render
+              // it only when something is selected so the empty-state block
+              // doesn't crowd the list.
+              `lg:col-span-7 xl:col-span-7 min-w-0 ` +
+              `lg:sticky lg:top-4 lg:max-h-[calc(100vh-160px)] lg:overflow-hidden ` +
+              `rounded-lg border border-border/50 bg-card ` +
+              `${selectedTaskId ? '' : 'hidden lg:block'}`
+            }
+            style={{ minHeight: '420px' }}
+          >
+            <TaskDetailPane
+              task={tasks.find(t => t?.id === selectedTaskId) || null}
+              project={project}
+              projectId={projectId}
+              canEdit={canEdit}
+              currentUser={user}
+              onClose={() => setSelectedTaskId(null)}
+            />
+          </div>
+        </div>
       )}
 
       {canEdit && (

@@ -61,9 +61,16 @@ export default function TaskListView({
   products = [],
   packages = [],
   groupBy = "product",
-  revisions = []
+  revisions = [],
+  // When provided, the list runs in two-pane mode: clicking a row calls
+  // onSelectTask(task) instead of toggling the inline expansion, and the
+  // selectedTaskId row gets a ring highlight. Inline TaskDetailPanel is
+  // suppressed in this mode (the parent renders its own detail pane).
+  selectedTaskId = null,
+  onSelectTask = null,
 }) {
   const [expandedTaskId, setExpandedTaskId] = useState(null);
+  const twoPaneMode = typeof onSelectTask === 'function';
 
   // Live time logs for actual effort per task (real-time subscription via useEntityList)
   const { data: projectTimeLogs = [] } = useEntityList(
@@ -237,15 +244,23 @@ export default function TaskListView({
               const revType = rev?.revision_type || null;
               const revKind = rev?.request_kind || null;
               const revTypeConfig = revType ? REVISION_TYPE_CONFIG[revType] : null;
+              const isSelectedInPane = twoPaneMode && selectedTaskId === task.id;
               return (
               <div key={task.id} className="space-y-0">
                 {/* Minimal Task Row */}
                 <div
-                   onClick={() => toggleExpanded(task.id)}
+                   onClick={() => {
+                     if (twoPaneMode) {
+                       onSelectTask(task);
+                     } else {
+                       toggleExpanded(task.id);
+                     }
+                   }}
                    className={cn(
                      "flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-all",
                      getTaskRowColor(task, revKind),
-                     isExpanded(task.id) && !revKind && "border-primary"
+                     isExpanded(task.id) && !revKind && "border-primary",
+                     isSelectedInPane && "ring-2 ring-primary ring-offset-1"
                    )}
                  >
                   {/* Status Icon */}
@@ -299,15 +314,20 @@ export default function TaskListView({
                       <CountdownTimer dueDate={task.due_date} compact thresholds={thresholds} />
                     )}
 
-                    {/* Expand arrow */}
-                    <span className={cn("text-xs text-muted-foreground transition-transform", isExpanded(task.id) && "rotate-180")}>
-                      ▼
-                    </span>
+                    {/* Expand arrow — only in single-pane mode. In two-pane
+                         mode the right pane handles detail, so the chevron
+                         would be misleading. */}
+                    {!twoPaneMode && (
+                      <span className={cn("text-xs text-muted-foreground transition-transform", isExpanded(task.id) && "rotate-180")}>
+                        ▼
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                {/* Expanded Details */}
-                {isExpanded(task.id) && (
+                {/* Expanded Details — single-pane only; in two-pane mode the
+                     parent renders TaskDetailPane in the right column. */}
+                {!twoPaneMode && isExpanded(task.id) && (
                   <TaskDetailPanel
                     task={task}
                     canEdit={canEdit}
