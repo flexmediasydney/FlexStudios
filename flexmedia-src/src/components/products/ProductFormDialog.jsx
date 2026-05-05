@@ -113,8 +113,8 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
       const tasks = prev[key] || [];
       return {
         ...prev,
-        [key]: [...tasks, { 
-          title: "", 
+        [key]: [...tasks, {
+          title: "",
           description: "",
           task_type: "back_office",
           auto_assign_role: "none",
@@ -123,10 +123,34 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
           timer_trigger: "none",
           deadline_type: "custom",
           deadline_preset: null,
-          deadline_hours_after_trigger: 0
+          deadline_hours_after_trigger: 0,
+          // Optional inline checklist seeded into ProjectTask.checklist on
+          // initial sync. Items: `{ title }`. Read by syncProjectTasksFromProducts.
+          checklist: []
         }]
       };
     });
+  };
+
+  // Per-template checklist editing. Mutates `template.checklist` in-place
+  // through updateTaskTemplate so the existing dirty-tracking + save path
+  // sees the change. Items are simple `{ title }` records — `checked`
+  // belongs to the per-task instance, not the template.
+  const addChecklistItem = (tier, taskIndex) => {
+    const key = tier === "standard" ? "standard_task_templates" : "premium_task_templates";
+    const list = (formData[key]?.[taskIndex]?.checklist) || [];
+    updateTaskTemplate(tier, taskIndex, "checklist", [...list, { title: "" }]);
+  };
+  const updateChecklistItem = (tier, taskIndex, itemIndex, title) => {
+    const key = tier === "standard" ? "standard_task_templates" : "premium_task_templates";
+    const list = (formData[key]?.[taskIndex]?.checklist) || [];
+    const next = list.map((it, i) => (i === itemIndex ? { ...it, title } : it));
+    updateTaskTemplate(tier, taskIndex, "checklist", next);
+  };
+  const removeChecklistItem = (tier, taskIndex, itemIndex) => {
+    const key = tier === "standard" ? "standard_task_templates" : "premium_task_templates";
+    const list = (formData[key]?.[taskIndex]?.checklist) || [];
+    updateTaskTemplate(tier, taskIndex, "checklist", list.filter((_, i) => i !== itemIndex));
   };
 
   const updateTaskTemplate = (tier, index, field, value) => {
@@ -912,6 +936,49 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                       </div>
                                     </div>
                                   )}
+
+                                  {/* Optional checklist — items seed
+                                       ProjectTask.checklist on initial sync.
+                                       Per the spec: simple { title, checkbox }
+                                       only; `checked` lives on the instance. */}
+                                  <div>
+                                    <Label className="text-xs text-muted-foreground mb-1 flex items-center gap-1 block">
+                                      <Checkbox checked disabled className="h-3 w-3 opacity-60 pointer-events-none" />
+                                      Checklist <span className="text-muted-foreground/60 font-normal">(optional)</span>
+                                    </Label>
+                                    {(task.checklist || []).length > 0 && (
+                                      <div className="space-y-1 mb-1">
+                                        {(task.checklist || []).map((item, itemIdx) => (
+                                          <div key={itemIdx} className="flex items-center gap-1.5">
+                                            <Checkbox checked disabled className="h-3.5 w-3.5 opacity-50 flex-shrink-0 pointer-events-none" />
+                                            <Input
+                                              value={item?.title || ""}
+                                              onChange={(e) => updateChecklistItem(tier, index, itemIdx, e.target.value)}
+                                              placeholder="Checklist item"
+                                              className="h-7 text-xs bg-card flex-1"
+                                            />
+                                            <Button
+                                              size="sm"
+                                              variant="ghost"
+                                              className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive flex-shrink-0"
+                                              onClick={() => removeChecklistItem(tier, index, itemIdx)}
+                                              title="Remove item"
+                                            >
+                                              <X className="h-3 w-3" />
+                                            </Button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <Button
+                                      onClick={() => addChecklistItem(tier, index)}
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 text-xs gap-1 text-muted-foreground"
+                                    >
+                                      <Plus className="h-3 w-3" /> Add checklist item
+                                    </Button>
+                                  </div>
                                          </div>
                                        )}
                                      </Draggable>
