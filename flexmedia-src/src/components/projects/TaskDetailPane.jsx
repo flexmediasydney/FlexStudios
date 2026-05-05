@@ -15,7 +15,7 @@
  *      link_kind = 'task'. New notes can be created via the existing
  *      UnifiedNoteComposer with initialLink pre-set to this task.
  */
-import React, { useState, useMemo, useCallback, useRef } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/supabaseClient";
 import { useEntityList } from "@/components/hooks/useEntityData";
@@ -50,9 +50,19 @@ export default function TaskDetailPane({
   onClose,
 }) {
   const queryClient = useQueryClient();
-  // Track in-flight checklist edits via a ref so quick successive clicks
-  // (toggle two boxes fast) don't lose updates to a stale closure.
-  const localChecklistRef = useRef(null);
+  // Local mirror of task.checklist. Mutations update this state synchronously
+  // for instant UI, then persist to the server. Resyncs from props whenever
+  // a different task is selected or the task's updated_at advances (so
+  // realtime updates from another tab still land here).
+  const [localChecklist, setLocalChecklist] = useState(() =>
+    Array.isArray(task?.checklist) ? task.checklist : []
+  );
+  useEffect(() => {
+    setLocalChecklist(Array.isArray(task?.checklist) ? task.checklist : []);
+    // task.updated_at is the canonical version key — the row's updated_at
+    // is bumped on every server write, so this effect runs each time the
+    // server confirms a change (and once on task switch).
+  }, [task?.id, task?.updated_at]);
 
   // Project-scoped time logs — useEntityList shares the cache with
   // TaskListView so this isn't an extra round-trip.
@@ -90,20 +100,11 @@ export default function TaskDetailPane({
 
   const persistChecklist = useCallback((nextList) => {
     if (!task?.id) return;
-    localChecklistRef.current = nextList; // mark as in-flight
-    updateMutation.mutate({ id: task.id, data: { checklist: nextList } }, {
-      onSettled: () => { localChecklistRef.current = null; },
-    });
+    setLocalChecklist(nextList); // optimistic — instant render
+    updateMutation.mutate({ id: task.id, data: { checklist: nextList } });
   }, [task?.id, updateMutation]);
 
-  // ── Checklist state derived from the task ──
-  // We mirror task.checklist locally so checkbox toggles feel instant. The
-  // mutation invalidates the query and the freshly-fetched task replaces our
-  // mirror. While a mutation is in flight, the ref above is the source of truth.
-  const checklist = useMemo(() => {
-    if (Array.isArray(localChecklistRef.current)) return localChecklistRef.current;
-    return Array.isArray(task?.checklist) ? task.checklist : [];
-  }, [task?.checklist, task?.id]);
+  const checklist = localChecklist;
 
   const [newItemDraft, setNewItemDraft] = useState("");
 
