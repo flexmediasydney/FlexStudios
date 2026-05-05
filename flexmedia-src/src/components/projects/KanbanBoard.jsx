@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { retryWithBackoff } from "@/lib/networkResilience";
@@ -601,6 +601,29 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
   const [pendingDrag, setPendingDrag] = useState(null);
   const [draggingId, setDraggingId] = useState(null);
 
+  // Watchdog: if onDragEnd doesn't fire within 800ms of mouseup, reset
+  // draggingId. Without this, a drop that fails to complete (browser tab
+  // focus loss mid-drag, untrusted automation events, JS error in onDragEnd,
+  // etc.) leaves draggingId stuck non-null, which makes isDragDisabled=true
+  // on every other Draggable and locks the entire board until a page reload.
+  // Real drops fire onDragEnd synchronously after mouseup; the 800ms grace
+  // period covers the library's drop animation window.
+  useEffect(() => {
+    if (!draggingId) return undefined;
+    let timer = null;
+    const onUp = () => {
+      if (timer) return;
+      timer = setTimeout(() => setDraggingId(null), 800);
+    };
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('touchend', onUp);
+    return () => {
+      if (timer) clearTimeout(timer);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('touchend', onUp);
+    };
+  }, [draggingId]);
+
   const onDragEnd = async (result) => {
     setDraggingId(null);
     if (!result.destination) return;
@@ -994,7 +1017,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
                           const urgencyClass = urgencyBorderClass[urgency] || 'urgency-border-none';
 
                           return (
-                            <Draggable key={project.id} draggableId={project.id} index={index} isDragDisabled={!!draggingId && draggingId !== project.id}>
+                            <Draggable key={project.id} draggableId={project.id} index={index} isDragDisabled={!canEdit || !canEditProject}>
                               {(provided, snapshot) => (
                                 <Card
                                   ref={provided.innerRef}
