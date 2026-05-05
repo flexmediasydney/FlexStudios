@@ -11,7 +11,7 @@ import { createPageUrl } from "@/utils";
 import { 
   ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
   ExternalLink, Edit, Archive, CheckCircle, Building, Search,
-  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera, AlertTriangle, CheckCircle2
+  Star, Zap, Trophy, XCircle, CreditCard, AlertCircle, Camera, AlertTriangle, CheckCircle2, Package
 } from "lucide-react";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
 import StagePipeline from "@/components/projects/StagePipeline";
@@ -791,6 +791,43 @@ export default function ProjectDetails() {
       }
       });
 
+    const updatePartiallyDeliveredMutation = useMutation({
+      mutationFn: async (nextValue) => {
+        if (!project) throw new Error('Project not loaded');
+        const oldValue = !!project.partially_delivered;
+        const nowIso   = new Date().toISOString();
+        const operator = user?.full_name || user?.email || 'Unknown';
+        const result = await api.entities.Project.update(projectId, {
+          partially_delivered:    nextValue,
+          partially_delivered_at: nowIso,
+          partially_delivered_by: operator,
+        });
+        logActivity('partially_delivered_changed',
+          nextValue
+            ? `Marked as partially delivered by ${operator}`
+            : `Cleared partially delivered flag (was set by ${project.partially_delivered_by || 'unknown'})`,
+          { changed_fields: [{ field: 'partially_delivered', old_value: oldValue, new_value: nextValue }] }
+        );
+        writeFeedEvent({
+          eventType: 'partially_delivered_changed', category: 'project', severity: 'info',
+          actorId: user?.id, actorName: user?.full_name,
+          title: `Project ${nextValue ? 'marked' : 'unmarked'} partially delivered: ${project.title || project.property_address}`,
+          projectId, projectName: project.title || project.property_address,
+          entityType: 'project', entityId: projectId,
+        }).catch(() => {});
+        return result;
+      },
+      onSuccess: (_, nextValue) => {
+        refetchEntityList("Project");
+        queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+        toast.success(nextValue ? 'Marked as partially delivered' : 'Cleared partially delivered flag');
+      },
+      onError: (err) => {
+        toast.error(err?.message || "Failed to update partially delivered");
+        setErrorMessage(err?.message || "Failed to update partially delivered");
+      }
+    });
+
       const updateInvoicedMutation = useMutation({
     mutationFn: async (amount) => {
       const parsed = amount === "" || amount === null ? null : parseFloat(amount);
@@ -1184,28 +1221,29 @@ export default function ProjectDetails() {
             <CreditCard className="h-3.5 w-3.5" />
             {project.payment_status === "paid" ? "✓ Paid" : "○ Unpaid"}
           </button>
-          {/* Won / Lost outcome toggles — mutually exclusive; click again to revert to Open */}
+          {/* Partially Delivered toggle — independent of stage; audit-tracked */}
           <button
             onClick={() => {
-              if (memoizedCanEdit && !updateOutcomeMutation.isPending) {
-                updateOutcomeMutation.mutate(project.outcome === "won" ? "open" : "won");
+              if (memoizedCanEdit && !updatePartiallyDeliveredMutation.isPending) {
+                updatePartiallyDeliveredMutation.mutate(!project.partially_delivered);
               }
             }}
-            disabled={!memoizedCanEdit || updateOutcomeMutation.isPending}
+            disabled={!memoizedCanEdit || updatePartiallyDeliveredMutation.isPending}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-all ${
-              project.outcome === "won"
-                ? "bg-green-600 text-white border-green-700 hover:bg-green-700"
+              project.partially_delivered
+                ? "bg-indigo-600 text-white border-indigo-700 hover:bg-indigo-700"
                 : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!memoizedCanEdit || updateOutcomeMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
+            } ${!memoizedCanEdit || updatePartiallyDeliveredMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
             title={
               !memoizedCanEdit ? "You don't have permission to edit" :
-              project.outcome === "won" ? "Currently Won — click to revert to Open" :
-              "Mark this project as Won"
+              project.partially_delivered
+                ? `Partially delivered${project.partially_delivered_by ? ` — set by ${project.partially_delivered_by}` : ''}${project.partially_delivered_at ? ` on ${new Date(project.partially_delivered_at).toLocaleString()}` : ''}. Click to clear.`
+                : "Mark this project as partially delivered"
             }
-            aria-label={`Mark as won. Current outcome: ${project.outcome}`}
+            aria-label={`Partially delivered: ${project.partially_delivered ? 'yes' : 'no'}. Click to toggle.`}
           >
-            <Trophy className="h-3.5 w-3.5" />
-            {project.outcome === "won" ? "✓ Won" : "◯ Won"}
+            <Package className="h-3.5 w-3.5" />
+            {project.partially_delivered ? "✓ Partially Delivered" : "○ Partially Delivered"}
           </button>
           <button
             onClick={() => {

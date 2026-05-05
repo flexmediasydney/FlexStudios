@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Clock, User, Building, DollarSign, Flag, CheckSquare, ExternalLink, FileText, CreditCard, CheckCircle2 } from "lucide-react";
+import { Calendar, Clock, User, Building, DollarSign, Flag, CheckSquare, ExternalLink, FileText, CreditCard, CheckCircle2, Package } from "lucide-react";
 import { usePriceGate } from '@/components/auth/RoleGate';
 import { fmtDate, fmtTimestampCustom } from "@/components/utils/dateUtils";
 import { CountdownTimer } from "./TaskManagement";
@@ -392,6 +392,29 @@ export function ProjectFieldValue({ fieldId, project, products = [], packages = 
           <CreditCard className="h-3 w-3" aria-hidden="true" />
           {status}
         </span>
+      );
+    }
+    case "partially_delivered": {
+      if (!project.partially_delivered) return null;
+      const ts = project.partially_delivered_at
+        ? fmtTimestampCustom(project.partially_delivered_at, {
+            day: 'numeric', month: 'short', year: 'numeric',
+            hour: 'numeric', minute: '2-digit', hour12: true,
+          })
+        : null;
+      const operator = project.partially_delivered_by;
+      return (
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-400">
+            <Package className="h-3 w-3" aria-hidden="true" />
+            Partially Delivered
+          </span>
+          {(ts || operator) && (
+            <span className="text-[10px] text-muted-foreground truncate">
+              {operator ? `by ${operator}` : ''}{operator && ts ? ' · ' : ''}{ts || ''}
+            </span>
+          )}
+        </div>
       );
     }
     case "notes": {

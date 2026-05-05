@@ -17,6 +17,7 @@ export const ALL_CARD_FIELDS = [
   { id: "requests",       label: "Requests",      group: "Details" },
   { id: "outcome",        label: "Outcome",       group: "Details" },
   { id: "payment_status", label: "Payment",       group: "Finance" },
+  { id: "partially_delivered", label: "Partially Delivered", group: "Details" },
   { id: "notes",          label: "Notes",         group: "Details" },
   { id: "delivery_link",  label: "Delivery Link", group: "Details" },
   { id: "effort",         label: "Effort (Actual / Est.)", group: "Details" },
