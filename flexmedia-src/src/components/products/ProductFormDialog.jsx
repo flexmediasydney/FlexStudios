@@ -796,7 +796,7 @@ export default function ProductFormDialog({ open, onClose, product, onSave, isSa
                                        <SelectItem value="none" className="text-xs">No auto-deadline</SelectItem>
                                        <SelectItem value="project_onsite" className="text-xs">Project set to Onsite</SelectItem>
                                        <SelectItem value="project_uploaded" className="text-xs">Project set to Uploaded</SelectItem>
-                                       <SelectItem value="project_submitted" className="text-xs">Project set to Submitted</SelectItem>
+                                       <SelectItem value="project_submitted" className="text-xs">Project set to Stills in Progress</SelectItem>
                                        <SelectItem value="dependencies_cleared" className="text-xs">Dependencies Cleared</SelectItem>
                                      </SelectContent>
                                    </Select>

@@ -173,7 +173,7 @@ async function _writeFeedEvent(entities: any, p: {
 // --- Stage order ---
 const STAGE_ORDER = [
   "pending_review", "to_be_scheduled", "scheduled", "onsite",
-  "uploaded", "submitted", "in_progress", "ready_for_partial",
+  "uploaded", "in_progress", "in_production", "ready_for_partial",
   "in_revision", "delivered",
 ];
 

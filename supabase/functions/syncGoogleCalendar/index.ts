@@ -345,7 +345,7 @@ serveWithAudit('syncGoogleCalendar', async (req) => {
               const matchedProject = projectByGoogleEventId.get(gEvent.id);
               if (matchedProject) {
                 const LINKABLE_STAGES = ['to_be_scheduled', 'scheduled', 'onsite', 'uploaded',
-                  'submitted', 'in_revision', 'in_production', 'delivered', 'cancelled'];
+                  'in_progress', 'in_revision', 'in_production', 'delivered', 'cancelled'];
                 if (LINKABLE_STAGES.includes(matchedProject.status)) {
                   autoProjectId = matchedProject.id;
                   autoAgentId = matchedProject.agent_id || null;
@@ -494,7 +494,7 @@ serveWithAudit('syncGoogleCalendar', async (req) => {
         const matchedProject = projectByGoogleEventId.get(ev.google_event_id);
         if (!matchedProject) continue;
         const LINKABLE_STAGES = ['to_be_scheduled', 'scheduled', 'onsite', 'uploaded',
-          'submitted', 'in_revision', 'in_production', 'delivered'];
+          'in_progress', 'in_revision', 'in_production', 'delivered'];
         if (!LINKABLE_STAGES.includes(matchedProject.status)) continue;
 
         try {

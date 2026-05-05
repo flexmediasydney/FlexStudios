@@ -59,7 +59,7 @@ const TRIGGER_LABELS = {
   none: null,
   project_onsite: "Shoot starts",
   project_uploaded: "Media uploaded",
-  project_submitted: "Submitted",
+  project_submitted: "Stills in Progress",
   dependencies_cleared: "Dependencies done",
 };
 

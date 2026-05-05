@@ -42,7 +42,6 @@ const STAGE_COLORS = {
   scheduled:         '#3b82f6',
   onsite:            '#eab308',
   uploaded:          '#f97316',
-  submitted:         '#8b5cf6',
   in_progress:       '#7c3aed',
   in_production:     '#06b6d4',
   ready_for_partial: '#6366f1',
@@ -82,7 +81,7 @@ function getDominantAgency(projects) {
 }
 
 // ─── Time filter definitions ──────────────────────────────────────────
-const ACTIVE_STAGES = ['onsite', 'uploaded', 'submitted', 'in_production', 'in_progress', 'ready_for_partial', 'in_revision'];
+const ACTIVE_STAGES = ['onsite', 'uploaded', 'in_production', 'in_progress', 'ready_for_partial', 'in_revision'];
 const UPCOMING_STAGES = ['scheduled', 'to_be_scheduled', 'pending_review'];
 
 function matchesTimeFilter(project, timeFilter) {
@@ -686,7 +685,7 @@ function TerritoryBubbles({ clusters, metric, onSelect, selectedSuburb }) {
 function ActiveProjectDots({ clusters }) {
   return clusters.map((cluster, i) => {
     const activeCount = cluster.projects.filter(p =>
-      ['onsite', 'uploaded', 'submitted'].includes(p.status)
+      ['onsite', 'uploaded', 'in_progress'].includes(p.status)
     ).length;
     if (activeCount === 0) return null;
     return (

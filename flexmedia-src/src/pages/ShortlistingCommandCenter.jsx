@@ -114,7 +114,6 @@ const PIPELINE_COLUMNS = [
 const PENDING_LANE_PROJECT_STATUSES = [
   'onsite',
   'uploaded',
-  'submitted',
   'in_progress',
   'in_production',
   'partially_delivered',

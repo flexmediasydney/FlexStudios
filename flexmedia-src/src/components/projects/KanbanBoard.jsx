@@ -562,14 +562,13 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
       const triggerMap = {
         'onsite':    'project_onsite',
         'uploaded':  'project_uploaded',
-        'submitted': 'project_submitted',
       };
       if (triggerMap[newStatus]) {
         scheduleDeadlineSync(projectId, triggerMap[newStatus], 500);
       }
 
       // Trigger onsite effort logging when project reaches uploaded or further
-      const STAGE_ORDER_KB = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','submitted','in_progress','in_production','ready_for_partial','in_revision','delivered'];
+      const STAGE_ORDER_KB = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','in_progress','in_production','ready_for_partial','in_revision','delivered'];
       const newIdxKB = STAGE_ORDER_KB.indexOf(newStatus);
       const uploadedIdxKB = STAGE_ORDER_KB.indexOf('uploaded');
       if (newIdxKB >= uploadedIdxKB) {
@@ -625,7 +624,7 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
     }
 
     // Hard rule: cannot advance past onsite until at least 1 calendar event has ended
-    const POST_ONSITE = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
+    const POST_ONSITE = ['uploaded', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
     if (POST_ONSITE.includes(newStatus)) {
       try {
         const calEvents = await api.entities.CalendarEvent.filter({ project_id: projectId });

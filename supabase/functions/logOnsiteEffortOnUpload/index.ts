@@ -66,7 +66,7 @@ serveWithAudit('logOnsiteEffortOnUpload', async (req) => {
     // (e.g., pending_review → in_production skipping uploaded) correctly.
     const STAGE_ORDER = [
       'pending_review', 'to_be_scheduled', 'scheduled', 'onsite',
-      'uploaded', 'submitted', 'in_progress', 'in_production',
+      'uploaded', 'in_progress', 'in_production',
       'ready_for_partial', 'in_revision', 'delivered',
     ];
     const currentIdx = STAGE_ORDER.indexOf(project.status);

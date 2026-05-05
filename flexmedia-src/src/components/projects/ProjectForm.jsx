@@ -610,7 +610,7 @@ export default function ProjectForm({ project, open, onClose, onSave }) {
           const currentUser = await api.auth.me().catch(() => null);
           const staffIds = [project.photographer_id, project.onsite_staff_1_id, project.project_owner_id].filter(Boolean);
           const projectName = formData.property_address || project.title || 'Project';
-          const isAdvancedStage = ['onsite', 'uploaded', 'submitted', 'in_production', 'in_revision'].includes(project.status);
+          const isAdvancedStage = ['onsite', 'uploaded', 'in_progress', 'in_production', 'in_revision'].includes(project.status);
 
           createNotificationsForUsers(staffIds, {
             type: isAdvancedStage ? 'reschedule_advanced_stage' : 'shoot_date_changed',

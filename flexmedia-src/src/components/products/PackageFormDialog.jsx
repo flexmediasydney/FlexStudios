@@ -544,7 +544,7 @@ export default function PackageFormDialog({ open, onClose, package: packageData,
                                   Project set to Uploaded
                                 </SelectItem>
                                 <SelectItem value="project_submitted" className="text-xs">
-                                  Project set to Submitted
+                                  Project set to Stills in Progress
                                 </SelectItem>
                                 <SelectItem value="dependencies_cleared" className="text-xs">
                                   Dependencies Cleared

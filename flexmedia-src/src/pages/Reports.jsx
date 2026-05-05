@@ -157,7 +157,7 @@ export default function Reports() {
 
   // ── Stage funnel (all projects) ────────────────────────────────────────────
   const stageFunnel = useMemo(() => {
-    const stages = ["to_be_scheduled","scheduled","onsite","uploaded","submitted","in_progress","ready_for_partial","delivered"];
+    const stages = ["to_be_scheduled","scheduled","onsite","uploaded","in_progress","in_production","ready_for_partial","delivered"];
     const counts  = {};
     allProjects.forEach(p => { counts[p.status] = (counts[p.status] || 0) + 1; });
     return stages.map(s => ({ stage: s.replace(/_/g, " "), count: counts[s] || 0 }));

@@ -23,8 +23,8 @@ const STAGES_WITH_MEDIA = [
   { value: 'delivered',        label: 'Delivered' },
   { value: 'ready_for_partial',label: 'Partially Delivered' },
   { value: 'in_revision',      label: 'In Revision' },
-  { value: 'in_progress',      label: 'In Progress' },
-  { value: 'submitted',        label: 'Submitted' },
+  { value: 'in_production',    label: 'Video in Progress' },
+  { value: 'in_progress',      label: 'Stills in Progress' },
   { value: 'uploaded',         label: 'Uploaded' },
 ];
 
@@ -440,8 +440,8 @@ function ProjectMediaBlock({ project, onOpenLightbox }) {
     delivered:         { color: 'bg-emerald-100 text-emerald-700', label: 'Delivered' },
     ready_for_partial: { color: 'bg-indigo-100 text-indigo-700',  label: 'Partially Delivered' },
     in_revision:       { color: 'bg-amber-100 text-amber-700',    label: 'In Revision' },
-    in_progress:       { color: 'bg-violet-100 text-violet-700',  label: 'In Progress' },
-    submitted:         { color: 'bg-purple-100 text-purple-700',  label: 'Submitted' },
+    in_production:     { color: 'bg-cyan-100 text-cyan-700',      label: 'Video in Progress' },
+    in_progress:       { color: 'bg-violet-100 text-violet-700',  label: 'Stills in Progress' },
     uploaded:          { color: 'bg-orange-100 text-orange-700',  label: 'Uploaded' },
   };
   const stageCfg = stageConfig[project.status] || { color: 'bg-muted text-muted-foreground', label: project.status };

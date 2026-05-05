@@ -94,8 +94,7 @@ const VALID_FORWARD_TRANSITIONS = {
   to_be_scheduled: ['scheduled', 'cancelled'],
   scheduled: ['onsite', 'cancelled'],
   onsite: ['uploaded', 'cancelled'],
-  uploaded: ['submitted', 'cancelled'],
-  submitted: ['in_progress', 'cancelled'],
+  uploaded: ['in_progress', 'cancelled'],
   in_progress: ['in_production', 'cancelled'],
   in_production: ['ready_for_partial', 'in_revision', 'delivered', 'cancelled'],
   ready_for_partial: ['in_revision', 'delivered', 'cancelled'],
@@ -613,7 +612,6 @@ export default function ProjectDetails() {
      const triggerMap = {
        'onsite':     'project_onsite',
        'uploaded':   'project_uploaded',
-       'submitted':  'project_submitted',
      };
 
      if (triggerMap[newStatus]) {
@@ -628,7 +626,7 @@ export default function ProjectDetails() {
       // Uses "at or past" logic — fires if new stage >= uploaded index, regardless
       // of what the old stage was. The edge function itself is idempotent (won't
       // double-log if onsite tasks are already completed).
-      const STAGE_ORDER = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','submitted','in_progress','in_production','ready_for_partial','in_revision','delivered'];
+      const STAGE_ORDER = ['pending_review','to_be_scheduled','scheduled','onsite','uploaded','in_progress','in_production','ready_for_partial','in_revision','delivered'];
       const newIdx = STAGE_ORDER.indexOf(newStatus);
       const uploadedIdx = STAGE_ORDER.indexOf('uploaded');
       const hasIncompleteOnsiteTasks = (projectTasks || []).some(t => t.task_type === 'onsite' && !t.is_completed && !t.is_deleted);

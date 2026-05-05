@@ -52,7 +52,7 @@ function StatusBar({ projects }) {
   const statusGroups = {
     "To Schedule":  ["to_be_scheduled"],
     "Scheduled":    ["scheduled", "onsite"],
-    "Editing":      ["uploaded", "submitted", "in_progress", "ready_for_partial"],
+    "Editing":      ["uploaded", "in_progress", "in_production", "ready_for_partial"],
     "In Revision":  ["in_revision"],
     "Delivered":    ["delivered"],
   };

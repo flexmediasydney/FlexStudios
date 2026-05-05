@@ -210,8 +210,8 @@ export default function ContactTimeline({ entityType, entityId }) {
               <SelectItem value="scheduled">Scheduled</SelectItem>
               <SelectItem value="onsite">Onsite</SelectItem>
               <SelectItem value="uploaded">Uploaded</SelectItem>
-              <SelectItem value="submitted">Submitted</SelectItem>
-              <SelectItem value="in_progress">In Progress</SelectItem>
+              <SelectItem value="in_progress">Stills in Progress</SelectItem>
+              <SelectItem value="in_production">Video in Progress</SelectItem>
               <SelectItem value="ready_for_partial">Partially Delivered</SelectItem>
               <SelectItem value="in_revision">In Revision</SelectItem>
               <SelectItem value="delivered">Delivered</SelectItem>

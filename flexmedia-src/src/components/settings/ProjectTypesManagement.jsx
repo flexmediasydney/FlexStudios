@@ -36,7 +36,7 @@ const TRIGGER_OPTIONS = [
   { value: "none", label: "None (manual)" },
   { value: "project_onsite", label: "Project reaches Onsite" },
   { value: "project_uploaded", label: "Project reaches Uploaded" },
-  { value: "project_submitted", label: "Project reaches Submitted" },
+  { value: "project_submitted", label: "Project reaches Stills in Progress" },
   { value: "dependencies_cleared", label: "Dependencies completed" },
 ];
 

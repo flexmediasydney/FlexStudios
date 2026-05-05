@@ -215,7 +215,7 @@ export default function TaskManagement({ projectId, project, canEdit }) {
     return () => { mounted = false; };
   }, [projectId, taskAssigneeFingerprint, users, teams]);
 
-  const UPLOADED_STAGES = ['uploaded', 'submitted', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
+  const UPLOADED_STAGES = ['uploaded', 'in_progress', 'in_production', 'ready_for_partial', 'in_revision', 'delivered'];
 
   const createMutation = useMutation({
     mutationFn: (data) => {

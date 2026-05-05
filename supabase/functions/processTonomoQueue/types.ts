@@ -6,4 +6,4 @@ export const BATCH_SIZE = 25;
 // fallback TTL. The new dispatcher_locks mutex (W7.5) self-cleans via the
 // dispatcher's 20-minute stale-row sweep — no per-fn TTL constant needed.
 
-export const ACTIVE_STAGES = ['scheduled', 'onsite', 'uploaded', 'submitted', 'in_revision', 'in_production'];
+export const ACTIVE_STAGES = ['scheduled', 'onsite', 'uploaded', 'in_progress', 'in_revision', 'in_production'];

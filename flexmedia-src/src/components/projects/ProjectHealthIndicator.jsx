@@ -87,7 +87,7 @@ export default function ProjectHealthIndicator({ project, tasks = [] }) {
     }
 
     // AT RISK: no tasks completed and project is past scheduling
-    const ACTIVE_STAGES = ["onsite", "uploaded", "submitted", "in_progress", "in_production"];
+    const ACTIVE_STAGES = ["onsite", "uploaded", "in_progress", "in_production"];
     if (activeTasks.length > 0 && completedTasks.length === 0 && ACTIVE_STAGES.includes(project.status)) {
       reasonList.push("No tasks completed in active stage");
     }

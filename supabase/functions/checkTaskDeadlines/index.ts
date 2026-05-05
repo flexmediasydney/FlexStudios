@@ -245,7 +245,7 @@ serveWithAudit('checkTaskDeadlines', async (req) => {
         }
 
         // stale_production: stuck in production/uploaded stages >48h
-        const productionStages = ['uploaded', 'in_progress', 'ready_for_partial'];
+        const productionStages = ['uploaded', 'in_progress', 'in_production', 'ready_for_partial'];
         if (
           productionStages.includes(project.status) &&
           project.last_status_change &&
@@ -271,33 +271,6 @@ serveWithAudit('checkTaskDeadlines', async (req) => {
           }
         }
 
-        // stale_submitted: stuck in submitted >48h
-        if (
-          project.status === 'submitted' &&
-          project.last_status_change &&
-          new Date(project.last_status_change) < staleThreshold
-        ) {
-          const staleHours = Math.floor(
-            (now.getTime() - new Date(project.last_status_change).getTime()) / (1000 * 60 * 60)
-          );
-          const adminIds = await _resolveUserIds(entities, ['master_admin'], null);
-          const notifyIds = new Set([...ownerIds, ...adminIds]);
-          for (const userId of notifyIds) {
-            const ok = await _createNotif(entities, {
-              userId,
-              type: 'stale_submitted',
-              title: `Project awaiting review: ${projectName}`,
-              message: `Submitted ${staleHours}h ago with no status change. Needs review.`,
-              category: 'project',
-              severity: 'warning',
-              projectId: project.id,
-              projectName,
-              source: 'system',
-              idempotencyKey: `stale_submitted:${project.id}:${todayStr}`,
-            });
-            if (ok) notified++;
-          }
-        }
       }
     } catch { /* non-fatal — don't break task deadline notifications */ }
 

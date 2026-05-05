@@ -104,7 +104,6 @@ export default function StuckProjectsWidget() {
           "scheduled",
           "onsite",
           "uploaded",
-          "submitted",
           "in_progress",
           "in_production",
           "partially_delivered",

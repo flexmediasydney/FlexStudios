@@ -254,7 +254,7 @@ export default function RevisionTemplateFormDialog({ open, onClose, template, on
                               <SelectItem value="none">None</SelectItem>
                               <SelectItem value="project_onsite">Project Onsite</SelectItem>
                               <SelectItem value="project_uploaded">Project Uploaded</SelectItem>
-                              <SelectItem value="project_submitted">Project Submitted</SelectItem>
+                              <SelectItem value="project_submitted">Project Stills in Progress</SelectItem>
                               <SelectItem value="dependencies_cleared">Dependencies Cleared</SelectItem>
                             </SelectContent>
                           </Select>

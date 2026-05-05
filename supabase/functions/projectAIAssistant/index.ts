@@ -71,7 +71,7 @@ const TOOLS = [
       properties: {
         new_stage: {
           type: 'string' as const,
-          enum: ['pending_review', 'scheduled', 'onsite', 'production', 'submitted', 'delivered'],
+          enum: ['pending_review', 'scheduled', 'onsite', 'uploaded', 'in_progress', 'in_production', 'delivered'],
         },
       },
       required: ['new_stage'],

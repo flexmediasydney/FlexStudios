@@ -96,13 +96,15 @@ function calculatePresetDeadline(preset: string, triggerDate: any, timezone = AP
 // Ordered project pipeline — index determines "at or past" comparison
 const STAGE_ORDER = [
   'pending_review', 'to_be_scheduled', 'scheduled', 'onsite',
-  'uploaded', 'submitted', 'in_progress', 'in_production',
+  'uploaded', 'in_progress', 'in_production',
   'ready_for_partial', 'in_revision', 'delivered',
 ];
 const TRIGGER_TO_STAGE: Record<string, string> = {
   'project_onsite': 'onsite',
   'project_uploaded': 'uploaded',
-  'project_submitted': 'submitted',
+  // Legacy alias: 'submitted' stage was removed (migration 471). Existing
+  // task templates with this trigger now satisfy at 'in_progress'.
+  'project_submitted': 'in_progress',
 };
 
 function isTriggerConditionMet(triggerType: string, project: any) {
