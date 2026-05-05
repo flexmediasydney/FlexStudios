@@ -7,6 +7,7 @@ import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSm
 import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
+import { updateEntityInCache } from "@/components/hooks/useEntityData";
 import { 
   ArrowLeft, MapPin, Calendar, Clock as ClockIcon, User, Users, Phone,
   ExternalLink, Edit, Archive, CheckCircle, Building, Search,
@@ -469,6 +470,21 @@ export default function ProjectDetails() {
   }, [project?.products, project?.packages, productsData, packagesData]);
 
   const updateStatusMutation = useMutation({
+  onMutate: (newStatus) => {
+    const project = projectRef.current;
+    if (!project) return;
+    const prev = {
+      status: project.status,
+      last_status_change: project.last_status_change ?? null,
+      shooting_started_at: project.shooting_started_at ?? null,
+    };
+    const optimistic = { status: newStatus, last_status_change: new Date().toISOString() };
+    if (newStatus === 'onsite' && !project.shooting_started_at) {
+      optimistic.shooting_started_at = new Date().toISOString();
+    }
+    updateEntityInCache('Project', projectId, optimistic);
+    return { prev };
+  },
   mutationFn: async (newStatus) => {
     // Snapshot latest project from ref to avoid stale closure data in fire-and-forget calls
     const project = projectRef.current;
@@ -667,13 +683,20 @@ export default function ProjectDetails() {
      queryClient.invalidateQueries({ queryKey: ['project-tasks-scoped', projectId] });
      toast.success(`Status updated to ${stageLabel(newStatus) || newStatus}`);
    },
-   onError: (err) => {
+   onError: (err, _variables, context) => {
+     // Revert optimistic patch on failure.
+     if (context?.prev) updateEntityInCache('Project', projectId, context.prev);
      toast.error(err?.message || "Failed to update project status");
      setErrorMessage(err?.message || "Failed to update project status");
    },
    });
 
     const updatePaymentMutation = useMutation({
+    onMutate: (payment_status) => {
+      const prev = { payment_status: project?.payment_status ?? 'unpaid' };
+      updateEntityInCache('Project', projectId, { payment_status });
+      return { prev };
+    },
     mutationFn: async (payment_status) => {
       if (!project) throw new Error('Project not loaded');
       if (!payment_status) throw new Error('Payment status is required');
@@ -728,13 +751,28 @@ export default function ProjectDetails() {
         queryClient.invalidateQueries({ queryKey: ["project", projectId] });
         toast.success(`Payment status updated to ${payment_status}`);
       },
-      onError: (err) => {
+      onError: (err, _variables, context) => {
+      if (context?.prev) updateEntityInCache('Project', projectId, context.prev);
       toast.error(err?.message || "Failed to update payment status");
       setErrorMessage(err?.message || "Failed to update payment status");
       }
       });
 
     const updatePartiallyDeliveredMutation = useMutation({
+      onMutate: (nextValue) => {
+        const prev = {
+          partially_delivered: !!project?.partially_delivered,
+          partially_delivered_at: project?.partially_delivered_at ?? null,
+          partially_delivered_by: project?.partially_delivered_by ?? null,
+        };
+        const operator = user?.full_name || user?.email || 'Unknown';
+        updateEntityInCache('Project', projectId, {
+          partially_delivered: nextValue,
+          partially_delivered_at: new Date().toISOString(),
+          partially_delivered_by: operator,
+        });
+        return { prev };
+      },
       mutationFn: async (nextValue) => {
         if (!project) throw new Error('Project not loaded');
         const oldValue = !!project.partially_delivered;
@@ -765,13 +803,22 @@ export default function ProjectDetails() {
         queryClient.invalidateQueries({ queryKey: ["project", projectId] });
         toast.success(nextValue ? 'Marked as partially delivered' : 'Cleared partially delivered flag');
       },
-      onError: (err) => {
+      onError: (err, _variables, context) => {
+        if (context?.prev) updateEntityInCache('Project', projectId, context.prev);
         toast.error(err?.message || "Failed to update partially delivered");
         setErrorMessage(err?.message || "Failed to update partially delivered");
       }
     });
 
       const updateInvoicedMutation = useMutation({
+    onMutate: (amount) => {
+      const prev = { invoiced_amount: project?.invoiced_amount ?? null };
+      const parsed = amount === "" || amount === null ? null : parseFloat(amount);
+      if (parsed === null || !isNaN(parsed)) {
+        updateEntityInCache('Project', projectId, { invoiced_amount: parsed });
+      }
+      return { prev };
+    },
     mutationFn: async (amount) => {
       const parsed = amount === "" || amount === null ? null : parseFloat(amount);
       if (parsed !== null && isNaN(parsed)) throw new Error("Invalid amount");
@@ -785,13 +832,28 @@ export default function ProjectDetails() {
       );
       toast.success(amount ? `Invoiced amount set to $${parseFloat(amount).toLocaleString('en-AU')}` : 'Invoiced amount cleared');
     },
-    onError: (err) => {
+    onError: (err, _variables, context) => {
+      if (context?.prev) updateEntityInCache('Project', projectId, context.prev);
       toast.error(err.message || 'Failed to update invoiced amount');
       setErrorMessage(err.message || 'Failed to update invoiced amount');
     },
   });
 
   const updateAgentMutation = useMutation({
+    onMutate: (agentId) => {
+      const prev = {
+        agent_id: project?.agent_id ?? null,
+        agent_name: project?.agent_name ?? null,
+        agency_id: project?.agency_id ?? null,
+      };
+      const selectedAgent = agentId ? allAgents.find(a => a.id === agentId) : null;
+      updateEntityInCache('Project', projectId, {
+        agent_id: agentId || null,
+        agent_name: selectedAgent?.name || null,
+        agency_id: selectedAgent?.current_agency_id || null,
+      });
+      return { prev };
+    },
     mutationFn: (agentId) => {
       if (!project) throw new Error('Project not loaded');
       const selectedAgent = agentId ? allAgents.find(a => a.id === agentId) : null;
@@ -843,7 +905,8 @@ export default function ProjectDetails() {
       setErrorMessage(null);
       toast.success('Agent updated successfully');
       },
-      onError: (err) => {
+      onError: (err, _variables, context) => {
+      if (context?.prev) updateEntityInCache('Project', projectId, context.prev);
       toast.error(err?.message || "Failed to update agent");
       setErrorMessage(err?.message || "Failed to update agent");
       }
