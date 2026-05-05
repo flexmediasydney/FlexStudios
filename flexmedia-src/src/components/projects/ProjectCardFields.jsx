@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useDeferredValue } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Calendar, Clock, User, Building, DollarSign, Flag, CheckSquare, ExternalLink, FileText, CreditCard, CheckCircle2, Package } from "lucide-react";
 import { usePriceGate } from '@/components/auth/RoleGate';
@@ -51,6 +51,90 @@ const CATEGORY_BAR_COLORS = {
   other: "bg-slate-400",
 };
 
+// Bucket a project's tasks into the scope groups the Task Progress field
+// shows. Hoisted out of the field render and computed once per card per
+// task-set change (memoized in the ProjectCardFields wrapper) so each card
+// doesn't re-bucketize on every parent re-render. Returns null when there
+// are no active tasks so the field can early-exit before mounting any
+// Popover instances.
+function computeTaskBuckets(tasks, productById) {
+  if (!Array.isArray(tasks) || tasks.length === 0) return null;
+
+  const allActive = [];
+  const projectScopeTasks = [];
+  const revisionTasks = [];
+  const changeRequestTasks = [];
+  const productByCategory = new Map();
+  let completedAll = 0;
+  let productCompleted = 0;
+
+  for (const t of tasks) {
+    if (t.is_deleted || t.is_archived) continue;
+    allActive.push(t);
+    if (t.is_completed) completedAll++;
+
+    const isRevision = Boolean(t.revision_id) || /^\[Revision #\d+\]/.test(t.title || "");
+    if (isRevision) {
+      if (t.request_kind === 'change_request') changeRequestTasks.push(t);
+      else revisionTasks.push(t);
+    } else if (t.product_id) {
+      const product = productById.get(t.product_id);
+      const cat = (product?.category || 'other').toLowerCase();
+      if (!productByCategory.has(cat)) productByCategory.set(cat, []);
+      productByCategory.get(cat).push(t);
+      if (t.is_completed) productCompleted++;
+    } else {
+      projectScopeTasks.push(t);
+    }
+  }
+
+  if (allActive.length === 0) return null;
+
+  const productAll = [];
+  productByCategory.forEach(list => { for (const t of list) productAll.push(t); });
+
+  const productGroups = [...productByCategory.entries()]
+    .map(([cat, list]) => {
+      let completed = 0;
+      for (const t of list) if (t.is_completed) completed++;
+      return {
+        cat,
+        label: CATEGORY_LABELS[cat] || cat,
+        tasks: list,
+        total: list.length,
+        completed,
+        barColor: CATEGORY_BAR_COLORS[cat] || CATEGORY_BAR_COLORS.other,
+      };
+    })
+    .sort((a, b) => {
+      const ai = CATEGORY_ORDER.indexOf(a.cat);
+      const bi = CATEGORY_ORDER.indexOf(b.cat);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+  let projectScopeCompleted = 0;
+  for (const t of projectScopeTasks) if (t.is_completed) projectScopeCompleted++;
+  let revisionCompleted = 0;
+  for (const t of revisionTasks) if (t.is_completed) revisionCompleted++;
+  let changeRequestCompleted = 0;
+  for (const t of changeRequestTasks) if (t.is_completed) changeRequestCompleted++;
+
+  return {
+    productAll,
+    productTotal: productAll.length,
+    productCompleted,
+    productGroups,
+    projectScopeTasks,
+    projectScopeCompleted,
+    revisionTasks,
+    revisionCompleted,
+    changeRequestTasks,
+    changeRequestCompleted,
+    totalAll: allActive.length,
+    completedAll,
+  };
+}
+
 /**
  * Renders a single field row for a project card.
  * Shared across Kanban, Grid, and List views.
@@ -58,7 +142,7 @@ const CATEGORY_BAR_COLORS = {
 // Memoized so a 1Hz running-timer tick (or any single-card mutation) only
 // re-renders the affected card field row, not all 200 × N field rows on the
 // Kanban / project list. Pure render — no internal state.
-export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, project, products = [], packages = [], tasks = [], timeLogs = [] }) {
+export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, project, products = [], packages = [], tasks = [], timeLogs = [], taskBuckets = null }) {
   const { visible: showPricing } = usePriceGate();
   switch (fieldId) {
     case "agency_name": {
@@ -269,59 +353,17 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
        );
      }
     case "product_category_tasks": {
-      // Scope-first task progress. Buckets every active task by scope:
-      //   Product (sub-grouped by product.category)
-      //   Project (no product / package / revision linkage)
-      //   Revisions (revision_id set OR [Revision #N] title prefix; request_kind != change_request)
-      //   Change Requests (revision-tagged with request_kind === 'change_request')
-      // Overall progress matches ProjectProgressBar's calc — all active tasks.
-      const allActive = tasks.filter(t => !t.is_deleted && !t.is_archived);
-      if (allActive.length === 0) return null;
-
-      const isRevisionTask = (t) => Boolean(t.revision_id) || /^\[Revision #\d+\]/.test(t.title || "");
-      const productById = new Map(products.map(p => [p.id, p]));
-
-      const productByCategory = new Map();
-      const projectScopeTasks = [];
-      const revisionTasks = [];
-      const changeRequestTasks = [];
-
-      for (const t of allActive) {
-        if (isRevisionTask(t)) {
-          if (t.request_kind === 'change_request') changeRequestTasks.push(t);
-          else revisionTasks.push(t);
-        } else if (t.product_id) {
-          const product = productById.get(t.product_id);
-          const cat = (product?.category || 'other').toLowerCase();
-          if (!productByCategory.has(cat)) productByCategory.set(cat, []);
-          productByCategory.get(cat).push(t);
-        } else {
-          // No product_id, no revision → project-level (or package-level) task
-          projectScopeTasks.push(t);
-        }
-      }
-
-      const productAll = [...productByCategory.values()].flat();
-      const productTotal = productAll.length;
-      const productCompleted = productAll.filter(t => t.is_completed).length;
-
-      const productGroups = [...productByCategory.entries()]
-        .map(([cat, list]) => ({
-          cat,
-          label: CATEGORY_LABELS[cat] || cat,
-          tasks: list,
-          total: list.length,
-          completed: list.filter(t => t.is_completed).length,
-          barColor: CATEGORY_BAR_COLORS[cat] || CATEGORY_BAR_COLORS.other,
-        }))
-        .sort((a, b) => {
-          const ai = CATEGORY_ORDER.indexOf(a.cat);
-          const bi = CATEGORY_ORDER.indexOf(b.cat);
-          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-        });
-
-      const totalAll = allActive.length;
-      const completedAll = allActive.filter(t => t.is_completed).length;
+      // Scope-first task progress. Bucketing is done once at the wrapper level
+      // (computeTaskBuckets in ProjectCardFields) and passed in via prop, so
+      // this case is purely render — no per-card iteration over tasks.
+      if (!taskBuckets) return null;
+      const {
+        productAll, productTotal, productCompleted, productGroups,
+        projectScopeTasks, projectScopeCompleted,
+        revisionTasks, revisionCompleted,
+        changeRequestTasks, changeRequestCompleted,
+        totalAll, completedAll,
+      } = taskBuckets;
       const overallPct = totalAll > 0 ? (completedAll / totalAll) * 100 : 0;
 
       const renderRow = ({ key, label, tasksList, completed, total, barColor, indent, popoverTitle, stripRevisionPrefix }) => {
@@ -413,7 +455,7 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
             key: 'project',
             label: 'Project',
             tasksList: projectScopeTasks,
-            completed: projectScopeTasks.filter(t => t.is_completed).length,
+            completed: projectScopeCompleted,
             total: projectScopeTasks.length,
             barColor: 'bg-slate-500',
           })}
@@ -423,7 +465,7 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
             key: 'revisions',
             label: 'Revisions',
             tasksList: revisionTasks,
-            completed: revisionTasks.filter(t => t.is_completed).length,
+            completed: revisionCompleted,
             total: revisionTasks.length,
             barColor: 'bg-red-500',
             stripRevisionPrefix: true,
@@ -434,7 +476,7 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
             key: 'change_requests',
             label: 'Change Requests',
             tasksList: changeRequestTasks,
-            completed: changeRequestTasks.filter(t => t.is_completed).length,
+            completed: changeRequestCompleted,
             total: changeRequestTasks.length,
             barColor: 'bg-purple-500',
             stripRevisionPrefix: true,
@@ -672,6 +714,25 @@ export const ProjectCardFields = memo(function ProjectCardFields({ project, enab
     });
   }, [tasks]);
 
+  // Build the product-id lookup once per products change. Without this, every
+  // card was rebuilding a 200-entry Map inside its Task Progress field render.
+  const productById = useMemo(() => {
+    const m = new Map();
+    for (const p of products) m.set(p.id, p);
+    return m;
+  }, [products]);
+
+  // Defer the heavier task-bucketing pass: when tasks update, the card paints
+  // the cheap fields (price, dates, etc.) first; React schedules the bucketing
+  // re-render at lower priority. On the kanban this is the difference between
+  // a paint hitch when 100+ cards mount the Task Progress field and a smooth
+  // progressive fill-in.
+  const deferredTasks = useDeferredValue(sortedTasks);
+  const taskBuckets = useMemo(
+    () => computeTaskBuckets(deferredTasks, productById),
+    [deferredTasks, productById]
+  );
+
   return (
     <div className="space-y-2">
       {enabledFields.map(fieldId => (
@@ -683,6 +744,7 @@ export const ProjectCardFields = memo(function ProjectCardFields({ project, enab
           packages={packages}
           tasks={sortedTasks}
           timeLogs={timeLogs}
+          taskBuckets={taskBuckets}
         />
       ))}
     </div>
