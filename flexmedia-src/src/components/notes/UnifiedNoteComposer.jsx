@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { sanitizeEditorHtml as sanitizeHtml } from '@/utils/sanitizeHtml';
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { notifyNoteMentions, notifyNoteReply } from './noteNotifications';
+import NoteLinkPicker from './NoteLinkPicker';
 
 export default function UnifiedNoteComposer({
   agencyId, projectId, agentId, teamId,
@@ -26,6 +27,7 @@ export default function UnifiedNoteComposer({
   parentNoteAuthorEmail = null,
   initialHtml = null,
   initialMentions = null,
+  initialLink = null,
   noteId = null,
   onSave,
   onCancel,
@@ -42,6 +44,8 @@ export default function UnifiedNoteComposer({
   const [saving, setSaving] = useState(false);
   const [mentionQuery, setMentionQuery] = useState(null);
   const [mentionPos, setMentionPos] = useState({ top: 0, left: 0 });
+  // initialLink shape: { kind: 'email'|'task'|'revision'|'change_request', id, label } | null
+  const [link, setLink] = useState(() => initialLink || null);
 
   const { data: users = [] } = useQuery({
     queryKey: ['users'],
@@ -161,6 +165,17 @@ export default function UnifiedNoteComposer({
     }
   };
 
+  // Translate the picker's link state into the columns the org_notes table expects.
+  // The CHECK constraint enforces at-most-one FK; we always send all three so an
+  // edit that clears a link explicitly nulls the previous FK rather than leaving it set.
+  const linkColumns = (lk) => ({
+    linked_email_id:    lk?.kind === 'email'    ? lk.id : null,
+    linked_task_id:     lk?.kind === 'task'     ? lk.id : null,
+    linked_revision_id: (lk?.kind === 'revision' || lk?.kind === 'change_request') ? lk.id : null,
+    link_kind:          lk?.kind  || null,
+    link_label:         lk?.label || null,
+  });
+
   const handleSave = async () => {
     if (!agencyId && !agentId && !teamId && !projectId) { toast.error('Cannot save note — no context available'); return; }
     if (checkEmpty()) return;
@@ -187,7 +202,7 @@ export default function UnifiedNoteComposer({
           .filter(id => !previousIds.has(id));
 
         await retryWithBackoff(
-          () => api.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized, mentions }),
+          () => api.entities.OrgNote.update(noteId, { content: plainText, content_html: sanitized, mentions, ...linkColumns(link) }),
           { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
         );
 
@@ -218,6 +233,7 @@ export default function UnifiedNoteComposer({
             focus_tags: [],
             is_pinned: false,
             ...(parentNoteId && { parent_note_id: parentNoteId }),
+            ...linkColumns(link),
           }),
           { maxRetries: 2, onRetry: (err, attempt) => toast.info(`Retrying save (${attempt}/2)...`) }
         );
@@ -269,6 +285,7 @@ export default function UnifiedNoteComposer({
         el.innerHTML = '';
         setMentions([]);
         setAttachments([]);
+        setLink(null);
         setEditorEmpty(true);
         onSave?.();
       }
@@ -284,6 +301,7 @@ export default function UnifiedNoteComposer({
     if (editorRef.current) editorRef.current.innerHTML = '';
     setMentions([]);
     setAttachments([]);
+    setLink(initialLink || null);
     setEditorEmpty(true);
     onCancel?.();
   };
@@ -417,6 +435,16 @@ export default function UnifiedNoteComposer({
           <Paperclip className="h-3.5 w-3.5" />
         </button>
         <input ref={fileInputRef} type="file" multiple className="hidden" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip" onChange={handleFileInput} />
+
+        {/* Link this note to an email / task / request on the project */}
+        {projectId && (
+          <NoteLinkPicker
+            projectId={projectId}
+            value={link}
+            onChange={setLink}
+            disabled={saving}
+          />
+        )}
 
         <div className="flex-1" />
         <Button variant="ghost" size="sm" onClick={handleCancel} className="h-7 text-xs text-muted-foreground">

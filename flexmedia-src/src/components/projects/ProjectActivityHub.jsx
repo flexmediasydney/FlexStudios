@@ -287,12 +287,17 @@ function ProjectActivityHub({ projectId, project }) {
   }, [projectId, refetchEmails]);
 
   // ── Pinned notes ──
+  // Soft-deleted notes are filtered out of the pinned section entirely; if
+  // somebody pins then deletes, the bar disappears.
   const pinnedNotes = useMemo(
-    () => notes.filter(n => n.is_pinned && !n.parent_note_id),
+    () => notes.filter(n => n.is_pinned && !n.parent_note_id && !n.is_deleted),
     [notes]
   );
 
   // ── Build reply map for note threading ──
+  // Replies are kept in the map even when soft-deleted so the feed item
+  // can render a "[Comment deleted]" placeholder; ProjectActivityFeedItem
+  // does the placeholder swap on its own.
   const replyMap = useMemo(() => {
     const map = {};
     for (const n of notes) {
@@ -313,8 +318,16 @@ function ProjectActivityHub({ projectId, project }) {
   const allItems = useMemo(() => {
     const items = [];
 
-    // Only include root notes (not replies, not pinned)
-    const rootNotes = notes.filter(n => !n.parent_note_id && !n.is_pinned);
+    // Root notes: skip pinned (rendered above) and skip soft-deleted notes
+    // unless they still have live (non-deleted) replies — in that case we
+    // keep the deleted parent so its thread stays anchored.
+    const rootNotes = notes.filter(n => {
+      if (n.parent_note_id) return false;
+      if (n.is_pinned) return false;
+      if (!n.is_deleted) return true;
+      const liveReplies = (replyMap[n.id] || []).some(r => !r.is_deleted);
+      return liveReplies;
+    });
     for (const n of rootNotes) {
       items.push({
         type: 'note',
