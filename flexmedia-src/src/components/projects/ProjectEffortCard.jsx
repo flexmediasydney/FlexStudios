@@ -21,7 +21,7 @@ function getProgressColor(pct) {
 const BAR_CLASSES = { green: 'bg-green-500', amber: 'bg-amber-500', red: 'bg-red-500' };
 const TEXT_CLASSES = { green: 'text-green-600 dark:text-green-400', amber: 'text-amber-600 dark:text-amber-400', red: 'text-red-600 dark:text-red-400' };
 
-export default function ProjectEffortCard({ projectId, project, onNavigateToEffort }) {
+function ProjectEffortCard({ projectId, project, onNavigateToEffort }) {
   const data = useProjectEffortSummary(projectId, project);
 
   if (!projectId) return null;
@@ -246,3 +246,5 @@ export default function ProjectEffortCard({ projectId, project, onNavigateToEffo
     </HoverCard>
   );
 }
+
+export default React.memo(ProjectEffortCard);

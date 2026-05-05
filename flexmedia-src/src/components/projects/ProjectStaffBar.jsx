@@ -335,7 +335,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
   );
 }
 
-export default function ProjectStaffBar({ project, canEdit, onProjectUpdate }) {
+function ProjectStaffBar({ project, canEdit, onProjectUpdate }) {
    const { data: liveProject } = useEntityData("Project", project?.id);
    const { data: allProducts = [] } = useEntityList("Product");
    const { data: allPackages = [] } = useEntityList("Package");
@@ -439,3 +439,5 @@ export default function ProjectStaffBar({ project, canEdit, onProjectUpdate }) {
      </Card>
    );
 }
+
+export default React.memo(ProjectStaffBar);

@@ -39,7 +39,7 @@ function formatDuration(seconds) {
   return `${secs}s`;
 }
 
-export default function ProjectDurationTimer({ project }) {
+function ProjectDurationTimer({ project }) {
   const [elapsed, setElapsed] = useState(0);
 
   const createdMs = parseCreatedMs(project?.created_date);
@@ -61,3 +61,5 @@ export default function ProjectDurationTimer({ project }) {
   if (!project?.created_date) return null;
   return <span className="tabular-nums">{formatDuration(elapsed)}</span>;
 }
+
+export default React.memo(ProjectDurationTimer);

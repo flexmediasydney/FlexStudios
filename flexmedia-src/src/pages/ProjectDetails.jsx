@@ -916,6 +916,12 @@ export default function ProjectDetails() {
       const [showArchiveDialog, setShowArchiveDialog] = useState(false);
       const [archiveWarnings, setArchiveWarnings] = useState([]);
 
+      // Stable handler for the Tonomo banner — memoised so the memoised
+      // sidebar children don't re-render every parent tick.
+      const onTonomoResolved = useCallback(() => {
+        queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      }, [queryClient, projectId]);
+
       // Compute archive warnings when dialog opens
       const computeArchiveWarnings = useCallback(async () => {
         const warnings = [];
@@ -1717,7 +1723,7 @@ export default function ProjectDetails() {
                 <TonomoPendingDeltaBanner
                   project={project}
                   canEdit={memoizedCanEdit}
-                  onResolved={() => queryClient.invalidateQueries({ queryKey: ["project", projectId] })}
+                  onResolved={onTonomoResolved}
                 />
               )}
               {canSeePricing && (
