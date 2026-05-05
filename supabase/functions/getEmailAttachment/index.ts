@@ -83,8 +83,10 @@ serveWithAudit('getEmailAttachment', async (req) => {
     const gmailData = await gmailRes.json();
     if (!gmailData.data) return errorResponse('No attachment data returned', 404, req);
 
-    // Gmail returns base64url-encoded data — convert to standard base64
-    const base64Data = gmailData.data.replace(/-/g, '+').replace(/_/g, '/');
+    // Gmail returns base64url-encoded data — convert to standard base64 with padding
+    let base64Data = gmailData.data.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = base64Data.length % 4;
+    if (padding) base64Data += '='.repeat(4 - padding);
 
     return jsonResponse({
       data: base64Data,
