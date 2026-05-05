@@ -172,6 +172,74 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     messages: [...liveMessages].sort((a, b) => new Date(a.received_at) - new Date(b.received_at))
   }), [thread, liveMessages]);
 
+  // Inline images (cid: refs) — fetch matching image attachments and swap to data URIs.
+  // Browsers can't fetch cid: URLs, so without this <img src="cid:..."> renders broken.
+  // Caches by cid so navigating between expanded/collapsed states doesn't refetch.
+  const [inlineDataUris, setInlineDataUris] = useState({});
+  useEffect(() => {
+    if (!user || !account) return;
+    let cancelled = false;
+    const fetchInline = async () => {
+      const newUris = {};
+      for (const m of liveMessages) {
+        if (!m?.body || !Array.isArray(m.attachments) || m.attachments.length === 0) continue;
+        const matches = [...m.body.matchAll(/src=["']cid:([^"'>]+)["']/gi)];
+        if (matches.length === 0) continue;
+        for (const match of matches) {
+          const cid = match[1];
+          if (inlineDataUris[cid] || newUris[cid]) continue;
+          // cid is typically "<filename>@<host-uid>" — match by filename prefix
+          const filenameGuess = cid.split('@')[0].toLowerCase();
+          const att = m.attachments.find((a) =>
+            a.attachment_id &&
+            (a.mime_type || '').toLowerCase().startsWith('image/') &&
+            (a.filename || '').toLowerCase() === filenameGuess
+          );
+          if (!att) continue;
+          try {
+            const { data: { session } } = await api.supabase.auth.getSession();
+            const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/getEmailAttachment`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session?.access_token}`,
+              },
+              body: JSON.stringify({
+                messageId: m.gmail_message_id,
+                attachmentId: att.attachment_id,
+                accountId: account.id,
+              }),
+            });
+            if (!res.ok) continue;
+            const result = await res.json();
+            if (result?.data) {
+              newUris[cid] = `data:${att.mime_type};base64,${result.data}`;
+            }
+          } catch (err) {
+            console.error('inline image fetch failed', err);
+          }
+        }
+      }
+      if (!cancelled && Object.keys(newUris).length > 0) {
+        setInlineDataUris((prev) => ({ ...prev, ...newUris }));
+      }
+    };
+    fetchInline();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- inlineDataUris read for cache check, not a dep
+  }, [liveMessages, user?.id, account?.id]);
+
+  // Apply cid: → data URI swap AFTER sanitization (sanitizer strips data: in src,
+  // so doing this before would lose the images).
+  const renderBody = (rawBody) => {
+    const sanitized = sanitizeEmailHtml(rawBody);
+    if (!sanitized) return '';
+    return sanitized.replace(/(src=["'])cid:([^"'>]+)(["'])/gi, (full, pre, cid, post) => {
+      const uri = inlineDataUris[cid];
+      return uri ? `${pre}${uri}${post}` : full;
+    });
+  };
+
   // Use the latest message as the canonical source for labels, priority, visibility, and actions.
   // messages are sorted oldest→newest (ascending received_at), so last index = most recent.
   const msg = freshThread.messages[freshThread.messages.length - 1];
@@ -1106,7 +1174,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
                       <div
                         className="prose prose-sm max-w-none text-foreground leading-relaxed overflow-x-auto overflow-y-auto email-body-content"
                         style={{ fontFamily: 'inherit', maxHeight: '80vh' }}
-                        dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msgItem.body) }}
+                        dangerouslySetInnerHTML={{ __html: renderBody(msgItem.body) }}
                       />
                       <style>{`
                         .email-body-content a {

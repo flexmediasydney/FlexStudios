@@ -45,15 +45,23 @@ serveWithAudit('getEmailAttachment', async (req) => {
 
     const admin = getAdminClient();
 
-    // Get the email account (verify user owns it)
+    // Get the email account and verify access (mirror EmailInboxMain filter:
+    // own account, master_admin, team inbox visible to internal employees, or orphan).
     const { data: account, error: accErr } = await admin
       .from('email_accounts')
-      .select('id, user_id, access_token, refresh_token')
+      .select('id, assigned_to_user_id, team_id, access_token, refresh_token')
       .eq('id', accountId)
       .single();
 
     if (accErr || !account) return errorResponse('Email account not found', 404, req);
-    if (account.user_id !== user.id && user.role !== 'master_admin') {
+
+    const isInternalEmployee = ['master_admin', 'admin', 'manager', 'employee'].includes(user.role);
+    const canAccess =
+      user.role === 'master_admin' ||
+      account.assigned_to_user_id === user.id ||
+      (account.team_id && isInternalEmployee) ||
+      (!account.assigned_to_user_id && !account.team_id);
+    if (!canAccess) {
       return errorResponse('Access denied', 403, req);
     }
     if (!account.refresh_token) return errorResponse('No refresh token', 400, req);
