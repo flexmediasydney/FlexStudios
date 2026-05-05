@@ -736,6 +736,18 @@ function TaskManagement({ projectId, project, canEdit }) {
                 Complete all
               </Button>
             )}
+            {canEdit && (
+              <Button
+                size="sm"
+                className="h-8 text-xs gap-1"
+                onClick={() => setShowAddDialog(true)}
+                title="Add a new task to this project"
+                aria-label="Add task"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add Task
+              </Button>
+            )}
             <Select value={sortBy} onValueChange={setSortBy}>
               <SelectTrigger className="h-8 w-32 text-xs" title="Sort tasks by workflow order or urgency" aria-label="Sort tasks">
                 <SelectValue />
@@ -759,6 +771,17 @@ function TaskManagement({ projectId, project, canEdit }) {
           <CheckCheck className="h-8 w-8 text-muted-foreground/40 mx-auto" />
           <p className="text-sm font-medium text-muted-foreground">No tasks yet</p>
           <p className="text-xs text-muted-foreground/70">Tasks will appear here once added to this project.</p>
+          {canEdit && (
+            <Button
+              size="sm"
+              className="mt-3 gap-1"
+              onClick={() => setShowAddDialog(true)}
+              title="Add a new task to this project"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add Task
+            </Button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
@@ -812,11 +835,9 @@ function TaskManagement({ projectId, project, canEdit }) {
         </div>
       )}
 
-      {canEdit && (
-        <Button variant="outline" size="sm" className="w-full" onClick={() => setShowAddDialog(true)} title="Add a new task to this project" aria-label="Add task">
-          <Plus className="h-4 w-4 mr-1" /> Add Task
-        </Button>
-      )}
+      {/* Add Task button moved to the top-right toolbar (next to "Complete
+           all"). The full-width version that used to live here at the bottom
+           of the list was duplicating the affordance. */}
 
       {/* Add Task Dialog */}
       <Dialog open={showAddDialog} onOpenChange={(open) => {
