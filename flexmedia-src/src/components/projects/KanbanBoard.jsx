@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation } from "@tanstack/react-query";
 import { retryWithBackoff } from "@/lib/networkResilience";
-import { useEntityList, refetchEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList } from "@/components/hooks/useEntityData";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -582,8 +582,9 @@ export default function KanbanBoard({ projects = [], products, packages, fitToSc
     },
     onSuccess: () => {
       toast.success('Project moved to new stage');
-      // Bug fix: invalidate project cache so the parent list and kanban reflect the new status
-      refetchEntityList('Project');
+      // Realtime patches the entity cache in place (useEntityData ensureSubscription).
+      // No manual refetch needed — refetching here would race the realtime patch
+      // and burn a 200-row roundtrip.
     },
     onError: (err) => toast.error(err?.message || "Failed to update project status. Please try again."),
   });

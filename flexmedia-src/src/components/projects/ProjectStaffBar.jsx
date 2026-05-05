@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { api } from "@/api/supabaseClient";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { useEntityList, useEntityData, refetchEntityList } from "@/components/hooks/useEntityData";
+import { useEntityList, useEntityData } from "@/components/hooks/useEntityData";
 import { User, Users, ChevronDown, ChevronRight, AlertCircle, Camera, Video, ImageIcon, Film, PenTool, Compass, Crown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
@@ -131,11 +131,10 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
       setOpen(false);
       toast.success("Staff assignment updated");
 
-      // Invalidate caches for immediate UI update
-      queryClient.invalidateQueries({ queryKey: ["entity-list", "Project"] });
-      queryClient.invalidateQueries({ queryKey: ["entity-data", "Project", project?.id] });
+      // Realtime patches the Project entity cache automatically (ensureSubscription).
+      // The TanStack Query keys above are stale aliases; the entity layer is the
+      // source of truth. ProjectTask invalidation only matters for legacy callers.
       queryClient.invalidateQueries({ queryKey: ["entity-list", "ProjectTask"] });
-      refetchEntityList("Project");
 
       // Resync onsite tasks when photographer or videographer changes
       const onsiteRoleFields = ['photographer_id', 'onsite_staff_1_id', 'videographer_id', 'onsite_staff_2_id'];
@@ -160,7 +159,7 @@ function StaffSelector({ roleKey, legacyKey, label, project, canEdit, disabled, 
                   ? { assigned_to: null, assigned_to_name: null, assigned_to_team_id: newId, assigned_to_team_name: newName }
                   : { assigned_to: newId, assigned_to_name: newName, assigned_to_team_id: null, assigned_to_team_name: null };
                 return api.entities.ProjectTask.update(t.id, updates);
-              })).then(() => refetchEntityList("ProjectTask"));
+              })).then(() => queryClient.invalidateQueries({ queryKey: ["entity-list", "ProjectTask"] }));
             }).catch(() => {});
           }
         }

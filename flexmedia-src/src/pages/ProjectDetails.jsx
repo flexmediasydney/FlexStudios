@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePermissions, useCurrentUser } from "@/components/auth/PermissionGuard";
 import { useEntityAccess } from '@/components/auth/useEntityAccess';
 import { useSmartEntityData, useSmartEntityList } from "@/components/hooks/useSmartEntityData";
-import { refetchEntityList } from "@/components/hooks/useEntityData";
 import { invalidateProjectCaches } from "@/lib/invalidateProjectCaches";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { createPageUrl } from "@/utils";
@@ -724,7 +723,8 @@ export default function ProjectDetails() {
       return result;
       },
       onSuccess: (_, payment_status) => {
-        refetchEntityList("Project");
+        // Realtime patches the entity cache in place; only the project-scoped
+        // query (which has no realtime channel) needs invalidation.
         queryClient.invalidateQueries({ queryKey: ["project", projectId] });
         toast.success(`Payment status updated to ${payment_status}`);
       },
@@ -761,7 +761,7 @@ export default function ProjectDetails() {
         return result;
       },
       onSuccess: (_, nextValue) => {
-        refetchEntityList("Project");
+        // Realtime carries the new field values back to the entity cache.
         queryClient.invalidateQueries({ queryKey: ["project", projectId] });
         toast.success(nextValue ? 'Marked as partially delivered' : 'Cleared partially delivered flag');
       },
@@ -778,7 +778,7 @@ export default function ProjectDetails() {
       return api.entities.Project.update(projectId, { invoiced_amount: parsed });
     },
     onSuccess: (_, amount) => {
-      refetchEntityList("Project");
+      // Realtime patches the entity cache; only invalidate the scoped project query.
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       logActivity('invoiced_amount_changed',
         `Invoiced amount set to ${amount ? `$${parseFloat(amount).toLocaleString('en-AU')}` : 'cleared'}`
@@ -837,7 +837,7 @@ export default function ProjectDetails() {
         }).catch((err) => { if (import.meta.env.DEV) console.warn('Pricing recalc after agent change failed:', err?.message); });
       }
 
-      refetchEntityList("Project");
+      // Realtime patches the entity cache; only invalidate the scoped project query.
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       setShowAgentSelector(false);
       setErrorMessage(null);
@@ -925,8 +925,8 @@ export default function ProjectDetails() {
       });
     },
     onSuccess: () => {
-      refetchEntityList("Project");
-      refetchEntityList("TaskTimeLog");
+      // Realtime patches the Project + TaskTimeLog caches; the projects-list
+      // query (TanStack Query) still needs invalidation since it's a separate key.
       queryClient.invalidateQueries({ queryKey: ["projects"] });
       setErrorMessage(null);
       setShowArchiveDialog(false);
@@ -1017,7 +1017,7 @@ export default function ProjectDetails() {
               onClick={async () => {
                 try {
                   await api.entities.Project.update(projectId, { is_archived: false, archived_at: null });
-                  refetchEntityList("Project");
+                  // Realtime patches the entity cache; only the scoped query needs invalidation.
                   queryClient.invalidateQueries({ queryKey: ["project", projectId] });
                   api.entities.ProjectActivity.create({
                     project_id: projectId,
@@ -1367,8 +1367,7 @@ export default function ProjectDetails() {
                             description: `Booking flagged as urgent by ${u?.full_name || 'admin'}.`,
                             user_id: u?.id, user_name: u?.full_name || u?.email,
                           }).catch(() => {});
-                          refetchEntityList("Project");
-                          refetchEntityList("ProjectActivity");
+                          // Realtime patches Project + ProjectActivity caches.
                           toast.success('Flagged as urgent');
                         } catch { toast.error('Failed to flag'); }
                       }}
@@ -1402,8 +1401,7 @@ export default function ProjectDetails() {
                           api.functions.invoke('applyProjectRoleDefaults', { project_id: project.id }).catch(() => {});
                           api.functions.invoke('trackProjectStageChange', { projectId: project.id, old_data: { status: 'pending_review' } }).catch(() => {});
                         }
-                        refetchEntityList("Project");
-                        refetchEntityList("ProjectActivity");
+                        // Realtime patches Project + ProjectActivity caches.
                         toast.success(isCancellation ? 'Cancellation confirmed' : 'Booking approved');
                       } catch { toast.error('Approval failed'); }
                     }}
@@ -1656,7 +1654,7 @@ export default function ProjectDetails() {
                 <TonomoPendingDeltaBanner
                   project={project}
                   canEdit={memoizedCanEdit}
-                  onResolved={() => refetchEntityList("Project")}
+                  onResolved={() => queryClient.invalidateQueries({ queryKey: ["project", projectId] })}
                 />
               )}
               {canSeePricing && (
