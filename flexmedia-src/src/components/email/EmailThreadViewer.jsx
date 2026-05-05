@@ -210,23 +210,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           );
           if (!att) continue;
           try {
-            const { data: { session } } = await api.supabase.auth.getSession();
-            const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/getEmailAttachment`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${session?.access_token}`,
-              },
-              body: JSON.stringify({
-                messageId: m.gmail_message_id,
-                attachmentId: att.attachment_id,
-                accountId: account.id,
-              }),
+            const res = await api.functions.invoke('getEmailAttachment', {
+              messageId: m.gmail_message_id,
+              attachmentId: att.attachment_id,
+              accountId: account.id,
             });
-            if (!res.ok) continue;
-            const result = await res.json();
-            if (result?.data) {
-              setInlineDataUris((prev) => ({ ...prev, [cid]: `data:${att.mime_type};base64,${result.data}` }));
+            const payload = res?.data;
+            if (payload?.data) {
+              setInlineDataUris((prev) => ({ ...prev, [cid]: `data:${att.mime_type};base64,${payload.data}` }));
             }
           } catch (err) {
             console.error('inline image fetch failed', err);
