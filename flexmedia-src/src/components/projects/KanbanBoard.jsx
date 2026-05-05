@@ -143,36 +143,6 @@ const urgencyBorderClass = {
   ontrack: 'urgency-border-ontrack',
 };
 
-/* ─────────────────────────── Mini Progress Bar ─────────────────────────── */
-// Memoized so a single-card task update doesn't re-iterate the per-card filter
-// for every other card on the board.
-const TaskProgressBar = React.memo(function TaskProgressBar({ tasks }) {
-  const regularTasks = tasks.filter(t => !t.parent_task_id && !t.is_deleted && !t.is_archived && !t.revision_id && !/^\[Revision #\d+\]/.test(t.title || ""));
-  if (regularTasks.length === 0) return null;
-
-  const completed = regularTasks.filter(t => t.is_completed).length;
-  const total = regularTasks.length;
-  const pct = Math.round((completed / total) * 100);
-
-  const barColor = pct === 100 ? 'bg-green-500' : pct >= 50 ? 'bg-blue-500' : pct > 0 ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-600';
-
-  return (
-    <div className="flex items-center gap-1.5 mt-1">
-      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-        <div
-          className={`h-full ${barColor} rounded-full transition-all duration-500 ease-out`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className={`text-[9px] font-semibold tabular-nums ${
-        pct === 100 ? 'text-green-600' : 'text-muted-foreground'
-      }`}>
-        {pct}%
-      </span>
-    </div>
-  );
-});
-
 /* ─────────────────────────── Email indicator ─────────────────────────── */
 const ProjectEmailIndicator = React.memo(function ProjectEmailIndicator({ emails = [] }) {
   if (emails.length === 0) return null;
@@ -1175,8 +1145,9 @@ export default function KanbanBoard({ projects = [], products, packages, agencie
                                       />
                                     </div>
 
-                                    {/* ── Mini task progress bar (requirement #5) ── */}
-                                    <TaskProgressBar tasks={projectTasks} />
+                                    {/* Overall TaskProgressBar removed by request — the
+                                         per-scope rows inside the Task Progress field
+                                         already cover progress visibility. */}
 
                                     {/* Overdue chip — pricing tier moved to a
                                          toggleable card field (see

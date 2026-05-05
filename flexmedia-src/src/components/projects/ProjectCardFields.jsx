@@ -49,6 +49,21 @@ const TASK_BASED_FIELDS = new Set([
   'product_category_tasks',
 ]);
 
+// Fields that should render together on a single horizontal row instead of
+// each taking its own line. The row mounts at the position of whichever
+// member appears first in the user-ordered enabledFields list, and pulls in
+// any other enabled members of that row regardless of where they sit in the
+// order. Useful for compact small chips (payment / tier / price) that read
+// best as a "money strip" instead of three separate lines.
+const ROW_GROUPS = [
+  new Set(['payment_status', 'pricing_tier', 'price']),
+  new Set(['effort', 'shoot']),
+];
+
+function findRowGroup(fieldId) {
+  return ROW_GROUPS.find(g => g.has(fieldId));
+}
+
 // Map a 0..1 completion ratio to the same red/orange/blue/green palette the
 // project-level overall progress bar uses. Pure helper — exported only so
 // future callers (other progress visuals) can stay consistent without
@@ -282,8 +297,12 @@ export const ProjectFieldValue = memo(function ProjectFieldValue({ fieldId, proj
       if (!showPricing) return null;
       const displayPrice = project.calculated_price || project.price;
       if (!displayPrice) return null;
+      // ml-auto pushes price to the right end of the shared "money strip"
+      // row (paid · tier · …price). When price renders standalone (own
+      // row inside the space-y wrapper) ml-auto is a no-op so the existing
+      // layout doesn't change.
       return (
-        <div className="flex items-center gap-1.5 text-sm font-semibold tabular-nums justify-end">
+        <div className="flex items-center gap-1.5 text-sm font-semibold tabular-nums ml-auto">
           <span className="text-muted-foreground font-normal">$</span>
           <span>{Number(displayPrice).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         </div>
@@ -577,24 +596,57 @@ export const ProjectCardFields = memo(function ProjectCardFields({ project, enab
     && taskBuckets.completedAll > 0
     && taskBuckets.completedAll < taskBuckets.totalAll;
 
-  return (
-    <div className="space-y-1.5">
-      {enabledFields.map(fieldId => {
-        if (TASK_BASED_FIELDS.has(fieldId) && !tasksInFlight) return null;
-        return (
-          <ProjectFieldValue
-            key={fieldId}
-            fieldId={fieldId}
-            project={project}
-            products={products}
-            packages={packages}
-            agencies={agencies}
-            tasks={sortedTasks}
-            timeLogs={timeLogs}
-            taskBuckets={taskBuckets}
-          />
-        );
-      })}
-    </div>
-  );
+  // Walk enabledFields once, collapsing any members of the same ROW_GROUP
+  // into a single horizontal flex row. We track which fields have already
+  // been emitted so a group's later members are skipped where they appear
+  // standalone. The group's row mounts at the position of its FIRST
+  // enabled member.
+  const rendered = new Set();
+  const rows = [];
+  for (const fieldId of enabledFields) {
+    if (rendered.has(fieldId)) continue;
+    if (TASK_BASED_FIELDS.has(fieldId) && !tasksInFlight) {
+      rendered.add(fieldId);
+      continue;
+    }
+    const group = findRowGroup(fieldId);
+    if (group) {
+      const members = enabledFields.filter(f => group.has(f));
+      members.forEach(f => rendered.add(f));
+      rows.push(
+        <div key={`row:${members.join(',')}`} className="flex items-center gap-x-2 gap-y-1 flex-wrap">
+          {members.map(f => (
+            <ProjectFieldValue
+              key={f}
+              fieldId={f}
+              project={project}
+              products={products}
+              packages={packages}
+              agencies={agencies}
+              tasks={sortedTasks}
+              timeLogs={timeLogs}
+              taskBuckets={taskBuckets}
+            />
+          ))}
+        </div>
+      );
+    } else {
+      rendered.add(fieldId);
+      rows.push(
+        <ProjectFieldValue
+          key={fieldId}
+          fieldId={fieldId}
+          project={project}
+          products={products}
+          packages={packages}
+          agencies={agencies}
+          tasks={sortedTasks}
+          timeLogs={timeLogs}
+          taskBuckets={taskBuckets}
+        />
+      );
+    }
+  }
+
+  return <div className="space-y-1.5">{rows}</div>;
 });

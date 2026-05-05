@@ -14,16 +14,20 @@ export const ALL_CARD_FIELDS = [
   { id: "shoot",          label: "Shoot Date & Time",    group: "Schedule" },
 ];
 
-// Default: enabled field IDs in display order. `shoot` is intentionally last
-// so the combined date+time row sits at the bottom of the card.
+// Default: enabled field IDs in display order. The card renderer collapses
+// adjacent same-row groups (payment_status / pricing_tier / price into a
+// "money strip", and effort / shoot into a date+effort row), so the order
+// here is what users see by default. shoot stays last to anchor the card.
 const DEFAULT_ENABLED = [
-  "agency_agent", "products_packages", "price", "product_category_tasks", "payment_status", "pricing_tier", "effort", "shoot"
+  "agency_agent", "products_packages", "payment_status", "pricing_tier", "price", "product_category_tasks", "effort", "shoot"
 ];
 
-// v5: pricing_tier became a controllable field option (was hardcoded as a
-// "Premium" chip at the bottom of every kanban card). Bumped so users
-// pick up the new default order and see the toggle in the customizer.
-const STORAGE_KEY = "project_card_fields_v5";
+// v6: payment_status, pricing_tier, price now render as a single horizontal
+// "money strip" row, and effort + shoot share a row. Default order updated
+// to put each group's members adjacent. Storage key bumped so users pick
+// up the new layout instead of inheriting the old single-line-per-field
+// ordering.
+const STORAGE_KEY = "project_card_fields_v6";
 
 // ─── Module-level shared store ─────────────────────────────────────────────
 // Why not plain useState: every consumer (CardFieldsCustomizer, KanbanBoard,
