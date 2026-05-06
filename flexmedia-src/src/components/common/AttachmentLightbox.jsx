@@ -132,14 +132,17 @@ export default function AttachmentLightbox({ files, initialIndex = 0, onClose })
         </>
       )}
 
-      {/* Content area */}
-      <div className="flex-1 flex items-center justify-center w-full px-16 py-14" onClick={handleOverlayClick}>
+      {/* Content area — bounded so the image sits as a modal lightbox, not a
+          full-screen takeover. Matches MediaLightbox sizing. */}
+      <div className="flex-1 flex items-center justify-center w-full px-16 py-12 overflow-hidden" onClick={handleOverlayClick}>
         {category === 'image' && (
           <img
             src={file.file_url}
             alt={file.file_name}
-            className={`max-h-full transition-transform duration-200 rounded ${
-              zoomed ? 'max-w-none cursor-zoom-out scale-150' : 'max-w-full cursor-zoom-in'
+            className={`transition-transform duration-200 rounded shadow-2xl object-contain ${
+              zoomed
+                ? 'max-w-none w-auto h-auto cursor-zoom-out scale-150'
+                : 'max-w-[90vw] max-h-[calc(100vh-160px)] cursor-zoom-in'
             }`}
             onClick={(e) => { e.stopPropagation(); setZoomed(z => !z); }}
             draggable={false}
@@ -150,7 +153,7 @@ export default function AttachmentLightbox({ files, initialIndex = 0, onClose })
             src={file.file_url}
             controls
             autoPlay
-            className="max-w-full max-h-full rounded"
+            className="max-w-[90vw] max-h-[calc(100vh-160px)] rounded shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             Your browser does not support the video tag.
@@ -160,7 +163,7 @@ export default function AttachmentLightbox({ files, initialIndex = 0, onClose })
           <iframe
             src={file.file_url}
             title={file.file_name}
-            className="w-full max-w-4xl h-full rounded bg-white"
+            className="w-[90vw] max-w-4xl h-[calc(100vh-160px)] rounded bg-white shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
         )}
