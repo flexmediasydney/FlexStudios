@@ -51,7 +51,7 @@ const sanitizeEmailHtml = (html) => {
 import { toast } from "sonner";
 import EmailComposeReply from "./EmailComposeReply";
 import EmailComposeDialog from "./EmailComposeDialog";
-import ProjectLinkDialog from "./ProjectLinkDialog";
+import ProjectLinkDialogForInbox from "./ProjectLinkDialogForInbox";
 import LabelSelectorRobust from "./LabelSelectorRobust";
 import LabelBadge from "./LabelBadge";
 import EmailHeaderInfo from "./EmailHeaderInfo";
@@ -526,41 +526,7 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
     }
   });
 
-  const linkProjectMutation = useMutation({
-    mutationFn: (projectData) => {
-      // Race condition fix: snapshot IDs at call time to avoid stale freshThread reference
-      const ids = liveMessages.map(m => m.id);
-      return Promise.all(ids.map(id =>
-        api.entities.EmailMessage.update(id, {
-          project_id: projectData.id,
-          project_title: projectData.title
-          // Do NOT force visibility to shared — owner controls that separately
-        })
-      ));
-    },
-    onSuccess: (_, projectData) => {
-      if (msg?.id) {
-        api.functions.invoke('logEmailActivity', {
-          email_message_id: msg.id,
-          email_account_id: account?.id,
-          action_type: 'project_linked',
-          old_value: msg.project_title || 'none',
-          new_value: projectData.title,
-          description: `Email linked to project: ${projectData.title}`
-        }).then(() => {
-          queryClient.invalidateQueries({ queryKey: ['email-activity', msg.id] });
-        }).catch(err => console.error('Failed to log activity:', err));
-      }
-      queryClient.invalidateQueries({ queryKey: ["email-messages"] });
-      setShowProjectLink(false);
-      toast.success("Project linked to thread");
-    },
-    onError: () => {
-      toast.error("Failed to link project. Please try again.");
-    }
-  });
-
-  // Auto-mark as read on open (fires once per unique thread open)
+// Auto-mark as read on open (fires once per unique thread open)
   // Uses a ref to track which threads have been auto-marked, preventing repeated calls
   const autoMarkedRef = useRef(new Set());
   useEffect(() => {
@@ -1300,13 +1266,12 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           })()}
         </div>
 
-        {showProjectLink && (
-          <ProjectLinkDialog
-            thread={thread}
-            onClose={() => setShowProjectLink(false)}
-            onProjectLinked={(projectData) => linkProjectMutation.mutate(projectData)}
-          />
-        )}
+        <ProjectLinkDialogForInbox
+          thread={thread}
+          open={showProjectLink}
+          onOpenChange={setShowProjectLink}
+          account={account}
+        />
 
         {/* Reply / Forward Box — Pipedrive-style */}
         <div className="sticky bottom-0 bg-card border-t border-border shadow-lg">
