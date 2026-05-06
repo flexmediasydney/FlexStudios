@@ -27,7 +27,6 @@ const BATCH_SIZE = 10;
 const WALL_BUDGET_MS = 55_000;
 const GMAIL_DELAY = 100;
 const MAX_MESSAGES_PER_CALL = 500;
-const MAX_BODY_SIZE = 10000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -226,10 +225,7 @@ serveWithAudit('extendEmailHistory', async (req) => {
       const link = await lookup.resolve({ from: headers['From'], to: toList, cc: ccList });
       if (link.agent_id || link.agency_id) matched++;
 
-      let rawBody = extractBody(msg.payload);
-      if (rawBody.length > MAX_BODY_SIZE) {
-        rawBody = rawBody.substring(0, MAX_BODY_SIZE) + '\n\n<div style="margin-top:20px;padding:12px;background:#fff3cd;border:1px solid #ffc107;border-radius:4px;color:#856404;"><strong>Email Truncated</strong><br/>Historical backfill — view in Gmail for full message.</div>';
-      }
+      const rawBody = extractBody(msg.payload);
 
       try {
         await entities.EmailMessage.create({

@@ -207,17 +207,7 @@ const getThreadProjectLink = async (entities: any, account: any, threadId: strin
 
 const saveMessage = async (entities: any, account: any, fullMsg: any, headers: any, adminClient?: any, retriesLeft = 2): Promise<boolean> => {
   try {
-    const rawBody = extractEmailBody(fullMsg.payload);
-    const MAX_BODY_SIZE = 10000;
-
-    let body = rawBody;
-    if (rawBody.length > MAX_BODY_SIZE) {
-      body = rawBody.substring(0, MAX_BODY_SIZE) +
-        '\n\n<div style="margin-top: 20px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404;">' +
-        '<strong>Email Truncated</strong><br/>' +
-        'This message exceeded 10KB and was shortened. View in Gmail for the complete email.' +
-        '</div>';
-    }
+    const body = extractEmailBody(fullMsg.payload);
 
     const threadProjectLink = await getThreadProjectLink(entities, account, fullMsg.threadId);
 

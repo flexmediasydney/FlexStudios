@@ -230,16 +230,7 @@ async function fetchAndSaveMessage(
       })
     : { agent_id: null, agent_name: null, agency_id: null, agency_name: null, matched_via: null };
 
-  // Truncate oversized bodies to prevent DB insert failures
-  const MAX_BODY_SIZE = 10000;
-  let rawBody = extractEmailBody(fullMsg.payload);
-  if (rawBody.length > MAX_BODY_SIZE) {
-    rawBody = rawBody.substring(0, MAX_BODY_SIZE) +
-      '\n\n<div style="margin-top: 20px; padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404;">' +
-      '<strong>Email Truncated</strong><br/>' +
-      'This message exceeded 10KB and was shortened. View in Gmail for the complete email.' +
-      '</div>';
-  }
+  const rawBody = extractEmailBody(fullMsg.payload);
 
   // ── SAFR observation: record email (+ optional signature phone) for the
   // matched agent. Only fires when AgentLookup matched a specific agent id —
