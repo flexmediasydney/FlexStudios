@@ -214,7 +214,8 @@ function MyPreferencesTab({ userId }) {
   const [expanded, setExpanded] = useState(new Set(["scheduling", "task"]));
   const [digestSettings, setDigestSettings] = useState({
     quiet_hours_enabled: false, quiet_hours_start: "22:00",
-    quiet_hours_end: "08:00", sound_enabled: false, show_previews: true
+    quiet_hours_end: "08:00", sound_enabled: false, show_previews: true,
+    toast_enabled: true,
   });
 
   const { data: prefs = [] } = useQuery({
@@ -370,6 +371,20 @@ function MyPreferencesTab({ userId }) {
           <div className="grid grid-cols-2 gap-4">
             <div className="flex items-center justify-between">
               <div>
+                <Label>Pop-up notifications</Label>
+                <p className="text-xs text-muted-foreground">Show a transient toast in the bottom-right when a new notification arrives</p>
+              </div>
+              <Switch
+                checked={digestSettings.toast_enabled !== false}
+                onCheckedChange={v => {
+                  const updated = { ...digestSettings, toast_enabled: v };
+                  setDigestSettings(updated);
+                  saveDigestMutation.mutate(updated);
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
                 <Label>Sound on notification</Label>
                 <p className="text-xs text-muted-foreground">Play a sound when new notifications arrive</p>
               </div>
@@ -385,7 +400,7 @@ function MyPreferencesTab({ userId }) {
             <div className="flex items-center justify-between">
               <div>
                 <Label>Show message previews</Label>
-                <p className="text-xs text-muted-foreground">Show message content in the bell dropdown</p>
+                <p className="text-xs text-muted-foreground">Show message content in the bell dropdown and pop-ups</p>
               </div>
               <Switch
                 checked={digestSettings.show_previews}

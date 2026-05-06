@@ -40,6 +40,7 @@ export function NotificationProvider({ children }) {
   const [digestSettings, setDigestSettings] = useState({
     sound_enabled: false,
     show_previews: true,
+    toast_enabled: true,
     quiet_hours_enabled: false,
     quiet_hours_start: "22:00",
     quiet_hours_end: "08:00",
