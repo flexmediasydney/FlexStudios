@@ -388,7 +388,9 @@ const EmailListRow = React.memo(function EmailListRow({
                     </HoverCard>
                   )}
 
-                  {/* Subject + preview on one line, preview muted and truncated */}
+                  {/* Subject + preview on one line, preview muted and truncated.
+                      The "Link item" affordance lives in the actions column so we
+                      don't double up. */}
                   <span
                     className={cn(
                       "truncate text-[13px] leading-tight min-w-0 block",
@@ -405,19 +407,6 @@ const EmailListRow = React.memo(function EmailListRow({
                       </span>
                     )}
                   </span>
-
-                  {/* Hover-only "Link item" quick action */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onLinkProject?.(thread);
-                    }}
-                    className="ml-auto flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-[11px] text-muted-foreground hover:text-foreground flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-background"
-                    title="Link item to project"
-                  >
-                    <Link2 className="h-3 w-3" />
-                    Link item
-                  </button>
                 </div>
               </div>
             );
@@ -483,11 +472,11 @@ const EmailListRow = React.memo(function EmailListRow({
                 ) : (
                   <button
                     onClick={() => onLinkProject?.(thread)}
-                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded-full border border-dashed border-muted-foreground/30"
-                    title="Link to project"
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded hover:bg-background"
+                    title="Link item to project"
                   >
-                    <DollarSign className="h-3 w-3" />
-                    Link
+                    <Link2 className="h-3 w-3" />
+                    Link item
                   </button>
                 )}
               </div>
