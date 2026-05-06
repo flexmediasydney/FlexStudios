@@ -8,7 +8,7 @@
 //   - ProjectProgressBar card (Tasks)
 //   - RequestsProgressBar card (Requests)
 //
-// All data and handlers stay the same — only the layout collapses to ~180px.
+// All data and handlers stay the same — only the layout collapses to ~140px.
 // Stage durations are computed from ProjectStageTimer with the same logic as
 // StagePipeline (live timer for current stage, summed closed timers for past).
 //
@@ -20,7 +20,7 @@ import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { api } from "@/api/supabaseClient";
 import {
-  ArrowLeft, MapPin, Check, ChevronRight, ListTodo, MessageSquareWarning,
+  ArrowLeft, MapPin, Check, ListTodo, MessageSquareWarning,
   CheckCircle2, CreditCard, Package, Edit, Archive, AlertTriangle, Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,36 +29,42 @@ import { PROJECT_STAGES } from "./projectStatuses";
 import { fixTimestamp } from "@/components/utils/dateUtils";
 import { cn } from "@/lib/utils";
 import FavoriteButton from "@/components/favorites/FavoriteButton";
+import ProjectPresenceIndicator from "@/components/projects/ProjectPresenceIndicator";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 
 // ────────────────────────────────────────────────────────────────────────────
-// Duration helpers (mirror StagePipeline.formatDurationCompact for consistency)
+// Duration helpers
 // ────────────────────────────────────────────────────────────────────────────
-function fmtCompact(seconds) {
+// Past-stage display: hours + minutes only (no seconds).
+function fmtHoursMinutes(seconds) {
   if (!seconds || seconds < 0) return null;
   seconds = Math.floor(seconds);
   if (seconds < 60) return `${seconds}s`;
-  const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(seconds / 3600);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(seconds / 86400);
-  return `${d}d`;
+  const totalMins = Math.floor(seconds / 60);
+  if (totalMins < 60) return `${totalMins}m`;
+  const hours = Math.floor(totalMins / 60);
+  const mins = totalMins % 60;
+  if (hours < 24) return `${hours}h ${mins}m`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
+// Full precision (used in tooltip rows): include seconds.
 function fmtFull(seconds) {
   if (!seconds || seconds < 0) return "0s";
   seconds = Math.floor(seconds);
   if (seconds < 60) return `${seconds}s`;
   const m = Math.floor(seconds / 60), s = seconds % 60;
   if (m < 60) return `${m}m ${s}s`;
-  const h = Math.floor(seconds / 3600), rm = Math.floor((seconds % 3600) / 60);
-  if (h < 24) return `${h}h ${rm}m`;
+  const h = Math.floor(seconds / 3600), rm = Math.floor((seconds % 3600) / 60), rs = seconds % 60;
+  if (h < 24) return `${h}h ${rm}m ${rs}s`;
   const d = Math.floor(seconds / 86400), rh = Math.floor((seconds % 86400) / 3600);
   return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
 }
 
-// Live-ticking duration for the current stage (1Hz).
-function LiveDuration({ since, baseSeconds = 0 }) {
+// Live-ticking duration (1Hz) — current-stage only.
+function LiveTimer({ since, baseSeconds = 0 }) {
   const [, setTick] = useState(0);
   useEffect(() => {
     const iv = setInterval(() => setTick(t => t + 1), 1000);
@@ -66,14 +72,115 @@ function LiveDuration({ since, baseSeconds = 0 }) {
   }, []);
   const sinceMs = since ? new Date(fixTimestamp(since)).getTime() : Date.now();
   const elapsed = Math.floor(baseSeconds + Math.max(0, (Date.now() - sinceMs) / 1000));
-  return <>{fmtCompact(elapsed)}</>;
+  return <>{fmtFull(elapsed)}</>;
+}
+
+function fmtTimestamp(ts) {
+  if (!ts) return null;
+  return new Date(fixTimestamp(ts)).toLocaleString('en-AU', {
+    timeZone: 'Australia/Sydney', day: '2-digit', month: '2-digit', year: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Compact horizontal stepper — replaces the chevron StagePipeline.
-// Each stage = small numbered/checked dot + (when current) inline label,
-// with duration as a superscript-style badge and visit count for revisits.
-// Hover reveals full entry/exit/duration in a tooltip.
+// Rich stage tooltip — same structure as StagePipeline (visit history,
+// entered/exited timestamps, total duration, live indicator).
+// ────────────────────────────────────────────────────────────────────────────
+function StageTooltipBody({ stage, info, isCurrent, isCompleted }) {
+  const sortedVisits = info?.dbTimers
+    ? [...info.dbTimers].sort((a, b) => new Date(fixTimestamp(a.entry_time)) - new Date(fixTimestamp(b.entry_time)))
+    : [];
+
+  return (
+    <div className="bg-[#202124] text-white rounded-lg overflow-hidden">
+      <div className={cn(
+        "px-4 py-2.5 flex items-center justify-between",
+        isCurrent ? "bg-[#1a73e8]" : isCompleted ? "bg-[#34a853]" : "bg-[#5f6368]"
+      )}>
+        <p className="font-semibold text-sm">{stage.label}</p>
+        {isCurrent ? (
+          <span className="flex items-center gap-1 text-[10px] font-medium bg-white/20 rounded-full px-2 py-0.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+            LIVE
+          </span>
+        ) : info?.visitCount ? (
+          <span className="text-[10px] font-medium bg-white/20 rounded-full px-2 py-0.5">
+            {info.visitCount}x visited
+          </span>
+        ) : null}
+      </div>
+
+      {info ? (
+        <div className="px-4 py-3 space-y-3 text-xs">
+          {sortedVisits.length > 1 && (
+            <div className="space-y-1.5">
+              <p className="text-[10px] uppercase tracking-wider text-white/40 font-semibold">Visit History</p>
+              {sortedVisits.map((visit, i) => (
+                <div key={visit.id || i} className="flex items-center justify-between bg-white/5 rounded px-2 py-1">
+                  <div className="text-white/60">
+                    <span className="text-white/40 text-[10px]">#{i + 1} </span>
+                    <span>{fmtTimestamp(visit.entry_time)}</span>
+                    {visit.exit_time && (
+                      <span className="text-white/40"> &rarr; {new Date(fixTimestamp(visit.exit_time)).toLocaleString('en-AU', { timeZone: 'Australia/Sydney', hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                    )}
+                    {!visit.exit_time && isCurrent && (
+                      <span className="text-blue-300"> &rarr; now</span>
+                    )}
+                  </div>
+                  <span className="font-mono font-bold text-white tabular-nums">
+                    {!visit.exit_time && isCurrent
+                      ? <LiveTimer since={visit.entry_time} baseSeconds={visit.duration_seconds || 0} />
+                      : fmtFull(visit.duration_seconds || 0)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {sortedVisits.length === 1 && (
+            <div className="space-y-1.5 text-white/80">
+              <div className="flex justify-between">
+                <span className="text-white/50">Entered</span>
+                <span className="font-medium">{fmtTimestamp(sortedVisits[0].entry_time)}</span>
+              </div>
+              {sortedVisits[0].exit_time ? (
+                <div className="flex justify-between">
+                  <span className="text-white/50">Exited</span>
+                  <span className="font-medium">{fmtTimestamp(sortedVisits[0].exit_time)}</span>
+                </div>
+              ) : isCurrent ? (
+                <div className="flex justify-between">
+                  <span className="text-white/50">Status</span>
+                  <span className="text-blue-300 font-medium">Still active</span>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <div className="flex justify-between items-center pt-2 border-t border-white/10">
+            <span className="font-semibold text-white text-[11px]">
+              {isCurrent ? "Time in stage" : "Total duration"}
+            </span>
+            <span className="font-bold text-white font-mono tabular-nums text-sm">
+              {isCurrent && info.entryTime
+                ? <LiveTimer since={info.entryTime} baseSeconds={info.baseSeconds || 0} />
+                : fmtFull(info.durationSeconds || 0)}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <div className="px-4 py-3 text-xs text-white/40 text-center">Not yet reached</div>
+      )}
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Compact horizontal stepper.
+// All stages always show their label. Past = hours+minutes. Current = live
+// counter with seconds. Future with no time = "--". Hover reveals the same
+// rich detail popover the original StagePipeline shows.
 // ────────────────────────────────────────────────────────────────────────────
 function CompactStepper({ project, stageTimers, onStatusChange, canEdit, deliveryReady }) {
   const currentIdx = PROJECT_STAGES.findIndex(s => s.value === project.status);
@@ -82,7 +189,9 @@ function CompactStepper({ project, stageTimers, onStatusChange, canEdit, deliver
     const timers = stageTimers.filter(t => t.stage === stage.value);
     if (timers.length === 0 && idx > currentIdx) return null;
 
-    const closedSeconds = timers.filter(t => t.exit_time).reduce((sum, t) => sum + (t.duration_seconds || 0), 0);
+    const closedSeconds = timers
+      .filter(t => t.exit_time)
+      .reduce((sum, t) => sum + (t.duration_seconds || 0), 0);
     const open = timers.find(t => !t.exit_time);
     const visitCount = timers.length;
 
@@ -90,48 +199,67 @@ function CompactStepper({ project, stageTimers, onStatusChange, canEdit, deliver
       return {
         isCurrent: true,
         entryTime: open?.entry_time,
-        baseSeconds: closedSeconds,
+        baseSeconds: closedSeconds + (open?.duration_seconds || 0),
+        durationSeconds: closedSeconds + (open?.duration_seconds || 0),
         visitCount: Math.max(visitCount, 1),
+        dbTimers: timers,
       };
     }
+    const sorted = [...timers].sort(
+      (a, b) => new Date(fixTimestamp(b.entry_time)) - new Date(fixTimestamp(a.entry_time))
+    );
     return {
       isCurrent: false,
       durationSeconds: closedSeconds,
       visitCount,
-      entryTime: timers[0]?.entry_time,
-      exitTime: [...timers].sort((a, b) => new Date(b.exit_time || 0) - new Date(a.exit_time || 0))[0]?.exit_time,
+      entryTime: sorted[sorted.length - 1]?.entry_time,
+      exitTime: sorted[0]?.exit_time,
+      dbTimers: timers,
     };
   }
 
   return (
-    <div className="flex items-center gap-0.5 overflow-x-auto py-1 px-1 -mx-1 scrollbar-thin">
+    <div className="flex items-stretch gap-1 overflow-x-auto py-1 scrollbar-thin">
       {PROJECT_STAGES.map((stage, i) => {
         const info = getInfo(stage, i);
         const isPast = i < currentIdx;
         const isCurrent = i === currentIdx;
         const isFuture = i > currentIdx;
+        const isCompleted = isPast;
         const visits = info?.visitCount > 1 ? info.visitCount : null;
-        const blockedDeliver = stage.value === 'delivered' && !deliveryReady && !isPast && !isCurrent;
+        const blockedDeliver = stage.value === 'delivered' && !deliveryReady && isFuture;
         const blockedRevision = stage.value === 'in_revision';
+        const disabled = !canEdit || blockedRevision || blockedDeliver;
 
         return (
-          <React.Fragment key={stage.value}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  disabled={!canEdit || blockedRevision || blockedDeliver}
-                  onClick={() => onStatusChange?.(stage.value)}
-                  className={cn(
-                    "group flex items-center gap-1 px-1.5 py-1 rounded transition-colors flex-shrink-0",
-                    isCurrent && "bg-primary/10 ring-1 ring-primary/30",
-                    isPast && "hover:bg-muted/60",
-                    isFuture && "opacity-50 hover:opacity-90",
-                    canEdit && !blockedRevision && !blockedDeliver ? "cursor-pointer" : "cursor-default",
-                  )}
-                >
+          <Tooltip key={stage.value}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => !disabled && onStatusChange?.(stage.value)}
+                className={cn(
+                  "relative flex flex-col items-center justify-center px-2 py-1 rounded-md transition-colors flex-shrink-0 min-w-[80px] outline-offset-2 focus-visible:outline-2 focus-visible:outline-primary",
+                  isCurrent && "bg-primary/10 ring-1 ring-primary/30",
+                  isPast && "hover:bg-muted/60",
+                  isFuture && "opacity-55 hover:opacity-90",
+                  !disabled ? "cursor-pointer" : "cursor-default",
+                )}
+                aria-label={`${stage.label} - ${isCompleted ? "completed" : isCurrent ? "current" : "future"}`}
+              >
+                {visits && (
+                  <span className="absolute top-0 right-1 text-[8px] font-bold text-amber-600 dark:text-amber-400 leading-none">
+                    ×{visits}
+                  </span>
+                )}
+                {blockedDeliver && (
+                  <span className="absolute -top-0.5 -right-0.5">
+                    <AlertTriangle className="h-3 w-3 text-amber-500" />
+                  </span>
+                )}
+                <span className="flex items-center gap-1 mb-0.5">
                   <span className={cn(
-                    "flex items-center justify-center w-4 h-4 rounded-full text-[9px] font-bold flex-shrink-0",
+                    "flex items-center justify-center w-3.5 h-3.5 rounded-full text-[8px] font-bold",
                     isPast && "bg-emerald-500 text-white",
                     isCurrent && "bg-primary text-primary-foreground",
                     isFuture && !blockedDeliver && "bg-muted text-muted-foreground border border-border",
@@ -142,66 +270,82 @@ function CompactStepper({ project, stageTimers, onStatusChange, canEdit, deliver
                      : i + 1}
                   </span>
                   {isCurrent && (
-                    <span className="text-xs font-semibold text-foreground whitespace-nowrap">
-                      {stage.label}
-                    </span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
                   )}
-                  {isCurrent && info?.entryTime && (
-                    <span className="text-[10px] tabular-nums text-primary font-semibold">
-                      <LiveDuration since={info.entryTime} baseSeconds={info.baseSeconds} />
-                    </span>
+                </span>
+                <span className={cn(
+                  "text-[10px] font-semibold leading-tight whitespace-nowrap",
+                  isCurrent ? "text-foreground" : "text-muted-foreground",
+                )}>
+                  {stage.label}
+                </span>
+                <span className={cn(
+                  "text-[10px] tabular-nums leading-tight mt-0.5",
+                  isCurrent ? "text-primary font-semibold" : "text-muted-foreground/80",
+                )}>
+                  {isCurrent && info?.entryTime ? (
+                    <LiveTimer since={info.entryTime} baseSeconds={info.baseSeconds} />
+                  ) : info?.durationSeconds > 0 ? (
+                    fmtHoursMinutes(info.durationSeconds)
+                  ) : (
+                    <span className="opacity-40">--</span>
                   )}
-                  {!isCurrent && info?.durationSeconds > 0 && (
-                    <span className="text-[10px] tabular-nums text-muted-foreground">
-                      {fmtCompact(info.durationSeconds)}
-                    </span>
-                  )}
-                  {visits && (
-                    <span className="text-[9px] font-bold text-amber-600 dark:text-amber-400 ml-0.5">
-                      ×{visits}
-                    </span>
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs max-w-xs">
-                <div className="font-semibold">{stage.label}</div>
-                {info?.entryTime && (
-                  <div className="text-muted-foreground">
-                    Entered {new Date(fixTimestamp(info.entryTime)).toLocaleString('en-AU', {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
-                    })}
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="p-0 overflow-hidden shadow-xl border-0 w-64">
+              {blockedRevision && isFuture ? (
+                <div className="bg-[#202124] text-white rounded-lg overflow-hidden px-4 py-3 text-xs">
+                  In Revision is set automatically when a revision is created. It cannot be set manually.
+                </div>
+              ) : blockedDeliver ? (
+                <div className="bg-[#202124] text-white rounded-lg overflow-hidden">
+                  <div className="px-4 py-2.5 bg-amber-600 flex items-center gap-2">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <p className="font-semibold text-sm">Not Ready to Deliver</p>
                   </div>
-                )}
-                {info?.exitTime && (
-                  <div className="text-muted-foreground">
-                    Exited {new Date(fixTimestamp(info.exitTime)).toLocaleString('en-AU', {
-                      day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
-                    })}
+                  <div className="px-4 py-3 text-xs text-white/80">
+                    Tasks are still incomplete.
                   </div>
-                )}
-                {info?.durationSeconds > 0 && (
-                  <div className="text-muted-foreground">Total time: {fmtFull(info.durationSeconds)}</div>
-                )}
-                {visits && (
-                  <div className="text-amber-600 dark:text-amber-400">Re-entered {visits} times</div>
-                )}
-                {blockedRevision && (
-                  <div className="text-muted-foreground italic">Auto-managed by revision system</div>
-                )}
-                {blockedDeliver && (
-                  <div className="text-amber-600 dark:text-amber-400 flex items-center gap-1">
-                    <AlertTriangle className="h-3 w-3" />Tasks incomplete
-                  </div>
-                )}
-              </TooltipContent>
-            </Tooltip>
-            {i < PROJECT_STAGES.length - 1 && (
-              <ChevronRight className="h-2.5 w-2.5 text-muted-foreground/30 flex-shrink-0" />
-            )}
-          </React.Fragment>
+                </div>
+              ) : (
+                <StageTooltipBody stage={stage} info={info} isCurrent={isCurrent} isCompleted={isCompleted} />
+              )}
+            </TooltipContent>
+          </Tooltip>
         );
       })}
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Inline KPI chip — Tasks / Requests
+// ────────────────────────────────────────────────────────────────────────────
+function KpiChip({ icon: Icon, label, done, total, pct, extra, href }) {
+  const barClass = pct === 100 ? "bg-emerald-500"
+    : pct >= 75 ? "bg-emerald-500"
+    : pct >= 50 ? "bg-blue-500"
+    : pct >= 25 ? "bg-amber-500" : "bg-orange-500";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          to={href}
+          className="flex items-center gap-2 min-w-0 hover:opacity-80 transition-opacity flex-shrink-0"
+        >
+          <Icon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+          <span className="text-muted-foreground text-xs">{label}</span>
+          <div className="relative h-1.5 w-20 overflow-hidden rounded-full bg-muted">
+            <div className={cn("h-full rounded-full transition-all duration-700", barClass)} style={{ width: `${pct}%` }} />
+          </div>
+          <span className="text-xs tabular-nums font-semibold">{done}/{total}</span>
+          {pct === 100 && <CheckCircle2 className="h-3 w-3 text-emerald-500 flex-shrink-0" />}
+          {extra}
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent>{done} done · {total - done} remaining{extra ? ` · ${extra.props['data-tooltip-extra'] || ''}` : ''}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -214,6 +358,7 @@ export default function ProjectSummaryHeader({
   revisions = [],
   approvalActivity,
   canEdit,
+  currentUser,
   onStatusChange,
   onEditClick,
   onArchiveClick,
@@ -222,7 +367,7 @@ export default function ProjectSummaryHeader({
 }) {
   const isPinned = !!(project?.confirmed_lat && project?.confirmed_lng);
 
-  // ── Stage timers (same source-of-truth as StagePipeline) ─────────────────
+  // Stage timers (same source-of-truth as StagePipeline)
   const [stageTimers, setStageTimers] = useState([]);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -246,7 +391,7 @@ export default function ProjectSummaryHeader({
     return () => { mountedRef.current = false; unsub(); };
   }, [project?.id]);
 
-  // ── Tasks / Requests stats ────────────────────────────────────────────────
+  // Tasks / Requests stats
   const taskStats = useMemo(() => {
     const active = projectTasks.filter(t => !t.is_deleted && !t.is_archived);
     const done = active.filter(t => t.is_completed).length;
@@ -346,7 +491,13 @@ export default function ProjectSummaryHeader({
           </div>
 
           {/* Right-aligned status / actions */}
-          <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
+            {/* Live presence — restored */}
+            <ErrorBoundary>
+              <ProjectPresenceIndicator projectId={project.id} currentUser={currentUser} />
+            </ErrorBoundary>
+
+            {/* Paid */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
@@ -362,19 +513,20 @@ export default function ProjectSummaryHeader({
                   aria-label={`Payment: ${isPaid ? 'paid' : 'unpaid'}`}
                 >
                   <CreditCard className="h-3 w-3" />
-                  {isPaid ? "Paid" : "Unpaid"}
+                  {isPaid ? "✓ Paid" : "○ Unpaid"}
                 </button>
               </TooltipTrigger>
               <TooltipContent>{canEdit ? `Click to mark ${isPaid ? 'unpaid' : 'paid'}` : "Read-only"}</TooltipContent>
             </Tooltip>
 
+            {/* Partially delivered — keep the words */}
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   onClick={() => canEdit && onTogglePartialDelivery?.(!isPartial)}
                   disabled={!canEdit}
                   className={cn(
-                    "inline-flex items-center justify-center w-7 h-7 rounded border transition-colors",
+                    "inline-flex items-center gap-1 px-2 h-7 rounded text-[11px] font-semibold border transition-colors",
                     isPartial
                       ? "bg-indigo-600 text-white border-indigo-700 hover:bg-indigo-700"
                       : "bg-muted text-muted-foreground border-border hover:bg-muted/80",
@@ -382,10 +534,15 @@ export default function ProjectSummaryHeader({
                   )}
                   aria-label={isPartial ? "Partially delivered: yes" : "Partially delivered: no"}
                 >
-                  <Package className="h-3.5 w-3.5" />
+                  <Package className="h-3 w-3" />
+                  {isPartial ? "✓ Partially Delivered" : "○ Partially Delivered"}
                 </button>
               </TooltipTrigger>
-              <TooltipContent>{isPartial ? "Partially delivered" : "Mark as partially delivered"}</TooltipContent>
+              <TooltipContent>
+                {isPartial
+                  ? `Partially delivered${project.partially_delivered_by ? ` by ${project.partially_delivered_by}` : ''}`
+                  : 'Mark as partially delivered'}
+              </TooltipContent>
             </Tooltip>
 
             {canEdit && (
@@ -410,94 +567,47 @@ export default function ProjectSummaryHeader({
           </div>
         </div>
 
-        {/* ─── Row 2: Compact pipeline ──────────────────────────────────────── */}
-        <div className="px-3 border-b">
-          <CompactStepper
-            project={project}
-            stageTimers={stageTimers}
-            onStatusChange={onStatusChange}
-            canEdit={canEdit}
-            deliveryReady={deliveryReady}
-          />
-        </div>
+        {/* ─── Row 2: Pipeline + Tasks/Requests on the same line ───────────── */}
+        <div className="flex items-center gap-3 px-3 py-1">
+          {/* Stepper grows + scrolls horizontally if it overflows */}
+          <div className="flex-1 min-w-0">
+            <CompactStepper
+              project={project}
+              stageTimers={stageTimers}
+              onStatusChange={onStatusChange}
+              canEdit={canEdit}
+              deliveryReady={deliveryReady}
+            />
+          </div>
 
-        {/* ─── Row 3: KPI strip (Tasks / Requests) ─────────────────────────── */}
-        <div className="flex items-center gap-x-5 gap-y-1 px-3 py-1.5 text-xs flex-wrap">
-          {taskStats.total > 0 && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  to={createPageUrl(`ProjectDetails?id=${project.id}&tab=tasks`)}
-                  className="flex items-center gap-2 min-w-0 hover:opacity-80 transition-opacity"
-                >
-                  <ListTodo className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="text-muted-foreground">Tasks</span>
-                  <div className="relative h-1.5 w-24 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={cn(
-                        "h-full rounded-full transition-all duration-700",
-                        taskStats.pct === 100 ? "bg-emerald-500"
-                          : taskStats.pct >= 75 ? "bg-emerald-500"
-                          : taskStats.pct >= 50 ? "bg-blue-500"
-                          : taskStats.pct >= 25 ? "bg-amber-500" : "bg-orange-500"
-                      )}
-                      style={{ width: `${taskStats.pct}%` }}
-                    />
-                  </div>
-                  <span className="tabular-nums font-semibold">
-                    {taskStats.done}/{taskStats.total}
+          {/* KPI strip pinned right */}
+          <div className="flex items-center gap-4 flex-shrink-0 pl-3 border-l border-border/60">
+            {taskStats.total > 0 && (
+              <KpiChip
+                icon={ListTodo}
+                label="Tasks"
+                done={taskStats.done}
+                total={taskStats.total}
+                pct={taskStats.pct}
+                href={createPageUrl(`ProjectDetails?id=${project.id}&tab=tasks`)}
+              />
+            )}
+            {reqStats.total > 0 && (
+              <KpiChip
+                icon={MessageSquareWarning}
+                label="Requests"
+                done={reqStats.done}
+                total={reqStats.total}
+                pct={reqStats.pct}
+                href={createPageUrl(`ProjectDetails?id=${project.id}&tab=revisions`)}
+                extra={reqStats.stuck > 0 ? (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] text-orange-600 dark:text-orange-400">
+                    <MessageSquareWarning className="h-3 w-3" />{reqStats.stuck} stuck
                   </span>
-                  {taskStats.pct === 100 && (
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500 flex-shrink-0" />
-                  )}
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent>
-                {taskStats.done} done · {taskStats.total - taskStats.done} remaining
-              </TooltipContent>
-            </Tooltip>
-          )}
-
-          {reqStats.total > 0 && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Link
-                  to={createPageUrl(`ProjectDetails?id=${project.id}&tab=revisions`)}
-                  className="flex items-center gap-2 min-w-0 hover:opacity-80 transition-opacity"
-                >
-                  <MessageSquareWarning className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-                  <span className="text-muted-foreground">Requests</span>
-                  <div className="relative h-1.5 w-24 overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={cn(
-                        "h-full rounded-full transition-all duration-700",
-                        reqStats.pct === 100 ? "bg-emerald-500"
-                          : reqStats.pct >= 75 ? "bg-emerald-500"
-                          : reqStats.pct >= 50 ? "bg-blue-500"
-                          : reqStats.pct >= 25 ? "bg-amber-500" : "bg-orange-500"
-                      )}
-                      style={{ width: `${reqStats.pct}%` }}
-                    />
-                  </div>
-                  <span className="tabular-nums font-semibold">
-                    {reqStats.done}/{reqStats.total}
-                  </span>
-                  {reqStats.pct === 100 && (
-                    <CheckCircle2 className="h-3 w-3 text-emerald-500 flex-shrink-0" />
-                  )}
-                  {reqStats.stuck > 0 && (
-                    <span className="inline-flex items-center gap-0.5 text-[10px] text-orange-600 dark:text-orange-400">
-                      <MessageSquareWarning className="h-3 w-3" />{reqStats.stuck} stuck
-                    </span>
-                  )}
-                </Link>
-              </TooltipTrigger>
-              <TooltipContent>
-                {reqStats.done} resolved · {reqStats.total - reqStats.done} open
-                {reqStats.stuck > 0 && <> · {reqStats.stuck} stuck</>}
-              </TooltipContent>
-            </Tooltip>
-          )}
+                ) : null}
+              />
+            )}
+          </div>
         </div>
       </div>
     </TooltipProvider>

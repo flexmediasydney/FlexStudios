@@ -1168,6 +1168,7 @@ export default function ProjectDetails() {
             projectTasks={projectTasks}
             approvalActivity={allProjectActivities?.find(a => a.activity_type === 'manual_approval')}
             canEdit={memoizedCanEdit && entityCanEdit}
+            currentUser={user}
             onStatusChange={(newStatus) => {
               if (updateStatusMutation.isPending) return;
               const stages = PROJECT_STAGES.map(s => s.value);
