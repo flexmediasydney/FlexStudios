@@ -14,7 +14,6 @@ import {
   Star, Zap, CreditCard, AlertCircle, Camera, AlertTriangle, CheckCircle2, Package
 } from "lucide-react";
 import { PROJECT_STAGES, stageLabel } from "@/components/projects/projectStatuses";
-import StagePipeline from "@/components/projects/StagePipeline";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,8 +43,6 @@ import ProjectDurationTimer from "@/components/projects/ProjectDurationTimer";
 import ProjectValidationBanner from "@/components/projects/ProjectValidationBanner";
 import ConcurrentEditDetector from "@/components/projects/ConcurrentEditDetector";
 import ProjectEffortCard from "@/components/projects/ProjectEffortCard";
-import ProjectProgressBar from "@/components/projects/ProjectProgressBar";
-import RequestsProgressBar from "@/components/projects/RequestsProgressBar";
 import ProjectSummaryHeader from "@/components/projects/ProjectSummaryHeader";
 import { useProjectRevisions } from "@/hooks/useProjectRevisions";
 import ProjectHealthIndicator from "@/components/projects/ProjectHealthIndicator";
@@ -272,7 +269,6 @@ export default function ProjectDetails() {
    // different project within the SPA left a stale ID forever.
    const [searchParams] = useSearchParams();
    const projectId = searchParams.get("id");
-   const compactHeader = searchParams.get("compact") === "1";
    const navigate = useNavigate();
 
    useEffect(() => {
@@ -1159,9 +1155,9 @@ export default function ProjectDetails() {
         />
       )}
 
-      {/* Compact header (demo, opt-in via ?compact=1) — replaces title row,
-          StagePipeline, approval banner, and the two progress cards below. */}
-      {compactHeader && project && (
+      {/* Compact summary header — replaces title row, StagePipeline, approval
+          banner, and the two progress cards. */}
+      {project && (
         <ErrorBoundary>
           <CompactHeaderHost
             project={project}
@@ -1185,193 +1181,6 @@ export default function ProjectDetails() {
         </ErrorBoundary>
       )}
 
-      {/* Header */}
-      {!compactHeader && (
-      <div className="flex items-start gap-3">
-        <Link to={createPageUrl("Projects")} className="flex-shrink-0 mt-1" title="Back to Projects">
-          <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-muted/80 transition-colors" title="Back to Projects" aria-label="Back to Projects">
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        </Link>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl lg:text-2xl font-bold tracking-tight leading-tight" title={project?.title || ''}>{project?.title || 'Loading...'}</h1>
-            {project?.id && (
-              <FavoriteButton
-                projectId={project.id}
-                projectTitle={project.title}
-                propertyAddress={project.property_address}
-                size="md"
-              />
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 text-muted-foreground text-sm">
-            <MapPin className="h-3.5 w-3.5 flex-shrink-0" />
-            <button
-              onClick={() => { if (project?.property_address) navigator.clipboard.writeText(project.property_address).then(() => toast.success('Address copied'), () => toast.error('Failed to copy address')); }}
-              title="Copy address to clipboard"
-              className="text-left hover:text-primary transition-colors group truncate"
-            >
-              {project?.property_address || ''}
-              <ExternalLink className="h-3 w-3 inline ml-1 opacity-0 group-hover:opacity-50" />
-            </button>
-            {project?.id && (
-              <Link
-                to={createPageUrl('ProjectLocation') + `?id=${project.id}`}
-                title={project.confirmed_lat && project.confirmed_lng ? 'View / adjust confirmed location' : 'Set confirmed location pin'}
-                className={cn(
-                  'inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors flex-shrink-0',
-                  project.confirmed_lat && project.confirmed_lng
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800'
-                    : 'bg-muted text-muted-foreground border-border hover:bg-muted/70'
-                )}
-              >
-                <MapPin className="h-2.5 w-2.5" />
-                {project.confirmed_lat && project.confirmed_lng ? 'Pinned' : 'Set pin'}
-              </Link>
-            )}
-          </div>
-          {project.calendar_auto_linked && (
-            <div className="flex items-center gap-1 mt-0.5">
-              <span
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 cursor-help"
-                title={`Calendar auto-linked via ${project.calendar_link_source === 'google_event_id_retroactive' ? 'retroactive match' : 'Google Calendar event ID'}`}
-              >
-                <Zap className="h-3 w-3" />
-                Calendar auto-linked
-              </span>
-            </div>
-          )}
-          {project.is_first_order && (
-            <div className="flex items-center gap-1 mt-0.5">
-              <span className="inline-flex items-center gap-1 text-xs font-semibold
-                             px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300
-                             border border-amber-200 dark:border-amber-800">
-                ⭐ First order
-              </span>
-            </div>
-          )}
-          {/* Project Health Indicator */}
-          <div className="mt-1.5">
-            <ErrorBoundary><ProjectHealthIndicator project={project} tasks={projectTasks} /></ErrorBoundary>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
-          {/* Live Presence */}
-          {project && <ErrorBoundary><ProjectPresenceIndicator projectId={projectId} currentUser={user} /></ErrorBoundary>}
-          {/* Payment badge */}
-          <button
-            onClick={() => {
-              if (memoizedCanEdit && !updatePaymentMutation.isPending) {
-                updatePaymentMutation.mutate(project.payment_status === "paid" ? "unpaid" : "paid");
-              }
-            }}
-            disabled={!memoizedCanEdit || updatePaymentMutation.isPending}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-all ${
-              project.payment_status === "paid"
-                ? "bg-green-500 text-white border-green-600 hover:bg-green-600"
-                : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!memoizedCanEdit || updatePaymentMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
-            title={memoizedCanEdit ? `Click to mark ${project.payment_status === "paid" ? "unpaid" : "paid"}` : "You don't have permission to edit"}
-            aria-label={`Payment status: ${project.payment_status}. Click to toggle.`}
-          >
-            <CreditCard className="h-3.5 w-3.5" />
-            {project.payment_status === "paid" ? "✓ Paid" : "○ Unpaid"}
-          </button>
-          {/* Partially Delivered toggle — independent of stage; audit-tracked */}
-          <button
-            onClick={() => {
-              if (memoizedCanEdit && !updatePartiallyDeliveredMutation.isPending) {
-                updatePartiallyDeliveredMutation.mutate(!project.partially_delivered);
-              }
-            }}
-            disabled={!memoizedCanEdit || updatePartiallyDeliveredMutation.isPending}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border transition-all ${
-              project.partially_delivered
-                ? "bg-indigo-600 text-white border-indigo-700 hover:bg-indigo-700"
-                : "bg-muted text-muted-foreground border-border hover:bg-muted/80"
-            } ${!memoizedCanEdit || updatePartiallyDeliveredMutation.isPending ? "opacity-60 cursor-not-allowed grayscale-[30%]" : "hover:shadow-md"}`}
-            title={
-              !memoizedCanEdit ? "You don't have permission to edit" :
-              project.partially_delivered
-                ? `Partially delivered${project.partially_delivered_by ? ` — set by ${project.partially_delivered_by}` : ''}${project.partially_delivered_at ? ` on ${new Date(project.partially_delivered_at).toLocaleString()}` : ''}. Click to clear.`
-                : "Mark this project as partially delivered"
-            }
-            aria-label={`Partially delivered: ${project.partially_delivered ? 'yes' : 'no'}. Click to toggle.`}
-          >
-            <Package className="h-3.5 w-3.5" />
-            {project.partially_delivered ? "✓ Partially Delivered" : "○ Partially Delivered"}
-          </button>
-          {project.partially_delivered && (project.partially_delivered_by || project.partially_delivered_at) && (
-            <span className="text-xs text-muted-foreground whitespace-nowrap">
-              {project.partially_delivered_by ? `by ${project.partially_delivered_by}` : ''}
-              {project.partially_delivered_by && project.partially_delivered_at ? ' · ' : ''}
-              {project.partially_delivered_at
-                ? fmtTimestampCustom(project.partially_delivered_at, {
-                    day: 'numeric', month: 'short', year: 'numeric',
-                    hour: 'numeric', minute: '2-digit', hour12: true,
-                  })
-                : ''}
-            </span>
-          )}
-          {memoizedCanEdit && entityCanEdit && (
-           <Button variant="outline" size="sm" onClick={() => setShowEditForm(true)} title="Edit project details" className="hover:shadow-md transition-all h-9" aria-label="Edit project">
-             <Edit className="h-4 w-4" />
-             <span className="hidden sm:inline ml-1.5">Edit</span>
-           </Button>
-          )}
-          {entityCanView && !entityCanEdit && <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">View only</Badge>}
-          {memoizedCanEdit && entityCanEdit && (
-            <>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-orange-600 hover:text-orange-700 hover:bg-orange-50 dark:text-orange-400 dark:hover:text-orange-300 dark:hover:bg-orange-950/30 px-2.5 transition-colors h-9"
-                title="Archive this project"
-                aria-label="Archive project"
-                onClick={computeArchiveWarnings}
-              >
-                <Archive className="h-4 w-4" />
-              </Button>
-              <AlertDialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>Archive "{project.title || project.property_address}"?</AlertDialogTitle>
-                    <AlertDialogDescription asChild>
-                      <div className="space-y-3">
-                        {archiveWarnings.length > 0 && (
-                          <div className="space-y-1.5">
-                            {archiveWarnings.map((w, i) => (
-                              <div key={i} className="flex items-center gap-2 text-amber-600 bg-amber-50 border border-amber-200 dark:text-amber-300 dark:bg-amber-950/30 dark:border-amber-800 rounded-md px-3 py-1.5 text-sm">
-                                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                                <span>{w}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <p className="text-muted-foreground text-sm">
-                          This project will be hidden from active views. You can unarchive it later from the project's detail page.
-                        </p>
-                      </div>
-                    </AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter>
-                    <AlertDialogCancel disabled={archiveMutation.isPending}>Cancel</AlertDialogCancel>
-                    <AlertDialogAction
-                      onClick={() => archiveMutation.mutate()}
-                      className="bg-orange-600 text-white hover:bg-orange-700"
-                      disabled={archiveMutation.isPending}
-                    >
-                      {archiveMutation.isPending ? "Archiving..." : "Archive Anyway"}
-                    </AlertDialogAction>
-                  </AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            </>
-          )}
-        </div>
-      </div>
-      )}
 
       {/* Delivery prompt */}
       {!dismissedDeliveryPrompt && isDeliverable && (
@@ -1404,29 +1213,10 @@ export default function ProjectDetails() {
         </div>
       )}
 
-      {/* Status Pipeline — full width for maximum stage visibility */}
-      {project && !compactHeader && (
-        <ErrorBoundary><StagePipeline
-          project={project}
-          onStatusChange={(newStatus) => {
-            if (updateStatusMutation.isPending) return;
-            const stages = PROJECT_STAGES.map(s => s.value);
-            const currentIdx = stages.indexOf(project.status);
-            const newIdx = stages.indexOf(newStatus);
-            if (newIdx < currentIdx) {
-              setPendingBackwardStage(newStatus);
-              return;
-            }
-            updateStatusMutation.mutate(newStatus);
-          }}
-          canEdit={memoizedCanEdit}
-          allTasksDone={allTasksDone}
-          projectTasks={projectTasks}
-        /></ErrorBoundary>
-      )}
-
-      {/* Review State Banner */}
-      {!compactHeader && (() => {
+      {/* Review State Banner — pending_review only.
+          (auto_approved / tonomo "Approved by …" chips are now in the
+          compact summary header.) */}
+      {(() => {
         // Find the latest booking decision from activity log
         const approvalActivity = allProjectActivities?.find(a => a.activity_type === 'manual_approval');
         const flagActivity = allProjectActivities?.find(a => a.activity_type === 'flagged');
@@ -1564,43 +1354,15 @@ export default function ProjectDetails() {
           );
         }
 
-        if (project?.auto_approved) {
-          return (
-            <div className="rounded-lg border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 px-4 py-2 flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-              <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400">Auto-approved by system</span>
-            </div>
-          );
-        }
-
-        // Show approval info even after project has moved past pending_review
-        if (approvalActivity && project?.source === 'tonomo') {
-          return (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 px-4 py-2 flex items-center gap-2">
-              <CheckCircle2 className="h-4 w-4 text-blue-600 shrink-0" />
-              <span className="text-xs font-medium text-blue-700 dark:text-blue-400">
-                Approved by {approvalActivity.user_name || 'admin'}
-              </span>
-              {approvalActivity.created_at && (
-                <span className="text-[10px] text-blue-500 dark:text-blue-400/70">
-                  {new Date(approvalActivity.created_at).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                </span>
-              )}
-            </div>
-          );
-        }
-
+        // auto_approved + tonomo manual_approval are surfaced as inline chips
+        // in the compact summary header now — banner only for pending_review.
         return null;
       })()}
 
       <div data-testid="project-detail-grid" className="grid grid-cols-1 lg:grid-cols-[10fr_3fr] gap-4 lg:gap-6">
         {/* Main Content */}
         <div className="space-y-4 lg:space-y-6">
-          {/* Project Progress Bar */}
-          {!compactHeader && <ErrorBoundary><ProjectProgressBar tasks={projectTasks} /></ErrorBoundary>}
-
-          {/* Requests Progress Bar */}
-          {!compactHeader && <ErrorBoundary><RequestsProgressBar projectId={projectId} /></ErrorBoundary>}
+          {/* Tasks/Requests progress now lives in the compact summary header. */}
 
           {/* Active Timers — live, real-time */}
           <ErrorBoundary><ActiveTimersPanel projectId={projectId} tasks={projectTasks} /></ErrorBoundary>

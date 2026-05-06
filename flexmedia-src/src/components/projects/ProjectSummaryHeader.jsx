@@ -15,7 +15,7 @@
 // Wired in ProjectDetails.jsx behind a `?compact=1` query param so you can
 // toggle between the two layouts and compare.
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { createPageUrl } from "@/utils";
 import { api } from "@/api/supabaseClient";
@@ -368,6 +368,7 @@ export default function ProjectSummaryHeader({
   const isPinned = !!(project?.confirmed_lat && project?.confirmed_lng);
 
   // Stage timers (same source-of-truth as StagePipeline)
+  // Subscription replaces optimistic synthetic timers as real DB rows arrive.
   const [stageTimers, setStageTimers] = useState([]);
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -380,6 +381,13 @@ export default function ProjectSummaryHeader({
       if (!mountedRef.current) return;
       setStageTimers(prev => {
         if (event.type === 'create' && event.data?.project_id === project.id) {
+          // Replace any optimistic open timer for the same stage with the real row.
+          const optIdx = prev.findIndex(t => t._optimistic && t.stage === event.data.stage && !t.exit_time);
+          if (optIdx >= 0) {
+            const next = [...prev];
+            next[optIdx] = event.data;
+            return next;
+          }
           if (prev.some(t => t.id === event.id)) return prev;
           return [...prev, event.data];
         }
@@ -390,6 +398,61 @@ export default function ProjectSummaryHeader({
     });
     return () => { mountedRef.current = false; unsub(); };
   }, [project?.id]);
+
+  // Optimistic stage transition: close the current open timer locally and
+  // open a synthetic timer for the target stage so the stepper, durations,
+  // and tooltip update instantly. Realtime later replaces the synthetic row.
+  const handleStageChange = useCallback((newStatus) => {
+    if (!project || !newStatus || newStatus === project.status) return;
+    const oldStatus = project.status;
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.now();
+
+    setStageTimers(prev => {
+      const next = prev.map(t => {
+        if (!t.exit_time && t.stage === oldStatus) {
+          const entryMs = new Date(fixTimestamp(t.entry_time)).getTime();
+          const elapsed = Math.max(0, Math.floor((nowMs - entryMs) / 1000));
+          return {
+            ...t,
+            exit_time: nowIso,
+            duration_seconds: (t.duration_seconds || 0) + elapsed,
+          };
+        }
+        return t;
+      });
+      next.push({
+        id: `optimistic-${nowMs}`,
+        project_id: project.id,
+        stage: newStatus,
+        entry_time: nowIso,
+        exit_time: null,
+        duration_seconds: 0,
+        _optimistic: true,
+      });
+      return next;
+    });
+
+    onStatusChange?.(newStatus);
+  }, [project, onStatusChange]);
+
+  // If the project status reverts (e.g. mutation rolled back) or settles to
+  // something other than what we optimistically opened, drop stale synthetic
+  // timers so the stepper reflects reality.
+  useEffect(() => {
+    if (!project?.status) return;
+    setStageTimers(prev => {
+      let changed = false;
+      const next = prev.filter(t => {
+        if (t._optimistic && !t.exit_time && t.stage !== project.status) {
+          changed = true;
+          return false;
+        }
+        return true;
+      });
+      return changed ? next : prev;
+    });
+  }, [project?.status]);
 
   // Tasks / Requests stats
   const taskStats = useMemo(() => {
@@ -574,7 +637,7 @@ export default function ProjectSummaryHeader({
             <CompactStepper
               project={project}
               stageTimers={stageTimers}
-              onStatusChange={onStatusChange}
+              onStatusChange={handleStageChange}
               canEdit={canEdit}
               deliveryReady={deliveryReady}
             />
