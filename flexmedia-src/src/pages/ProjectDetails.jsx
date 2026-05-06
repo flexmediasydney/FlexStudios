@@ -46,6 +46,8 @@ import ConcurrentEditDetector from "@/components/projects/ConcurrentEditDetector
 import ProjectEffortCard from "@/components/projects/ProjectEffortCard";
 import ProjectProgressBar from "@/components/projects/ProjectProgressBar";
 import RequestsProgressBar from "@/components/projects/RequestsProgressBar";
+import ProjectSummaryHeader from "@/components/projects/ProjectSummaryHeader";
+import { useProjectRevisions } from "@/hooks/useProjectRevisions";
 import ProjectHealthIndicator from "@/components/projects/ProjectHealthIndicator";
 import EmailComposeDialog from "@/components/email/EmailComposeDialog";
 import ProjectRevisionsTab from "@/components/revisions/ProjectRevisionsTab";
@@ -65,6 +67,14 @@ import AIChat from "@/components/ai/AIChat";
 
 // BUG FIX: moved VALID_TABS to module level — was inside the component body,
 // creating a new Set on every render. Since it's a constant, it belongs here.
+// Small wrapper that hooks live revision data into the compact header.
+// Defined here (not inside ProjectDetails) to avoid re-creating the
+// component on every parent render.
+function CompactHeaderHost(props) {
+  const { revisions = [] } = useProjectRevisions(props.project?.id);
+  return <ProjectSummaryHeader {...props} revisions={revisions} />;
+}
+
 const statuses = PROJECT_STAGES;
 const VALID_TABS = new Set(['tasks', 'revisions', 'effort', 'media', 'files', 'shortlisting', 'drones', 'tonomo']);
 
@@ -262,6 +272,7 @@ export default function ProjectDetails() {
    // different project within the SPA left a stale ID forever.
    const [searchParams] = useSearchParams();
    const projectId = searchParams.get("id");
+   const compactHeader = searchParams.get("compact") === "1";
    const navigate = useNavigate();
 
    useEffect(() => {
@@ -1148,7 +1159,33 @@ export default function ProjectDetails() {
         />
       )}
 
+      {/* Compact header (demo, opt-in via ?compact=1) — replaces title row,
+          StagePipeline, approval banner, and the two progress cards below. */}
+      {compactHeader && project && (
+        <ErrorBoundary>
+          <CompactHeaderHost
+            project={project}
+            projectTasks={projectTasks}
+            approvalActivity={allProjectActivities?.find(a => a.activity_type === 'manual_approval')}
+            canEdit={memoizedCanEdit && entityCanEdit}
+            onStatusChange={(newStatus) => {
+              if (updateStatusMutation.isPending) return;
+              const stages = PROJECT_STAGES.map(s => s.value);
+              const currentIdx = stages.indexOf(project.status);
+              const newIdx = stages.indexOf(newStatus);
+              if (newIdx < currentIdx) { setPendingBackwardStage(newStatus); return; }
+              updateStatusMutation.mutate(newStatus);
+            }}
+            onEditClick={() => setShowEditForm(true)}
+            onArchiveClick={computeArchiveWarnings}
+            onTogglePayment={(next) => updatePaymentMutation.mutate(next)}
+            onTogglePartialDelivery={(next) => updatePartiallyDeliveredMutation.mutate(next)}
+          />
+        </ErrorBoundary>
+      )}
+
       {/* Header */}
+      {!compactHeader && (
       <div className="flex items-start gap-3">
         <Link to={createPageUrl("Projects")} className="flex-shrink-0 mt-1" title="Back to Projects">
           <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-muted/80 transition-colors" title="Back to Projects" aria-label="Back to Projects">
@@ -1333,6 +1370,7 @@ export default function ProjectDetails() {
           )}
         </div>
       </div>
+      )}
 
       {/* Delivery prompt */}
       {!dismissedDeliveryPrompt && isDeliverable && (
@@ -1366,7 +1404,7 @@ export default function ProjectDetails() {
       )}
 
       {/* Status Pipeline — full width for maximum stage visibility */}
-      {project && (
+      {project && !compactHeader && (
         <ErrorBoundary><StagePipeline
           project={project}
           onStatusChange={(newStatus) => {
@@ -1387,7 +1425,7 @@ export default function ProjectDetails() {
       )}
 
       {/* Review State Banner */}
-      {(() => {
+      {!compactHeader && (() => {
         // Find the latest booking decision from activity log
         const approvalActivity = allProjectActivities?.find(a => a.activity_type === 'manual_approval');
         const flagActivity = allProjectActivities?.find(a => a.activity_type === 'flagged');
@@ -1558,10 +1596,10 @@ export default function ProjectDetails() {
         {/* Main Content */}
         <div className="space-y-4 lg:space-y-6">
           {/* Project Progress Bar */}
-          <ErrorBoundary><ProjectProgressBar tasks={projectTasks} /></ErrorBoundary>
+          {!compactHeader && <ErrorBoundary><ProjectProgressBar tasks={projectTasks} /></ErrorBoundary>}
 
           {/* Requests Progress Bar */}
-          <ErrorBoundary><RequestsProgressBar projectId={projectId} /></ErrorBoundary>
+          {!compactHeader && <ErrorBoundary><RequestsProgressBar projectId={projectId} /></ErrorBoundary>}
 
           {/* Active Timers — live, real-time */}
           <ErrorBoundary><ActiveTimersPanel projectId={projectId} tasks={projectTasks} /></ErrorBoundary>
