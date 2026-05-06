@@ -1,4 +1,6 @@
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
 import { cn } from "@/lib/utils";
 import {
   Paperclip,
@@ -12,7 +14,24 @@ import {
   EyeOff,
   DollarSign,
   ChevronDown,
+  ExternalLink,
+  Unlink2,
 } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   HoverCard,
   HoverCardContent,
@@ -154,9 +173,13 @@ const EmailListRow = React.memo(function EmailListRow({
   emailAccounts = [],
   showAccount = false,
   onLinkProject,
+  onUnlinkProject,
   onToggleVisibility,
   onContextMenu,
 }) {
+  const navigate = useNavigate();
+  const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
+  const [pillPopoverOpen, setPillPopoverOpen] = useState(false);
   if (!thread?.messages || thread.messages.length === 0) return null;
 
   const priority = thread.messages[0]?.priority;
@@ -411,18 +434,52 @@ const EmailListRow = React.memo(function EmailListRow({
                 onClick={(e) => e.stopPropagation()}
               >
                 {thread.project_id ? (
-                  <ProjectHoverCard projectTitle={thread.project_title} projectId={thread.project_id}>
-                    <button
-                      onClick={() => onLinkProject?.(thread)}
-                      className="group/proj inline-flex items-center gap-1 max-w-full px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 transition-colors"
-                      title={`Linked: ${thread.project_title} (click to change)`}
+                  <Popover open={pillPopoverOpen} onOpenChange={setPillPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        onClick={(e) => e.stopPropagation()}
+                        className="group/proj inline-flex items-center gap-1 max-w-full px-2 py-0.5 rounded-full border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 transition-colors"
+                        title={`Linked: ${thread.project_title}`}
+                      >
+                        <DollarSign className="h-3 w-3 flex-shrink-0" />
+                        <span className="text-[11px] font-medium truncate">
+                          {shortProjectLabel(thread.project_title)}
+                        </span>
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="w-56 p-2"
+                      align="start"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <DollarSign className="h-3 w-3 flex-shrink-0" />
-                      <span className="text-[11px] font-medium truncate">
-                        {shortProjectLabel(thread.project_title)}
-                      </span>
-                    </button>
-                  </ProjectHoverCard>
+                      <div className="px-2 py-1.5 mb-1 border-b border-border">
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Linked Project</p>
+                        <p className="text-sm font-medium truncate">{thread.project_title}</p>
+                      </div>
+                      <button
+                        className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-muted text-left"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPillPopoverOpen(false);
+                          navigate(createPageUrl(`ProjectDetails?id=${thread.project_id}`));
+                        }}
+                      >
+                        <ExternalLink className="h-3.5 w-3.5 text-muted-foreground" />
+                        Drill to project
+                      </button>
+                      <button
+                        className="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:bg-red-50 text-destructive text-left"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPillPopoverOpen(false);
+                          setUnlinkConfirmOpen(true);
+                        }}
+                      >
+                        <Unlink2 className="h-3.5 w-3.5" />
+                        Unlink
+                      </button>
+                    </PopoverContent>
+                  </Popover>
                 ) : (
                   <button
                     onClick={() => onLinkProject?.(thread)}
@@ -483,15 +540,39 @@ const EmailListRow = React.memo(function EmailListRow({
                       Mark as confidential
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onLinkProject?.(thread);
-                      }}
-                    >
-                      <Link2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
-                      Link item
-                    </DropdownMenuItem>
+                    {thread.project_id ? (
+                      <>
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(createPageUrl(`ProjectDetails?id=${thread.project_id}`));
+                          }}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                          Drill to project
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUnlinkConfirmOpen(true);
+                          }}
+                          className="text-red-600 focus:text-red-600"
+                        >
+                          <Unlink2 className="h-3.5 w-3.5 mr-2" />
+                          Unlink project
+                        </DropdownMenuItem>
+                      </>
+                    ) : (
+                      <DropdownMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onLinkProject?.(thread);
+                        }}
+                      >
+                        <Link2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+                        Link item
+                      </DropdownMenuItem>
+                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -620,15 +701,39 @@ const EmailListRow = React.memo(function EmailListRow({
             : <Eye className="h-3.5 w-3.5 mr-2 text-muted-foreground" />}
           {isShared ? "Make private" : "Share with team"}
         </ContextMenuItem>
-        <ContextMenuItem
-          onClick={(e) => {
-            e.stopPropagation();
-            onLinkProject?.(thread);
-          }}
-        >
-          <Link2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
-          {thread.project_id ? "Change project" : "Link to project"}
-        </ContextMenuItem>
+        {thread.project_id ? (
+          <>
+            <ContextMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(createPageUrl(`ProjectDetails?id=${thread.project_id}`));
+              }}
+            >
+              <ExternalLink className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+              Drill to project
+            </ContextMenuItem>
+            <ContextMenuItem
+              onClick={(e) => {
+                e.stopPropagation();
+                setUnlinkConfirmOpen(true);
+              }}
+              className="text-red-600 focus:text-red-600"
+            >
+              <Unlink2 className="h-3.5 w-3.5 mr-2" />
+              Unlink project
+            </ContextMenuItem>
+          </>
+        ) : (
+          <ContextMenuItem
+            onClick={(e) => {
+              e.stopPropagation();
+              onLinkProject?.(thread);
+            }}
+          >
+            <Link2 className="h-3.5 w-3.5 mr-2 text-muted-foreground" />
+            Link to project
+          </ContextMenuItem>
+        )}
         <ContextMenuSeparator />
         <ContextMenuItem
           onClick={(e) => {
@@ -661,6 +766,25 @@ const EmailListRow = React.memo(function EmailListRow({
           Delete
         </ContextMenuItem>
       </ContextMenuContent>
+      <AlertDialog open={unlinkConfirmOpen} onOpenChange={setUnlinkConfirmOpen}>
+        <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unlink project?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will unlink <span className="font-semibold">{thread.project_title}</span> from this email thread. The email will no longer appear in the project's timeline.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => onUnlinkProject?.(thread)}
+            >
+              Unlink
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </ContextMenu>
   );
 });

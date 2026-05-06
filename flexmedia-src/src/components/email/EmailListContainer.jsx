@@ -34,6 +34,7 @@ export default function EmailListContainer({
   emailAccounts = [],
   showAccount = false,
   onLinkProject,
+  onUnlinkProject,
   onToggleVisibility,
   onContextMenu,
   onReorderColumns,
@@ -172,6 +173,7 @@ export default function EmailListContainer({
                   emailAccounts={emailAccounts}
                   showAccount={showAccount}
                   onLinkProject={onLinkProject}
+                  onUnlinkProject={onUnlinkProject}
                   onToggleVisibility={onToggleVisibility}
                   onContextMenu={onContextMenu}
                 />

@@ -21,6 +21,7 @@ export default function ProjectLinkDialogForInbox({
   onOpenChange,
   account,
   onLinked,
+  onOptimisticLink,
 }) {
   const [searchQuery, setSearchQuery] = useState("");
   const queryClient = useQueryClient();
@@ -47,6 +48,8 @@ export default function ProjectLinkDialogForInbox({
     mutationFn: async (projectId) => {
       const project = projects.find(p => p.id === projectId);
       const messageIds = thread.messages.map(msg => msg.id);
+      // Optimistic: notify parent so it can update local state instantly.
+      onOptimisticLink?.({ messageIds, projectId, projectTitle: project.title });
       // Update ALL messages in the thread, not just the first one
       // Do NOT change visibility on link — owner controls that separately.
       // Pipedrive model: linked + private = only owner sees it in project timeline.

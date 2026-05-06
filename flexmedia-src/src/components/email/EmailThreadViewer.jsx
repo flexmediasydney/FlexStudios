@@ -505,6 +505,16 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
         })
       ));
     },
+    onMutate: () => {
+      // Optimistic: snapshot + clear locally for instant UI feedback.
+      const snapshot = liveMessages.map(m => ({
+        id: m.id, project_id: m.project_id, project_title: m.project_title, visibility: m.visibility
+      }));
+      setLiveMessages(prev => prev.map(m => ({
+        ...m, project_id: null, project_title: null, visibility: 'private'
+      })));
+      return { snapshot };
+    },
     onSuccess: () => {
       if (msg?.id) {
         api.functions.invoke('logEmailActivity', {
@@ -521,7 +531,14 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
       queryClient.invalidateQueries({ queryKey: ["email-messages"] });
       toast.success("Project unlinked from thread");
     },
-    onError: () => {
+    onError: (_err, _vars, context) => {
+      // Rollback optimistic clear
+      if (context?.snapshot) {
+        setLiveMessages(prev => prev.map(m => {
+          const snap = context.snapshot.find(s => s.id === m.id);
+          return snap ? { ...m, ...snap } : m;
+        }));
+      }
       toast.error("Failed to unlink project. Please try again.");
     }
   });
@@ -1271,6 +1288,12 @@ export default function EmailThreadViewer({ thread, account, onBack, currentView
           open={showProjectLink}
           onOpenChange={setShowProjectLink}
           account={account}
+          onOptimisticLink={({ messageIds, projectId, projectTitle }) => {
+            const idSet = new Set(messageIds);
+            setLiveMessages(prev => prev.map(m =>
+              idSet.has(m.id) ? { ...m, project_id: projectId, project_title: projectTitle } : m
+            ));
+          }}
         />
 
         {/* Reply / Forward Box — Pipedrive-style */}

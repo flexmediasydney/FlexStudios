@@ -1761,6 +1761,39 @@ export default function EmailInboxMain() {
                 emailAccounts={emailAccounts}
                 showAccount={selectedAccountIds.size !== 1 && emailAccounts.length > 1}
                 onLinkProject={(thread) => setLinkProjectThread(thread)}
+                onUnlinkProject={async (thread) => {
+                  if (!thread.messages?.length) return;
+                  const ids = thread.messages.map(m => m.id);
+                  const prevTitle = thread.project_title;
+                  const snapshot = messages.filter(m => ids.includes(m.id))
+                    .map(m => ({ id: m.id, project_id: m.project_id, project_title: m.project_title, visibility: m.visibility }));
+                  // Optimistic: clear locally so the pill flips to "Link" instantly.
+                  setMessages(prev => prev.map(m =>
+                    ids.includes(m.id)
+                      ? { ...m, project_id: null, project_title: null, visibility: 'private' }
+                      : m
+                  ));
+                  try {
+                    await Promise.all(
+                      ids.map(id =>
+                        api.entities.EmailMessage.update(id, {
+                          project_id: null,
+                          project_title: null,
+                          visibility: 'private',
+                        })
+                      )
+                    );
+                    queryClient.invalidateQueries({ queryKey: ['email-messages'] });
+                    toast.success(`Unlinked from ${prevTitle || 'project'}`);
+                  } catch {
+                    // Rollback
+                    setMessages(prev => prev.map(m => {
+                      const snap = snapshot.find(s => s.id === m.id);
+                      return snap ? { ...m, ...snap } : m;
+                    }));
+                    toast.error('Failed to unlink project');
+                  }
+                }}
                 onToggleVisibility={async (thread, newVisibility) => {
                   try {
                     if (!thread.messages?.length) return;
@@ -1860,6 +1893,12 @@ export default function EmailInboxMain() {
              if (!open) setLinkProjectThread(null);
            }}
            account={emailAccounts.find(a => a.id === linkProjectThread.email_account_id)}
+           onOptimisticLink={({ messageIds, projectId, projectTitle }) => {
+             const idSet = new Set(messageIds);
+             setMessages(prev => prev.map(m =>
+               idSet.has(m.id) ? { ...m, project_id: projectId, project_title: projectTitle } : m
+             ));
+           }}
          />
        )}
 

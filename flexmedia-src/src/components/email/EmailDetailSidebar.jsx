@@ -1,9 +1,11 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Users, Link2, Trash2 } from "lucide-react";
+import { Users, Link2, Trash2, ExternalLink } from "lucide-react";
 import { useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
+import { createPageUrl } from "@/utils";
 import { api } from "@/api/supabaseClient";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/components/auth/PermissionGuard";
@@ -14,11 +16,23 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export default function EmailDetailSidebar({ thread, onProjectLinkClick, onProjectUnlink }) {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { data: currentUser } = useCurrentUser();
   const [showAssignMenu, setShowAssignMenu] = useState(false);
+  const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
 
   // Get the primary message ID
   const messageId = useMemo(() => thread.messages[0]?.id, [thread.messages]);
@@ -66,19 +80,48 @@ export default function EmailDetailSidebar({ thread, onProjectLinkClick, onProje
         <CardContent className="space-y-3">
           {msg.project_id ? (
             <>
-              <div className="bg-card p-3 rounded-lg border border-emerald-200">
-                <p className="font-bold text-sm text-foreground">{msg.project_title}</p>
-                <p className="text-xs text-emerald-700 mt-1.5 font-semibold">✓ Connected</p>
-              </div>
+              <button
+                type="button"
+                onClick={() => navigate(createPageUrl(`ProjectDetails?id=${msg.project_id}`))}
+                className="w-full text-left bg-card p-3 rounded-lg border border-emerald-200 hover:border-emerald-400 hover:bg-emerald-100/40 transition-colors group"
+                title="Open project"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-bold text-sm text-foreground truncate">{msg.project_title}</p>
+                    <p className="text-xs text-emerald-700 mt-1.5 font-semibold">✓ Connected — click to open</p>
+                  </div>
+                  <ExternalLink className="h-3.5 w-3.5 text-emerald-700 opacity-60 group-hover:opacity-100 mt-0.5 flex-shrink-0" />
+                </div>
+              </button>
               <Button
                 variant="outline"
                 size="sm"
                 className="w-full text-destructive hover:bg-red-50 border-red-200"
-                onClick={() => onProjectUnlink()}
+                onClick={() => setUnlinkConfirmOpen(true)}
               >
                 <Trash2 className="h-3.5 w-3.5 mr-2" />
                 Unlink
               </Button>
+              <AlertDialog open={unlinkConfirmOpen} onOpenChange={setUnlinkConfirmOpen}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Unlink project?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will unlink <span className="font-semibold">{msg.project_title}</span> from this email thread. The email will no longer appear in the project's timeline.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      onClick={() => onProjectUnlink()}
+                    >
+                      Unlink
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </>
           ) : (
             <>
